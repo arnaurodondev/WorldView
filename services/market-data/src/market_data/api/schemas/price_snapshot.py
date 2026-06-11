@@ -39,6 +39,13 @@ class PriceSnapshotResponse(BaseModel):
     refresh_available: bool
     refresh_cooldown_remaining_sec: int
 
+    # Order-book context (B-Q bid/ask plumbing, 2026-06-10) — only populated
+    # when the snapshot's source is a quote (fresh_quote / bulk_quote); bar-
+    # derived prices carry no bid/ask. Nullable + defaulted so older cached
+    # snapshots and older clients are unaffected (forward-compatible).
+    bid: str | None = None
+    ask: str | None = None
+
 
 class BatchPriceSnapshotRequest(BaseModel):
     """Request body for the batch price-snapshot endpoint (POST)."""

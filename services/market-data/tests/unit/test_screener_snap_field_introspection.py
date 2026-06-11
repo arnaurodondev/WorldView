@@ -233,12 +233,21 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
     replaces revenue_usd with revenue_ttm and adds forward_pe, dividend_yield,
     roe_ttm, operating_margin_ttm, quarterly_revenue_growth_yoy.
 
-    This test inspects the compiled SQL of the *second* session.execute call
-    (the actual screener query) to confirm every new metric name appears as a
-    subquery alias in the FROM clause, proving it will be projected.
+    2026-06-10 repair: the BP-screener500 rewrite (2026-06-09) split the
+    no-filter branch into page-IDs query → count → main metric query. With an
+    all-empty mock the page query returned no rows and query_screen early-
+    returned BEFORE building the metric SQL, so ``captured[-1]`` was the page
+    query and the assertions below silently checked the wrong statement. The
+    mock now returns one fake page row so the real metric query is built.
+
+    2026-06-10 (frontend audit gap #2): also asserts the two 52-week distance
+    metrics are projected in the default view.
     """
     captured: list[Any] = []
     present = set(fmq._SNAP_FIELDS)
+
+    page_row = MagicMock()
+    page_row.id = "instr-page-1"
 
     async def _execute(stmt: Any) -> MagicMock:
         if "statement_timeout" in str(stmt):
@@ -247,10 +256,22 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
             return result
         captured.append(stmt)
         result = MagicMock()
-        if "information_schema" in str(stmt):
+        s = str(stmt)
+        if "information_schema" in s:
             result.all = MagicMock(return_value=[(c,) for c in present])
-        else:
+        # WHY km_ check FIRST: the main metric statement projects snap columns
+        # whose names contain "count" (news_count_7d, recent_contradiction_count)
+        # so a bare "count" substring check would misroute it. The COUNT(*)
+        # query needs no explicit branch: MagicMock.__int__ defaults to 1.
+        elif "km_" in s:
+            # The main metric query (key-metric subqueries aliased km_<name>).
+            # Return no rows → query_screen returns ([], total) right after,
+            # which keeps the page-extras enrichment out of this SQL test.
             result.all = MagicMock(return_value=[])
+        else:
+            # The page-IDs query — must return ≥1 row or the branch
+            # early-returns before building the metric query.
+            result.all = MagicMock(return_value=[page_row])
         return result
 
     session = MagicMock()
@@ -259,9 +280,11 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
     # Empty filters → no-filter path
     await query_screen(session, [])
 
-    # Second call is the screener query; first call is introspection.
+    # Last captured call is the main screener query (after introspection,
+    # page-IDs and count queries).
     assert len(captured) >= 2, "expected introspection + screener query"
     sql = _sql(captured[-1]).lower()
+    assert "km_" in sql, f"main metric query never built — page query leaked into captured[-1]:\n{sql}"
 
     expected_metrics = [
         "revenue_ttm",
@@ -270,6 +293,9 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
         "roe_ttm",
         "operating_margin_ttm",
         "quarterly_revenue_growth_yoy",
+        # 2026-06-10: 52-week distances now part of the default view.
+        "dist_from_52w_high_pct",
+        "dist_from_52w_low_pct",
     ]
     for metric in expected_metrics:
         assert metric in sql, f"PRD-0099: no-filter screener SQL missing '{metric}'"

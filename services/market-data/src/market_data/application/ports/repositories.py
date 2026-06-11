@@ -337,7 +337,9 @@ class OHLCVRepository(ABC):
         rather than derived weekly/monthly bars (which are rarely populated).
 
         lookback_days: 7 for 1W, 30 for 1M
-        Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int}
+        Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int,
+        top_mover_ticker: str | None, top_mover_return_pct: float | None}
+        (top mover = largest absolute period return within the sector; 2026-06-10)
         """
 
     @abstractmethod
@@ -355,7 +357,9 @@ class OHLCVRepository(ABC):
         lookback_days: 7 for 1W, 30 for 1M
         mover_type: "gainers" (DESC) or "losers" (ASC)
         offset: SQL OFFSET for paginating through the universe leaderboard
-        Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
+        Returns list of dicts: {instrument_id, ticker, name, last_price, period_return_pct}
+        (last_price = latest daily close, added 2026-06-10 so consumers don't
+        need a second /internal/v1/price batch call)
         """
 
 

@@ -1081,6 +1081,7 @@ def create_app() -> FastAPI:
         peers,
         prediction_markets,
         price_snapshot,
+        quote_stats,
         quotes,
         securities,
     )
@@ -1098,6 +1099,10 @@ def create_app() -> FastAPI:
     # keep the literal /peers sub-path distinct from the UUID catch-all.
     # W5-T-S2-01: top-N market-cap peers in same GICS industry.
     app.include_router(peers.router, prefix="/api/v1")
+    # quote_stats: /instruments/{id}/{intraday-stats|returns|price-levels} —
+    # B-Q-2/3/4 Quote-tab statistics. Two-segment literal sub-paths cannot
+    # collide with the instruments.router UUID catch-all (one segment).
+    app.include_router(quote_stats.router, prefix="/api/v1")
     # prediction_markets: /prediction-markets/{market_id}/history registered
     # before /{market_id} inside the router to avoid path-param conflicts
     app.include_router(prediction_markets.router, prefix="/api/v1")

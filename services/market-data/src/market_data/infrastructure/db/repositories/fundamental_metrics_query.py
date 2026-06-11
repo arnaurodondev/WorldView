@@ -13,15 +13,49 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import Numeric, and_, func, select, text
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
 from market_data.domain.entities import ScreenFieldMetadata
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
+from market_data.infrastructure.db.models.fundamentals.technicals_snapshots import TechnicalsSnapshotModel
 from market_data.infrastructure.db.models.fundamentals_snapshot import InstrumentFundamentalsSnapshotModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
+from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
 from market_data.infrastructure.db.models.quotes import QuoteModel
 from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
+
+# ── Key display metrics (2026-06-10 frontend-audit fix) ─────────────────────
+# WHY module-level: these are the columns the screener table renders in EVERY
+# view. Previously the list lived inside the no-filter (GET) branch only, so
+# the moment any filter was applied (POST branch) the result rows carried ONLY
+# the filtered metrics — MKT CAP / P/E / CHG% / REV all rendered as "—"
+# (frontend audit 2026-06-10, gap #1). Both branches now project this set:
+#   - GET branch: via the scoped-LATERAL subqueries (unchanged mechanism)
+#   - POST branch: via a single page-bounded DISTINCT ON enrichment query
+#     (see ``_fetch_page_extras``) merged into each row's metrics dict.
+# Each name must match a row the metric extractors actually write into
+# ``fundamental_metrics`` (e.g. ``revenue_ttm`` from HIGHLIGHTS, the
+# ``dist_from_52w_*`` pair from the computed-metrics worker).
+_KEY_METRICS: tuple[str, ...] = (
+    "market_capitalization",
+    "pe_ratio",
+    "daily_return",
+    "beta",
+    "revenue_ttm",
+    # PRD-0099: the five columns the screener table renders so the default
+    # view shows real values instead of "—".
+    "forward_pe",
+    "dividend_yield",
+    "roe_ttm",
+    "operating_margin_ttm",
+    "quarterly_revenue_growth_yoy",
+    # 2026-06-10 (frontend audit gap #3): 52-week distance metrics in the
+    # default view — computed by computed_metrics_worker (L-3), stored as
+    # SNAPSHOT-period fundamental_metrics rows.
+    "dist_from_52w_high_pct",
+    "dist_from_52w_low_pct",
+)
 
 # Snapshot metric columns selected from instrument_fundamentals_snapshot (L-2).
 # Aliased with "snap_" prefix to avoid name collisions with fundamental_metrics columns.
@@ -120,6 +154,107 @@ async def _resolve_available_snap_fields(session: AsyncSession) -> tuple[str, ..
     except Exception as e:  # pragma: no cover — introspection failure path
         _log.warning("snap_fields_introspect_failed", error=str(e))
         return _SNAP_FIELDS
+
+
+async def _fetch_page_extras(
+    session: AsyncSession,
+    page_ids: list[Any],
+    extra_metrics: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Fetch per-instrument display extras for a single result PAGE.
+
+    2026-06-10 frontend-audit fixes (gaps #1/#2/#3). Returns a mapping
+    ``str(instrument_id) -> {metric_name: value}`` containing:
+
+    1. The latest value per (instrument, metric) for ``extra_metrics`` — used
+       by the POST (filtered) branch to union the ``_KEY_METRICS`` display set
+       into rows that previously carried only the filtered metrics.
+    2. ``volume`` — the latest 1d OHLCV bar's volume, so the frontend can
+       render volume-vs-30d-average (payload previously only shipped
+       ``avg_volume_30d`` from the snapshot).
+    3. ``high_52w`` / ``low_52w`` — absolute 52-week prices extracted from the
+       latest ``technicals_snapshots`` JSONB payload (EODHD ``52WeekHigh`` /
+       ``52WeekLow``). The snapshot/key-metrics tables only store the
+       DISTANCES (``dist_from_52w_*``); the absolute levels live solely in
+       this section table, hence the dedicated lookup.
+
+    PERFORMANCE: every query is bounded to ``instrument_id IN (page_ids)``
+    (≤ page limit rows) and rides an existing composite index —
+    ``ix_fundamental_metrics_instrument_metric``, the ohlcv_bars PK
+    ``(instrument_id, timeframe, bar_date)``, and
+    ``ix_technicals_snapshots_instrument_period`` respectively. This mirrors
+    the BP-screener500 scoped-subquery approach: never join these against the
+    full instruments table.
+
+    FAIL-OPEN: each lookup is individually guarded — these are display-only
+    enrichments and must never convert a working screener page into a 500
+    (same philosophy as the BP-635 introspection guard above). Failures are
+    logged at WARNING with the block name.
+    """
+    extras: dict[str, dict[str, Any]] = {str(iid): {} for iid in page_ids}
+    if not page_ids:
+        return extras
+
+    m = FundamentalMetricModel
+
+    # ── 1. Latest key-metric values (POST-branch union, gap #1) ──────────────
+    # DISTINCT ON (instrument_id, metric) + ORDER BY as_of_date DESC gives the
+    # newest row per pair in ONE index-driven query instead of N LATERALs.
+    if extra_metrics:
+        try:
+            metric_stmt = (
+                select(m.instrument_id, m.metric, m.value_numeric)
+                .where(m.instrument_id.in_(page_ids), m.metric.in_(extra_metrics))
+                .order_by(m.instrument_id, m.metric, m.as_of_date.desc())
+                .distinct(m.instrument_id, m.metric)
+            )
+            metric_rows: Any = await session.execute(metric_stmt)
+            for iid, metric_name, value in metric_rows.all():
+                if value is not None:
+                    extras[str(iid)][metric_name] = value
+        except Exception as e:
+            _log.warning("screen_page_extras_failed", block="key_metrics", error=str(e))
+
+    # ── 2. Latest daily volume (gap #3) ──────────────────────────────────────
+    o = OHLCVBarModel
+    try:
+        vol_stmt = (
+            select(o.instrument_id, o.volume)
+            .where(o.instrument_id.in_(page_ids), o.timeframe == "1d")
+            .order_by(o.instrument_id, o.bar_date.desc())
+            .distinct(o.instrument_id)
+        )
+        vol_rows: Any = await session.execute(vol_stmt)
+        for iid, volume in vol_rows.all():
+            if volume is not None:
+                extras[str(iid)]["volume"] = volume
+    except Exception as e:
+        _log.warning("screen_page_extras_failed", block="daily_volume", error=str(e))
+
+    # ── 3. Absolute 52-week high/low (gap #2) ────────────────────────────────
+    t = TechnicalsSnapshotModel
+    try:
+        tech_stmt = (
+            select(
+                t.instrument_id,
+                # JSONB ->> returns text; cast to NUMERIC for a typed value.
+                t.data["52WeekHigh"].astext.cast(Numeric).label("high_52w"),
+                t.data["52WeekLow"].astext.cast(Numeric).label("low_52w"),
+            )
+            .where(t.instrument_id.in_(page_ids))
+            .order_by(t.instrument_id, t.period_end_date.desc())
+            .distinct(t.instrument_id)
+        )
+        tech_rows: Any = await session.execute(tech_stmt)
+        for iid, high_52w, low_52w in tech_rows.all():
+            if high_52w is not None:
+                extras[str(iid)]["high_52w"] = high_52w
+            if low_52w is not None:
+                extras[str(iid)]["low_52w"] = low_52w
+    except Exception as e:
+        _log.warning("screen_page_extras_failed", block="technicals_52w", error=str(e))
+
+    return extras
 
 
 async def query_timeseries(
@@ -235,26 +370,11 @@ async def query_screen(
         # NULL for missing metrics, which the frontend renders as "—".
         m = FundamentalMetricModel
 
-        # WHY these 10 metrics: these are the columns displayed in the screener
-        # table's default (no-filter) view. Each metric name must match a row
-        # that the metric_extractor actually writes into fundamental_metrics.
-        # NOTE: ``revenue_ttm`` (HIGHLIGHTS section) replaces the old
-        # ``revenue_usd`` placeholder — ``revenue_usd`` was never populated
-        # in the extractor catalog, so the column always returned NULL.
-        key_metrics = [
-            "market_capitalization",
-            "pe_ratio",
-            "daily_return",
-            "beta",
-            "revenue_ttm",
-            # PRD-0099: add the five columns the screener table renders so the
-            # default view shows real values instead of "—".
-            "forward_pe",
-            "dividend_yield",
-            "roe_ttm",
-            "operating_margin_ttm",
-            "quarterly_revenue_growth_yoy",
-        ]
+        # WHY these metrics: the columns displayed in the screener table's
+        # default (no-filter) view — see ``_KEY_METRICS`` (module level) for
+        # the catalogue rationale. 2026-06-10: now shared with the POST branch
+        # so filtered results carry the same display set (audit gap #1).
+        key_metrics = list(_KEY_METRICS)
 
         # ── PERFORMANCE FIX (2026-06-09, BP-screener500) ─────────────────────
         # Original implementation joined 10 LATERAL "latest per metric"
@@ -349,6 +469,12 @@ async def query_screen(
         rows = result.all()
         if not rows:
             return [], total
+
+        # 2026-06-10: page-bounded extras — latest daily volume + absolute
+        # 52-week high/low (key metrics already projected via the LATERALs
+        # above, so ``extra_metrics`` is empty here).
+        extras = await _fetch_page_extras(session, page_ids, ())
+
         return [
             ScreenResult(
                 instrument_id=str(row.instrument_id),
@@ -357,6 +483,9 @@ async def query_screen(
                 exchange=row.exchange,
                 sector=row.sector,
                 metrics={
+                    # WHY extras first: explicit projections below (key metrics,
+                    # current_price, snap fields) must win on any name collision.
+                    **extras.get(str(row.instrument_id), {}),
                     **{name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None},
                     # current_price from quotes LEFT JOIN (None if no quote row)
                     **({"current_price": float(row.current_price)} if row.current_price is not None else {}),
@@ -614,9 +743,25 @@ async def query_screen(
         return [], 0
 
     total = int(rows[0].total_count)
+
+    # ── 2026-06-10 (frontend audit gap #1, HIGHEST LEVERAGE) ─────────────────
+    # Union the ``_KEY_METRICS`` display projection into the filtered branch.
+    # Previously this branch projected ONLY the metrics the user filtered on,
+    # so applying ANY filter blanked MKT CAP / P/E / CHG% / REV in the UI.
+    # The lookup is bounded to this page's instrument IDs (≤ limit rows) —
+    # same scoped approach as the GET branch post-BP-screener500. Metrics that
+    # are already projected by a filter subquery are excluded so the filter's
+    # period_type-scoped value always wins.
+    filtered_metric_names = {mn for mn, _ in metric_columns}
+    missing_key_metrics = tuple(km for km in _KEY_METRICS if km not in filtered_metric_names)
+    page_ids = [row.instrument_id for row in rows]
+    extras = await _fetch_page_extras(session, page_ids, missing_key_metrics)
+
     results = []
     for row in rows:
-        metrics_dict: dict[str, Any] = {}
+        # WHY extras seed the dict: explicit projections below (filter metrics,
+        # snap fields, current_price) must win on any name collision.
+        metrics_dict: dict[str, Any] = dict(extras.get(str(row.instrument_id), {}))
         for metric_name, _ in metric_columns:
             metrics_dict[metric_name] = getattr(row, metric_name, None)
         for sf in snap_fields_available:

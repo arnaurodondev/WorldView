@@ -56,6 +56,11 @@ class PeerInstrumentResponse(BaseModel):
     pe_ratio: float | None
     return_1y: float | None
     change_pct: float | None
+    # B-Q-1 (2026-06-10): latest traded price. Sourced from quotes.last when a
+    # quote row exists, falling back to the most recent 1d OHLCV close. Null
+    # when neither source has data. Defaulted so cached v1 payloads (without
+    # the field) and older clients remain compatible.
+    last_price: float | None = None
 
 
 class PeersResponse(BaseModel):
@@ -83,7 +88,9 @@ async def _get_read_session(request: Request) -> AsyncGenerator[AsyncSession, No
 async def get_peers(
     instrument_id: str,
     request: Request,
-    limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = 5,
+    # WHY default 8: the Quote-tab PeersStrip (B-Q-1) renders ~8 rows; callers
+    # that want the old 5 (PeerComparisonTable) pass limit=5 explicitly.
+    limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = 8,
     session: AsyncSession = Depends(_get_read_session),
 ) -> PeersResponse:
     """Return top-N market-cap peers in the same GICS industry.
@@ -110,7 +117,9 @@ async def get_peers(
 
     # ── Valkey cache check (best-effort) ────────────────────────────────────
     valkey = getattr(request.app.state, "valkey", None)
-    cache_key = f"peers:v1:{instrument_id}:{limit}"
+    # WHY v2: the B-Q-1 last_price field changed the payload shape; serving a
+    # v1 cache entry for up to 24h would hide the new column from the frontend.
+    cache_key = f"peers:v2:{instrument_id}:{limit}"
 
     if valkey is not None:
         try:
@@ -228,6 +237,12 @@ async def get_peers(
         peer_rows = peer_result.all()
         effective_label = sector  # Label reflects what we actually matched on
 
+    # ── B-Q-1: latest traded price per peer ──────────────────────────────────
+    # quotes.last preferred (intraday feed), latest 1d close as fallback —
+    # quote coverage is sparse (only actively-polled symbols have rows) while
+    # every has_ohlcv instrument has daily bars.
+    last_prices = await _fetch_last_prices(session, [str(r.instrument_id) for r in peer_rows])
+
     peers = [
         PeerInstrumentResponse(
             instrument_id=str(r.instrument_id),
@@ -239,6 +254,7 @@ async def get_peers(
             # WHY * 100: daily_return is stored as a decimal fraction (0.031 = 3.1%).
             # The frontend expects a percentage value (3.1) for display.
             change_pct=float(r.change_pct) * 100 if r.change_pct is not None else None,
+            last_price=last_prices.get(str(r.instrument_id)),
         )
         for r in peer_rows
     ]
@@ -246,6 +262,52 @@ async def get_peers(
     resp = PeersResponse(instrument_id=instrument_id, industry=effective_label, peers=peers)
     _write_cache(valkey, cache_key, resp)
     return resp
+
+
+async def _fetch_last_prices(session: AsyncSession, instrument_ids: list[str]) -> dict[str, float]:
+    """Return {instrument_id: last_price} for the given peers (B-Q-1).
+
+    Two queries:
+      1. ``quotes.last`` for every id that has a quote row (intraday feed).
+      2. Latest 1d OHLCV close (DISTINCT ON) for the ids quotes didn't cover.
+
+    Ids with neither source are simply absent — the caller's ``.get()`` maps
+    that to null in the response (honest "no data", never 0).
+
+    WHY lazy model imports: same IG-LAYER-002 rationale as the handler above.
+    """
+    if not instrument_ids:
+        return {}
+
+    from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
+    from market_data.infrastructure.db.models.quotes import QuoteModel
+
+    prices: dict[str, float] = {}
+
+    quote_rows: Any = await session.execute(
+        select(QuoteModel.instrument_id, QuoteModel.last).where(
+            QuoteModel.instrument_id.in_(instrument_ids),
+            QuoteModel.last.is_not(None),
+        )
+    )
+    for row in quote_rows.all():
+        prices[str(row.instrument_id)] = float(row.last)
+
+    missing = [iid for iid in instrument_ids if iid not in prices]
+    if missing:
+        # DISTINCT ON (instrument_id) + ORDER BY bar_date DESC → newest daily
+        # close per instrument in a single index-driven scan.
+        bar = OHLCVBarModel
+        close_rows: Any = await session.execute(
+            select(bar.instrument_id, bar.close)
+            .where(bar.instrument_id.in_(missing), bar.timeframe == "1d")
+            .order_by(bar.instrument_id, bar.bar_date.desc())
+            .distinct(bar.instrument_id)
+        )
+        for row in close_rows.all():
+            prices[str(row.instrument_id)] = float(row.close)
+
+    return prices
 
 
 def _write_cache(valkey: Any, key: str, resp: PeersResponse) -> None:

@@ -474,7 +474,12 @@ class TestPriceSnapshotToFromDict:
             "refresh_available",
             "refresh_cooldown_remaining_sec",
         }
-        assert set(d.keys()) == expected_keys
+        # WHY subset (not equality): PriceSnapshot is a forward-compatible
+        # contract — optional fields with None defaults (e.g. bid/ask, added
+        # 2026-06-10) may be appended without breaking Valkey round-trips.
+        # Asserting exact equality made every additive contract change fail
+        # this test even though older snapshots still deserialise fine.
+        assert expected_keys <= set(d.keys()), f"missing keys: {expected_keys - set(d.keys())}"
         # Price is a string (not float) to preserve Decimal precision
         assert isinstance(d["price"], str)
 
@@ -515,3 +520,217 @@ class TestResolverPicksLatestBar:
         )
         assert snapshot.source == PriceSource.INTRADAY_5M_CLOSE
         assert snapshot.price == Decimal("155.00")
+
+
+# ── 2026-06-10 day-change fix (frontend audit gap #6) ─────────────────────────
+#
+# Root cause of the "+0.00% on every equity" dashboard bug: only the
+# DAILY_CLOSE path passed prev_close into _build, so FRESH_QUOTE / BULK_QUOTE /
+# INTRADAY_5M / INTRADAY_1H snapshots always carried price_change=None — which
+# S9's _map_price_snapshot_to_quote coerces to 0.0 for the frontend Quote
+# shape. The resolver now derives prev_close from the latest 1d bar belonging
+# to a session STRICTLY BEFORE the price timestamp's UTC day.
+
+
+class TestDayChangeAcrossAllPaths:
+    """price_change/_pct must be populated on every resolution path with 1d history."""
+
+    @staticmethod
+    def _daily_bar(days_ago_from_now: float, close: str) -> OHLCVBar:
+        """A 1d bar floored to midnight UTC, N days before _NOW's date."""
+        day = (_NOW - timedelta(days=days_ago_from_now)).date()
+        return OHLCVBar(
+            instrument_id=_INSTRUMENT_ID,
+            timeframe=Timeframe.ONE_DAY,
+            bar_date=datetime(day.year, day.month, day.day, tzinfo=UTC),
+            open=Decimal("148.00"),
+            high=Decimal("151.00"),
+            low=Decimal("147.00"),
+            close=Decimal(close),
+            volume=10_000_000,
+        )
+
+    def test_fresh_quote_computes_change_vs_prior_session_close(self) -> None:
+        """FRESH_QUOTE path: change = quote.last - yesterday's 1d close."""
+        quote = _make_quote(age_seconds=60, last="150.00")  # 1 min old → FRESH_QUOTE
+        prev_day_bar = self._daily_bar(days_ago_from_now=1, close="145.00")
+
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[prev_day_bar],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.FRESH_QUOTE
+        assert snapshot.price_change == Decimal("5.00")
+        assert snapshot.price_change_pct is not None
+        assert snapshot.price_change_pct.quantize(Decimal("0.01")) == Decimal("3.45")
+
+    def test_fresh_quote_ignores_same_day_partial_daily_bar(self) -> None:
+        """Today's (partial, derived) 1d bar must NOT be used as the prior close.
+
+        Derived 1d bars are floored to midnight UTC of the CURRENT session, so a
+        raw ``bar_date < quote.timestamp`` comparison would pick today's own bar
+        and report a misleading near-zero change. The fix compares UTC dates.
+        """
+        quote = _make_quote(age_seconds=60, last="150.00")
+        today_partial = self._daily_bar(days_ago_from_now=0, close="150.10")  # same UTC day
+        prev_day_bar = self._daily_bar(days_ago_from_now=1, close="140.00")
+
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[today_partial, prev_day_bar],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.FRESH_QUOTE
+        # Must compare against yesterday (140), not today's partial (150.10).
+        assert snapshot.price_change == Decimal("10.00")
+
+    def test_intraday_1h_computes_change_vs_prior_session_close(self) -> None:
+        """INTRADAY_1H path (the live-stack repro: stale quotes, 1h bars only)."""
+        stale_quote = _make_quote(age_seconds=3600, last="150.00")  # 1h → skip quote
+        bar_1h = _make_bar(Timeframe.ONE_HOUR, age_seconds=7200, close="152.00")  # 2h old
+        prev_day_bar = self._daily_bar(days_ago_from_now=1, close="150.00")
+
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=stale_quote,
+            ohlcv_bars=[bar_1h, prev_day_bar],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.INTRADAY_1H_CLOSE
+        assert snapshot.price_change == Decimal("2.00")
+
+    def test_intraday_5m_computes_change_vs_prior_session_close(self) -> None:
+        """INTRADAY_5M path also carries a real change now."""
+        bar_5m = _make_bar(Timeframe.FIVE_MIN, age_seconds=300, close="151.00")
+        prev_day_bar = self._daily_bar(days_ago_from_now=1, close="150.00")
+
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=None,
+            ohlcv_bars=[bar_5m, prev_day_bar],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.INTRADAY_5M_CLOSE
+        assert snapshot.price_change == Decimal("1.00")
+
+    def test_quote_with_no_prior_session_stays_null_not_zero(self) -> None:
+        """With NO earlier-session 1d bar, change must be None (unknown), never 0.
+
+        The frontend renders None as "—"; emitting a fake 0.00 would assert
+        "the price did not move", which is not knowable from the data.
+        """
+        quote = _make_quote(age_seconds=60, last="150.00")
+        today_partial = self._daily_bar(days_ago_from_now=0, close="150.10")  # same day only
+
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[today_partial],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.FRESH_QUOTE
+        assert snapshot.price_change is None
+        assert snapshot.price_change_pct is None
+
+
+# ── B-Q bid/ask plumbing (2026-06-10) ────────────────────────────────────────
+
+
+class TestBidAskPlumbing:
+    """bid/ask are carried only on quote-sourced snapshots (B-Q task 5).
+
+    Order-book context comes exclusively from the quotes table; bar-derived
+    prices must report bid/ask = None ("no live quote"), never a stale value.
+    """
+
+    def test_fresh_quote_carries_bid_ask(self) -> None:
+        quote = _make_quote(age_seconds=60)
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.FRESH_QUOTE
+        assert snapshot.bid == Decimal("149.90")
+        assert snapshot.ask == Decimal("150.10")
+
+    def test_bulk_quote_carries_bid_ask(self) -> None:
+        quote = _make_quote(age_seconds=600)  # 10 min → BULK_QUOTE
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.BULK_QUOTE
+        assert snapshot.bid == Decimal("149.90")
+        assert snapshot.ask == Decimal("150.10")
+
+    def test_bar_sourced_snapshot_has_null_bid_ask(self) -> None:
+        """A stale quote falls through to bars — bid/ask must NOT leak through."""
+        stale_quote = _make_quote(age_seconds=3600)  # 1h → past bulk threshold
+        bar = _make_bar(Timeframe.FIVE_MIN, age_seconds=120)
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=stale_quote,
+            ohlcv_bars=[bar],
+            resolved_at=_NOW,
+        )
+        assert snapshot.source == PriceSource.INTRADAY_5M_CLOSE
+        assert snapshot.bid is None
+        assert snapshot.ask is None
+
+    def test_bid_ask_round_trip_through_dict(self) -> None:
+        """to_dict/from_dict preserve bid/ask as Decimal-precision strings."""
+        quote = _make_quote(age_seconds=60)
+        snapshot = _resolver().resolve(
+            instrument_id=_INSTRUMENT_ID,
+            symbol=_SYMBOL,
+            exchange=_EXCHANGE,
+            quote=quote,
+            ohlcv_bars=[],
+            resolved_at=_NOW,
+        )
+        restored = PriceSnapshot.from_dict(snapshot.to_dict())
+        assert restored.bid == Decimal("149.90")
+        assert restored.ask == Decimal("150.10")
+
+    def test_pre_bid_ask_cached_dict_still_deserialises(self) -> None:
+        """Valkey entries written before the bid/ask fields existed must load."""
+        legacy = {
+            "instrument_id": _INSTRUMENT_ID,
+            "symbol": _SYMBOL,
+            "exchange": _EXCHANGE,
+            "price": "100.00",
+            "price_change": None,
+            "price_change_pct": None,
+            "timestamp": "2024-03-15T15:00:00+00:00",
+            "fetched_at": "2024-03-15T15:00:00+00:00",
+            "source": "daily_close",
+            "freshness_status": "delayed",
+            "stale_reason": None,
+            # NOTE: no bid/ask keys — pre-2026-06-10 cache shape.
+        }
+        snapshot = PriceSnapshot.from_dict(legacy)
+        assert snapshot.bid is None
+        assert snapshot.ask is None

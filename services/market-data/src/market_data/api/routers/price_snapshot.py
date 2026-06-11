@@ -79,6 +79,9 @@ def _snapshot_to_response(snapshot: object) -> PriceSnapshotResponse:
         stale_reason=snapshot.stale_reason,
         refresh_available=snapshot.refresh_available,
         refresh_cooldown_remaining_sec=snapshot.refresh_cooldown_remaining_sec,
+        # B-Q bid/ask plumbing (2026-06-10): Decimal → str like the price fields.
+        bid=str(snapshot.bid) if snapshot.bid is not None else None,
+        ask=str(snapshot.ask) if snapshot.ask is not None else None,
     )
 
 

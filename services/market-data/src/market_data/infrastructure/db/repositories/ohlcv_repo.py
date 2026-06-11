@@ -286,30 +286,62 @@ class PgOHLCVRepository(OHLCVRepository):
 
         Uses LATERAL JOINs: first subquery finds the latest daily bar, second finds
         the closest daily bar at-or-before the lookback horizon.
+
+        2026-06-10 (frontend audit gap #6): each sector row now also carries
+        ``top_mover_ticker`` / ``top_mover_return_pct`` — the instrument with the
+        largest ABSOLUTE period return within the sector. The frontend heatmap
+        previously had to client-side-join /market/period-movers to label tiles.
+        Computed via DISTINCT ON over the same per-instrument CTE the average
+        uses, so the extra cost is one sort over already-materialised rows.
         """
         sql = text(
             """
+            WITH per_instrument AS (
+                SELECT
+                    i.sector AS sector,
+                    i.symbol AS ticker,
+                    (latest.close - prev.close) / NULLIF(prev.close, 0) * 100 AS return_pct
+                FROM instruments i
+                JOIN LATERAL (
+                    SELECT close, bar_date FROM ohlcv_bars
+                    WHERE instrument_id = i.id AND timeframe = '1d'
+                    ORDER BY bar_date DESC LIMIT 1
+                ) latest ON true
+                JOIN LATERAL (
+                    SELECT close FROM ohlcv_bars
+                    WHERE instrument_id = i.id AND timeframe = '1d'
+                      AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                    ORDER BY bar_date DESC LIMIT 1
+                ) prev ON true
+                WHERE i.sector IS NOT NULL
+            ),
+            sector_agg AS (
+                SELECT
+                    sector,
+                    AVG(return_pct) AS change_pct,
+                    COUNT(*)::int AS instrument_count
+                FROM per_instrument
+                GROUP BY sector
+            ),
+            top_movers AS (
+                -- One row per sector: the largest absolute move (gainer OR loser).
+                SELECT DISTINCT ON (sector)
+                    sector,
+                    ticker AS top_mover_ticker,
+                    return_pct AS top_mover_return_pct
+                FROM per_instrument
+                WHERE return_pct IS NOT NULL
+                ORDER BY sector, ABS(return_pct) DESC
+            )
             SELECT
-                i.sector AS name,
-                AVG(
-                    (latest.close - prev.close) / NULLIF(prev.close, 0)
-                ) * 100 AS change_pct,
-                COUNT(DISTINCT i.id)::int AS instrument_count
-            FROM instruments i
-            JOIN LATERAL (
-                SELECT close, bar_date FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = '1d'
-                ORDER BY bar_date DESC LIMIT 1
-            ) latest ON true
-            JOIN LATERAL (
-                SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = '1d'
-                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
-                ORDER BY bar_date DESC LIMIT 1
-            ) prev ON true
-            WHERE i.sector IS NOT NULL
-            GROUP BY i.sector
-            ORDER BY change_pct DESC NULLS LAST
+                a.sector AS name,
+                a.change_pct,
+                a.instrument_count,
+                t.top_mover_ticker,
+                t.top_mover_return_pct
+            FROM sector_agg a
+            LEFT JOIN top_movers t ON t.sector = a.sector
+            ORDER BY a.change_pct DESC NULLS LAST
             """
         )
         result = await self._session.execute(sql, {"lookback_days": lookback_days})
@@ -319,6 +351,12 @@ class PgOHLCVRepository(OHLCVRepository):
                 "name": row["name"],
                 "change_pct": round(float(row["change_pct"]), 2) if row["change_pct"] is not None else None,
                 "instrument_count": int(row["instrument_count"]),
+                # Forward-compatible additions (2026-06-10): null when the sector
+                # has no instrument with a computable return.
+                "top_mover_ticker": row["top_mover_ticker"],
+                "top_mover_return_pct": (
+                    round(float(row["top_mover_return_pct"]), 2) if row["top_mover_return_pct"] is not None else None
+                ),
             }
             for row in rows
         ]
@@ -336,12 +374,17 @@ class PgOHLCVRepository(OHLCVRepository):
         offset: SQL OFFSET for paginating through the sorted leaderboard.
         """
         order = "DESC" if mover_type == "gainers" else "ASC"
+        # 2026-06-10 (frontend audit gap #4): also project the latest daily close
+        # as ``last_price`` — the LATERAL subquery already materialises it, so
+        # this is free. Consumers previously paid a second /internal/v1/price
+        # batch call just to label movers with a price.
         sql = text(
             f"""
             SELECT
                 i.id AS instrument_id,
                 i.symbol AS ticker,
                 i.name AS name,
+                latest.close AS last_price,
                 (latest.close - prev.close) / NULLIF(prev.close, 0) * 100 AS period_return_pct
             FROM instruments i
             JOIN LATERAL (
@@ -370,6 +413,8 @@ class PgOHLCVRepository(OHLCVRepository):
                 "instrument_id": row["instrument_id"],
                 "ticker": row["ticker"],
                 "name": row["name"],
+                # Forward-compatible addition (2026-06-10): latest daily close.
+                "last_price": float(row["last_price"]) if row["last_price"] is not None else None,
                 "period_return_pct": (
                     round(float(row["period_return_pct"]), 2) if row["period_return_pct"] is not None else None
                 ),

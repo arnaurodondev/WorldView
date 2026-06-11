@@ -231,13 +231,46 @@ async def test_query_screen_filter_branch_includes_snapshot_join() -> None:
 
 @pytest.mark.asyncio
 async def test_query_screen_no_filter_branch_includes_snapshot_join() -> None:
-    """The no-filter branch also LEFT JOINs ``instrument_fundamentals_snapshot``."""
-    session, captured = _make_capture_session()
+    """The no-filter branch also LEFT JOINs ``instrument_fundamentals_snapshot``.
+
+    2026-06-10 repair: post-BP-screener500 (2026-06-09) the no-filter branch
+    first fetches the page's instrument IDs and early-returns when that page is
+    empty — an all-empty capture session therefore never built the main
+    (snapshot-joined) statement and ``captured[-1]`` was the page query. The
+    mock now returns a fake page row so the main statement is built + captured.
+    """
+    captured: list[Any] = []
+    page_row = MagicMock()
+    page_row.id = "instr-page-1"
+
+    async def _execute(stmt: Any) -> MagicMock:
+        result = MagicMock()
+        s = str(stmt)
+        if "statement_timeout" in s:
+            result.all = MagicMock(return_value=[])
+            return result
+        captured.append(stmt)
+        # WHY km_ check FIRST: the main metric statement projects snap columns
+        # whose names contain "count" (news_count_7d, recent_contradiction_count)
+        # so a bare "count" substring check would misroute it. The COUNT(*)
+        # query needs no explicit branch: MagicMock.__int__ defaults to 1.
+        if "km_" in s:
+            # Main metric query (key-metric subqueries aliased km_<name>) —
+            # empty rows trigger the early return, keeping page-extras
+            # enrichment out of this SQL-shape test.
+            result.all = MagicMock(return_value=[])
+        else:
+            result.all = MagicMock(return_value=[page_row])
+        return result
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=_execute)
 
     # Empty filters → no-filter branch
     await query_screen(session, [], limit=10)
 
     sql = _sql(captured[-1])
+    assert "km_" in sql.lower(), f"main metric query never built:\n{sql}"
     assert (
         "instrument_fundamentals_snapshot" in sql.lower()
     ), f"snapshot table missing from no-filter-branch SQL:\n{sql}"
