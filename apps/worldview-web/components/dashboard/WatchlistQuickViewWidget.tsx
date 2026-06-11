@@ -204,7 +204,7 @@ export function WatchlistQuickViewWidget() {
       <Link
         href="/portfolio"
         // Round 3 (item 5): keyboard focus ring on the header's primary action.
-        className="text-[10px] text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="text-[10px] text-muted-foreground-dim transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         Portfolio →
       </Link>

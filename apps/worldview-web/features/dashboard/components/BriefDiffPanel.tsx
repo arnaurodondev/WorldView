@@ -96,7 +96,7 @@ export function BriefDiffPanel({ diff, onClose }: BriefDiffPanelProps) {
       {/* ── Removed bullets ─────────────────────────────────────────────── */}
       {hasRemoved && (
         <div>
-          <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
+          <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground-dim">
             Removed
           </p>
           <ul className="m-0 list-none space-y-0.5 p-0">

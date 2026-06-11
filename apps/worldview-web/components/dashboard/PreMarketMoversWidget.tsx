@@ -404,7 +404,7 @@ export function PreMarketMoversWidget() {
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-        <span className="text-[10px] text-muted-foreground/60">
+        <span className="text-[10px] text-muted-foreground-dim">
           prior session data
         </span>
       </div>

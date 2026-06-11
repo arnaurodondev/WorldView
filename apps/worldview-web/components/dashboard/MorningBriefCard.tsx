@@ -338,7 +338,7 @@ export function MorningBriefCard() {
                     9px is allowed here: it is a timestamp, not a data value
                     (§15.9 exception list). */}
                 {lastAttempt && (
-                  <p className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
+                  <p className="font-mono text-[9px] tabular-nums text-muted-foreground-dim">
                     Last attempt {lastAttempt} UTC
                   </p>
                 )}
@@ -460,7 +460,7 @@ export function MorningBriefCard() {
             (R19 forbids deleting/weakening tests). The label also
             disambiguates the timestamp from "current UTC time" so users
             don't confuse the brief's mtime with wall-clock time. */}
-        <span className="min-w-[120px] max-w-[140px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground/60">
+        <span className="min-w-[120px] max-w-[140px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground-dim">
           Generated {ts} UTC
         </span>
 
@@ -717,7 +717,7 @@ export function MorningBriefCard() {
                   {/* Source domain — small uppercase label so the user can
                       tell at a glance whether the chip points to e.g.
                       Bloomberg vs. Reuters before they click. */}
-                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground/70">
+                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
                     {extractDomain(story.url ?? "")}
                   </span>
                   {/* Title truncated by a JS slice (CSS ellipsis on flex

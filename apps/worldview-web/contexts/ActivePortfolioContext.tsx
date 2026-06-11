@@ -12,10 +12,16 @@
  *
  * SEMANTICS:
  *   - `activePortfolioId === null` means "All Portfolios" (ROOT sentinel).
- *     Today consumers fall back to `portfolios[0]` for this case — true
- *     ROOT aggregation (sum-across-all-portfolios) is deferred to the
- *     dedicated Portfolio Overview wave per the QA recommendation.
+ *     usePortfolioMetrics (TopBar rail) resolves this to the backend ROOT
+ *     portfolio when provisioned, else aggregates client-side across all
+ *     portfolios (2026-06-10 PortfolioSwitcher fix). Single-portfolio
+ *     widgets (useResolvedPortfolioId) still fall back to `portfolios[0]`.
  *   - `activePortfolioId === <uuid>` means scope to that portfolio only.
+ *
+ * MOUNT: app/providers.tsx (root client provider tree). It MUST stay an
+ *   ancestor of app/(app)/layout.tsx because the layout itself calls
+ *   usePortfolioMetrics — pinned by
+ *   __tests__/active-portfolio-provider-mount.test.ts.
  *
  * PERSISTENCE:
  *   - Reads/writes `localStorage.shell.activePortfolioId` (same key the
@@ -178,7 +184,7 @@ function noopSetter(_id: string | null): void {
     _noopSetterWarned = true;
     console.warn(
       "[ActivePortfolioContext] useActivePortfolio().setActivePortfolio called outside <ActivePortfolioProvider>. " +
-        "Selection will not persist. Wrap the consumer tree in the provider — see app/(app)/layout.tsx for the canonical mount.",
+        "Selection will not persist. Wrap the consumer tree in the provider — see app/providers.tsx for the canonical mount.",
     );
   }
 }

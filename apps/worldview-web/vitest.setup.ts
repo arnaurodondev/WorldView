@@ -168,6 +168,30 @@ if (typeof window !== "undefined" && !window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 }
 
+// WHY IntersectionObserver stub (2026-06-10): jsdom does not implement
+// IntersectionObserver. PredictionMarketsWidget (dashboard infinite scroll)
+// constructs one for its bottom sentinel; AlertHistoryTab / docs pages did
+// too but carried per-file stubs. A global no-op stub (same pattern as
+// ResizeObserver above) lets any component mount; tests that need to DRIVE
+// intersection events still override this with their own capturing stub.
+if (typeof window !== "undefined" && !window.IntersectionObserver) {
+  class IntersectionObserverStub {
+    root = null;
+    rootMargin = "";
+    thresholds: number[] = [];
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  window.IntersectionObserver =
+    IntersectionObserverStub as unknown as typeof IntersectionObserver;
+  globalThis.IntersectionObserver =
+    IntersectionObserverStub as unknown as typeof IntersectionObserver;
+}
+
 // PLAN-0050 T-F-6-20: jsdom's `localStorage` shim in this project's vitest
 // config does not expose getItem/setItem/clear on the prototype — every
 // test that calls a hook backed by localStorage explodes with

@@ -278,7 +278,7 @@ export function SectorHeatmapWidget() {
         <div className="flex items-center gap-2">
           {/* Sector count — font-mono so digits align if it ever changes. */}
           {heatmap?.sectors && (
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground/60">
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground-dim">
               {heatmap.sectors.length} sectors
             </span>
           )}
@@ -315,18 +315,22 @@ export function SectorHeatmapWidget() {
           some widths, producing a visible re-layout when tiles arrived.
           11 placeholders ≈ the typical GICS sector count (matches 2 rows). */}
       {isHeatmapLoading && (
+        // Dead-space fix (2026-06-10): same flex-1 + stretchy auto-rows as the
+        // loaded treemap below — the skeleton must occupy the same height the
+        // tiles will, or data arrival visibly re-layouts the panel.
         <div
-          className="grid gap-0.5 content-start px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))" }}
+          className="grid flex-1 gap-0.5 px-0.5 py-0"
+          style={{
+            gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))",
+            gridAutoRows: `minmax(${TILE_HEIGHT_PX}px, 1fr)`,
+          }}
         >
           {Array.from({ length: 11 }).map((_, i) => (
             <Skeleton
               key={i}
-              className="min-h-[40px]"
-              style={{
-                height: `${TILE_HEIGHT_PX}px`,
-                animationDelay: `${i * 40}ms`,
-              }}
+              // h-full: fill the stretched grid row (min 40px via auto-rows).
+              className="h-full min-h-[40px]"
+              style={{ animationDelay: `${i * 40}ms` }}
             />
           ))}
         </div>
@@ -363,13 +367,29 @@ export function SectorHeatmapWidget() {
       {/* ── Treemap tile container ───────────────────────────────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
         // `auto-fit` + `minmax(48px, 1fr)`: at ~344px widget width, this fits
-        // ~7 tiles per row → 2 rows for 13 sectors (staying within the 130px
-        // Row 2 height budget). Previously 120px forced 2 tiles/row → 7 rows →
-        // widget height expanded to 312px, bloating the entire Row 2.
+        // ~7 tiles per row → 2 rows for 13 sectors. Previously 120px forced
+        // 2 tiles/row → 7 rows → widget height expanded to 312px.
         // WHY gap-0.5 (2px): tight enough for the Bloomberg dense-grid look.
+        //
+        // DEAD-SPACE FIX (user report 2026-06-10): the dashboard's Row 2 is
+        // `minmax(130px, max-content)` — it stretches to the TALLEST cell in
+        // the row (MarketSnapshot's 11 rows ≈ 300px). This container was
+        // previously `content-start` with FIXED 40px tile rows, so ~85px of
+        // tiles floated at the top of a ~300px panel with a huge empty band
+        // below. Fix: `flex-1` makes the grid consume the panel's full height
+        // budget and `gridAutoRows: minmax(40px, 1fr)` stretches the tile
+        // rows evenly into it (Finviz-map behaviour — tiles grow taller when
+        // the panel is taller, never leaving dead space). At exactly 130px
+        // the 1fr floor degrades gracefully back to ~40px rows, so nothing
+        // changes at the minimum row height. Works at every ≥1280px width
+        // because auto-fit recomputes columns independently of row height.
         <div
-          className="grid gap-0.5 content-start px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))" }}
+          className="grid flex-1 gap-0.5 px-0.5 py-0"
+          data-testid="sector-heatmap-grid"
+          style={{
+            gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))",
+            gridAutoRows: `minmax(${TILE_HEIGHT_PX}px, 1fr)`,
+          }}
         >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile
@@ -450,22 +470,21 @@ function SectorTile({
     <Popover>
       <PopoverTrigger asChild>
         <button
-          // WHY height only (no flex-basis): the parent container switched from
-          // flex-wrap to CSS grid (FR-1.7). In grid layout flex-basis is
-          // ignored — column widths are driven by auto-fit/minmax on the
-          // container. We keep height fixed so the treemap maintains a uniform
-          // row height; the proportional-weight variable (still computed in
-          // useMemo) is retained for future use if we switch back to flex.
-          style={{
-            height: `${TILE_HEIGHT_PX}px`,
-          }}
+          // WHY h-full (dead-space fix 2026-06-10, was a fixed 40px height):
+          // the parent grid now stretches rows via gridAutoRows:
+          // minmax(40px, 1fr) so tiles share the panel's full height budget.
+          // A fixed-height tile inside a stretched row would re-create the
+          // dead band INSIDE each row. min-h via the auto-rows floor keeps the
+          // 40px label+% readability minimum. The proportional-weight variable
+          // (still computed in useMemo) is retained for future use if we
+          // switch back to flex-basis treemap widths.
           // Round 1: hover tooltip — sector name, % change, top mover ticker
           // (when the client-side sector join has resolved; see WHY above).
           title={tooltip}
           className={cn(
-            // Base layout: vertical stack, centred horizontally, vertically
-            // centred on a fixed-height tile.
-            "flex min-h-[40px] flex-col items-center justify-center gap-0 px-1",
+            // Base layout: vertical stack, centred horizontally and
+            // vertically; h-full fills the stretched grid row (see above).
+            "flex h-full min-h-[40px] flex-col items-center justify-center gap-0 px-1",
             // Color encoding: bg-positive/N or bg-negative/N at 4 PROPORTIONAL
             // steps normalised against the payload's max |change| (Round 1).
             colorClassFor(changePct, maxAbsChange),

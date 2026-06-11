@@ -486,7 +486,7 @@ export function WatchlistMoversWidget() {
           ticker they "added" isn't here — it's in another list). */}
       {!isError && !noWatchlist && firstWatchlist && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-          <span className="text-[10px] text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground-dim">
             {firstWatchlist.name}
             {period === "1D" ? " · today" : period === "1W" ? " · 1W" : " · 1M"}
           </span>

@@ -43,6 +43,8 @@ import { createGateway } from "@/lib/gateway";
 // Round 4 (item 3b): central query-key factory for the shared portfolios key.
 import { qk } from "@/lib/query/keys";
 import { useAuth } from "@/hooks/useAuth";
+// 2026-06-10: shared active-portfolio resolution — follows the TopBar chip.
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
@@ -98,13 +100,16 @@ export function HoldingsMoversWidget() {
     staleTime: 60_000,
   });
 
-  const firstPortfolio = useMemo(() => {
-    if (!portfolios || portfolios.length === 0) return null;
-    const sorted = [...portfolios].sort(
-      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
-    );
-    return sorted[0] ?? null;
-  }, [portfolios]);
+  // 2026-06-10 PortfolioSwitcher fix: resolve via the shared contract
+  // (active-portfolio context first, fallback portfolios[0]) instead of the
+  // widget-private created_at sort. Before this, picking a portfolio in the
+  // TopBar chip changed PortfolioSummary but NOT this widget — two panels on
+  // the same dashboard silently described different books.
+  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
+  const firstPortfolio = useMemo(
+    () => portfolios?.find((p) => p.portfolio_id === resolvedPortfolioId) ?? null,
+    [portfolios, resolvedPortfolioId],
+  );
 
   // ── 2. Holdings ────────────────────────────────────────────────────────
   // Round 4 (item 3b): aligned to the shared ["holdings", id] key family
@@ -419,7 +424,7 @@ export function HoldingsMoversWidget() {
           the data context at a glance ("which portfolio?"). */}
       {!noPortfolio && !noHoldings && firstPortfolio && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-          <span className="text-[10px] text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground-dim">
             {firstPortfolio.name}
             {period === "1D" ? " · today" : period === "1W" ? " · 1W" : " · 1M"}
           </span>

@@ -44,11 +44,60 @@ export class GatewayError extends Error {
   }
 }
 
+/**
+ * GatewayTimeoutError — thrown when a request exceeds its timeout budget.
+ *
+ * WHY a subclass (R4 deferred item, 2026-06-10): before this, apiFetch had NO
+ * request timeout at all — a hung S9 connection (half-open TCP, stalled
+ * upstream) left the underlying fetch pending on browser defaults (up to
+ * ~300s in Chromium). TanStack Query would show an eternal loading state
+ * with no error surface. Callers can now `instanceof GatewayTimeoutError`
+ * to render "request timed out — retry?" distinctly from a 5xx.
+ *
+ * WHY status 408 (Request Timeout): the closest semantic HTTP status. The
+ * server never actually sent 408 — the abort is client-side — but reusing
+ * the GatewayError status channel keeps every existing `error.status`
+ * consumer working without a new error taxonomy.
+ */
+export class GatewayTimeoutError extends GatewayError {
+  constructor(
+    /** The timeout budget that was exceeded, in milliseconds. */
+    public readonly timeoutMs: number,
+    path: string,
+  ) {
+    super(408, `Request to ${path} timed out after ${timeoutMs}ms`);
+    this.name = "GatewayTimeoutError";
+  }
+}
+
+/**
+ * DEFAULT_TIMEOUT_MS — default per-request timeout budget (15s).
+ *
+ * WHY 15s: generous enough for the slowest legitimate gateway round-trips we
+ * observe (cold screener queries, KG depth-2 graph expansion ≈ 5-8s) while
+ * still bounding a hung connection to something a user will plausibly wait
+ * out. Callers with known-slow endpoints can override per call via
+ * `FetchOptions.timeoutMs`.
+ *
+ * NOTE — STREAMING IS EXEMPT BY CONSTRUCTION: SSE / chat streaming
+ * (lib/api/chat.ts `streamChat`) deliberately uses a RAW `fetch()` and never
+ * goes through apiFetch, so long-lived streams are NOT subject to this
+ * timeout. If you add a new streaming endpoint, do the same — a stream that
+ * flows through apiFetch would be killed mid-response after 15s.
+ */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
 // ── Fetch options ─────────────────────────────────────────────────────────
 
 export interface FetchOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   token?: string;
+  /**
+   * Per-call timeout override in milliseconds (default DEFAULT_TIMEOUT_MS).
+   * Pass `0` to disable the timeout entirely (escape hatch for known
+   * long-running non-streaming calls — use sparingly).
+   */
+  timeoutMs?: number;
 }
 
 // ── Malformed path guard ──────────────────────────────────────────────────
@@ -107,7 +156,7 @@ export async function apiFetch<T>(
     );
   }
 
-  const { body, token, ...rest } = options;
+  const { body, token, timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = options;
 
   const headers: HeadersInit = {
     "Content-Type": "application/json",
@@ -121,11 +170,43 @@ export async function apiFetch<T>(
     (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${BASE}${path}`, {
-    ...rest,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  // ── Timeout wiring (R4 deferred item, 2026-06-10) ──────────────────────
+  // AbortSignal.timeout() aborts the fetch with a DOMException named
+  // "TimeoutError" once the budget elapses. We must COMBINE it with any
+  // caller-provided signal (e.g. knowledge-graph.ts passes an AbortSignal so
+  // unmounted graph queries tear down their HTTP connection) — otherwise the
+  // timeout would silently REPLACE caller cancellation.
+  // WHY AbortSignal.any: the only composition primitive that fires on
+  // whichever signal aborts first. Available in all evergreen browsers +
+  // Node 20.3+ (our toolchain floor); the typeof guard keeps older test
+  // environments working by falling back to the caller signal alone.
+  let signal: AbortSignal | undefined = rest.signal ?? undefined;
+  if (timeoutMs > 0) {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    signal =
+      signal && typeof AbortSignal.any === "function"
+        ? AbortSignal.any([signal, timeoutSignal])
+        : signal ?? timeoutSignal;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      ...rest,
+      signal,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    // Map the AbortSignal.timeout() DOMException to our typed error so
+    // callers (and TanStack Query error states) can distinguish "the request
+    // timed out" from "the user/component cancelled it" (plain AbortError,
+    // re-thrown unchanged so TanStack treats it as a cancellation).
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new GatewayTimeoutError(timeoutMs, path);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     // Try to get error detail from JSON response body

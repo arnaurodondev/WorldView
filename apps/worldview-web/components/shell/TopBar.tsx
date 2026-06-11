@@ -10,7 +10,7 @@
  * center = market data, right = tools + user.
  *
  * WHO USES IT: app/(app)/layout.tsx — rendered at the top of every protected page
- * DATA SOURCE: auth state from AuthContext, market data from IndexStrip (10-ticker static row)
+ * DATA SOURCE: auth state from AuthContext, market data from IndexStrip (scrolling 16-ticker tape)
  * DESIGN REFERENCE: PRD-0028 §6.5 TopBar; Handoff 2026-05-01 Tier-3 #7
  */
 
@@ -25,7 +25,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { UtcClock } from "@/components/shell/UtcClock";
-// PRD-0089 W1 §4.3 — IndexStrip: static 10-cell row, no animation, priority-drop at narrow viewports.
+// User feedback 2026-06-10 — IndexStrip is now a continuously scrolling ticker
+// tape (16 instruments, pause-on-hover, static under prefers-reduced-motion).
+// This is the sanctioned NFR-6 exception — see IndexStrip.tsx header.
 import { IndexStrip } from "@/components/shell/IndexStrip";
 // PRD-0089 W1 §4.3 — PortfolioSwitcher between GlobalSearch and IndexStrip (slot 3/4).
 import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
@@ -212,7 +214,7 @@ export function TopBar({
           onClick={() => window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT))}
           aria-label="Open command palette (Cmd+K or Ctrl+K)"
           title="Open command palette (⌘K / Ctrl+K)"
-          className="flex h-5 shrink-0 items-center rounded-[2px] border border-border/50 bg-muted/20 px-1.5 font-mono text-[10px] text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex h-5 shrink-0 items-center rounded-[2px] border border-border/50 bg-muted/20 px-1.5 font-mono text-[10px] text-muted-foreground-dim hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           ⌘K
         </button>
@@ -224,16 +226,16 @@ export function TopBar({
           portfolio is active. The IndexStrip to its right absorbs the slack. */}
       <PortfolioSwitcher />
 
-      {/* ── Slot 5: IndexStrip (replaces the animated marquee) ──────── */}
-      {/* WHY flex-1 min-w-0: the strip absorbs all horizontal slack between
+      {/* ── Slot 5: IndexStrip — scrolling ticker tape ──────────────── */}
+      {/* WHY flex-1 min-w-0: the tape absorbs all horizontal slack between
           the left cluster (logo+search+switcher) and the right cluster (clock+
-          pill+rail+AI+bell+avatar). Without flex-1 the strip would not expand
-          to fill the available space on wide monitors. min-w-0 allows it to
-          shrink below its intrinsic width — the strip's own priority-drop CSS
-          handles graceful degradation (cells hide, never overflow).
+          pill+rail+AI+bell+avatar). min-w-0 allows it to shrink below its
+          intrinsic width — the tape clips its own moving track internally.
           WHY overflow-hidden: stops any momentary over-width during hydration
-          from causing a horizontal scrollbar flash on the TopBar. */}
-      <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
+          from causing a horizontal scrollbar flash on the TopBar.
+          WHY no justify-center (removed with the marquee rewrite): the tape's
+          moving track fills the entire slot edge-to-edge by design. */}
+      <div className="flex min-w-0 flex-1 overflow-hidden">
         <IndexStrip />
       </div>
 

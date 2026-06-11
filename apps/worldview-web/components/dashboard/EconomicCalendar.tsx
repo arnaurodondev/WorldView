@@ -250,7 +250,7 @@ function ImpactBadge({ impact }: { impact: EconomicImpact }) {
   const colors: Record<EconomicImpact, string> = {
     HIGH: "text-warning", // PLAN-0059 W0 F-VISUAL-022: --warning token (was amber-400)
     MEDIUM: "text-muted-foreground",
-    LOW: "text-muted-foreground/50",
+    LOW: "text-muted-foreground-dim",
   };
 
   return (

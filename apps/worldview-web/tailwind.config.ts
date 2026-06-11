@@ -61,6 +61,10 @@ const config: Config = {
         muted: {
           DEFAULT: "hsl(var(--muted))",
           foreground: "hsl(var(--muted-foreground))",
+          // R4 deferred item: AA-passing tertiary dim (replaces the WCAG-failing
+          // text-muted-foreground/70|60|50 opacity steps on informational text).
+          // Class form: text-muted-foreground-dim. See globals.css token comment.
+          "foreground-dim": "hsl(var(--muted-foreground-dim))",
         },
         accent: {
           DEFAULT: "hsl(var(--accent))",

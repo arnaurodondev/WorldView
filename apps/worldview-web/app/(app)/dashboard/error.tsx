@@ -30,7 +30,7 @@ export default function DashboardError({
     <div className="flex h-full flex-col items-center justify-center gap-3">
       <p className="text-[12px] text-muted-foreground">Something went wrong.</p>
       {error.message && (
-        <p className="max-w-[300px] text-center text-[10px] text-muted-foreground/60">
+        <p className="max-w-[300px] text-center text-[10px] text-muted-foreground-dim">
           {error.message}
         </p>
       )}

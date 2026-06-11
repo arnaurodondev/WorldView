@@ -15,12 +15,15 @@
  * SPY is included but may show "—" until OHLCV is ingested (no daily price).
  * VIX, 10Y yield, DXY, gold require specialized data sources not yet integrated.
  *
- * WHY TWO-STEP FETCH (search → overview per ticker): We need instrument_ids
+ * WHY TWO-STEP FETCH (resolve → overview per ticker): We need instrument_ids
  * to call getCompanyOverview(), but we only know tickers at build time. Step 1
  * resolves tickers → instrument_ids; Step 2 fans out CompanyOverview queries
- * (one per ticker) via useQueries. getBatchQuotes was replaced because it hits
- * S3 batch-price which returns price=0 for equities without seeded OHLCV data
- * (BP-463). getCompanyOverview uses the full PriceSnapshot fallback chain.
+ * (one per ticker) via useQueries — the overview quote leg uses the full
+ * PriceSnapshot fallback chain (BP-463: bare batch-price returns price=0 for
+ * equities without seeded OHLCV). Step 2b (2026-06-10 unified-resolution fix)
+ * ADDS a single POST /v1/quotes/batch call as a per-row FALLBACK for
+ * instruments whose overview has no quote (IWM/VIX) — the same path the
+ * TopBar IndexStrip uses, so the two surfaces can never disagree again.
  *
  * WHY SHOW CHANGE% + PRICE: price tells the trader the absolute level;
  * change% tells them today's move. Both are required for a quick morning scan.
@@ -74,18 +77,65 @@ import { usePriceFlash } from "@/features/dashboard/hooks/usePriceFlash";
  * The group separator is a thin muted label row, same pattern as Bloomberg's
  * "SECTORS / INDICES" dividers in the monitor panel.
  */
+/**
+ * UNIFIED RESOLUTION FIX (user report 2026-06-10 — "IWM/BTC show — while the
+ * TopBar strip shows real prices"): this widget and the IndexStrip resolved
+ * instruments DIFFERENTLY, producing contradictory data on the same screen:
+ *   1. Ticker symbol: this widget asked resolveTickersBatch for "BTC" which
+ *      resolves to NULL on S3 — the canonical row is "BTC-USD" (verified live
+ *      2026-06-10). The strip already used "BTC-USD" and worked. Fix: each
+ *      row now carries a `canonicalTicker` (API symbol) + `label` (display).
+ *   2. Quote path: this widget read ONLY overview.quote, which is null for
+ *      IWM/VIX (S9 /v1/companies/{id}/overview has no quote leg for several
+ *      index ETFs), while the strip's POST /v1/quotes/batch returns IWM
+ *      285.21 fine. Fix: keep the overview chain (BP-463 — batch returns
+ *      price=0 for some equities) but FALL BACK to the strip's batch-quote
+ *      path whenever the overview quote is missing or non-positive. Both
+ *      components now agree by construction: any price the strip can show,
+ *      this widget shows too.
+ */
+interface SnapshotInstrument {
+  /** Symbol sent to resolveTickersBatch AND used in quote lookups. */
+  canonicalTicker: string;
+  /** Short label rendered in the 40px row slot ("BTC", not "BTC-USD"). */
+  label: string;
+}
+
 interface SnapshotGroup {
   label: string;
-  tickers: readonly string[];
+  instruments: readonly SnapshotInstrument[];
 }
 
 const SNAPSHOT_GROUPS: SnapshotGroup[] = [
-  { label: "INDICES", tickers: ["SPY", "QQQ", "IWM", "VIX", "BTC"] },
-  { label: "EQUITIES", tickers: ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "JPM"] },
+  {
+    label: "INDICES",
+    instruments: [
+      { canonicalTicker: "SPY", label: "SPY" },
+      { canonicalTicker: "QQQ", label: "QQQ" },
+      { canonicalTicker: "IWM", label: "IWM" },
+      { canonicalTicker: "VIX", label: "VIX" },
+      // WHY BTC-USD (was "BTC"): "BTC" resolves to null on S3 — the
+      // instrument row's ticker is "BTC-USD" (same symbol the IndexStrip
+      // uses). The label stays "BTC" for the 40px row slot.
+      { canonicalTicker: "BTC-USD", label: "BTC" },
+    ],
+  },
+  {
+    label: "EQUITIES",
+    instruments: [
+      { canonicalTicker: "AAPL", label: "AAPL" },
+      { canonicalTicker: "MSFT", label: "MSFT" },
+      { canonicalTicker: "NVDA", label: "NVDA" },
+      { canonicalTicker: "AMZN", label: "AMZN" },
+      { canonicalTicker: "GOOGL", label: "GOOGL" },
+      { canonicalTicker: "JPM", label: "JPM" },
+    ],
+  },
 ];
 
-// Flat list for the instrument_id lookup query key + Promise.all
-const ALL_TICKERS = SNAPSHOT_GROUPS.flatMap((g) => [...g.tickers]);
+// Flat list for the instrument_id lookup query key + per-row overview fan-out.
+const ALL_INSTRUMENTS = SNAPSHOT_GROUPS.flatMap((g) => [...g.instruments]);
+const ALL_TICKERS = ALL_INSTRUMENTS.map((i) => i.canonicalTicker);
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -149,6 +199,24 @@ export function MarketSnapshotWidget() {
     }),
   });
 
+  // ── Step 2b: Batch-quote fallback (unified-resolution fix, 2026-06-10) ────
+  // The SAME call the IndexStrip makes (POST /v1/quotes/batch). For rows
+  // where the overview has no usable quote (IWM/VIX — overview.quote is null
+  // on S9), this supplies the price the strip already shows. One extra HTTP
+  // request for the whole widget; 15s staleTime matches the platform quote
+  // cadence (DEFAULT_STALE.quotes) so repeated mounts hit cache.
+  const resolvedIds = useMemo(
+    () => Object.values(instrumentMap ?? {}).filter((id): id is string => !!id),
+    [instrumentMap],
+  );
+  const { data: batchQuotesData } = useQuery({
+    queryKey: ["market-snapshot-batch-quotes", ...resolvedIds],
+    queryFn: () => createGateway(accessToken).getBatchQuotes(resolvedIds),
+    enabled: !!accessToken && resolvedIds.length > 0,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+
   // WHY two loading signals:
   //   isLoading (strict) — true until ALL queries resolve; used to switch the
   //     skeleton-vs-data render branches so partial data never shows alongside
@@ -166,22 +234,53 @@ export function MarketSnapshotWidget() {
 
   // Ticker → quote map built from stable ALL_TICKERS index ordering.
   // useMemo avoids map reconstruction on every render.
+  //
+  // RESOLUTION LADDER (unified-resolution fix, 2026-06-10):
+  //   1. overview.quote with a positive price — the BP-463-safe chain
+  //      (FRESH_QUOTE → BULK_QUOTE → INTRADAY → DAILY_CLOSE → STALE).
+  //   2. batch quote with a positive price — the IndexStrip's working path;
+  //      covers IWM/VIX where the overview returns quote: null.
+  //   3. null → the row truthfully renders "—".
+  // The positive-price guard on BOTH legs keeps the BP-463 "price=0 means no
+  // OHLCV" semantics: a zero is never preferred over a real value from the
+  // other leg, and a double-zero still renders as "—" downstream.
   const quoteByTicker = useMemo(() => {
     const map = new Map<string, { price: number; change: number; change_pct: number } | null>();
-    ALL_TICKERS.forEach((ticker, i) => {
-      const q = overviewQueries[i]?.data?.quote;
-      map.set(ticker, q ?? null);
+    ALL_INSTRUMENTS.forEach((inst, i) => {
+      const overviewQuote = overviewQueries[i]?.data?.quote;
+      if (overviewQuote && (overviewQuote.price ?? 0) > 0) {
+        map.set(inst.canonicalTicker, overviewQuote);
+        return;
+      }
+      // Fallback: the batch-quote leg, keyed by resolved instrument id.
+      const instrumentId = instrumentMap?.[inst.canonicalTicker];
+      const batchQuote = instrumentId
+        ? batchQuotesData?.quotes?.[instrumentId]
+        : undefined;
+      if (batchQuote && (batchQuote.price ?? 0) > 0) {
+        map.set(inst.canonicalTicker, {
+          price: batchQuote.price,
+          change: batchQuote.change ?? 0,
+          change_pct: batchQuote.change_pct ?? 0,
+        });
+        return;
+      }
+      map.set(inst.canonicalTicker, null);
     });
     return map;
-  }, [overviewQueries]);
+  }, [overviewQueries, instrumentMap, batchQuotesData]);
 
   // Build display rows per group — include instrumentId so SnapshotRow can navigate.
   const groupRows = SNAPSHOT_GROUPS.map((group) => ({
     label: group.label,
-    rows: group.tickers.map((ticker) => {
-      const instrumentId = instrumentMap?.[ticker];
-      const quote = quoteByTicker.get(ticker) ?? null;
-      return { ticker, instrumentId: instrumentId ?? null, quote };
+    rows: group.instruments.map((inst) => {
+      const instrumentId = instrumentMap?.[inst.canonicalTicker];
+      const quote = quoteByTicker.get(inst.canonicalTicker) ?? null;
+      return {
+        ticker: inst.label,
+        instrumentId: instrumentId ?? null,
+        quote,
+      };
     }),
   }));
 
@@ -246,10 +345,10 @@ export function MarketSnapshotWidget() {
                   <Skeleton className="h-2 w-[44px]" />
                 </div>
                 <div className="divide-y divide-border/30">
-                  {/* WHY group.tickers.length: skeleton row count must match the
-                      loaded row count per group (5 INDICES + 6 EQUITIES). */}
-                  {group.tickers.map((ticker) => (
-                    <div key={ticker} className="flex h-[22px] items-center gap-1 px-2">
+                  {/* WHY group.instruments.length: skeleton row count must match
+                      the loaded row count per group (5 INDICES + 6 EQUITIES). */}
+                  {group.instruments.map(({ canonicalTicker }) => (
+                    <div key={canonicalTicker} className="flex h-[22px] items-center gap-1 px-2">
                       <Skeleton className="h-3 w-[40px] shrink-0" />
                       <span className="flex-1" />
                       <Skeleton className="h-3 w-[48px] shrink-0" />
@@ -273,7 +372,7 @@ export function MarketSnapshotWidget() {
                   gIdx > 0 && "border-t border-border/30",
                 )}
               >
-                <span className="text-[9px] uppercase tracking-[0.1em] text-muted-foreground/50">
+                <span className="text-[9px] uppercase tracking-[0.1em] text-muted-foreground-dim">
                   {group.label}
                 </span>
               </div>
@@ -296,7 +395,7 @@ export function MarketSnapshotWidget() {
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-        <span className="text-[10px] text-muted-foreground/60">
+        <span className="text-[10px] text-muted-foreground-dim">
           {/* Round 4 (item 1): the error branch gets its own truthful caption —
               "instruments not yet ingested" claimed a DATA gap when the
               REQUEST failed, sending the trader to the wrong triage path. */}

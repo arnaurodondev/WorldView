@@ -16,7 +16,7 @@
 "use client";
 // WHY "use client": uses useInfiniteQuery for paginated market data + useState for filters.
 
-import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -116,10 +116,14 @@ function ProbabilitySparkline({ data }: { data?: number[] | null }) {
 
 // ── Category filter pills ─────────────────────────────────────────────────────
 
-// WHY "all" sentinel: gateway doesn't support null category param; we use "all"
-// client-side to mean "show everything" and filter on market.category locally.
-const CATEGORIES = ["all", "politics", "crypto", "sports", "macro"] as const;
-type Category = (typeof CATEGORIES)[number];
+// 2026-06-10 filtering fix: pills are now SERVER-DRIVEN. The static list
+// ("politics/crypto/sports/macro") + client-side synonym matching is gone —
+// the filter is pushed down via the documented `?category=` param (S9 does a
+// case-insensitive equality on S3's category column) and the pill set comes
+// from GET /v1/signals/prediction-markets/categories, so a pill can never
+// name a bucket the backend would return zero rows for. "all" remains the
+// client-side sentinel meaning "omit the param".
+const ALL_CATEGORY = "all";
 
 // ── YES/NO probability color helper ───────────────────────────────────────────
 
@@ -285,12 +289,40 @@ function MarketRow({ market }: { market: PredictionMarketExtended }) {
 export default function PredictionMarketsPage() {
   const { accessToken } = useAuth();
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState<Category>("all");
+  const [category, setCategory] = useState<string>(ALL_CATEGORY);
+
+  // ── Category pills — server-driven (2026-06-10 filtering fix) ─────────────
+  // One cheap GROUP BY on the backend; counts reflect the FULL open universe
+  // so the pills stay truthful regardless of how many pages are loaded.
+  // Rows with category IS NULL are uncounted here by design (they only show
+  // under "all" — the backend's documented filter semantics).
+  const { data: categoryCounts } = useQuery({
+    queryKey: ["prediction-markets-page-categories"],
+    queryFn: () => createGateway(accessToken).getPredictionMarketCategories(),
+    enabled: !!accessToken,
+    staleTime: 5 * 60_000,
+  });
+  // "all" first (reset affordance), then real buckets by count desc so the
+  // densest filters sit closest to the reset.
+  const categoryPills: Array<{ value: string; count: number | null }> = useMemo(() => {
+    const buckets = (categoryCounts?.items ?? [])
+      .filter((c): c is { category: string; count: number } => c.category != null && c.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .map((c) => ({ value: c.category, count: c.count }));
+    return [{ value: ALL_CATEGORY, count: categoryCounts?.total ?? null }, ...buckets];
+  }, [categoryCounts]);
 
   // WHY useInfiniteQuery: PRD-0103 dashboard regression #3 — paginate the
   // prediction markets browser using offset+limit pages instead of the prior
   // limit=200 eager fetch. Users now scroll/click through the universe at
   // their own pace; bandwidth is proportional to how many pages they view.
+  //
+  // WHY category in the queryKey AND the params (2026-06-10 fix): the filter
+  // previously matched `m.category` client-side — a field the gateway never
+  // mapped (always undefined), so EVERY category pill yielded zero rows.
+  // Server-side filtering also makes pagination correct under a filter:
+  // offset walks the filtered universe, so "politics" can page through all
+  // 181 politics rows instead of whatever subset happened to be loaded.
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<
       PredictionMarketsResponse,
@@ -299,17 +331,18 @@ export default function PredictionMarketsPage() {
       readonly unknown[],
       number
     >({
-      queryKey: ["prediction-markets-page-infinite"],
+      queryKey: ["prediction-markets-page-infinite", category],
       queryFn: ({ pageParam }) =>
         createGateway(accessToken).getPredictionMarkets({
           status: "open",
           limit: PAGE_SIZE,
           offset: pageParam,
+          category: category === ALL_CATEGORY ? undefined : category,
         }),
       initialPageParam: 0,
       getNextPageParam: (lastPage, allPages) => {
-        // WHY total-based: backend always returns total open markets; stop
-        // when we've fetched every row. Fallback: partial page = end.
+        // WHY total-based: backend always returns the (filter-scoped) total;
+        // stop when we've fetched every row. Fallback: partial page = end.
         const loaded = allPages.reduce((n, p) => n + p.markets.length, 0);
         if (lastPage.total != null) return loaded < lastPage.total ? loaded : undefined;
         return lastPage.markets.length === PAGE_SIZE ? loaded : undefined;
@@ -332,36 +365,17 @@ export default function PredictionMarketsPage() {
   const markets: PredictionMarket[] = useMemo(() => {
     let result = allLoadedMarkets;
 
-    // Density bundle 2026-05-09 — fix non-working category filter.
-    //
-    // Previous bug: ``m.category?.toLowerCase() === category`` required EXACT
-    // string equality, but the upstream Polymarket categories include synonyms
-    // ("elections" → politics, "sports-mlb" → sports) and the DB column may
-    // hold either the canonical bucket OR the raw tag. We:
-    //   1. Lowercase + null-coerce both sides safely.
-    //   2. Allow substring match so "politics" pill catches "elections" rows.
-    //   3. Hand-map a few obvious synonyms so the pills feel responsive even
-    //      when the DB hasn't normalized to our 4 canonical buckets yet.
-    if (category !== "all") {
-      // Synonym map — extend as needed. Keys are pill values; values are
-      // substrings that should also count as a match.
-      const SYNONYMS: Record<string, readonly string[]> = {
-        politics: ["politic", "election", "vote", "president", "senate", "congress"],
-        crypto: ["crypto", "btc", "bitcoin", "eth", "ethereum", "defi"],
-        sports: ["sport", "nba", "nfl", "nhl", "mlb", "soccer", "football", "baseball"],
-        macro: ["macro", "fed", "fomc", "gdp", "cpi", "inflation", "rate", "economy"],
-      };
-      const aliases = SYNONYMS[category] ?? [category];
-      result = result.filter((m) => {
-        const cat = (m.category ?? "").toLowerCase();
-        if (!cat) return false;
-        return aliases.some((alias) => cat.includes(alias));
-      });
-    }
+    // 2026-06-10: NO client-side category filter anymore — the server already
+    // scoped every loaded page via `?category=` (see queryFn above). The
+    // previous client-side path filtered on `m.category`, a field the gateway
+    // dropped (always undefined) — every pill returned zero rows. The synonym
+    // map died with it: the server's equality semantics ARE the taxonomy the
+    // counts endpoint reports, so pills and rows can't disagree.
 
-    // Text search on title + category. ``title`` defaults to "" when missing
-    // so we never call .toLowerCase on undefined (was crash-prone for half-
-    // populated dev rows).
+    // Text search on title + category — client-side over the LOADED pages
+    // only (the backend's `query` param exists, but wiring it would refetch
+    // per keystroke; debounced server search is a follow-up). ``title``
+    // defaults to "" when missing so we never call .toLowerCase on undefined.
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter((m) => {
@@ -372,7 +386,7 @@ export default function PredictionMarketsPage() {
     }
 
     return result;
-  }, [allLoadedMarkets, category, search]);
+  }, [allLoadedMarkets, search]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -394,20 +408,28 @@ export default function PredictionMarketsPage() {
 
         {/* Category pills + search */}
         <div className="mt-2.5 flex items-center gap-2">
-          <div className="flex gap-1">
-            {CATEGORIES.map((cat) => (
+          <div className="flex gap-1" role="group" aria-label="Filter by category">
+            {/* Server-driven pills (2026-06-10): one per backend bucket with a
+                non-zero count, plus "all". Counts shown so the trader knows
+                the bucket size BEFORE clicking (same idiom as the dashboard
+                widget's pill row). */}
+            {categoryPills.map(({ value, count }) => (
               <button
-                key={cat}
-                onClick={() => setCategory(cat)}
+                key={value}
+                onClick={() => setCategory(value)}
+                aria-pressed={category === value}
                 className={cn(
                   "rounded-[2px] px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
                   // WHY bg-primary/20 text-primary (not hardcoded yellow HSL): design-system tokens.
-                  category === cat
+                  category === value
                     ? "bg-primary/20 text-primary"
                     : "bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
-                {cat}
+                {value}
+                {count != null && count > 0 ? (
+                  <span className="ml-1 opacity-70 tabular-nums">{count}</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -470,9 +492,9 @@ export default function PredictionMarketsPage() {
           <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
             <TrendingUp className="h-5 w-5" strokeWidth={1.5} />
             <p className="text-[11px]">
-              {search || category !== "all" ? "No markets match your filters" : "No prediction markets available"}
+              {search || category !== ALL_CATEGORY ? "No markets match your filters" : "No prediction markets available"}
             </p>
-            {!search && category === "all" && (
+            {!search && category === ALL_CATEGORY && (
               <p className="text-[10px] text-muted-foreground/60">
                 Run <code className="font-mono text-[9px]">make seed</code> to populate Polymarket data.
               </p>

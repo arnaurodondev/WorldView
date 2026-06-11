@@ -162,3 +162,49 @@ describe("SectorHeatmapWidget — overflow guard at trader viewports (B-2-03)", 
     expect(tileEl.className).not.toMatch(/\bgap-1\b/);
   });
 });
+
+// ── Dead-space fix (user report 2026-06-10) ──────────────────────────────────
+// The dashboard's Row 2 stretches to its tallest cell (MarketSnapshot ≈
+// 300px). The heatmap's tile grid used to be `content-start` with fixed 40px
+// tiles → ~85px of tiles floating above ~200px of empty panel. The fix makes
+// the grid consume the panel height (flex-1) and stretch tile rows into it
+// (gridAutoRows: minmax(40px, 1fr)). jsdom computes no layout, so we pin the
+// structural contract — the exact classes/styles that produce the behaviour.
+describe("SectorHeatmapWidget — height budget sharing (dead-space fix)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("tile grid is flex-1 with stretchy auto-rows (no content-start dead band)", async () => {
+    const { getByTestId, findAllByLabelText } = render(
+      <SectorHeatmapWidget />,
+      { wrapper: ({ children }) => wrap(children) },
+    );
+    await findAllByLabelText(/ sector,/i);
+
+    const grid = getByTestId("sector-heatmap-grid");
+    // flex-1: the grid claims the panel's full height inside the flex column.
+    expect(grid.className).toMatch(/\bflex-1\b/);
+    // content-start was the dead-space culprit — rows packed at the top.
+    expect(grid.className).not.toMatch(/\bcontent-start\b/);
+    // Stretchy rows with the 40px readability floor.
+    expect(grid.style.gridAutoRows).toBe("minmax(40px, 1fr)");
+  });
+
+  it("tiles fill their stretched grid row (h-full, no fixed inline height)", async () => {
+    const { findAllByLabelText } = render(
+      <SectorHeatmapWidget />,
+      { wrapper: ({ children }) => wrap(children) },
+    );
+    const tiles = await findAllByLabelText(/ sector,/i);
+
+    for (const tile of tiles) {
+      const el = tile as HTMLElement;
+      // h-full lets the tile track its (stretched) grid row height …
+      expect(el.className).toMatch(/\bh-full\b/);
+      // … and the old fixed inline `height: 40px` must be gone, or the tile
+      // would re-create the dead band INSIDE each stretched row.
+      expect(el.style.height).toBe("");
+    }
+  });
+});

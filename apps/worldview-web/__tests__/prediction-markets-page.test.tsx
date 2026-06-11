@@ -48,10 +48,14 @@ vi.mock("@/hooks/useAuth", () => ({
 // ── Gateway mock ───────────────────────────────────────────────────────────────
 
 const mockGetPredictionMarkets = vi.fn();
+// 2026-06-10 filtering fix: pills are server-driven via the categories
+// endpoint — the page now fetches per-bucket counts to build the pill row.
+const mockGetPredictionMarketCategories = vi.fn();
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getPredictionMarkets: mockGetPredictionMarkets,
+    getPredictionMarketCategories: mockGetPredictionMarketCategories,
   })),
   GatewayError: class GatewayError extends Error {
     status: number;
@@ -104,6 +108,16 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 describe("PredictionMarketsPage", () => {
   beforeEach(() => {
     mockGetPredictionMarkets.mockReset();
+    mockGetPredictionMarketCategories.mockReset();
+    // Default category universe — macro + sports buckets so the pill row
+    // renders both in the filter tests below.
+    mockGetPredictionMarketCategories.mockResolvedValue({
+      items: [
+        { category: "macro", count: 1 },
+        { category: "sports", count: 1 },
+      ],
+      total: 2,
+    });
   });
 
   // (a) Skeleton while loading
@@ -150,14 +164,22 @@ describe("PredictionMarketsPage", () => {
     });
   });
 
-  // (c) Category pill filters
+  // (c) Category pill filters — SERVER-SIDE since the 2026-06-10 fix.
+  // The old client-side filter matched `m.category`, a field the gateway never
+  // mapped (always undefined) → every pill yielded zero rows. The pills now
+  // send `?category=` to the backend; these tests pin that the param is sent
+  // and the (server-filtered) response is what renders.
 
-  it("hides markets that don't match the active category pill", async () => {
-    const markets = [
-      makeMarket({ title: "Fed rate decision", category: "macro" }),
-      makeMarket({ title: "NBA Finals winner", category: "sports" }),
-    ];
-    mockGetPredictionMarkets.mockResolvedValue({ markets, total: 2 });
+  it("sends the category param and renders only the server-filtered rows", async () => {
+    const macroMarket = makeMarket({ title: "Fed rate decision", category: "macro" });
+    const sportsMarket = makeMarket({ title: "NBA Finals winner", category: "sports" });
+    // Param-aware mock — emulates S9's case-insensitive equality filter.
+    mockGetPredictionMarkets.mockImplementation(
+      async (params: { category?: string }) => {
+        if (params?.category === "macro") return { markets: [macroMarket], total: 1 };
+        return { markets: [macroMarket, sportsMarket], total: 2 };
+      },
+    );
 
     render(<PredictionMarketsPage />, { wrapper: Wrapper });
 
@@ -165,21 +187,31 @@ describe("PredictionMarketsPage", () => {
       expect(screen.getByText("Fed rate decision")).toBeInTheDocument();
     });
 
-    // Click the "macro" category pill
+    // Click the "macro" category pill (rendered from the categories endpoint)
     fireEvent.click(screen.getByRole("button", { name: /macro/i }));
 
-    // macro market still visible
-    expect(screen.getByText("Fed rate decision")).toBeInTheDocument();
-    // sports market hidden
-    expect(screen.queryByText("NBA Finals winner")).not.toBeInTheDocument();
+    // The refetch carries category=macro down to the gateway …
+    await waitFor(() => {
+      expect(mockGetPredictionMarkets).toHaveBeenCalledWith(
+        expect.objectContaining({ category: "macro" }),
+      );
+    });
+    // … macro market still visible, sports market gone (server-filtered).
+    await waitFor(() => {
+      expect(screen.getByText("Fed rate decision")).toBeInTheDocument();
+      expect(screen.queryByText("NBA Finals winner")).not.toBeInTheDocument();
+    });
   });
 
-  it("shows all markets when the 'all' pill is active", async () => {
-    const markets = [
-      makeMarket({ title: "Fed rate decision", category: "macro" }),
-      makeMarket({ title: "NBA Finals winner", category: "sports" }),
-    ];
-    mockGetPredictionMarkets.mockResolvedValue({ markets, total: 2 });
+  it("omits the category param and shows all markets when the 'all' pill is active", async () => {
+    const macroMarket = makeMarket({ title: "Fed rate decision", category: "macro" });
+    const sportsMarket = makeMarket({ title: "NBA Finals winner", category: "sports" });
+    mockGetPredictionMarkets.mockImplementation(
+      async (params: { category?: string }) => {
+        if (params?.category === "macro") return { markets: [macroMarket], total: 1 };
+        return { markets: [macroMarket, sportsMarket], total: 2 };
+      },
+    );
 
     render(<PredictionMarketsPage />, { wrapper: Wrapper });
 
@@ -189,10 +221,23 @@ describe("PredictionMarketsPage", () => {
 
     // Filter to macro, then reset to all
     fireEvent.click(screen.getByRole("button", { name: /macro/i }));
-    fireEvent.click(screen.getByRole("button", { name: /all/i }));
+    await waitFor(() => {
+      expect(screen.queryByText("NBA Finals winner")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^all/i }));
 
-    expect(screen.getByText("Fed rate decision")).toBeInTheDocument();
-    expect(screen.getByText("NBA Finals winner")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Fed rate decision")).toBeInTheDocument();
+      expect(screen.getByText("NBA Finals winner")).toBeInTheDocument();
+    });
+    // The "all" view's fetches must NOT carry a category param. NOTE: the
+    // reset to "all" is typically served from the TanStack cache (the key
+    // ["…", "all"] was populated by the initial load), so we assert on the
+    // recorded unfiltered call rather than demanding a brand-new fetch.
+    const unfilteredCalls = mockGetPredictionMarkets.mock.calls.filter(
+      (c) => (c[0] as { category?: string })?.category === undefined,
+    );
+    expect(unfilteredCalls.length).toBeGreaterThan(0);
   });
 
   // (d) Search filters

@@ -242,6 +242,58 @@ describe("usePortfolioMetrics", () => {
       expect(mockGetHoldings).toHaveBeenCalledWith(P1);
     });
 
+    // ── 2026-06-10 PortfolioSwitcher fix: "All Portfolios" aggregation ────
+    it("aggregates across ALL portfolios when active id is null and no ROOT exists", async () => {
+      mockGetPortfolios.mockResolvedValue([
+        { portfolio_id: P1, name: "First", kind: "manual" },
+        { portfolio_id: P2, name: "Second", kind: "manual" },
+      ]);
+      // Distinct holdings per portfolio so the sums are attributable.
+      mockGetHoldings.mockImplementation(async (id: string) =>
+        id === P1
+          ? { holdings: [{ instrument_id: "i1", quantity: 10, average_cost: 100 }] }
+          : { holdings: [{ instrument_id: "i2", quantity: 5, average_cost: 200 }] },
+      );
+      mockGetBatchQuotes.mockResolvedValue({
+        quotes: { i1: { price: 110, change: 1 }, i2: { price: 220, change: -2 } },
+      });
+
+      const { result } = renderHook(() => usePortfolioMetrics(), {
+        wrapper: makeWrapperWithActive(null),
+      });
+      await waitFor(() => expect(result.current.portfolioValue).not.toBeNull());
+
+      // BOTH portfolios were fetched (true household aggregate).
+      expect(mockGetHoldings).toHaveBeenCalledWith(P1);
+      expect(mockGetHoldings).toHaveBeenCalledWith(P2);
+      // NAV = 10×110 (P1) + 5×220 (P2) = 2200 — the SUM, not portfolios[0].
+      expect(result.current.portfolioValue).toBe(2200);
+      // Day P&L = 10×1 + 5×(−2) = 0; Unrealised = 2200 − 2000 = 200.
+      expect(result.current.dailyPnl).toBe(0);
+      expect(result.current.unrealisedPnl).toBe(200);
+    });
+
+    it("prefers the ROOT portfolio's holdings for 'All' when one is provisioned", async () => {
+      const ROOT = "01900000-0000-7000-8000-000000000a0f";
+      mockGetPortfolios.mockResolvedValue([
+        { portfolio_id: ROOT, name: "All Portfolios", kind: "root" },
+        { portfolio_id: P1, name: "First", kind: "manual" },
+        { portfolio_id: P2, name: "Second", kind: "brokerage" },
+      ]);
+      mockGetHoldings.mockResolvedValue({ holdings: [] });
+      mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
+
+      renderHook(() => usePortfolioMetrics(), {
+        wrapper: makeWrapperWithActive(null),
+      });
+      await waitFor(() => expect(mockGetHoldings).toHaveBeenCalled());
+
+      // The backend ROOT aggregate is authoritative — no client-side fan-out.
+      expect(mockGetHoldings).toHaveBeenCalledWith(ROOT);
+      expect(mockGetHoldings).not.toHaveBeenCalledWith(P1);
+      expect(mockGetHoldings).not.toHaveBeenCalledWith(P2);
+    });
+
     it("uses portfolios[0] when active id is null (ROOT/All semantics)", async () => {
       mockGetPortfolios.mockResolvedValue([
         { portfolio_id: P1, name: "First" },

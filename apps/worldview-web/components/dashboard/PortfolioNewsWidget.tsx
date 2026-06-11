@@ -39,6 +39,8 @@ import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/lib/query/keys";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// 2026-06-10: shared active-portfolio resolution — follows the TopBar chip.
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): panel-level empty states use the shared EmptyState
@@ -117,13 +119,11 @@ export function PortfolioNewsWidget() {
     staleTime: 5 * 60_000,
   });
 
-  const firstPortfolioId = useMemo(() => {
-    if (!portfolios || portfolios.length === 0) return null;
-    const sorted = [...portfolios].sort(
-      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
-    );
-    return sorted[0]?.portfolio_id ?? null;
-  }, [portfolios]);
+  // 2026-06-10 PortfolioSwitcher fix: resolve via the shared contract
+  // (active-portfolio context first, fallback portfolios[0]) instead of the
+  // widget-private created_at sort — the ticker-filter universe now follows
+  // the TopBar chip like every other portfolio-scoped widget.
+  const firstPortfolioId = useResolvedPortfolioId(portfolios);
 
   // Round 4 (item 3b): holdings key aligned to the shared ["holdings", id]
   // family (PortfolioSummary + WatchlistQuickViewWidget). Identical queryFn

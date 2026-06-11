@@ -292,7 +292,7 @@ export function GlobalSearch() {
                           {recent.name}
                         </span>
                         {/* WHY clock icon text: subtle "recent" signal without a bulky icon */}
-                        <span className="shrink-0 text-[10px] text-muted-foreground/60">↩</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground-dim">↩</span>
                       </div>
                     </CommandItem>
                   ))}
@@ -325,7 +325,7 @@ export function GlobalSearch() {
                     <div className="flex w-full items-center gap-2">
                       <span className="text-[11px] text-foreground">{page.label}</span>
                       {page.hotkey && (
-                        <span className="ml-auto text-[10px] text-muted-foreground/60">{page.hotkey}</span>
+                        <span className="ml-auto text-[10px] text-muted-foreground-dim">{page.hotkey}</span>
                       )}
                     </div>
                   </CommandItem>
@@ -359,7 +359,7 @@ export function GlobalSearch() {
                 >
                   <div className="flex w-full items-center gap-2">
                     <span className="text-[11px] text-foreground">New Alert</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">G A</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground-dim">G A</span>
                   </div>
                 </CommandItem>
                 <CommandItem
@@ -404,7 +404,7 @@ export function GlobalSearch() {
                 >
                   <div className="flex w-full items-center gap-2">
                     <span className="text-[11px] text-foreground">Send Feedback</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">⌘?</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground-dim">⌘?</span>
                   </div>
                 </CommandItem>
               </CommandGroup>
@@ -444,7 +444,7 @@ export function GlobalSearch() {
                             </span>
                             {/* P3-3: entity type badge — "Company" / "ETF" / "Index" / "Crypto" */}
                             {result.type && (
-                              <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-muted-foreground/60">
+                              <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
                                 {ENTITY_TYPE_LABEL[result.type] ?? result.type}
                               </span>
                             )}
@@ -462,13 +462,13 @@ export function GlobalSearch() {
                 shortcuts in the dropdown footer. Traders use keyboard more than mouse;
                 showing ↑↓/↵/⎋ reduces learning curve for new users. */}
             <div className="flex items-center justify-end gap-3 border-t border-border/40 px-2 py-1">
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">↑↓</kbd> Navigate
               </span>
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">↵</kbd> Open
               </span>
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">⎋</kbd> Close
               </span>
             </div>

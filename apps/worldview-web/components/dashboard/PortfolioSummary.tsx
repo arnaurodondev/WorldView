@@ -526,7 +526,7 @@ export function PortfolioSummary() {
                 {displayName}
               </span>
               {/* Qty — compact shares count */}
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground-dim">
                 {h.quantity % 1 === 0
                   ? h.quantity.toLocaleString()
                   : h.quantity.toFixed(2)}×
@@ -563,7 +563,7 @@ export function PortfolioSummary() {
         href="/portfolio"
         // Round 3 (item 5): focus-visible ring so the footer link is
         // keyboard-discoverable; transition-colors keeps the hover ≤150ms.
-        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground-dim transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       >
         View portfolio →
       </Link>

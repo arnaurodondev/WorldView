@@ -165,7 +165,7 @@ export function MarketClockWidget() {
               {session.nextLabel} in{" "}
               {formatCountdown(session.nextTransition.getTime() - now.getTime())}
               {session.closedReason && (
-                <span className="text-muted-foreground/60">
+                <span className="text-muted-foreground-dim">
                   {" "}
                   · {CLOSED_REASON_LABEL[session.closedReason]}
                 </span>

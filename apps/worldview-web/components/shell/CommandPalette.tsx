@@ -148,7 +148,7 @@ const NAV_ITEMS: readonly NavItem[] = [
 const ITEM_CLASS = "cursor-pointer gap-2 px-2 py-1.5";
 const PRIMARY_TEXT = "text-[11px] text-foreground";
 const SECONDARY_TEXT = "min-w-0 flex-1 truncate text-[10px] text-muted-foreground";
-const HINT_TEXT = "ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/60";
+const HINT_TEXT = "ml-auto shrink-0 font-mono text-[10px] text-muted-foreground-dim";
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -464,13 +464,13 @@ export function CommandPalette() {
       {/* Same keyboard-hint footer as GlobalSearch's dropdown — terminal users
           expect the legend; new users learn the keys from it. */}
       <div className="flex items-center justify-end gap-3 border-t border-border/40 px-2 py-1">
-        <span className="text-[9px] text-muted-foreground/60">
+        <span className="text-[9px] text-muted-foreground-dim">
           <kbd className="font-mono">↑↓</kbd> Navigate
         </span>
-        <span className="text-[9px] text-muted-foreground/60">
+        <span className="text-[9px] text-muted-foreground-dim">
           <kbd className="font-mono">↵</kbd> Open
         </span>
-        <span className="text-[9px] text-muted-foreground/60">
+        <span className="text-[9px] text-muted-foreground-dim">
           <kbd className="font-mono">⎋</kbd> Close
         </span>
       </div>

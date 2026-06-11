@@ -36,6 +36,10 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
+// 2026-06-10 fix: ActivePortfolioProvider was implemented (W1.1 F-002) but never
+// mounted anywhere — the TopBar PortfolioSwitcher wrote into a noop context.
+// Mounted below so the selection is real, persisted, and shared app-wide.
+import { ActivePortfolioProvider } from "@/contexts/ActivePortfolioContext";
 // PLAN-0059-C C-3: ApiClientProvider memoises createGateway(accessToken) so
 // the gateway is constructed once per token (not once per queryFn call).
 // Must be INSIDE AuthProvider (reads accessToken) and INSIDE
@@ -141,7 +145,22 @@ export function Providers({ children }: ProvidersProps) {
               Must be INSIDE AuthProvider so it can read accessToken for ws-token fetch.
               Wraps all children so TopBar, FlashOverlay, and AlertsPage share one WS connection. */}
           <AlertStreamProvider>
-            {children}
+            {/* ActivePortfolioProvider — single source of truth for "which
+                portfolio is active" (PortfolioSwitcher writes, every
+                portfolio-scoped widget + the TopBar rail read via
+                useResolvedPortfolioId / usePortfolioMetrics).
+                BUG FIX (2026-06-10): this provider was implemented in W1.1
+                (F-002) but NEVER MOUNTED — every consumer silently received
+                the noop fallback context, so the TopBar "All Portfolios ▾"
+                chip appeared dead: clicking a portfolio neither updated the
+                chip label nor re-scoped any widget. Mounting it here (root
+                providers, not app/(app)/layout.tsx) is REQUIRED because
+                AppLayout itself calls usePortfolioMetrics → the provider
+                must be an ancestor of the layout component, not a child
+                inside its JSX. */}
+            <ActivePortfolioProvider>
+              {children}
+            </ActivePortfolioProvider>
           </AlertStreamProvider>
         </ApiClientProvider>
       </AuthProvider>
