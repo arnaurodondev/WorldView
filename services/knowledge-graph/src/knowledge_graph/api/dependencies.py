@@ -267,16 +267,46 @@ RelationSummaryRepoDep = Annotated[RelationSummaryRepositoryPort, Depends(get_re
 def get_entity_detail_uc(
     session: ReadOnlyDbSessionDep,
 ) -> GetEntityDetailUseCase:
-    """Build GetEntityDetailUseCase bound to the current read-only session."""
+    """Build GetEntityDetailUseCase bound to the current read-only session.
+
+    PLAN-0099: alias / relation / summary repos wired so the detail endpoint
+    can return aliases, top relations and the relation count (node-click panel).
+    """
     from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
         CanonicalEntityRepository,
     )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+        RelationSummaryRepository,
+    )
 
-    return GetEntityDetailUseCase(CanonicalEntityRepository(session))
+    return GetEntityDetailUseCase(
+        CanonicalEntityRepository(session),
+        alias_repo=EntityAliasRepository(session),
+        relation_repo=RelationRepository(session),
+        summary_repo=RelationSummaryRepository(session),
+    )
 
 
 GetEntityDetailUseCaseDep = Annotated[GetEntityDetailUseCase, Depends(get_entity_detail_uc)]
+
+
+# ── Relation detail use case (PLAN-0099 edge detail) ──────────────────────────
+
+
+def get_relation_detail_uc() -> GetRelationDetailUseCase_:
+    """Depends() factory for GetRelationDetailUseCase (R25 compliance).
+
+    The use case is stateless — repos are passed per-call from the
+    EntityGraphReposDep bundle by the route handler.
+    """
+    from knowledge_graph.application.use_cases.get_relation_detail import GetRelationDetailUseCase
+
+    return GetRelationDetailUseCase()
 
 
 # ── Entity intelligence use case (PRD-0074 Wave D) ────────────────────────────
@@ -384,5 +414,9 @@ def get_entity_paths_uc(
 from knowledge_graph.application.use_cases.get_entity_paths import (  # noqa: E402
     GetEntityPathsUseCase as GetEntityPathsUseCase_,
 )
+from knowledge_graph.application.use_cases.get_relation_detail import (  # noqa: E402
+    GetRelationDetailUseCase as GetRelationDetailUseCase_,
+)
 
 GetEntityPathsUseCaseDep = Annotated[GetEntityPathsUseCase_, Depends(get_entity_paths_uc)]
+GetRelationDetailUseCaseDep = Annotated[GetRelationDetailUseCase_, Depends(get_relation_detail_uc)]

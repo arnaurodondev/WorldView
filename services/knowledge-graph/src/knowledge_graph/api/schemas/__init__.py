@@ -49,8 +49,40 @@ class EntityMetadata(BaseModel):
     macro_indicators: dict[str, object] | None = None
 
 
+class EntityAliasPublic(BaseModel):
+    """A single active alias for an entity (PLAN-0099 node detail)."""
+
+    alias_text: str
+    alias_type: str
+
+
+class EntityRelationBrief(BaseModel):
+    """Compact relation reference for the entity detail 'top relations' list.
+
+    ``direction`` is relative to the detail entity: "outbound" = entity is the
+    subject; "inbound" = entity is the object.
+    """
+
+    relation_id: UUID
+    canonical_type: str
+    direction: str
+    other_entity_id: UUID
+    other_entity_name: str | None = None
+    other_entity_type: str | None = None
+    confidence: float | None = None
+    evidence_count: int = 0
+    relation_summary: str | None = None
+
+
 class EntityPublic(BaseModel):
-    """Full canonical entity with enrichment fields for GET /entities/{entity_id}."""
+    """Full canonical entity with enrichment fields for GET /entities/{entity_id}.
+
+    PLAN-0099 (Intelligence tab node detail): ``health_score``, ``aliases``,
+    ``top_relations`` and ``relation_count`` are additive optional fields
+    (BP-148 pattern — defaults keep older clients working).  Recent article /
+    mention counts are NOT included: those live in nlp_db (S6) and are exposed
+    via GET /v1/entities/{id}/articles at the gateway (R9 — no cross-service DB).
+    """
 
     entity_id: UUID
     canonical_name: str
@@ -62,6 +94,10 @@ class EntityPublic(BaseModel):
     data_completeness: float | None = None
     enriched_at: datetime | None = None
     metadata: EntityMetadata = Field(default_factory=EntityMetadata)
+    health_score: float | None = None
+    aliases: list[EntityAliasPublic] = Field(default_factory=list)
+    top_relations: list[EntityRelationBrief] = Field(default_factory=list)
+    relation_count: int | None = None
 
 
 # ── Entity summary ─────────────────────────────────────────────────────────
@@ -81,6 +117,13 @@ class EntitySummary(BaseModel):
     # default=None for back-compat with older row shapes (BP-148 pattern).
     description: str | None = None
     sector: str | None = None
+    # PLAN-0099 / PLAN-0091 T-A-1-03: industry + market_cap from the metadata
+    # JSONB.  The S9 gateway already forwards these node fields to the frontend
+    # but S7 never sent them — they were silently null platform-wide.
+    # market_cap is currently unpopulated in canonical_entities.metadata (no
+    # ingestion writer yet) but is part of the forward-compatible contract.
+    industry: str | None = None
+    market_cap: float | None = None
 
 
 # ── Relation ────────────────────────────────────────────────────────────────
@@ -162,6 +205,64 @@ class RelationsListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ── GET /api/v1/relations/{relation_id} (PLAN-0099 edge detail) ──────────────
+
+
+class RelationEvidenceItem(BaseModel):
+    """One evidence row supporting a relation (from relation_evidence_raw).
+
+    ``document_id`` references the source document in S5 content-store /
+    S6 nlp_db.  Article title/url/published_at are NOT available from
+    intelligence_db (R9 — no cross-service DB access); clients resolve them
+    via the gateway's document/news endpoints when needed.
+    """
+
+    raw_id: UUID
+    evidence_text: str | None = None
+    document_id: UUID
+    source_name: str | None = None
+    source_type: str | None = None
+    polarity: str | None = None
+    evidence_date: datetime
+    extraction_confidence: float
+    source_trust_weight: float
+    is_backfill: bool = False
+    extracted_at: datetime | None = None
+
+
+class RelationDetailResponse(BaseModel):
+    """Full detail for a single relation (graph edge) + its evidence list.
+
+    Powers the Intelligence tab edge-click panel: relation metadata, the
+    LLM summary, source/target entity summaries, and per-evidence text.
+    """
+
+    relation_id: UUID
+    canonical_type: str
+    semantic_mode: str
+    decay_class: str
+    confidence: float | None = None
+    confidence_stale: bool
+    summary_authority: float
+    evidence_count: int
+    first_evidence_at: datetime
+    latest_evidence_at: datetime
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    relation_period_type: str | None = None
+    strongest_contra_score: float | None = None
+    latest_contra_at: datetime | None = None
+    relation_source: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    relation_summary: str | None = None
+    summary_generated_at: datetime | None = None
+    summary_model_id: str | None = None
+    subject: EntitySummary | None = None
+    object: EntitySummary | None = None
+    evidence: list[RelationEvidenceItem] = Field(default_factory=list)
 
 
 # ── GET /api/v1/graph/stats ──────────────────────────────────────────────────

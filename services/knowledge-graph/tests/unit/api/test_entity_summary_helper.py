@@ -70,3 +70,52 @@ def test_cypher_and_routes_share_the_same_helper() -> None:
 
     assert cypher_mod._entity_summary is entity_summary_from_row
     assert routes_mod._entity_summary is entity_summary_from_row
+
+
+def test_helper_forwards_industry_and_market_cap_from_columns() -> None:
+    """PLAN-0099: industry/market_cap from dedicated SELECT aliases."""
+    from knowledge_graph.api._entity_summary import entity_summary_from_row
+
+    summary = entity_summary_from_row(
+        {
+            "entity_id": uuid4(),
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "industry": "Consumer Electronics",
+            "market_cap": 3_000_000_000_000,
+        },
+    )
+    assert summary.industry == "Consumer Electronics"
+    assert summary.market_cap == 3_000_000_000_000.0
+
+
+def test_helper_falls_back_to_metadata_jsonb() -> None:
+    """industry/market_cap fall back to the metadata dict when no column alias."""
+    from knowledge_graph.api._entity_summary import entity_summary_from_row
+
+    summary = entity_summary_from_row(
+        {
+            "entity_id": uuid4(),
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "metadata": {"industry": "Hardware", "market_cap": "12345.5"},
+        },
+    )
+    assert summary.industry == "Hardware"
+    assert summary.market_cap == 12345.5
+
+
+def test_helper_non_numeric_market_cap_is_none() -> None:
+    """Free-form metadata with a junk market_cap must not raise (defensive)."""
+    from knowledge_graph.api._entity_summary import entity_summary_from_row
+
+    summary = entity_summary_from_row(
+        {
+            "entity_id": uuid4(),
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "metadata": {"market_cap": "not-a-number"},
+        },
+    )
+    assert summary.market_cap is None
+    assert summary.industry is None

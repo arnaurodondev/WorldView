@@ -707,8 +707,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         eid = uuid4()
-        # F-101: row now has 9 columns (added description at [7] and sector at [8])
-        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None)
+        # F-101 + PLAN-0099: row now has 10 columns (description [7], sector [8], industry [9])
+        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None, None)
 
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
@@ -729,11 +729,11 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         ids = [uuid4(), uuid4(), uuid4()]
-        # F-101: each row has 9 columns — description at [7], sector at [8]
+        # F-101 + PLAN-0099: each row has 10 columns — description [7], sector [8], industry [9]
         rows = [
-            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None),
-            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None),
-            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None),
+            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None, None),
+            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None, None),
+            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None, None),
         ]
 
         session = _make_session(fetchall_return=rows)
@@ -756,8 +756,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         existing_id = uuid4()
         missing_id = uuid4()
 
-        # F-101: row has 9 columns — description at [7], sector at [8]
-        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None)
+        # F-101 + PLAN-0099: row has 10 columns — description [7], sector [8], industry [9]
+        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None, None)
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 

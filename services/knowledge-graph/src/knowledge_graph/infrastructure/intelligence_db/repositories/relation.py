@@ -407,12 +407,20 @@ WHERE relation_id = :relation_id
         # Use CAST(:semantic_mode AS TEXT) to avoid asyncpg AmbiguousParameterError
         # when semantic_mode=None — asyncpg cannot infer the type of $N from
         # "$N IS NULL" alone; explicit CAST provides the type hint (BP-069).
+        #
+        # PLAN-0099 (edge-fields fix): valid_from / valid_to / relation_period_type /
+        # strongest_contra_score / latest_contra_at were NOT selected before, so
+        # _relation_response(confidence_breakdown=True) emitted null for all of
+        # them even though every row in `relations` has them populated — a silent
+        # drop at the repo layer (the T-A-1-02 temporal edge fields never worked).
         result = await self._session.execute(
             text("""
 SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
        r.canonical_type, r.semantic_mode, r.decay_class,
        r.confidence, r.confidence_stale,
-       r.evidence_count, r.first_evidence_at, r.latest_evidence_at
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at
 FROM relations r
 WHERE (r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id)
   AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
@@ -441,9 +449,72 @@ LIMIT :limit
                 "evidence_count": int(r[8]),
                 "first_evidence_at": r[9],
                 "latest_evidence_at": r[10],
+                "valid_from": r[11],
+                "valid_to": r[12],
+                "relation_period_type": r[13],
+                "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+                "latest_contra_at": r[15],
             }
             for r in rows
         ]
+
+    async def count_for_entity(self, entity_id: UUID) -> int:
+        """Count relations where the entity is subject or object (PLAN-0099 detail)."""
+        result = await self._session.execute(
+            text("""
+SELECT COUNT(*)
+FROM relations r
+WHERE r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id)},
+        )
+        return int(result.scalar() or 0)
+
+    async def get_by_id(self, relation_id: UUID) -> dict[str, object] | None:
+        """Fetch the full relation row by its UUID (PLAN-0099 relation detail).
+
+        Returns all presentation-relevant columns including the temporal
+        validity window, contradiction stats and audit timestamps.
+        Returns None when the relation does not exist.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at,
+       r.relation_source, r.created_at, r.updated_at
+FROM relations r
+WHERE r.relation_id = :relation_id
+"""),
+            {"relation_id": str(relation_id)},
+        )
+        r = result.fetchone()
+        if r is None:
+            return None
+        return {
+            "relation_id": UUID(str(r[0])),
+            "subject_entity_id": UUID(str(r[1])),
+            "object_entity_id": UUID(str(r[2])),
+            "canonical_type": r[3],
+            "semantic_mode": r[4],
+            "decay_class": r[5],
+            "confidence": float(r[6]) if r[6] is not None else None,
+            "confidence_stale": bool(r[7]),
+            "evidence_count": int(r[8]),
+            "first_evidence_at": r[9],
+            "latest_evidence_at": r[10],
+            "valid_from": r[11],
+            "valid_to": r[12],
+            "relation_period_type": r[13],
+            "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+            "latest_contra_at": r[15],
+            "relation_source": r[16],
+            "created_at": r[17],
+            "updated_at": r[18],
+        }
 
     async def list_filtered(
         self,

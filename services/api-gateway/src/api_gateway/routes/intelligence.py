@@ -75,6 +75,8 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # T-A-1-03 (PLAN-0091): from canonical_entities.metadata JSONB via S7.
                 "industry": center.get("industry") or None,
                 "market_cap": center.get("market_cap") or None,
+                # PLAN-0099: isin forwarded (was the only EntitySummary field dropped).
+                "isin": center.get("isin") or None,
             },
         )
 
@@ -96,6 +98,8 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # T-A-1-03 (PLAN-0091): industry + market_cap from S7 EntitySummary.
                 "industry": entity_data.get("industry") or None,
                 "market_cap": entity_data.get("market_cap") or None,
+                # PLAN-0099: isin forwarded (was the only EntitySummary field dropped).
+                "isin": entity_data.get("isin") or None,
             },
         )
 
@@ -146,6 +150,30 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "valid_from": str(rel["valid_from"]) if rel.get("valid_from") else None,
                 "valid_to": str(rel["valid_to"]) if rel.get("valid_to") else None,
                 "confidence_stale": bool(rel.get("confidence_stale") or False),
+                # ── PLAN-0099: previously-dropped S7 RelationResponse fields ──
+                # The gateway used to strip everything below, leaving the edge
+                # detail panel with nothing but label+weight ("S9 drops edge
+                # fields", 2026-05-11 graph-bugs investigation). All additive,
+                # null-safe — forward-compatible schema (R11/BP-148 pattern).
+                # WHY a separate `confidence` next to `weight`: weight coerces
+                # None→0.5 for sigma.js rendering; `confidence` preserves the
+                # null so the panel can distinguish "unknown" from "0.5".
+                "confidence": rel.get("confidence"),  # float | None
+                "semantic_mode": rel.get("semantic_mode") or None,  # RELATION_STATE | TEMPORAL_CLAIM
+                "evidence_count": int(rel.get("evidence_count") or 0),
+                # confidence * log1p(evidence_count), computed by S7 at query time.
+                "summary_authority": float(rel.get("summary_authority") or 0.0),
+                # Evidence recency window — drives "first seen / last seen" labels.
+                "first_evidence_at": str(rel["first_evidence_at"]) if rel.get("first_evidence_at") else None,
+                "latest_evidence_at": str(rel["latest_evidence_at"]) if rel.get("latest_evidence_at") else None,
+                # Confidence-breakdown extras (populated when S7 has them;
+                # null otherwise — see D-R3-001: sub-scores not yet migrated).
+                "relation_period_type": rel.get("relation_period_type") or None,  # ONGOING | ...
+                "strongest_contra_score": rel.get("strongest_contra_score"),  # float | None
+                "latest_contra_at": str(rel["latest_contra_at"]) if rel.get("latest_contra_at") else None,
+                "support": rel.get("support"),  # float | None
+                "corroboration": rel.get("corroboration"),  # float | None
+                "contradiction": rel.get("contradiction"),  # float | None
             },
         )
 
@@ -330,6 +358,84 @@ async def get_entity_contradictions(entity_id: UUID, request: Request) -> Any:
     clients = _clients(request)
     resp = await clients.knowledge_graph.get(
         f"/api/v1/entities/{entity_id}/contradictions",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/relations/{relation_id}")
+async def get_relation_detail(
+    relation_id: UUID,
+    request: Request,
+    evidence_limit: int = Query(default=25, ge=1, le=100),
+) -> Any:
+    """Proxy GET /api/v1/relations/{relation_id} → S7 Knowledge Graph (PLAN-0099).
+
+    Full edge detail for the Intelligence-tab edge-click panel: relation type,
+    semantic_mode, decay_class, confidence + temporal validity, the current LLM
+    summary, subject/object entity summaries, and the evidence list (each item
+    carries evidence_text + document_id + source_name/source_type).
+
+    Article title/url/published_at are NOT included in evidence items —
+    intelligence_db has no article metadata (R9). The frontend resolves
+    ``document_id`` via /v1/documents/{id} or the news endpoints when needed.
+
+    Pass-through proxy: S7 owns the response shape; new optional fields flow
+    through without gateway changes (forward-compatible, BP-148 pattern).
+    Requires authentication. 404 when the relation does not exist.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/relations/{relation_id}",
+        params={"evidence_limit": str(evidence_limit)},
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/entities/{entity_id}/events")
+async def get_entity_events(
+    entity_id: UUID,
+    request: Request,
+    active_only: bool = Query(default=True),
+    event_type: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    """Proxy GET /api/v1/temporal-events?entity_id=… → S7 Knowledge Graph (PLAN-0099).
+
+    Entity-scoped temporal events for the Intelligence tab's events column.
+    S7 filters via the ``entity_event_exposures`` join table, so only events
+    the entity is exposed to are returned (lifecycle_phase computed at query
+    time; EXPIRED events excluded when ``active_only=true``).
+
+    WHY a dedicated route (vs the generic calendars in market.py): the
+    calendar routes force ``event_type`` (macro/corporate) and have no
+    entity_id support; the Intelligence tab needs ALL event types scoped to
+    one entity. ``entity_id`` is injected from the path so callers cannot
+    override it via query string.
+
+    Requires authentication. Response shape = S7 TemporalEventsListResponse
+    ``{events: [...], total}`` (pass-through).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    params: dict[str, str] = {
+        "entity_id": str(entity_id),
+        "active_only": "true" if active_only else "false",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    if event_type is not None:
+        params["event_type"] = event_type
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/temporal-events",
+        params=params,
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

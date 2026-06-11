@@ -48,6 +48,13 @@ def _make_canonical_entity(
     )
 
 
+def _make_detail_result(entity: Any = None, **kwargs: Any) -> Any:
+    """Wrap a CanonicalEntity in the EntityDetailResult aggregate (PLAN-0099)."""
+    from knowledge_graph.application.use_cases.get_entity_detail import EntityDetailResult
+
+    return EntityDetailResult(entity=entity or _make_canonical_entity(), **kwargs)
+
+
 class TestEntityDetailEndpoint:
     async def test_entity_detail_200_with_enrichment(self, api_app: Any, api_client: Any) -> None:
         """Enriched entity returns 200 with all fields populated."""
@@ -55,7 +62,7 @@ class TestEntityDetailEndpoint:
         from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
 
         mock_uc = AsyncMock(spec=GetEntityDetailUseCase)
-        mock_uc.execute = AsyncMock(return_value=_make_canonical_entity())
+        mock_uc.execute = AsyncMock(return_value=_make_detail_result())
 
         api_app.dependency_overrides[get_entity_detail_uc] = lambda: mock_uc
 
@@ -80,7 +87,9 @@ class TestEntityDetailEndpoint:
 
         mock_uc = AsyncMock(spec=GetEntityDetailUseCase)
         mock_uc.execute = AsyncMock(
-            return_value=_make_canonical_entity(description=None, data_completeness=None, metadata={})
+            return_value=_make_detail_result(
+                _make_canonical_entity(description=None, data_completeness=None, metadata={})
+            )
         )
 
         api_app.dependency_overrides[get_entity_detail_uc] = lambda: mock_uc
@@ -119,16 +128,18 @@ class TestEntityDetailEndpoint:
 
         mock_uc = AsyncMock(spec=GetEntityDetailUseCase)
         mock_uc.execute = AsyncMock(
-            return_value=_make_canonical_entity(
-                metadata={
-                    "sector": "Technology",
-                    "industry": "Consumer Electronics",
-                    "country": "US",
-                    "employee_count": 164000,
-                    "founded_year": 1976,
-                    "headquarters_city": "Cupertino",
-                    "headquarters_country": "USA",
-                }
+            return_value=_make_detail_result(
+                _make_canonical_entity(
+                    metadata={
+                        "sector": "Technology",
+                        "industry": "Consumer Electronics",
+                        "country": "US",
+                        "employee_count": 164000,
+                        "founded_year": 1976,
+                        "headquarters_city": "Cupertino",
+                        "headquarters_country": "USA",
+                    }
+                )
             )
         )
 
