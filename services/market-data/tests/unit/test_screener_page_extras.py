@@ -285,3 +285,42 @@ async def test_default_view_includes_52w_distances_volume_and_levels() -> None:
     assert metrics["volume"] == 61_000_000
     assert metrics["high_52w"] == Decimal("199.62")
     assert metrics["low_52w"] == Decimal("124.17")
+
+
+@pytest.mark.asyncio
+async def test_volume_query_is_bounded_to_recent_chunks() -> None:
+    """Regression (screener limit=100 cold-cache 504): the latest-daily-volume
+    DISTINCT ON query MUST carry a ``bar_date`` lower bound.
+
+    ohlcv_bars is a TimescaleDB hypertable. An unbounded
+    ``DISTINCT ON (instrument_id) ORDER BY bar_date DESC`` cannot prune chunks,
+    so at limit=100 it index-scans every daily chunk (~672ms cold) and blows
+    past the 8s statement_timeout -> intermittent 504. Bounding bar_date to the
+    last 10 days prunes the scan to the current chunk. This test compiles the
+    statement and asserts the bound is present so the optimisation cannot be
+    silently removed.
+    """
+    captured: list[Any] = []
+    session = _route_session(captured=captured)
+    await _fetch_page_extras(session, ["instr-001"], ())
+
+    vol_stmts = [s for s in captured if "ohlcv_bars" in str(s)]
+    assert len(vol_stmts) == 1, "exactly one ohlcv_bars volume query expected"
+    compiled = str(vol_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    # The date arithmetic must reference bar_date and a 10-day interval window.
+    assert "bar_date" in compiled
+    assert "CURRENT_DATE" in compiled.upper()
+    assert "interval '10 days'" in compiled.lower()
+
+
+def test_key_metrics_includes_trailing_returns() -> None:
+    """Regression (backend-gaps wave 3, 2026-06-11): returns are PROJECTED.
+
+    return_1m..return_3y were registered in screen_field_metadata (filterable/
+    sortable) but absent from ``_KEY_METRICS``, so screener payloads never
+    carried them and the RETURNS columns rendered "—" in every view. They are
+    computed by computed_metrics_worker into ``fundamental_metrics`` (592-607
+    instruments live as of 2026-06-11; return_3y pending ≥1095d of history).
+    """
+    for name in ("return_1m", "return_3m", "return_6m", "return_ytd", "return_1y", "return_3y"):
+        assert name in fmq._KEY_METRICS, f"{name} missing from _KEY_METRICS"

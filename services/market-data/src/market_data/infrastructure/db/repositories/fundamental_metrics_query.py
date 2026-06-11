@@ -55,6 +55,20 @@ _KEY_METRICS: tuple[str, ...] = (
     # SNAPSHOT-period fundamental_metrics rows.
     "dist_from_52w_high_pct",
     "dist_from_52w_low_pct",
+    # 2026-06-11 (backend-gaps wave 3): trailing-return metrics. These were
+    # FILTERABLE (screen_field_metadata registers them) but never PROJECTED,
+    # so the screener's RETURNS columns always rendered "—". The computed-
+    # metrics worker writes them into ``fundamental_metrics`` (592-607
+    # instruments as of 2026-06-11). ``return_3y`` is included for forward-
+    # compat even though it currently has ZERO rows — the dev universe only
+    # carries ~250 daily bars (<1095-day lookback), so the worker skips it;
+    # missing metrics are simply absent from the payload (no error path).
+    "return_1m",
+    "return_3m",
+    "return_6m",
+    "return_ytd",
+    "return_1y",
+    "return_3y",
 )
 
 # Snapshot metric columns selected from instrument_fundamentals_snapshot (L-2).
@@ -218,9 +232,25 @@ async def _fetch_page_extras(
     # ── 2. Latest daily volume (gap #3) ──────────────────────────────────────
     o = OHLCVBarModel
     try:
+        # WHY THE bar_date LOWER BOUND (BP, screener limit=100 cold-cache 504):
+        # ohlcv_bars is a TimescaleDB hypertable partitioned into per-time-range
+        # chunks. An *unbounded* DISTINCT ON (instrument_id) ORDER BY bar_date
+        # DESC has no way to prune chunks, so for each of the up-to-100 page ids
+        # the planner index-scans EVERY daily chunk (15 chunks / ~23k rows
+        # materialised on the live DB, ~672ms cold) just to throw away all but
+        # the newest bar per instrument. The "latest daily bar" is by definition
+        # always recent, so we bound bar_date to the last 10 days: that prunes
+        # the scan to a single (current) chunk (~tens of ms cold) and is what
+        # turns the cold limit=100 page from an intermittent 8s-statement-timeout
+        # 504 into a sub-second response. A 10-day window (not 1-2) tolerates
+        # long weekends + market holidays so we never miss the latest bar.
         vol_stmt = (
             select(o.instrument_id, o.volume)
-            .where(o.instrument_id.in_(page_ids), o.timeframe == "1d")
+            .where(
+                o.instrument_id.in_(page_ids),
+                o.timeframe == "1d",
+                o.bar_date >= func.current_date() - text("interval '10 days'"),
+            )
             .order_by(o.instrument_id, o.bar_date.desc())
             .distinct(o.instrument_id)
         )
