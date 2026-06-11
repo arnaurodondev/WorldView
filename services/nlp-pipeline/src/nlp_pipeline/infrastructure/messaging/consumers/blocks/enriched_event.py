@@ -154,6 +154,12 @@ async def _enqueue_enriched(
         entity_id_by_ref,
         provisional_refs,
         published_at=published_at,
+        # P0 chunk-provenance fix (2026-06-11): thread the persisted chunks so
+        # each relation dict carries a REAL nlp_db chunk_id. KG's
+        # relation_evidence_raw.chunk_id is NOT NULL (migration 0047) and the
+        # writer guard rejects rows without it — omitting this key killed the
+        # entire news-path evidence flow since 2026-05-23.
+        chunks=chunks,
     )
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
     raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
@@ -199,12 +205,42 @@ async def _enqueue_enriched(
     )
 
 
+def _match_chunk_id(evidence_text: str | None, chunks: list[Chunk] | None) -> str | None:
+    """Resolve the chunk that contains *evidence_text* (chunk provenance).
+
+    P0 fix (2026-06-11): KG's ``relation_evidence_raw.chunk_id`` is NOT NULL
+    (intelligence-migrations 0047, PLAN-0093 T-B-3-01) and references real
+    ``nlp_db.chunks`` rows (no DB-level FK — cross-database — so THIS function
+    is the app-level invariant). Strategy:
+
+    1. Whitespace-normalized substring match of evidence_text inside each
+       chunk's text (the LLM quotes evidence verbatim from the chunk window,
+       but may collapse newlines/double spaces).
+    2. Fallback: the FIRST chunk of the document — weaker provenance but still
+       a real chunk row belonging to the same doc.
+    3. ``None`` only when the document has no chunks at all (KG then mints its
+       own fallback; see knowledge-graph graph_write.materialize_graph).
+    """
+    if not chunks:
+        return None
+    if evidence_text:
+        needle = " ".join(evidence_text.split()).lower()
+        if needle:
+            for chunk in chunks:
+                haystack = " ".join(chunk.text.split()).lower()
+                if needle in haystack:
+                    return str(chunk.chunk_id)
+    # No substring hit — anchor to the document's first chunk (real row).
+    return str(chunks[0].chunk_id)
+
+
 def _build_raw_relations(
     relations: list[Any],
     entity_id_by_ref: dict[str, str],
     provisional_refs: set[str],
     *,
     published_at: datetime | None = None,
+    chunks: list[Chunk] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction relations into the dict format S7 expects.
 
@@ -245,17 +281,26 @@ def _build_raw_relations(
             provisional_qid = subject_id
         elif object_is_provisional:
             provisional_qid = object_id
+        evidence_text = str(rel_d.get("evidence_text", "")) or None
         result.append(
             {
                 "subject_entity_id": subject_id,
                 "object_entity_id": object_id,
                 "raw_type": str(rel_d.get("predicate", "")),
                 "extraction_confidence": float(rel_d.get("confidence", 0.5)),
-                "evidence_text": str(rel_d.get("evidence_text", "")) or None,
+                "evidence_text": evidence_text,
                 "entity_provisional": subject_is_provisional or object_is_provisional,
                 "provisional_queue_id": provisional_qid,
                 # SA-3 (2026-05-10): carry article publication date into each relation row.
                 "evidence_date": evidence_date_iso,
+                # P0 fix (2026-06-11): real chunk provenance. KG's evidence
+                # writer requires a non-NULL chunk_id (migration 0047); this
+                # key was previously never emitted, so the KG-side guard added
+                # by PLAN-0093 T-B-3-01 rejected EVERY news-path evidence row.
+                # claim_id is intentionally NOT emitted here: claims are not
+                # persisted in nlp_db (legacy topic removed in PLAN-0057 D-1),
+                # so KG mints the backing claims row itself (graph_write).
+                "chunk_id": _match_chunk_id(evidence_text, chunks),
             }
         )
     return result

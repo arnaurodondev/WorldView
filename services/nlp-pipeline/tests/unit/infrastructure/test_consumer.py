@@ -1474,3 +1474,126 @@ class TestBuildRawClaimsProvisional:
         out = _build_raw_claims(claims, {"apple": aapl}, set())
         assert out[0]["entity_provisional"] is False
         assert out[0]["provisional_queue_id"] is None
+
+
+# ── P0 2026-06-11: chunk provenance on relation dicts ────────────────────────
+
+
+class TestBuildRawRelationsChunkId:
+    """P0 fix: each relation dict must carry a REAL chunk_id (KG's
+    relation_evidence_raw.chunk_id is NOT NULL since migration 0047; the keys
+    were previously never emitted, killing news-path evidence since 2026-05-23).
+    chunk_id is matched by evidence-text substring; falls back to the first
+    chunk; None only when the doc has no chunks."""
+
+    @staticmethod
+    def _chunk(text: str, index: int, doc_id: uuid.UUID) -> object:
+        from nlp_pipeline.domain.models import Chunk
+
+        return Chunk(
+            chunk_id=uuid.uuid4(),
+            doc_id=doc_id,
+            section_id=uuid.uuid4(),
+            chunk_index=index,
+            char_start=0,
+            char_end=len(text),
+            token_count=len(text.split()),
+            text=text,
+        )
+
+    @pytest.mark.unit
+    def test_chunk_id_matched_by_evidence_substring(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        doc_id = uuid.uuid4()
+        c0 = self._chunk("Intro paragraph about markets.", 0, doc_id)
+        c1 = self._chunk("Apple acquired Beats for $3 billion in 2014.", 1, doc_id)
+        aapl, beats = str(uuid.uuid4()), str(uuid.uuid4())
+        relations = [
+            {
+                "subject_ref": "Apple",
+                "object_ref": "Beats",
+                "predicate": "acquired",
+                "confidence": 0.9,
+                "evidence_text": "Apple acquired Beats for $3 billion",
+            }
+        ]
+        out = _build_raw_relations(
+            relations,
+            {"apple": aapl, "beats": beats},
+            set(),
+            chunks=[c0, c1],  # type: ignore[list-item]
+        )
+        assert len(out) == 1
+        # Substring match must select chunk 1 (the chunk containing the quote),
+        # not the first-chunk fallback.
+        assert out[0]["chunk_id"] == str(c1.chunk_id)  # type: ignore[attr-defined]
+
+    @pytest.mark.unit
+    def test_chunk_id_falls_back_to_first_chunk_when_no_match(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        doc_id = uuid.uuid4()
+        c0 = self._chunk("First chunk text.", 0, doc_id)
+        c1 = self._chunk("Second chunk text.", 1, doc_id)
+        aapl, msft = str(uuid.uuid4()), str(uuid.uuid4())
+        relations = [
+            {
+                "subject_ref": "Apple",
+                "object_ref": "Microsoft",
+                "predicate": "competes_with",
+                "confidence": 0.8,
+                "evidence_text": "A paraphrased sentence that appears in no chunk.",
+            }
+        ]
+        out = _build_raw_relations(
+            relations,
+            {"apple": aapl, "microsoft": msft},
+            set(),
+            chunks=[c0, c1],  # type: ignore[list-item]
+        )
+        assert out[0]["chunk_id"] == str(c0.chunk_id)  # type: ignore[attr-defined]
+
+    @pytest.mark.unit
+    def test_chunk_id_match_is_whitespace_insensitive(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        doc_id = uuid.uuid4()
+        c0 = self._chunk("Filler.", 0, doc_id)
+        c1 = self._chunk("Tesla  opened a\nnew factory in Berlin.", 1, doc_id)
+        tsla, berlin = str(uuid.uuid4()), str(uuid.uuid4())
+        relations = [
+            {
+                "subject_ref": "Tesla",
+                "object_ref": "Berlin",
+                "predicate": "operates_in",
+                "confidence": 0.7,
+                # LLM collapsed the double space + newline from the chunk text.
+                "evidence_text": "Tesla opened a new factory in Berlin.",
+            }
+        ]
+        out = _build_raw_relations(
+            relations,
+            {"tesla": tsla, "berlin": berlin},
+            set(),
+            chunks=[c0, c1],  # type: ignore[list-item]
+        )
+        assert out[0]["chunk_id"] == str(c1.chunk_id)  # type: ignore[attr-defined]
+
+    @pytest.mark.unit
+    def test_chunk_id_none_when_no_chunks(self) -> None:
+        """No chunks (or legacy call sites) → chunk_id None; KG mints its own fallback."""
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl, msft = str(uuid.uuid4()), str(uuid.uuid4())
+        relations = [{"subject_ref": "Apple", "object_ref": "Microsoft", "predicate": "x", "confidence": 0.5}]
+        out = _build_raw_relations(relations, {"apple": aapl, "microsoft": msft}, set())
+        assert out[0]["chunk_id"] is None
