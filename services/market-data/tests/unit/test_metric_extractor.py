@@ -638,3 +638,119 @@ def test_cash_flow_admin_keys_not_in_unmapped_keys(monkeypatch: pytest.MonkeyPat
 
     # Count must reflect only the genuine unknown, not the 3 admin keys
     assert captured.get("unmapped_keys_count") == 1
+
+
+# ── New balance sheet fields (10 high-value mappings, 2026-06-11) ─────────────
+
+
+def test_balance_sheet_ten_new_metrics_extracted_together() -> None:
+    """All 10 newly catalogued balance-sheet metrics extract from EODHD camelCase keys.
+
+    These keys appeared in the unmapped_keys warning on every ingest cycle
+    despite being present in every Balance_Sheet payload (see the catalog WHY
+    comment in metric_extractor.py for the screener value of each).
+    """
+    rows = _call(
+        FundamentalsSection.BALANCE_SHEET,
+        {
+            "goodWill": 1,
+            "intangibleAssets": 2,
+            "netTangibleAssets": 3,
+            "shortTermInvestments": 4,
+            "longTermInvestments": 5,
+            "treasuryStock": -6,
+            "additionalPaidInCapital": 7,
+            "commonStock": 8,
+            "accumulatedDepreciation": -9,
+            "capitalLeaseObligations": 10,
+        },
+    )
+    metrics = _metrics(rows)
+    assert metrics["goodwill"].value_numeric == Decimal("1")
+    assert metrics["intangible_assets"].value_numeric == Decimal("2")
+    assert metrics["net_tangible_assets"].value_numeric == Decimal("3")
+    assert metrics["short_term_investments"].value_numeric == Decimal("4")
+    assert metrics["long_term_investments"].value_numeric == Decimal("5")
+    assert metrics["treasury_stock"].value_numeric == Decimal("-6")
+    assert metrics["additional_paid_in_capital"].value_numeric == Decimal("7")
+    assert metrics["common_stock"].value_numeric == Decimal("8")
+    assert metrics["accumulated_depreciation"].value_numeric == Decimal("-9")
+    assert metrics["capital_lease_obligations"].value_numeric == Decimal("10")
+
+
+# ── Deliberately-ignored balance sheet keys (warning signal restoration) ──────
+
+
+def _capture_unmapped_log(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Patch the module logger and return the dict that captures the log payload."""
+    from market_data.infrastructure.db import metric_extractor
+
+    captured: dict[str, object] = {}
+
+    class _FakeLogger:
+        def debug(self, event: str, **kwargs: object) -> None:
+            captured["event"] = event
+            captured.update(kwargs)
+
+        def warning(self, event: str, **kwargs: object) -> None:
+            captured["event"] = event
+            captured.update(kwargs)
+
+    monkeypatch.setattr(metric_extractor, "logger", _FakeLogger())
+    return captured
+
+
+def test_balance_sheet_ignored_keys_produce_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keys on the deliberate-skip list (_IGNORED_KEYS) never reach the unmapped log.
+
+    WHY: these EODHD fields were reviewed and intentionally not promoted to
+    metrics (redundant aggregates / residual buckets).  If they kept appearing
+    in unmapped_keys, the warning would fire on EVERY ingest cycle and a
+    genuinely new EODHD field would drown in the noise.
+    """
+    captured = _capture_unmapped_log(monkeypatch)
+
+    _call(
+        FundamentalsSection.BALANCE_SHEET,
+        {
+            # Known metric — matched, not unmapped.
+            "totalAssets": 100,
+            # Deliberately-ignored keys — must be silently excluded.
+            "liabilitiesAndStockholdersEquity": 100,
+            "retainedEarningsTotalEquity": 50,
+            "propertyPlantEquipment": 40,
+            "capitalSurpluse": 30,
+            "warrants": 0,
+            # Admin keys — also excluded.
+            "date": "2024-09-30",
+        },
+    )
+
+    # Everything present was either matched, ignored, or admin — no log at all.
+    assert captured == {}
+
+
+def test_balance_sheet_unknown_key_still_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuinely NEW EODHD field still surfaces in the unmapped log.
+
+    This is the signal the ignore list exists to protect: when EODHD adds a
+    field we have never seen, it must appear in unmapped_keys so a human can
+    make a mapping decision.
+    """
+    captured = _capture_unmapped_log(monkeypatch)
+
+    _call(
+        FundamentalsSection.BALANCE_SHEET,
+        {
+            "totalAssets": 100,
+            # Ignored key — excluded.
+            "otherAssets": 5,
+            # Brand-new field EODHD just invented — must be flagged.
+            "someBrandNewEodhdField": 42,
+        },
+    )
+
+    sample = captured.get("unmapped_keys_sample") or []
+    assert "someBrandNewEodhdField" in sample
+    assert "otherAssets" not in sample
+    assert captured.get("unmapped_keys_count") == 1
