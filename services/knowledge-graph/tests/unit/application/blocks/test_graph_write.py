@@ -46,6 +46,16 @@ def _make_outbox_repo() -> AsyncMock:
     return repo
 
 
+def _make_entity_repo(*, exists: bool = True) -> AsyncMock:
+    """Entity repo whose ``exists()`` returns *exists* for every id.
+
+    Pass a set-backed side_effect via the returned mock to vary per-entity.
+    """
+    repo = AsyncMock()
+    repo.exists = AsyncMock(return_value=exists)
+    return repo
+
+
 def _raw_relation(
     *,
     raw_type: str = "employs",
@@ -175,6 +185,138 @@ class TestGraphMaterializationRelations:
             )
         )
         evidence_repo.insert_raw.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 — entity-existence gate (relations FK-crash fix)
+# ---------------------------------------------------------------------------
+
+
+class TestEntityExistenceGate:
+    """When the entity_repo is wired, a relation whose subject or object entity
+    is missing must NOT call relation_repo.upsert (which would FK-crash), must
+    still write the evidence row (with entity_provisional=True), and must
+    increment the deferred counter. Both-present relations upsert as before."""
+
+    def test_missing_subject_skips_upsert_and_defers_evidence(self) -> None:
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        subj_id = uuid4()
+        obj_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=subj_id,
+            object_entity_id=obj_id,
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+        )
+        relation_repo = _make_relation_repo()
+        evidence_repo = _make_evidence_repo()
+        entity_repo = _make_entity_repo()
+        # subject missing, object present
+        entity_repo.exists = AsyncMock(side_effect=lambda eid: eid != subj_id)
+
+        from knowledge_graph.application.metrics import s7_relation_entity_missing_total
+
+        before = s7_relation_entity_missing_total.labels(reason="subject_missing")._value.get()
+
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+                entity_repo=entity_repo,
+            )
+        )
+        # No edge upsert — this is what prevents the FK crash.
+        relation_repo.upsert.assert_not_called()
+        # Evidence row still written, but flagged deferred.
+        evidence_repo.insert_raw.assert_called_once()
+        assert evidence_repo.insert_raw.call_args.kwargs["entity_provisional"] is True
+        # Counter incremented for the subject_missing reason.
+        after = s7_relation_entity_missing_total.labels(reason="subject_missing")._value.get()
+        assert after == before + 1
+
+    def test_both_present_upserts_edge(self) -> None:
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        relation_repo = _make_relation_repo()
+        evidence_repo = _make_evidence_repo()
+        entity_repo = _make_entity_repo(exists=True)
+        rel = _raw_relation()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],  # type: ignore[list-item]
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+                entity_repo=entity_repo,
+            )
+        )
+        relation_repo.upsert.assert_called_once()
+        # Not deferred — both entities present.
+        assert evidence_repo.insert_raw.call_args.kwargs["entity_provisional"] is False
+
+    def test_exists_is_cached_per_call(self) -> None:
+        """The same entity is queried at most once even across two relations."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        shared_subj = uuid4()
+        obj_a = uuid4()
+        obj_b = uuid4()
+        rels = [
+            RawRelation(subject_entity_id=shared_subj, object_entity_id=obj_a, raw_type="employs", evidence_date=_NOW),
+            RawRelation(subject_entity_id=shared_subj, object_entity_id=obj_b, raw_type="employs", evidence_date=_NOW),
+        ]
+        entity_repo = _make_entity_repo(exists=True)
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=rels,
+                canonical_types=["employs", "employs"],
+                canonical_semantic_modes=[None, None],
+                canonical_decay_classes=[None, None],
+                canonical_decay_alphas=[None, None],
+                canonical_base_confidences=[None, None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+                entity_repo=entity_repo,
+            )
+        )
+        # 3 distinct entity ids (shared_subj, obj_a, obj_b) → 3 exists() calls,
+        # not 4 — shared_subj is cached after the first relation.
+        queried = {c.args[0] for c in entity_repo.exists.call_args_list}
+        assert queried == {shared_subj, obj_a, obj_b}
+        assert entity_repo.exists.call_count == 3
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,9 @@ Tests:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -94,3 +96,129 @@ class TestAvroDeserialization:
         payload = b'{"x":"' + b"a" * (17 * 1024 * 1024) + b'"}'
         with pytest.raises(MalformedDataError):
             consumer.deserialize_value(payload)  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 — edge materialization on provisional unblock
+# ---------------------------------------------------------------------------
+
+
+def _make_unblock_session(rows: list[tuple[object, ...]]) -> AsyncMock:
+    """Session whose UPDATE ... RETURNING yields *rows*."""
+    session = AsyncMock()
+    result = MagicMock()
+    result.fetchall.return_value = rows
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+class TestUnblockEdgeMaterialization:
+    """When an entity lands, deferred provisional evidence rows whose BOTH
+    entities now exist must materialize a graph edge (relation_repo.upsert).
+    Rows with a still-missing entity stay deferred and never crash."""
+
+    def test_unblock_with_both_present_materializes_edge(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers import entity_consumer
+
+        landed = uuid4()
+        other = uuid4()
+        # One unblocked row: (subject, object, canonical_type, extraction_confidence)
+        session = _make_unblock_session([(str(landed), str(other), "employs", 0.8)])
+
+        relation_repo = AsyncMock()
+        relation_repo.upsert = AsyncMock(return_value=uuid4())
+        entity_repo = AsyncMock()
+        entity_repo.exists = AsyncMock(return_value=True)
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository",
+                return_value=relation_repo,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+        ):
+            rows_updated, edges = asyncio.run(
+                entity_consumer._unblock_provisional_evidence(
+                    session=session,
+                    entity_id=landed,
+                    provisional_queue_id=None,
+                )
+            )
+        assert rows_updated == 1
+        assert edges == 1
+        relation_repo.upsert.assert_called_once()
+        kwargs = relation_repo.upsert.call_args.kwargs
+        assert kwargs["subject_entity_id"] == landed
+        assert kwargs["object_entity_id"] == other
+        assert kwargs["canonical_type"] == "employs"
+
+    def test_unblock_with_other_still_missing_defers_no_crash(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers import entity_consumer
+
+        landed = uuid4()
+        missing = uuid4()
+        session = _make_unblock_session([(str(landed), str(missing), "employs", 0.8)])
+
+        relation_repo = AsyncMock()
+        relation_repo.upsert = AsyncMock(return_value=uuid4())
+        entity_repo = AsyncMock()
+        # The landed entity is cached True; the other entity is missing.
+        entity_repo.exists = AsyncMock(side_effect=lambda eid: eid == landed)
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository",
+                return_value=relation_repo,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+        ):
+            rows_updated, edges = asyncio.run(
+                entity_consumer._unblock_provisional_evidence(
+                    session=session,
+                    entity_id=landed,
+                    provisional_queue_id=None,
+                )
+            )
+        assert rows_updated == 1
+        assert edges == 0
+        relation_repo.upsert.assert_not_called()
+
+    def test_unblock_skips_unknown_type_rows(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers import entity_consumer
+
+        landed = uuid4()
+        other = uuid4()
+        # canonical_type is NULL — cannot become an edge (NOT NULL column).
+        session = _make_unblock_session([(str(landed), str(other), None, 0.8)])
+
+        relation_repo = AsyncMock()
+        relation_repo.upsert = AsyncMock(return_value=uuid4())
+        entity_repo = AsyncMock()
+        entity_repo.exists = AsyncMock(return_value=True)
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository",
+                return_value=relation_repo,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+        ):
+            rows_updated, edges = asyncio.run(
+                entity_consumer._unblock_provisional_evidence(
+                    session=session,
+                    entity_id=landed,
+                    provisional_queue_id=None,
+                )
+            )
+        assert rows_updated == 1
+        assert edges == 0
+        relation_repo.upsert.assert_not_called()

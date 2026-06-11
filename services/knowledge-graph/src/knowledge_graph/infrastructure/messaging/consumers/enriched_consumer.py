@@ -38,6 +38,9 @@ from knowledge_graph.application.blocks.graph_write import (
     _build_entity_dirtied_payload,
     materialize_graph,
 )
+from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+    CanonicalEntityRepository,
+)
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     OutboxRepository,
 )
@@ -263,6 +266,10 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             outbox_repo = OutboxRepository(session)
             relation_repo = RelationRepository(session)
             evidence_repo = RelationEvidenceRepository(session)
+            # 2026-06-11 relations-FK-crash fix: entity-existence gate needs the
+            # canonical-entity repo so materialize_graph can defer (not crash on)
+            # relations whose subject/object entity has not yet landed.
+            entity_repo = CanonicalEntityRepository(session)
 
             # ----------------------------------------------------------
             # Block 11: Canonicalize all relation types
@@ -335,6 +342,8 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # T-B-03: propagate resolved source metadata into evidence rows.
                 source_name=source_name,
                 source_type_metadata=source_type_str,
+                # 2026-06-11: entity-existence gate (prevents relations FK crash).
+                entity_repo=entity_repo,
             )
 
             # ----------------------------------------------------------

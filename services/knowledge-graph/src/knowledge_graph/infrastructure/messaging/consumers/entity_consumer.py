@@ -108,13 +108,21 @@ class EntityCreatedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         correlation_id: str | None = value.get("correlation_id")
 
         async with self._sf() as session:
-            await _unblock_provisional_evidence(
+            unblocked, materialized = await _unblock_provisional_evidence(
                 session=session,
                 entity_id=entity_id,
                 provisional_queue_id=(UUID(provisional_queue_id_raw) if provisional_queue_id_raw else None),
             )
             # Wave D-3: create entity profile embedding here
             await session.commit()
+
+        logger.info(  # type: ignore[no-any-return]
+            "entity_created_unblock_summary",
+            entity_id=str(entity_id),
+            rows_unblocked=unblocked,
+            edges_materialized=materialized,
+            correlation_id=correlation_id,
+        )
 
         logger.info(  # type: ignore[no-any-return]
             "entity_created_processed",
@@ -210,18 +218,29 @@ async def _unblock_provisional_evidence(
     session: AsyncSession,
     entity_id: UUID,
     provisional_queue_id: UUID | None,
-) -> int:
-    """Clear ``entity_provisional`` flag for held evidence rows.
+) -> tuple[int, int]:
+    """Clear ``entity_provisional`` for held evidence rows AND materialize edges.
 
-    Matches on ``provisional_queue_id`` if provided, falling back to
-    either ``subject_entity_id`` or ``object_entity_id`` matching the
-    resolved entity.
+    Matches on ``provisional_queue_id`` if provided, falling back to either
+    ``subject_entity_id`` or ``object_entity_id`` matching the resolved entity.
+
+    2026-06-11 edge-materialization fix: clearing the flag alone never created
+    the graph edge, so deferred relations stayed out of ``relations`` forever
+    (the table was stuck at 959 edges). After unblocking, for every row whose
+    BOTH entities now exist we upsert the edge via ``RelationRepository.upsert``
+    (idempotent — ON CONFLICT handles re-runs). Rows whose OTHER entity is still
+    missing keep ``entity_provisional`` cleared but produce no edge yet; they
+    will be picked up when that entity lands (a later unblock by entity_id
+    fallback), so we never crash on a still-missing FK target.
 
     Returns
     -------
-        Number of rows updated.
+        tuple[int, int]: (rows_unblocked, edges_materialized).
 
     """
+    # ── 1. Clear the flag and RETURN the now-resolvable rows ──────────────────
+    # The RETURNING clause hands back the canonical triple + edge metadata so we
+    # can upsert the graph edge without a second SELECT round-trip.
     if provisional_queue_id is not None:
         result = await session.execute(
             text("""
@@ -237,6 +256,8 @@ SET entity_provisional = false,
     END
 WHERE provisional_queue_id = :pq_id
   AND entity_provisional   = true
+RETURNING subject_entity_id, object_entity_id, canonical_type,
+          extraction_confidence
 """),
             {"pq_id": str(provisional_queue_id), "entity_id": str(entity_id)},
         )
@@ -248,13 +269,84 @@ UPDATE relation_evidence_raw
 SET entity_provisional = false
 WHERE entity_provisional = true
   AND (subject_entity_id = :entity_id OR object_entity_id = :entity_id)
+RETURNING subject_entity_id, object_entity_id, canonical_type,
+          extraction_confidence
 """),
             {"entity_id": str(entity_id)},
         )
-    rows_updated: int = result.rowcount  # type: ignore[attr-defined]
+    rows = result.fetchall()
+    rows_updated = len(rows)
     logger.debug(  # type: ignore[no-any-return]
         "provisional_evidence_unblocked",
         entity_id=str(entity_id),
         rows=rows_updated,
     )
-    return rows_updated
+
+    # ── 2. Materialize the now-resolvable graph edges ─────────────────────────
+    # Reuse the SAME session-bound repos so this stays inside the consumer's
+    # transaction (no cross-DB / layering violation — R9/R25). Both entities
+    # must exist and the type must be known (relations.canonical_type is NOT
+    # NULL) before we can upsert; otherwise we leave the row deferred-but-cleared
+    # and skip — a still-missing FK target would otherwise abort the txn.
+    from knowledge_graph.application.metrics import (
+        s7_relation_edge_materialized_on_unblock_total,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+        RelationRepository,
+    )
+
+    entity_repo = CanonicalEntityRepository(session)
+    relation_repo = RelationRepository(session)
+    exists_cache: dict[UUID, bool] = {entity_id: True}
+
+    async def _exists(eid: UUID) -> bool:
+        cached = exists_cache.get(eid)
+        if cached is None:
+            cached = await entity_repo.exists(eid)
+            exists_cache[eid] = cached
+        return cached
+
+    edges_materialized = 0
+    for row in rows:
+        subject_id = UUID(str(row[0]))
+        object_id = UUID(str(row[1]))
+        canonical_type = row[2]
+        extraction_confidence = float(row[3]) if row[3] is not None else 0.5
+
+        # Self-loops are never stored as edges (BP-385); skip silently.
+        if subject_id == object_id:
+            continue
+        # Unknown type can't become an edge (relations.canonical_type NOT NULL).
+        if canonical_type is None:
+            continue
+        # Both entities must exist now — otherwise defer (no crash).
+        if not (await _exists(subject_id) and await _exists(object_id)):
+            logger.debug(  # type: ignore[no-any-return]
+                "unblock_edge_still_deferred",
+                subject_entity_id=str(subject_id),
+                object_entity_id=str(object_id),
+            )
+            continue
+
+        await relation_repo.upsert(
+            subject_entity_id=subject_id,
+            object_entity_id=object_id,
+            canonical_type=str(canonical_type),
+            semantic_mode="RELATION_STATE",
+            decay_class="DURABLE",
+            decay_alpha=0.000950,
+            base_confidence=extraction_confidence,
+        )
+        s7_relation_edge_materialized_on_unblock_total.inc()
+        edges_materialized += 1
+
+    if edges_materialized:
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_evidence_edges_materialized",
+            entity_id=str(entity_id),
+            edges=edges_materialized,
+        )
+    return rows_updated, edges_materialized
