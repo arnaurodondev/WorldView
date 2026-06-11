@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from knowledge_graph.application.ports.repositories import RelationEvidenceRepositoryPort
+from messaging.kafka.consumer.errors import MissingRequiredFieldError  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,14 +63,23 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         NULL when not provided.
 
         PLAN-0093 B-3 T-B-3-02: ``claim_id`` and ``chunk_id`` are NOT NULL in
-        the ``relation_evidence_raw`` schema (migration 0028). Surface the
-        constraint at the writer so callers get a fast ``ValueError`` instead
+        the ``relation_evidence_raw`` schema (migration 0047). Surface the
+        constraint at the writer so callers get a fast, terminal error instead
         of an opaque IntegrityError at commit time.
+
+        P0 fix (2026-06-11): raise :class:`MissingRequiredFieldError` (a
+        ``FatalError`` subclass) instead of a bare ``ValueError``. The base
+        consumer only dead-letters ``FatalError``; a ValueError here was
+        classified as retryable, so payloads missing these fields looped
+        silently and were then skipped when offsets advanced — the news-path
+        evidence flow was dead since 2026-05-23 with zero DLQ visibility.
+        Callers must now provide REAL claim/chunk references (the enriched
+        consumer auto-creates the backing claims row in materialize_graph).
         """
         if claim_id is None:
-            raise ValueError("claim_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
+            raise MissingRequiredFieldError("claim_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
         if chunk_id is None:
-            raise ValueError("chunk_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
+            raise MissingRequiredFieldError("chunk_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
         result = await self._session.execute(
             text("""
 INSERT INTO relation_evidence_raw (

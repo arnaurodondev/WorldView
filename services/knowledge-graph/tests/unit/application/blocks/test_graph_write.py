@@ -1094,3 +1094,154 @@ class TestDeterministicCreatedAt:
         )
         params = _extract_events_insert_params(session)
         assert params["created_at"] == _DETERMINISTIC_CREATED_AT_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# P0 2026-06-11: claim_id auto-create + chunk_id fallback (news-path evidence)
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceClaimAutoCreate:
+    """P0 fix: relations arriving without claim_id (ALL news-path relations —
+    S6 cannot mint claim ids) must get a REAL backing ``claims`` row created
+    inline, and the evidence row must reference it. Relations WITH a claim_id
+    pass through unchanged."""
+
+    def _run(self, rel: object, *, doc_id: UUID | None = None) -> tuple[AsyncMock, AsyncMock, object]:
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        session = _make_session()
+        evidence_repo = _make_evidence_repo()
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=doc_id or uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],  # type: ignore[list-item]
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        return session, evidence_repo, summary
+
+    def test_missing_claim_id_autocreates_claim_and_links_evidence(self) -> None:
+        """No claim_id → a claims INSERT runs and evidence references its UUID."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        rel = RawRelation(
+            subject_entity_id=uuid4(),
+            object_entity_id=uuid4(),
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+            evidence_text="Alice works at Acme.",
+            chunk_id=uuid4(),
+        )
+        session, evidence_repo, summary = self._run(rel)
+
+        # A claims-table INSERT must have been executed.
+        claim_params = None
+        for call in session.execute.call_args_list:
+            if "insert into claims" in str(call.args[0]).lower():
+                claim_params = call.args[1]
+                break
+        assert claim_params is not None, "expected an INSERT INTO claims for the auto-created claim"
+        # The claim text comes from the relation's evidence sentence.
+        assert claim_params["claim_text"] == "Alice works at Acme."
+
+        # The evidence row must reference the SAME claim_id that was inserted.
+        kwargs = evidence_repo.insert_raw.call_args.kwargs
+        assert kwargs["claim_id"] is not None
+        assert str(kwargs["claim_id"]) == claim_params["claim_id"]
+        # And the auto-created claim is counted in the summary.
+        assert summary.claims_inserted == 1  # type: ignore[attr-defined]
+
+    def test_existing_claim_id_passes_through_unchanged(self) -> None:
+        """Relation WITH claim_id → no claims INSERT; claim_id forwarded as-is."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        existing_claim_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=uuid4(),
+            object_entity_id=uuid4(),
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+            claim_id=existing_claim_id,
+            chunk_id=uuid4(),
+        )
+        session, evidence_repo, summary = self._run(rel)
+
+        claim_inserts = [c for c in session.execute.call_args_list if "insert into claims" in str(c.args[0]).lower()]
+        assert claim_inserts == [], "must not auto-create a claim when one is supplied"
+        assert evidence_repo.insert_raw.call_args.kwargs["claim_id"] == existing_claim_id
+        assert summary.claims_inserted == 0  # type: ignore[attr-defined]
+
+    def test_missing_evidence_text_falls_back_to_triple_description(self) -> None:
+        """Auto-created claim without evidence_text uses a triple description (claim_text NOT NULL)."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        subj, obj = uuid4(), uuid4()
+        rel = RawRelation(
+            subject_entity_id=subj,
+            object_entity_id=obj,
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+            chunk_id=uuid4(),
+        )
+        session, _, _ = self._run(rel)
+        for call in session.execute.call_args_list:
+            if "insert into claims" in str(call.args[0]).lower():
+                assert call.args[1]["claim_text"] == f"{subj} employs {obj}"
+                break
+        else:
+            pytest.fail("No claims INSERT call found")
+
+
+class TestEvidenceChunkIdFallback:
+    """P0 fix: legacy backlog messages (2026-05-23 → producer fix) have no
+    chunk_id, yet the column is NOT NULL. KG derives a DETERMINISTIC
+    doc-scoped fallback so replays stay idempotent."""
+
+    def test_chunk_id_passes_through_when_present(self) -> None:
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        chunk_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=uuid4(),
+            object_entity_id=uuid4(),
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+            chunk_id=chunk_id,
+        )
+        _, evidence_repo, _ = TestEvidenceClaimAutoCreate()._run(rel)
+        assert evidence_repo.insert_raw.call_args.kwargs["chunk_id"] == chunk_id
+
+    def test_missing_chunk_id_uses_deterministic_doc_scoped_fallback(self) -> None:
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        from common.ids import uuid5_from_parts
+
+        doc_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=uuid4(),
+            object_entity_id=uuid4(),
+            raw_type="employs",
+            extraction_confidence=0.85,
+            evidence_date=_NOW,
+        )
+        _, evidence_repo, _ = TestEvidenceClaimAutoCreate()._run(rel, doc_id=doc_id)
+        expected = UUID(uuid5_from_parts(str(doc_id), "missing_chunk_fallback"))
+        got = evidence_repo.insert_raw.call_args.kwargs["chunk_id"]
+        assert got == expected, "fallback chunk_id must be deterministic per doc (idempotent replays)"

@@ -232,16 +232,21 @@ class TestRelationEvidenceRepository:
         assert result == raw_id
 
     def test_insert_raw_rejects_missing_claim_id(self) -> None:
-        """PLAN-0093 B-3 T-B-3-02: omitting claim_id raises ValueError at the writer."""
+        """PLAN-0093 B-3 T-B-3-02 + P0 2026-06-11: omitting claim_id raises a
+        FatalError subclass so the consumer dead-letters instead of retrying
+        forever (a bare ValueError was classified as retryable and looped)."""
         import asyncio
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
             RelationEvidenceRepository,
         )
 
+        from messaging.kafka.consumer.errors import FatalError, MissingRequiredFieldError
+
+        assert issubclass(MissingRequiredFieldError, FatalError)
         session = _make_session(fetchone_return=(str(uuid4()),))
         repo = RelationEvidenceRepository(session)
-        with pytest.raises(ValueError, match="claim_id is NOT NULL"):
+        with pytest.raises(MissingRequiredFieldError, match="claim_id is NOT NULL"):
             asyncio.run(
                 repo.insert_raw(
                     subject_entity_id=uuid4(),
@@ -256,16 +261,19 @@ class TestRelationEvidenceRepository:
             )
 
     def test_insert_raw_rejects_missing_chunk_id(self) -> None:
-        """PLAN-0093 B-3 T-B-3-02: omitting chunk_id raises ValueError at the writer."""
+        """PLAN-0093 B-3 T-B-3-02 + P0 2026-06-11: omitting chunk_id raises a
+        FatalError subclass (dead-letter, not silent retry loop)."""
         import asyncio
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
             RelationEvidenceRepository,
         )
 
+        from messaging.kafka.consumer.errors import MissingRequiredFieldError
+
         session = _make_session(fetchone_return=(str(uuid4()),))
         repo = RelationEvidenceRepository(session)
-        with pytest.raises(ValueError, match="chunk_id is NOT NULL"):
+        with pytest.raises(MissingRequiredFieldError, match="chunk_id is NOT NULL"):
             asyncio.run(
                 repo.insert_raw(
                     subject_entity_id=uuid4(),

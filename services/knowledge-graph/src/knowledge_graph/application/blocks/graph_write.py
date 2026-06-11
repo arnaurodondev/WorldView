@@ -449,6 +449,67 @@ async def materialize_graph(
             )
             continue
 
+        # ── P0 claim_id fix (2026-06-11) ─────────────────────────────────
+        # ``relation_evidence_raw.claim_id`` is NOT NULL (migration 0047,
+        # PLAN-0093 T-B-3-01) but S6 cannot supply a real claim_id: claims
+        # are not persisted in nlp_db (legacy claims topic removed in
+        # PLAN-0057 D-1) and LLM extraction returns relations and claims as
+        # UNLINKED arrays. The writer guard added on 2026-05-23 therefore
+        # rejected every news-path evidence row — relation_evidence_raw was
+        # dead for news since then. The original T-B-3-02 intent is restored
+        # here: when the relation carries no claim_id, mint a REAL ``claims``
+        # row from the relation's own evidence and link the evidence row to
+        # it, keeping the relation → evidence → claim provenance chain intact
+        # (F-DB-008). Never fabricate a UUID that points at nothing.
+        evidence_claim_id = rel.claim_id
+        if evidence_claim_id is None:
+            backing_claim = RawClaim(
+                subject_entity_id=rel.subject_entity_id,
+                # Prefer the canonicalized type; fall back to the raw LLM
+                # predicate so the claim is still queryable by type.
+                claim_type=(canonical_type or rel.raw_type or "RELATION_EVIDENCE")[:100],
+                polarity=rel.polarity,
+                # claims.claim_text is NOT NULL — use the evidence sentence,
+                # falling back to a structured triple description.
+                claim_text=rel.evidence_text or f"{rel.subject_entity_id} {rel.raw_type} {rel.object_entity_id}",
+                extraction_confidence=rel.extraction_confidence,
+                chunk_id=rel.chunk_id,
+                is_backfill=rel.is_backfill or is_backfill,
+            )
+            evidence_claim_id = await _insert_claim(
+                session,
+                doc_id,
+                backing_claim,
+                extraction_model_id=extraction_model_id,
+            )
+            claim_count += 1
+            _log.debug(
+                "evidence_claim_autocreated",
+                doc_id=str(doc_id),
+                claim_id=str(evidence_claim_id),
+                raw_type=rel.raw_type,
+            )
+
+        # ── chunk_id fallback (backlog replay only) ──────────────────────
+        # New producer messages (2026-06-11 onward) carry a real nlp_db
+        # chunk_id matched against the evidence text. Messages produced
+        # between 2026-05-23 and the producer fix have NO chunk_id key, yet
+        # the column is NOT NULL. There is no chunks table in intelligence_db
+        # and reading nlp_db would violate R9 (no cross-service DB access),
+        # so for those legacy messages we derive a DETERMINISTIC doc-scoped
+        # placeholder (uuid5 of doc_id) — stable across replays (idempotent)
+        # and clearly flagged in logs. It does not resolve to an nlp_db chunk
+        # row; provenance for legacy rows is anchored by source_document_id.
+        evidence_chunk_id = rel.chunk_id
+        if evidence_chunk_id is None:
+            evidence_chunk_id = UUID(uuid5_from_parts(str(doc_id), "missing_chunk_fallback"))
+            _log.warning(
+                "evidence_chunk_id_fallback",
+                doc_id=str(doc_id),
+                chunk_id=str(evidence_chunk_id),
+                message="legacy enriched message lacks chunk_id; using deterministic doc-scoped fallback",
+            )
+
         # Skip provisional entities from the aggregation worker perspective,
         # but still INSERT the raw evidence row (entity_provisional=true rows
         # are held until entity.canonical.created.v1 resolves them).
@@ -476,8 +537,9 @@ async def materialize_graph(
             evidence_date=rel.evidence_date,
             canonical_type=canonical_type,
             polarity=rel.polarity,
-            claim_id=rel.claim_id,
-            chunk_id=rel.chunk_id,
+            # P0 fix: always a real claims-row UUID (incoming or auto-created).
+            claim_id=evidence_claim_id,
+            chunk_id=evidence_chunk_id,
             is_backfill=rel.is_backfill or is_backfill,
             entity_provisional=rel.entity_provisional,
             provisional_queue_id=rel.provisional_queue_id,
