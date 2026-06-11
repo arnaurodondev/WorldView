@@ -25,6 +25,10 @@ from api_gateway.clients import (
     get_market_heatmap,
     get_top_movers,
 )
+from api_gateway.resolution import (
+    InstrumentNotFoundError,
+    resolve_security_id,
+)
 from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import (
     EarningsCalendarResponse,
@@ -751,6 +755,127 @@ async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
     )
 
 
+# ── B-Q Quote-tab statistics proxies (B-Q-1..4, 2026-06-10) ──────────────────
+#
+# S3 now computes the Quote-tab strips server-side from market_data_db
+# (use cases in market_data/application/use_cases/query_quote_stats.py).
+# These S9 routes are thin auth-gating proxies — no S9-side math, unlike the
+# older /v1/fundamentals/{id}/intraday-stats family above which composes raw
+# OHLCV in the gateway. The /v1/instruments/{id}/* namespace is the canonical
+# home for these going forward (peers already lives there).
+#
+# WHY resolve_security_id: matches the sibling peers proxy — the frontend may
+# pass a ticker slug ("AAPL") instead of a UUID; S3 only accepts UUIDs.
+
+
+async def _proxy_instrument_stat(path_suffix: str, identifier: str, request: Request) -> Response:
+    """Shared proxy body for the three /instruments/{id}/<stat> routes."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            identifier,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/instruments/{resolved.instrument_id}/{path_suffix}",
+        headers=_auth_headers(request),
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/instruments/{instrument_id}/intraday-stats")
+async def get_instrument_intraday_stats(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/intraday-stats → S3 (B-Q-2).
+
+    Returns {open, prev_close, day_high, day_low, vwap, vwap_source, volume,
+    volume_vs_30d_ratio, session_date} — all nullable (null = no data, never 0).
+    """
+    return await _proxy_instrument_stat("intraday-stats", instrument_id, request)
+
+
+@router.get("/instruments/{instrument_id}/returns")
+async def get_instrument_returns(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/returns → S3 (B-Q-3).
+
+    Returns {as_of, returns: {1D,1W,1M,3M,6M,YTD,1Y,3Y,5Y}} — % returns from
+    daily closes; null per period when history is insufficient (never faked).
+    """
+    return await _proxy_instrument_stat("returns", instrument_id, request)
+
+
+@router.get("/instruments/{instrument_id}/price-levels")
+async def get_instrument_price_levels(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/price-levels → S3 (B-Q-4).
+
+    Returns 52w range + % distances, MA50/MA200, prior-session H/L and simple
+    fractal swing-point support/resistance (method documented in `sr_method`).
+    """
+    return await _proxy_instrument_stat("price-levels", instrument_id, request)
+
+
+# ── Ticker-direct company overview (B-Q task 6, 2026-06-10) ──────────────────
+#
+# WHY a dedicated by-ticker GET instead of extending POST /companies/
+# overviews:batch to accept tickers:
+#   1. The batch contract keys its response on the EXACT input id strings —
+#      mixing tickers and UUIDs in one request would force every consumer to
+#      handle two key types, a permanent contract complication for a one-call
+#      saving.
+#   2. The chat entity cards (the motivating consumer) resolve ONE ticker at a
+#      time; a single cacheable GET matches that access pattern, and the
+#      ticker→UUID step reuses resolve_security_id's 1h in-process TTL cache,
+#      so repeat hits skip the S3 lookup entirely.
+#   3. Zero new downstream surface: this is resolve_security_id +
+#      CompanyOverviewUseCase, both already battle-tested by
+#      /v1/companies/{company_id}/overview in routes/instruments.py.
+#
+# Path shape: /companies/by-ticker/{ticker}/overview is 4 segments, so it can
+# never collide with the 3-segment /companies/{company_id}/overview route.
+
+
+@router.get("/companies/by-ticker/{ticker}/overview")
+async def company_overview_by_ticker(ticker: str, request: Request) -> dict[str, Any]:
+    """Resolve a ticker and return the composed company overview in ONE call.
+
+    Replaces the frontend's search→overview two-request dance for chat entity
+    cards. 404 when the ticker matches no instrument (S3 lookup + KG alias
+    fallback both miss).
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        resolved = await resolve_security_id(
+            ticker,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+
+    # WHY lazy import: mirrors routes/instruments.py::company_overview — the
+    # use case pulls in the composition stack only when the route is hit.
+    from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
+
+    use_case = CompanyOverviewUseCase(
+        http_client=_clients(request).market_data,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
+    try:
+        return await use_case.execute(
+            company_id=str(resolved.instrument_id),
+            make_headers=lambda: _auth_headers(request),
+        )
+    except DownstreamError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
 @router.get("/fundamentals/{instrument_id}/technicals")
 async def get_technicals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot.
@@ -912,6 +1037,44 @@ async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
     clients = _clients(request)
     resp = await clients.market_data.get(
         f"/api/v1/fundamentals/{instrument_id}/income-statement",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/balance-sheet")
+async def get_balance_sheet(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/balance-sheet → S3 /balance-sheet.
+
+    WHY (B-Q task 7): S3 has exposed this section since the fundamentals
+    router landed, but S9 never proxied it — the Financials tab could only
+    reach it through the financials-bundle composite. Quarterly records by
+    default (S3 repo layer, BP-546); most-recent-first.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/balance-sheet",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/cash-flow")
+async def get_cash_flow(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/cash-flow → S3 /cash-flow.
+
+    WHY (B-Q task 7): same gap as balance-sheet — the S3 section existed with
+    no S9 passthrough. Quarterly records by default (BP-546).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/cash-flow",
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -1354,6 +1517,15 @@ def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> di
     except (ValueError, TypeError):
         change_pct = 0.0
 
+    # bid/ask (B-Q plumbing, 2026-06-10): S3 serialises Decimal → str; coerce
+    # to float for the frontend Quote shape. None whenever the snapshot was not
+    # quote-sourced (bars carry no order-book context) or the value is missing.
+    def _opt_float(raw: Any) -> float | None:
+        try:
+            return float(raw) if raw is not None else None
+        except (ValueError, TypeError):
+            return None
+
     return {
         "instrument_id": snap.get("instrument_id", instrument_id),
         "ticker": snap.get("symbol", ""),
@@ -1362,6 +1534,8 @@ def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> di
         "change_pct": change_pct,
         "timestamp": snap.get("timestamp", ""),
         "volume": None,  # PriceSnapshot does not carry volume — that's in OHLCV
+        "bid": _opt_float(snap.get("bid")),
+        "ask": _opt_float(snap.get("ask")),
         # Freshness fields (PLAN-0036 Wave 1 — optional on older clients)
         "freshness_status": snap.get("freshness_status"),
         "source": snap.get("source"),

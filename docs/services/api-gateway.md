@@ -112,6 +112,7 @@ To register a new service caller:
 | Method | Path | Sources | Auth |
 |--------|------|---------|------|
 | GET | `/v1/companies/{id}/overview` | S3 (fundamentals + OHLCV) + S5 (news) | Yes |
+| GET | `/v1/companies/by-ticker/{ticker}/overview` | Ticker-direct variant of the overview composition (B-Q task 6, 2026-06-10) — resolves the ticker via `resolve_security_id` (S3 lookup + KG alias fallback, 1h TTL cache) then reuses `CompanyOverviewUseCase`. Replaces the chat entity cards' search→overview two-request dance. 404 on unknown ticker. | Yes |
 | GET | `/v1/instruments/{id}/page-bundle` | Composes overview + fundamentals + technicals + insider + top-news in one round-trip (PLAN-0059 I-5) | Yes |
 | GET | `/v1/market/heatmap` | S3 (11 parallel sector-average screener calls) | Yes |
 | GET | `/v1/market/top-movers` | S3 (sorted by daily_return) | Yes |
@@ -172,8 +173,15 @@ with bundle.* values.
 |--------|------|-------------|------|
 | GET | `/v1/ohlcv/{instrument_id}` | OHLCV price history | Yes |
 | POST | `/v1/ohlcv/batch` | Batch OHLCV bars for up to 50 instruments (PLAN-0049 T-A-1-05) — fans out per-symbol calls in parallel; per-symbol failures populate `error` instead of failing the whole batch | Yes |
-| GET | `/v1/quotes/{instrument_id}` | Latest quote | Yes |
-| POST | `/v1/quotes/batch` | Batch quotes for multiple instruments | Yes |
+| GET | `/v1/quotes/{instrument_id}` | Latest quote (PriceSnapshot-enriched). Includes nullable `bid`/`ask` (2026-06-10) — populated only when the snapshot was quote-sourced (`fresh_quote`/`bulk_quote`, ≤15 min); bar-derived prices report null (no order-book context). | Yes |
+| POST | `/v1/quotes/batch` | Batch quotes for multiple instruments (same `bid`/`ask` semantics) | Yes |
+| GET | `/v1/instruments/{instrument_id}/peers` | Top-N market-cap peers in same GICS industry (sector fallback) → S3 `/instruments/{id}/peers`. Each peer: ticker, name, market_cap, pe_ratio, return_1y, change_pct, `last_price` (B-Q-1, 2026-06-10 — quotes.last with latest-1d-close fallback, null when neither exists). Default limit 8, max 20. Accepts ticker or UUID slug. | Yes |
+| GET | `/v1/instruments/{instrument_id}/intraday-stats` | B-Q-2 (2026-06-10) → S3-computed session stats: `open`, `prev_close`, `day_high`, `day_low`, `vwap` (+`vwap_source` 1m/5m), `volume`, `volume_vs_30d_ratio`, `session_date`. All nullable — null = no data, never 0. Accepts ticker or UUID slug. | Yes |
+| GET | `/v1/instruments/{instrument_id}/returns` | B-Q-3 (2026-06-10) → S3-computed close-on-close % returns: `{1D,1W,1M,3M,6M,YTD,1Y,3Y,5Y}` — calendar-anchored from daily closes; null per period when history is insufficient (never extrapolated). | Yes |
+| GET | `/v1/instruments/{instrument_id}/price-levels` | B-Q-4 (2026-06-10) → S3-computed levels: 52w high/low + % distances (null below 190-session honesty threshold), MA50/MA200, prior-session H/L, and simple fractal swing-point support/resistance (method string in `sr_method`). | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/income-statement` | Income-statement records → S3 `/income-statement` (PLAN-0088 G-1) | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/balance-sheet` | Balance-sheet records → S3 `/balance-sheet` (B-Q task 7, 2026-06-10; QUARTERLY default per BP-546) | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/cash-flow` | Cash-flow records → S3 `/cash-flow` (B-Q task 7, 2026-06-10; QUARTERLY default per BP-546) | Yes |
 | GET | `/v1/fundamentals/{instrument_id}` | All fundamentals sections (composite) | Yes |
 | GET | `/v1/fundamentals/{instrument_id}/technicals` | Technical indicators snapshot (beta, SMA50/200, short interest) → S3 `/technicals-snapshot` | Yes |
 | GET | `/v1/fundamentals/{instrument_id}/share-statistics` | Share statistics (float, short interest, insider/institutional %) → S3 `/share-statistics` | Yes |
@@ -224,8 +232,10 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/entities/{entity_id}` | Entity enrichment detail (description, metadata, data_completeness) | Yes |
-| GET | `/v1/entities/{entity_id}/graph` | Entity relationship graph. Query params: `limit`, `min_confidence`, `semantic_mode`, `confidence_breakdown`, `focus_node` (PLAN-0074 Wave G: `confidence_breakdown` + `focus_node` now forwarded) | Yes |
+| GET | `/v1/entities/{entity_id}` | Entity enrichment detail (description, metadata, data_completeness). PLAN-0099: now also returns `health_score`, `aliases` (alias_text + alias_type), `top_relations` (authority-ranked, with direction + counterpart name + LLM summary) and `relation_count`. Recent article/mention counts are NOT here — use `/v1/entities/{id}/articles` (data lives in nlp_db, R9) | Yes |
+| GET | `/v1/entities/{entity_id}/graph` | Entity relationship graph. Query params: `limit`, `min_confidence`, `semantic_mode`, `confidence_breakdown`, `focus_node` (PLAN-0074 Wave G: `confidence_breakdown` + `focus_node` now forwarded). PLAN-0099: edges now forward ALL S7 relation fields (`confidence` raw nullable, `semantic_mode`, `evidence_count`, `summary_authority`, `first/latest_evidence_at`, `relation_period_type`, `strongest_contra_score`, `latest_contra_at`, `support/corroboration/contradiction`); nodes gain `isin` (+ `industry`/`market_cap` from S7 EntitySummary) | Yes |
+| GET | `/v1/relations/{relation_id}` | Full relation (edge) detail + evidence list (PLAN-0099). Pass-through → S7 `GET /api/v1/relations/{relation_id}`. Returns relation metadata, temporal validity, contra stats, current LLM summary, subject/object entity summaries, and up to `evidence_limit` (default 25, max 100) evidence items with `evidence_text`, `document_id`, `source_name`, `source_type`, `polarity`. Article title/url/published_at NOT included (no article metadata in intelligence_db — resolve `document_id` via `/v1/documents/{id}` or news endpoints) | Yes |
+| GET | `/v1/entities/{entity_id}/events` | Entity-scoped temporal events (PLAN-0099) → S7 `GET /api/v1/temporal-events?entity_id=…` (filters via `entity_event_exposures`). Query params: `active_only` (default true), `event_type`, `limit`, `offset`. `entity_id` is injected from the path and cannot be overridden. Response: `{events: [...], total}` with computed `lifecycle_phase` | Yes |
 | GET | `/v1/entities/{entity_id}/contradictions` | Entity contradictions | Yes |
 | POST | `/v1/entities/similar` | Find similar entities (vector search) | No |
 | GET | `/v1/entities/{entity_id}/intelligence` | Full entity intelligence aggregate (health_score, narrative, confidence_breakdown, key_metrics). Valkey-cached 60 s. Query params: `confidence_breakdown`, `focus_node` (PLAN-0074 Wave G) | Yes |
@@ -246,9 +256,11 @@ preferable to all-or-nothing for dashboard widgets.
 |--------|------|-------------|------|
 | GET | `/v1/portfolios` | List portfolios. `response_model=list[PortfolioResponse]` | Yes |
 | GET | `/v1/portfolios/{id}/value-history` | Equity-curve snapshots (PLAN-0046 / T-46-5-01) | Yes |
-| GET | `/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown (PLAN-0046 / T-46-5-02) | Yes |
+| GET | `/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown (PLAN-0046 / T-46-5-02). Response now includes `buying_power` (v1 semantics: equals `cash`, margin not modelled — 2026-06-10 sprint gap #5) | Yes |
+| GET | `/v1/portfolios/{id}/twr` | **Flow-adjusted time-weighted return** (2026-06-10 sprint gap #3) — proxy to S1. Daily TWR series: sub-period returns between external cash flows, geometrically linked. Query: `days` (1-3650, default 90). Response: `{portfolio_id, from_date, to_date, points: [{date, twr_cum_pct, nav}], flow_days}` | Yes |
 | GET | `/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO, PLAN-0051 / T-A-1-04). Forwards `from`/`to`. Adds `Cache-Control: max-age=300` on 200. | Yes |
-| GET | `/v1/holdings/{portfolio_id}` | Holdings for a portfolio | Yes |
+| GET | `/v1/portfolios/{id}/sector-breakdown` | Optimised sector breakdown (PLAN-0099 W4). Segments now carry `instrument_ids: [uuid]` (2026-06-10 sprint gap #2) so the frontend joins sector filters to holdings rows by id instead of name aliasing. Valkey-cached 60s | Yes |
+| GET | `/v1/holdings/{portfolio_id}` | Holdings for a portfolio. Items include `asset_class` (instruments LEFT JOIN, nullable — 2026-06-10 sprint gap #1) | Yes |
 | GET | `/v1/transactions` | List transactions (API-004: `portfolio_id` forwarded as `X-Portfolio-ID` header, not query param) | Yes |
 | POST | `/v1/transactions` | Create transaction | Yes |
 | GET | `/v1/portfolio/{id}/bundle` | **BFF bundle (PLAN-0070 C-1)** — collapses portfolio + holdings + transactions + value_history into 1 round-trip. Each leg degrades independently (`null` on failure). `_meta.partial=True` when any leg fails. `asyncio.wait_for(25s)`. UUID validation on `id`. `response_model=PortfolioBundleResponse` | Yes |
@@ -325,6 +337,7 @@ preferable to all-or-nothing for dashboard widgets.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/briefings/morning` | AI morning briefing (stub) | Yes |
+| POST | `/v1/briefings/morning/generate` | Force-regenerate morning brief (proxies S8 `POST /api/v1/briefings/morning/generate`; 202 + queued; 503 on S8 timeout) | Yes |
 | GET | `/v1/briefings/instrument/{entity_id}` | Instrument briefing (stub) | Yes |
 
 ### Dashboard Snapshot (PLAN-0070 C-2)
@@ -339,7 +352,7 @@ preferable to all-or-nothing for dashboard widgets.
 |--------|------|-------------|------|
 | GET | `/v1/search` | Full-text document search (proxies → S6 /api/v1/search/documents). Params forwarded verbatim: q, entity_id (multi), scope, source_type, date_from, date_to, date_preset, page, page_size. Authenticated only. PLAN-0064 W6. | Yes |
 | GET | `/v1/search/instruments` | Search instruments by name/ticker. `response_model=list[InstrumentSearchResult]` | No |
-| GET | `/v1/signals/ai` | AI signals (stub — returns empty) | Yes |
+| GET | `/v1/signals/ai` | Enriched AI-signals feed (2026-06-10 overhaul, `routes/signals.py`). Proxies S6 `/api/v1/signals` (outbox `nlp.signal.detected.v1`), then: drops nil-UUID entities, dedups per (entity_id, doc_id) keeping the most informative claim (non-neutral polarity > confidence), batch-enriches via S7 KG (`ticker` + `entity_name`; KG-unknown entities dropped, KG outage degrades gracefully) and S5 content-store (article title/url/source/published_at). `label` = Avro polarity when decisive, else signal_type heuristic. Each item: `signal_id, entity_id, ticker, entity_name, label, polarity, signal_type, signal_type_label, score` (LLM extraction confidence 0–1, NOT a price prediction), `market_impact_score` (observed day-0 abnormal move; 0 = unlabelled), `article_title, article_url, source_name, published_at, created_at`. `?limit=` 1–50 (default 8; over-fetches 4× from S6 for dedup headroom). NOTE: a dead legacy handler for the same path remains in `routes/market.py`; `signals_router` is registered first and wins (guarded by test). | Yes |
 
 ### Feedback Endpoints (→ S1 Portfolio, PLAN-0052 Wave D)
 
@@ -617,7 +630,7 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (10-3650, default 90). All metrics independently nullable. | Yes |
+| GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (5-3650, default 90 — floor lowered 10→5 on 2026-06-10, sprint gap #4: short windows return 200 with nulled return-based metrics + `data_quality.status="insufficient_data"` instead of 422; `period_return`/`cagr` still compute from 2+ points). All metrics independently nullable. | Yes |
 
 **Response fields**: `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`,
 `sortino`, `beta_vs_spy`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
@@ -683,7 +696,7 @@ header (not query param) to S1 — this is by design (API-004).
 |----------|--------|--------|
 | `GET /v1/briefings/morning` | Stub | S8 briefing feature not yet implemented |
 | `GET /v1/briefings/instrument/{id}` | Stub | S8 briefing feature not yet implemented |
-| `GET /v1/signals/ai` | Stub | Returns empty list — S6 signal API pending |
+| `GET /v1/signals/ai` (legacy copy in `routes/market.py`) | Dead code | Superseded by `routes/signals.py` (registered first); remove the market.py handler in a follow-up owned by the market routes workstream |
 | `GET /v1/quotes/stream` | Stub | Returns 501 — streaming quotes not yet implemented |
 | WebSocket proxy | N/A | S9 cannot transparently proxy WS; clients connect to S10 directly with 30s token from `GET /v1/auth/ws-token` |
 

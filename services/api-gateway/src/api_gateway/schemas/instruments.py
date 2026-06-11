@@ -78,3 +78,8 @@ class QuoteResponse(BaseModel):
     change_pct: float | None = None
     timestamp: str | None = None
     volume: int | None = None
+    # B-Q bid/ask plumbing (2026-06-10): populated only when S3's PriceSnapshot
+    # was quote-sourced (fresh_quote/bulk_quote ≤15 min old); bar-derived prices
+    # carry no order-book context. Null = "no live quote", never 0.
+    bid: float | None = None
+    ask: float | None = None
