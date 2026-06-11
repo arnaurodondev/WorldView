@@ -58,6 +58,21 @@ def test_build_ticker_with_exchange():
     assert _build_ticker("AAPL", "US") == "AAPL.US"
 
 
+@pytest.mark.parametrize(
+    ("symbol", "exchange", "expected"),
+    [
+        # EODHD encodes US share classes with a hyphen: BRK.B -> BRK-B.US.
+        # A second dot (BRK.B.US) would trigger HTTP 422.
+        ("BRK.B", "US", "BRK-B.US"),
+        ("BF.B", "US", "BF-B.US"),
+        # Plain tickers are unaffected.
+        ("AAPL", "US", "AAPL.US"),
+    ],
+)
+def test_build_ticker_dot_class_translated_to_hyphen(symbol, exchange, expected):
+    assert _build_ticker(symbol, exchange) == expected
+
+
 # ---------------------------------------------------------------------------
 # fetch_ohlcv
 # ---------------------------------------------------------------------------

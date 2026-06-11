@@ -229,6 +229,37 @@ class TestEODHDTickerNewsAdapterWatermark:
         actual_params = mock_client.get.call_args.kwargs.get("params") or {}
         assert actual_params["s"] == "MSFT.US"
 
+    async def test_dot_class_symbol_translated_to_hyphen(self) -> None:
+        # EODHD encodes US share classes with a hyphen: a stored dot-class
+        # symbol BRK.B must become BRK-B.US, not BRK.B.US (the latter -> HTTP 422).
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings())
+        source = _make_source(symbol="BRK.B", exchange="US")
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response([])
+
+            await adapter.fetch(source)
+
+        actual_params = mock_client.get.call_args.kwargs.get("params") or {}
+        assert actual_params["s"] == "BRK-B.US"
+
+    async def test_plain_symbol_s_param_unchanged(self) -> None:
+        # Symbols without a dot class are passed through verbatim.
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings())
+        source = _make_source(symbol="AAPL", exchange="US")
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response([])
+
+            await adapter.fetch(source)
+
+        actual_params = mock_client.get.call_args.kwargs.get("params") or {}
+        assert actual_params["s"] == "AAPL.US"
+
 
 class TestEODHDTickerNewsAdapterErrors:
     async def test_http_429_raises_provider_rate_limited(self) -> None:

@@ -134,10 +134,16 @@ class EODHDTickerNewsAdapter(SourceAdapter):
             )
             return []
 
+        # EODHD encodes US share classes with a hyphen (BRK-B.US), not a second
+        # dot. A stored dot-class symbol (BRK.B) would yield s=BRK.B.US -> HTTP 422.
+        # Translate at the EODHD boundary ONLY; canonical symbol/exchange (used in
+        # logs + error messages) are left untouched.
+        eodhd_symbol = symbol.replace(".", "-")
+
         # Build query parameters for the EODHD /api/news endpoint.
         # ``fmt=json`` is mandatory — without it EODHD returns CSV.
         params: dict[str, str | int] = {
-            "s": f"{symbol}.{exchange}",
+            "s": f"{eodhd_symbol}.{exchange}",
             "api_token": self._api_key,
             "limit": _DEFAULT_LIMIT,
             "fmt": "json",
