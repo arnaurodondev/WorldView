@@ -179,8 +179,16 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
     for (const edge of data.edges) {
       if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && edge.source !== edge.target) {
         if (!graph.hasEdge(edge.source, edge.target)) {
-          graph.addEdge(edge.source, edge.target, {
-            id: edge.id, label: edge.label, weight: edge.weight,
+          // BUG FIX (PLAN-0099 Wave 2): use addEdgeWithKey(edge.id, …) — NOT
+          // addEdge(). graphology's addEdge() auto-generates an internal key
+          // ("geid_…"), so sigma's clickEdge handler was emitting that synthetic
+          // key while the GraphEvents docstring (and every consumer) assumed
+          // the key WAS the API-level GraphEdge.id. Result: edge clicks could
+          // never be resolved back to a KG relation_id and the edge inspector
+          // always fell into its "not found" branch. With addEdgeWithKey the
+          // graphology key == GraphEdge.id == KG relation_id end-to-end.
+          graph.addEdgeWithKey(edge.id, edge.source, edge.target, {
+            label: edge.label, weight: edge.weight,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -222,17 +230,40 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
 // WHY dedicated child: sigma.setSettings() avoids destroying/recreating SigmaContainer
 // (which would re-initialize WebGL). O(edges) per change — fast for interactive controls.
 
+// WHY hex literals for the selection accent: sigma's WebGL pipeline reads node/
+// edge colors from graph attributes — CSS variables and Tailwind classes never
+// reach the canvas. #FFD60A mirrors --primary (Terminal Dark trading yellow,
+// globals.css line ~109); if the design system retunes --primary this constant
+// must follow (same contract as NODE_DEFAULT_COLOR above).
+const SELECTION_ACCENT_HEX = "#FFD60A";
+
 interface FilterControllerProps {
   activeRelFilter: RelationFilter;
   minWeight: number;
   searchQuery: string;
   graphData: EntityGraphData;
+  /** PLAN-0099 Wave 2 — the node selected in the inspector (highlighted on canvas). */
+  selectedNodeId?: string | null;
+  /** PLAN-0099 Wave 2 — the edge selected in the inspector. Key == GraphEdge.id
+   *  (guaranteed by the addEdgeWithKey fix in GraphLoader). */
+  selectedEdgeId?: string | null;
 }
 
-export function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
+export function FilterController({
+  activeRelFilter,
+  minWeight,
+  searchQuery,
+  selectedNodeId = null,
+  selectedEdgeId = null,
+}: FilterControllerProps) {
   const sigma = useSigma();
 
   useEffect(() => {
+    // WHY selection lives INSIDE the same reducers as the filters (not a second
+    // controller): sigma.setSettings replaces the whole reducer — two sibling
+    // components each calling setSettings would silently clobber each other's
+    // reducer (last-write-wins). Folding both concerns into one reducer keeps
+    // a single source of truth for per-element render overrides.
     sigma.setSettings({
       edgeReducer: (edge: string, data: Record<string, unknown>) => {
         const label = (data.label as string ?? "").toUpperCase();
@@ -242,9 +273,38 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
         if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) {
           return { ...data, hidden: true };
         }
+        // ── Selected-edge highlight (PLAN-0099 Wave 2) ──────────────────────
+        // Accent color + a 2px-min size bump so the selected relation is
+        // findable even in a dense hairball. zIndex lifts it above siblings.
+        if (selectedEdgeId && edge === selectedEdgeId) {
+          return {
+            ...data,
+            hidden: false,
+            color: SELECTION_ACCENT_HEX,
+            size: Math.max(2, ((data.size as number) ?? 1) * 1.5),
+            zIndex: 10,
+          };
+        }
         return { ...data, hidden: false };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
+        // ── Selected-node highlight (PLAN-0099 Wave 2) ──────────────────────
+        // WHY checked BEFORE the search dim: an explicitly selected node must
+        // stay visible even if the analyst's search box would otherwise dim it.
+        // highlighted:true gives sigma's label a contrasting background;
+        // forceLabel guarantees the label paints regardless of the
+        // labelRenderedSizeThreshold; the size bump (+40%) makes the selection
+        // visible in peripheral vision without re-running the layout.
+        if (selectedNodeId && node === selectedNodeId) {
+          return {
+            ...data,
+            color: SELECTION_ACCENT_HEX,
+            highlighted: true,
+            forceLabel: true,
+            size: ((data.size as number) ?? 7) * 1.4,
+            zIndex: 11,
+          };
+        }
         if (!searchQuery) return data;
         const label = (data.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
@@ -256,7 +316,41 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
       },
     });
     sigma.refresh();
-  }, [sigma, activeRelFilter, minWeight, searchQuery]);
+  }, [sigma, activeRelFilter, minWeight, searchQuery, selectedNodeId, selectedEdgeId]);
+
+  return null;
+}
+
+// ── FocusNodeController ───────────────────────────────────────────────────────
+// PLAN-0099 Wave 2 — "Focus graph here" action from the node inspector.
+// Animates the camera to centre on the requested node at a closer zoom ratio.
+
+interface FocusNodeControllerProps {
+  /** Node to centre the camera on, or null when no focus is requested. */
+  focusNodeId: string | null;
+  /** Monotonic counter — bumping it re-fires the focus animation even when the
+   *  SAME node is focused twice in a row (useEffect dep on the id alone would
+   *  no-op the second click after the analyst panned away). */
+  focusNonce: number;
+}
+
+export function FocusNodeController({ focusNodeId, focusNonce }: FocusNodeControllerProps) {
+  const sigma = useSigma();
+
+  useEffect(() => {
+    if (!focusNodeId) return;
+    const graph = sigma.getGraph();
+    if (!graph.hasNode(focusNodeId)) return;
+    // WHY graph coords → camera state: sigma's camera works in normalised
+    // graph space; getNodeAttributes x/y are the layout coordinates that
+    // sigma normalises internally. viewportToFramedGraph round-trips are not
+    // needed — sigma.getNodeDisplayData returns the framed position directly.
+    const display = sigma.getNodeDisplayData(focusNodeId);
+    if (!display) return;
+    // ratio 0.4 ≈ "zoomed into the neighbourhood" — close enough to read the
+    // node's local edges, far enough to keep 1-hop context on screen.
+    sigma.getCamera().animate({ x: display.x, y: display.y, ratio: 0.4 }, { duration: 350 });
+  }, [sigma, focusNodeId, focusNonce]);
 
   return null;
 }

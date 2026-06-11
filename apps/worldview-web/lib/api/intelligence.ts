@@ -39,6 +39,11 @@ import {
 } from "@tanstack/react-query";
 import { useAccessToken } from "@/lib/api-client";
 import { apiFetch } from "./_client";
+// PLAN-0099 Wave 2: relation-detail + entity-events fetchers live in the KG
+// api module (single owner of /v1/relations + /v1/entities URL building);
+// these hooks only add TanStack cache policy on top.
+import { createKnowledgeGraphApi } from "./knowledge-graph";
+import type { RelationDetail, EntityEventsResponse } from "./knowledge-graph";
 import type {
   EntityIntelligencePublic,
   EntityPathsResponse,
@@ -66,6 +71,12 @@ const iqk = {
   /** Cache key for GET /v1/entities/{id}/narratives (infinite) */
   narratives: (entityId: string) =>
     ["entity-narratives", entityId] as const,
+  /** Cache key for GET /v1/relations/{relation_id} (PLAN-0099 Wave 2) */
+  relationDetail: (relationId: string) =>
+    ["relation-detail", relationId] as const,
+  /** Cache key for GET /v1/entities/{id}/events (PLAN-0099 Wave 2) */
+  events: (entityId: string) =>
+    ["entity-events", entityId] as const,
 };
 
 // ── useEntityIntelligence ─────────────────────────────────────────────────────
@@ -188,6 +199,76 @@ export function useEntityNarrativeHistory(entityId: string) {
     // WHY extract next_cursor: TanStack passes this return value as `pageParam`
     // for the NEXT fetch. Returning undefined stops the infinite scroll.
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!entityId && !!token,
+  });
+}
+
+// ── useRelationDetail (PLAN-0099 Wave 2) ──────────────────────────────────────
+
+/**
+ * useRelationDetail — full edge dossier for the Intelligence tab's inspector.
+ *
+ * Fires GET /v1/relations/{relation_id}?evidence_limit=25 when an edge is
+ * selected on the graph canvas (or via a top-relation row click).
+ *
+ * WHY staleTime 5 min: relation rows mutate only when the KG consumers process
+ * new evidence (minutes-scale cadence). Re-fetching the same edge inside one
+ * investigation session would return identical data — 5 min matches the graph
+ * cache so the canvas and the inspector never show different confidence values
+ * for longer than one graph refresh cycle.
+ *
+ * WHY enabled gate on relationId: the hook is mounted unconditionally by the
+ * inspector panel (hooks cannot be conditional); when no edge is selected
+ * relationId is null and the query stays idle.
+ *
+ * RETURNS data === null (not undefined) for a 404 — the relation was
+ * re-canonicalised away after the graph snapshot. The inspector renders a
+ * named "no longer available" state for that case.
+ *
+ * @param relationId GraphEdge.id (== KG relation_id), or null when idle.
+ */
+export function useRelationDetail(relationId: string | null) {
+  const token = useAccessToken();
+
+  return useQuery<RelationDetail | null>({
+    queryKey: iqk.relationDetail(relationId ?? "none"),
+    queryFn: () =>
+      createKnowledgeGraphApi(token ?? undefined).getRelationDetail(relationId as string),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!relationId && !!token,
+    // WHY retry 1: a single retry covers transient S9/S7 blips. The evidence
+    // list can be heavy (25 rows × chunk text) — hammering a failing backend
+    // with the default 3 retries would triple the pain for zero gain.
+    retry: 1,
+  });
+}
+
+// ── useEntityEvents (PLAN-0099 Wave 2) ────────────────────────────────────────
+
+/**
+ * useEntityEvents — entity-scoped temporal events for the EVENTS rail block.
+ *
+ * Fires GET /v1/entities/{id}/events?active_only=false&limit=20. The gateway
+ * filters via entity_event_exposures and computes lifecycle_phase per event.
+ *
+ * WHY staleTime 5 min: temporal events are produced by Worker 13D batches —
+ * they change at pipeline cadence (tens of minutes), not interactively.
+ *
+ * WHY activeOnly=false (investigation surface): residual/expired events are
+ * still context the analyst needs ("there WAS a regulatory threat in May") —
+ * the lifecycle chip on each row carries the phase signal.
+ */
+export function useEntityEvents(entityId: string) {
+  const token = useAccessToken();
+
+  return useQuery<EntityEventsResponse | null>({
+    queryKey: iqk.events(entityId),
+    queryFn: () =>
+      createKnowledgeGraphApi(token ?? undefined).getEntityEvents(entityId, {
+        activeOnly: false,
+        limit: 20,
+      }),
+    staleTime: 5 * 60 * 1000,
     enabled: !!entityId && !!token,
   });
 }

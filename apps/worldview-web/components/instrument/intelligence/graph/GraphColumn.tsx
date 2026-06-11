@@ -1,7 +1,17 @@
 /**
- * GraphColumn — PLAN-0090 T-D-04 — middle column of Intelligence tab (PRD-0088 §6.9).
- * Renders: FULL AI brief → GraphToolbar → sigma.js entity graph.
- * Owns depth + typeFilters; `selectedNodeId` lives in the parent IntelligenceTab.
+ * GraphColumn — PLAN-0090 T-D-04 / PLAN-0099 Wave 2 — centre canvas of the
+ * Intelligence tab's investigation grid (PRD-0088 §6.9).
+ * Renders: GraphToolbar → GraphStats → sigma.js entity graph.
+ * Owns depth + typeFilters; selection (node OR edge) lives in the parent
+ * IntelligenceTab so the SelectionDetailPanel below the canvas stays in sync.
+ *
+ * PLAN-0099 Wave 2 (investigation-page rework):
+ *   - The AI brief moved OUT of this column into the left-rail EntityDossier —
+ *     the centre column is now pure graph + inspector, Bloomberg-style.
+ *   - selectedNodeId/selectedEdgeId are forwarded to EntityGraph so the canvas
+ *     paints the trading-yellow selection highlight (FilterController reducers).
+ *   - focusNodeId/focusNonce drive the "Focus graph here" camera animation
+ *     requested from the node inspector.
  *
  * BUG FIX 1 (PLAN-0099 W4): GRAPH_TIMEOUT_MS was a flat 3000 ms for all depths.
  * The original comment itself said depth=3 takes 4-8s — so depth=3 always timed out.
@@ -27,9 +37,8 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 import { qk } from "@/lib/query/keys";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
-import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { GraphStats } from "./GraphStats";
-import type { BriefingResponse, EntityGraph as EntityGraphData } from "@/types/api";
+import type { EntityGraph as EntityGraphData } from "@/types/api";
 
 // Pane-count guard: treat a single node with 0 edges as an "empty" graph.
 // WHY: the KG always returns the centre entity even when no relations have been
@@ -80,7 +89,6 @@ const EntityGraph = dynamic(
   { ssr: false, loading: () => <GraphSkeleton /> },
 );
 
-const BRIEF_STALE_MS = 10 * 60 * 1000;
 const GRAPH_STALE_MS = 10 * 60 * 1000;
 
 // WHY depth-adaptive: PLAN-0090 hardcoded 3s which kills depth=3 on cold cache
@@ -98,11 +106,25 @@ export interface GraphColumnProps {
   onNodeSelect: (nodeId: string | null) => void;
   /** Optional callback for edge-click events (Block I T-27).
    *  When provided, a clicked edge fires onEdgeSelect(edgeId) and the parent
-   *  IntelligenceTab switches the right panel to EdgeDetailCard mode. */
+   *  IntelligenceTab switches the inspector to edge-detail mode. */
   onEdgeSelect?: (edgeId: string) => void;
+  /** PLAN-0099 Wave 2: edge selected in the inspector — highlighted on canvas. */
+  selectedEdgeId?: string | null;
+  /** PLAN-0099 Wave 2: "Focus graph here" — node to centre the camera on. */
+  focusNodeId?: string | null;
+  /** Bump to re-fire the focus animation for the same node. */
+  focusNonce?: number;
 }
 
-export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSelect }: GraphColumnProps) {
+export function GraphColumn({
+  entityId,
+  selectedNodeId,
+  onNodeSelect,
+  onEdgeSelect,
+  selectedEdgeId = null,
+  focusNodeId = null,
+  focusNonce = 0,
+}: GraphColumnProps) {
   const { accessToken } = useAuth();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
@@ -112,13 +134,9 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
   const latencyRef = useRef<number | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
-  const { data: brief } = useQuery<BriefingResponse>({
-    queryKey: qk.instruments.brief(entityId),
-    queryFn: () => createGateway(accessToken).getInstrumentBrief(entityId),
-    enabled: !!accessToken && !!entityId,
-    staleTime: BRIEF_STALE_MS,
-    retry: false, // brief 404s for cold instruments; retry just hammers LLM
-  });
+  // NOTE (PLAN-0099 Wave 2): the AI brief that used to render at the top of
+  // this column moved to the left-rail EntityDossier (same qk.instruments.brief
+  // cache slot — zero extra fetches). The centre column is graph-only now.
 
   // WHY AbortController inside queryFn: chain TanStack's unmount signal and add
   // a depth-adaptive deadline. Abort is translated to a typed Error for the UI.
@@ -193,21 +211,6 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {brief?.narrative && (
-        <div className="mx-3 mt-3">
-          {/* WHY StructuredBrief with variant="compact": the GraphColumn center
-              column is narrow — compact suppresses the confidence badge and
-              uses smaller text than the full variant. We pass sections/lead/
-              confidence directly from the BriefingResponse fields. */}
-          <StructuredBrief
-            sections={brief.sections ?? []}
-            lead={brief.lead}
-            confidence={brief.confidence}
-            variant="compact"
-            className="p-3 bg-card border border-border/50 rounded-[2px]"
-          />
-        </div>
-      )}
       <div className="mx-3 mt-2">
         <GraphToolbar
           depth={depth}
@@ -319,6 +322,13 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
               centerEntityId={entityId}
               onNodeClick={handleNodeClick}
               onEdgeClick={onEdgeSelect}
+              // PLAN-0099 Wave 2: canvas reflects the inspector selection
+              // (yellow highlight via FilterController reducers) and the
+              // "Focus graph here" camera request from the node inspector.
+              selectedNodeId={selectedNodeId}
+              selectedEdgeId={selectedEdgeId}
+              focusNodeId={focusNodeId}
+              focusNonce={focusNonce}
             />
           </EntityGraphErrorBoundary>
         )}

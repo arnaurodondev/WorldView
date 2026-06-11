@@ -43,6 +43,7 @@ import {
   GraphEvents,
   GraphLoader,
   FilterController,
+  FocusNodeController,
   CameraAutoFit,
   KeyboardResetListener,
   CameraResetButton,
@@ -116,9 +117,30 @@ export interface EntityGraphProps {
   /** Block I T-27: optional edge-click callback. When provided, clicking a graph
    *  edge fires this handler with the API-level edge id (GraphEdge.id). */
   onEdgeClick?: (edgeId: string) => void;
+  // ── PLAN-0099 Wave 2: selection + focus (Intelligence tab inspector) ────────
+  /** Node currently selected in the host's inspector — rendered with the
+   *  trading-yellow highlight + forced label on the canvas. */
+  selectedNodeId?: string | null;
+  /** Edge currently selected in the host's inspector — rendered with the
+   *  trading-yellow highlight + size bump. Key == GraphEdge.id. */
+  selectedEdgeId?: string | null;
+  /** "Focus graph here" request: camera animates to centre this node. */
+  focusNodeId?: string | null;
+  /** Bump to re-fire the focus animation for the same node (see
+   *  FocusNodeController docstring). */
+  focusNonce?: number;
 }
 
-export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: EntityGraphProps) {
+export function EntityGraph({
+  data,
+  centerEntityId,
+  onNodeClick,
+  onEdgeClick,
+  selectedNodeId = null,
+  selectedEdgeId = null,
+  focusNodeId = null,
+  focusNonce = 0,
+}: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -230,7 +252,14 @@ export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: 
             minWeight={minWeight}
             searchQuery={searchQuery}
             graphData={data}
+            // PLAN-0099 Wave 2: selection highlight is folded into the SAME
+            // reducer as the filters (two setSettings callers would clobber
+            // each other — see FilterController docstring).
+            selectedNodeId={selectedNodeId}
+            selectedEdgeId={selectedEdgeId}
           />
+          {/* PLAN-0099 Wave 2: "Focus graph here" camera animation */}
+          <FocusNodeController focusNodeId={focusNodeId} focusNonce={focusNonce} />
           {/* SA-3 (2026-05-10): auto-fit camera when entity changes */}
           <CameraAutoFit centerEntityId={centerEntityId} />
           {/* SA-3 (2026-05-10): keyboard shortcut 'R' to reset camera */}
