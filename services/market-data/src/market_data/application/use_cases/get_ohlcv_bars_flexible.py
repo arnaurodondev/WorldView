@@ -40,6 +40,9 @@ class GetOHLCVBarsFlexibleUseCase:
         """Return bars in {"bars": [...], "bar_count": int}.
 
         ``interval`` maps to existing Timeframe values:
+          "1m"/"5m"/"15m"/"30m"/"1h"/"4h" → intraday Timeframes (PLAN-0109 B-3:
+              needed so the rag-chat get_price_history tool can serve
+              "what is X trading at?" via the most recent 1-minute bar)
           "day"   → Timeframe.ONE_DAY  ("1d")
           "week"  → Timeframe.ONE_WEEK ("1w")
           "month" → Timeframe.ONE_MONTH ("1M")
@@ -50,6 +53,12 @@ class GetOHLCVBarsFlexibleUseCase:
         from market_data.domain.enums import Timeframe
 
         _interval_map = {
+            "1m": Timeframe.ONE_MIN,
+            "5m": Timeframe.FIVE_MIN,
+            "15m": Timeframe.FIFTEEN_MIN,
+            "30m": Timeframe.THIRTY_MIN,
+            "1h": Timeframe.ONE_HOUR,
+            "4h": Timeframe.FOUR_HOUR,
             "day": Timeframe.ONE_DAY,
             "week": Timeframe.ONE_WEEK,
             "month": Timeframe.ONE_MONTH,
@@ -68,9 +77,16 @@ class GetOHLCVBarsFlexibleUseCase:
         if len(bars) > max_bars:
             bars = bars[-max_bars:]
 
+        # Intraday bars share a calendar date — keep the time component so
+        # consumers (and the rag-chat price tool) can distinguish bars and
+        # identify the most-recent one. Daily+ keeps the original date-only
+        # shape for backward compatibility with existing consumers.
+        intraday = interval in ("1m", "5m", "15m", "30m", "1h", "4h")
+        date_fmt = "%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d"
+
         result = [
             {
-                "date": b.bar_date.strftime("%Y-%m-%d"),
+                "date": b.bar_date.strftime(date_fmt),
                 "open": float(b.open),
                 "high": float(b.high),
                 "low": float(b.low),

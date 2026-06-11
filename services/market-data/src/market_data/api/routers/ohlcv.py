@@ -82,7 +82,7 @@ async def get_ohlcv_bars_flexible(
     isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
     from_date: date = ...,  # type: ignore[assignment]
     to_date: date = ...,  # type: ignore[assignment]
-    interval: str = Query(default="day", pattern="^(day|week|month)$"),
+    interval: str = Query(default="day", pattern="^(1m|5m|15m|30m|1h|4h|day|week|month)$"),
     max_bars: int = Query(default=252, ge=1, le=1000),
     uc: Annotated[GetOHLCVBarsFlexibleUseCase, Depends(get_ohlcv_bars_flexible_uc)] = ...,  # type: ignore[assignment]
     lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
