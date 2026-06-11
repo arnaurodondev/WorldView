@@ -48,10 +48,19 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "nlp-pipeline-group"
     kafka_watchlist_consumer_group: str = "nlp-watchlist-group"
+    # REQ-003 / TASK-W0-06: dedicated consumer group for the entity-refresh
+    # consumer (entity.refresh.v1). This field and topic_entity_refresh below
+    # were dropped in a config.py merge resolution (BP-590 silent merge data
+    # loss), which crash-looped the entity-refresh consumer on a missing
+    # Settings attribute; restored here.
+    kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
     topic_watchlist_updated: str = "portfolio.watchlist.updated.v1"
+    # REQ-003 / TASK-W0-06: manual entity-refresh trigger emitted by S7's
+    # TriggerEntityRefreshUseCase; consumed by entity_refresh_consumer_main.
+    topic_entity_refresh: str = "entity.refresh.v1"
 
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
@@ -176,6 +185,30 @@ class Settings(BaseSettings):
     extraction_single_window_tokens: int = 24000
     extraction_window_size_tokens: int = 6000
     extraction_window_overlap_tokens: int = 500
+
+    # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
+    # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),
+    # NOT CPU-bound.  The base Kafka consumer loop is strictly serial (one article
+    # per replica), so each replica idles ~20s waiting on DeepInfra.  Two levers:
+    #
+    # 1. ``article_consumer_concurrency`` — the ArticleProcessingConsumer overrides
+    #    the serial poll loop with a bounded-concurrency dispatcher: up to N message
+    #    handlers run concurrently per replica, overlapping their DeepInfra waits.
+    #    With 12 partitions / 3 replicas (4 partitions each) and N=16, the platform
+    #    reaches ~48 concurrent articles (3 x 16).  Offsets commit only up to the
+    #    highest *contiguous* completed offset per partition, preserving at-least-once
+    #    and per-partition ordering (see ArticleProcessingConsumer.run docstring).
+    # NLP_PIPELINE_ARTICLE_CONSUMER_CONCURRENCY
+    article_consumer_concurrency: int = 16
+    # 2. ``deepinfra_max_connections`` — sizes the httpx connection pool inside the
+    #    DeepSeekExtractionAdapter so N concurrent extraction calls per replica do
+    #    not queue at the client.  Default 64 = 16 concurrent + comfortable headroom
+    #    for embedding calls sharing the host.  ``deepinfra_max_keepalive`` keeps
+    #    warm TCP+TLS connections so DeepInfra's KV prefix cache stays hot.
+    # NLP_PIPELINE_DEEPINFRA_MAX_CONNECTIONS
+    deepinfra_max_connections: int = 64
+    # NLP_PIPELINE_DEEPINFRA_MAX_KEEPALIVE
+    deepinfra_max_keepalive: int = 32
 
     # Dispatcher
     dispatcher_poll_interval_secs: float = 1.0

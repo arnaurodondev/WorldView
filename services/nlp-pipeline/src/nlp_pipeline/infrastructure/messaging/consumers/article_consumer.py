@@ -22,10 +22,13 @@ rather than in the block sub-modules for the same reason.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import json
+import sys
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -33,12 +36,14 @@ import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from common.ids import PUBLIC_TENANT_ID, uuid5_from_parts  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
+    _ASYNCPG_CONN_ERRORS,
     BaseKafkaConsumer,
     ConsumerConfig,
     FailureInfo,
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
+from messaging.kafka.consumer.errors import ConsumerError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
@@ -140,6 +145,7 @@ _DEFAULT_SOURCE_TRUST = 0.5
 
 # Re-export block helpers so existing imports from this module remain valid.
 __all__ = [
+    "_SCHEMA_DIR",
     "ArticleProcessingConsumer",
     "MLPhaseResult",
     "_build_chunk_entity_mentions",
@@ -155,7 +161,6 @@ __all__ = [
     "_infer_temporal_scope",
     "_normalize_ref_variants",
     "_normalize_temporal_events_for_emit",
-    "_SCHEMA_DIR",
     "synthesize_provisional_refs",
 ]
 
@@ -425,6 +430,195 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         return _NoOpUnitOfWork()  # type: ignore[return-value]
+
+    # ── Task #14: bounded-concurrency poll loop ─────────────────────────────────
+    #
+    # WHY OVERRIDE ``run`` HERE (not in libs/messaging.BaseKafkaConsumer):
+    # The base loop is strictly serial — poll one message, ``await`` the full
+    # pipeline (which includes a 12-22s DeepInfra deep-extraction round-trip),
+    # commit that single offset, then poll the next.  A replica therefore spends
+    # ~20s idle on network wait per article, so 3 replicas process only ~3
+    # articles at a time (~500/hr).  Deep extraction is I/O-bound, not CPU-bound,
+    # so a single replica can overlap many DeepInfra waits.  The base loop is
+    # shared by ~30 consumers across the platform, so we do NOT touch it; instead
+    # the article consumer overrides ``run`` to dispatch up to
+    # ``article_consumer_concurrency`` message handlers concurrently per poll
+    # batch.  K=16 x 3 replicas reaches ~48 articles in flight platform-wide.
+    #
+    # OFFSET-COMMIT CORRECTNESS (at-least-once + per-partition ordering):
+    # confluent-kafka's ``commit(message=msg)`` commits ``msg.offset()+1`` for
+    # that message's partition, which *implicitly* acks every lower offset on the
+    # partition.  Under concurrency a later offset may finish before an earlier
+    # one on the same partition, so committing it eagerly would skip the unfinished
+    # earlier message on a crash (data loss).  To preserve at-least-once we:
+    #   1. Group the poll batch by (topic, partition).
+    #   2. Dispatch every message as a task, bounded by a shared semaphore.
+    #   3. After the whole batch settles, for each partition commit ONLY the
+    #      highest *contiguous* successfully-handled offset starting from the
+    #      lowest offset in the batch.  A message that hit an un-handled exception
+    #      breaks the contiguous run, so its offset (and everything after it on
+    #      that partition) is re-polled on the next cycle / after rebalance.
+    # A message routed through ``_handle_failure`` (dead-letter / outbox retry) is
+    # considered "handled" for offset purposes — this matches the base loop, which
+    # commits after ``_handle_failure`` returns.  Idempotency (ValkeyDedupMixin +
+    # deterministic UUID5 IDs + idempotent upserts + the routing_decisions
+    # already-processed guard in ``process_message``) makes re-delivery safe.
+    #
+    # Messages are keyed by ``doc_id`` upstream (S5), so two events for the same
+    # document land on the same partition and are dispatched in offset order;
+    # concurrency across partitions never races two events for one document.
+    async def run(self) -> None:  # type: ignore[override]
+        """Bounded-concurrency poll loop (see class-level Task #14 docstring)."""
+        self._init_kafka()
+        retry_task = asyncio.create_task(self._retry_loop())
+        probe_task = asyncio.create_task(self._connectivity_probe_loop())
+
+        def _on_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.critical("article_consumer_bg_task_crashed", exc_info=exc)  # type: ignore[no-any-return]
+                sys.exit(1)
+
+        retry_task.add_done_callback(_on_task_done)
+        probe_task.add_done_callback(_on_task_done)
+
+        concurrency = max(1, int(getattr(self._settings, "article_consumer_concurrency", 16)))
+        sem = asyncio.Semaphore(concurrency)
+        logger.info(  # type: ignore[no-any-return]
+            "article_consumer_concurrency_enabled",
+            concurrency=concurrency,
+            group_id=self._config.group_id,
+        )
+
+        try:
+            loop = asyncio.get_event_loop()
+            while not self._stop_event.is_set():
+                # Honour the opt-in backpressure pause exactly like the base loop.
+                self._maybe_apply_backpressure()
+                batch = await self._poll_batch(loop, concurrency)
+                if not batch:
+                    continue
+                await self._dispatch_batch(loop, batch, sem)
+        finally:
+            retry_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retry_task
+            probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await probe_task
+            self._shutdown_kafka()
+
+    async def _poll_batch(self, loop: Any, max_records: int) -> list[Any]:
+        """Drain up to ``max_records`` messages without blocking on an empty topic.
+
+        The first ``poll`` blocks up to ``poll_timeout_seconds`` so an idle
+        consumer does not busy-spin; subsequent polls use a 0s timeout to grab
+        whatever is already buffered, then stop.  This bounds a batch to roughly
+        one concurrency-window of in-flight work so memory stays predictable.
+        """
+        from confluent_kafka import KafkaError
+
+        batch: list[Any] = []
+        first = True
+        while len(batch) < max_records and not self._stop_event.is_set():
+            timeout = self._config.poll_timeout_seconds if first else 0.0
+            first = False
+            msg = await loop.run_in_executor(None, self._consumer.poll, timeout)
+            if msg is None:
+                break
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                logger.error("kafka_poll_error", error=str(msg.error()))  # type: ignore[no-any-return]
+                continue
+            batch.append(msg)
+        return batch
+
+    async def _dispatch_batch(self, loop: Any, batch: list[Any], sem: asyncio.Semaphore) -> None:
+        """Process a poll batch concurrently and commit contiguous offsets.
+
+        Returns once every message in the batch has settled.  See the class-level
+        Task #14 docstring for the at-least-once / ordering guarantees.
+        """
+        # outcomes[(topic, partition)] = {offset: handled_ok}
+        outcomes: dict[tuple[str, int], dict[int, bool]] = defaultdict(dict)
+
+        async def _process_one(msg: Any) -> None:
+            tp = (msg.topic(), msg.partition())
+            offset = msg.offset()
+            async with sem:
+                try:
+                    try:
+                        await self._handle_message(msg)
+                    except _ASYNCPG_CONN_ERRORS as conn_exc:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "consumer_db_connection_lost_retrying",
+                            error=str(conn_exc),
+                            topic=msg.topic(),
+                            partition=msg.partition(),
+                            offset=offset,
+                        )
+                        await asyncio.sleep(1.0)
+                        await self._handle_message(msg)
+                    outcomes[tp][offset] = True
+                except ConsumerError as exc:
+                    # Routed to dead-letter / outbox retry — treated as handled for
+                    # offset purposes (mirrors the base loop committing after
+                    # _handle_failure returns).
+                    await self._handle_failure(msg, exc)
+                    outcomes[tp][offset] = True
+                except Exception as exc:
+                    # Unexpected error: the base loop still commits after
+                    # _handle_failure, so we mirror that to avoid a poison message
+                    # permanently blocking its partition's contiguous offset run.
+                    logger.exception("kafka_unexpected_error", error=str(exc))  # type: ignore[no-any-return]
+                    await self._handle_failure(msg, exc)
+                    outcomes[tp][offset] = True
+
+        await asyncio.gather(*(_process_one(m) for m in batch))
+
+        # Commit the highest contiguous handled offset per partition.  We rebuild
+        # one synthetic commit message per partition at that offset so confluent's
+        # implicit "commit offset+1" semantics ack exactly the contiguous prefix.
+        # ``_commit_to_offset`` finds, among each partition's batch messages, the
+        # one whose offset equals the contiguous high-water mark and commits it.
+        commit_targets = self._contiguous_commit_targets(batch, outcomes)
+        for msg in commit_targets:
+            if not self._config.enable_auto_commit:
+                with contextlib.suppress(Exception):
+                    await loop.run_in_executor(None, self._consumer.commit, msg)
+        with contextlib.suppress(Exception):
+            await loop.run_in_executor(None, self._record_consumer_lag)
+
+    @staticmethod
+    def _contiguous_commit_targets(batch: list[Any], outcomes: dict[tuple[str, int], dict[int, bool]]) -> list[Any]:
+        """Return, per partition, the batch message at the highest contiguous handled offset.
+
+        Sorts each partition's messages by offset and walks forward while each
+        offset is present-and-handled, stopping at the first gap or failure.  The
+        message at that high-water mark is committed (confluent acks offset+1,
+        implicitly acking every lower offset).  If the *first* message of a
+        partition was not handled, nothing is committed for it.
+        """
+        by_partition: dict[tuple[str, int], list[Any]] = defaultdict(list)
+        for msg in batch:
+            by_partition[(msg.topic(), msg.partition())].append(msg)
+
+        targets: list[Any] = []
+        for tp, msgs in by_partition.items():
+            msgs.sort(key=lambda m: m.offset())
+            handled = outcomes.get(tp, {})
+            high_water: Any = None
+            for msg in msgs:
+                if handled.get(msg.offset()) is True:
+                    high_water = msg
+                else:
+                    break  # gap / failure → stop the contiguous run here
+            if high_water is not None:
+                targets.append(high_water)
+        return targets
 
     async def _download_article(self, minio_key: str) -> str:
         """Download and unpack article text from MinIO (Block 3 storage step).

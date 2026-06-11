@@ -41,6 +41,8 @@ class DeepSeekExtractionAdapter:
         *,
         semaphore: asyncio.Semaphore,
         timeout_s: float = _EXTRACTION_TIMEOUT_S,
+        max_connections: int = 64,
+        max_keepalive_connections: int = 32,
         metrics: MLMetrics | None = None,
     ) -> None:
         try:
@@ -53,6 +55,24 @@ class DeepSeekExtractionAdapter:
         self._metrics = metrics
         self._openai = _openai
         self._timeout_s = timeout_s
+        # Task #14: deep extraction is I/O-bound (12-22s DeepInfra network wait per
+        # article).  When the article consumer processes many articles concurrently,
+        # an equal number of extraction calls hit this client at once.  httpx's
+        # default Limits (max_connections=100, max_keepalive=20) silently *queue*
+        # connections beyond the keepalive pool, adding hidden latency under load.
+        # We pass an explicit httpx.AsyncClient with Limits sized for the configured
+        # concurrency (default 64 conns / 32 keepalive ~ 50 concurrent + headroom).
+        # A wide keepalive pool also keeps warm TCP+TLS connections so DeepInfra's
+        # server-side KV prefix cache (same system prompt) stays hot across calls.
+        import httpx  # local import: httpx ships transitively with the openai SDK
+
+        http_client = httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+            ),
+            timeout=httpx.Timeout(connect=5.0, read=timeout_s, write=30.0, pool=5.0),
+        )
         # Client is created once at startup so httpx maintains a persistent connection
         # pool across extraction calls. This also enables DeepInfra's server-side KV
         # prefix cache: when the system prompt bytes are identical across calls, the
@@ -61,6 +81,7 @@ class DeepSeekExtractionAdapter:
             api_key=api_key,
             base_url=base_url,
             timeout=_openai.Timeout(connect=5.0, read=timeout_s, write=30.0, pool=5.0),
+            http_client=http_client,
         )
 
     async def aclose(self) -> None:

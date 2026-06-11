@@ -86,6 +86,14 @@ async def main() -> None:
 
     ml_sem = asyncio.Semaphore(settings.embedding_max_concurrent)
 
+    # Task #14: deep extraction gets its OWN semaphore sized to the per-replica
+    # article concurrency.  The shared ``ml_sem`` (embedding_max_concurrent=4) would
+    # otherwise cap concurrent DeepInfra extraction calls at 4 even when N=16 article
+    # handlers are in flight, re-serialising the very latency we are trying to
+    # overlap.  Embedding/NER keep the small shared pool because they are short and
+    # CPU/GPU-bound; extraction is long and network-bound, so it needs its own width.
+    extraction_sem = asyncio.Semaphore(settings.article_consumer_concurrency)
+
     # GLiNER: use HTTP adapter when gliner_base_url is configured (containerised),
     # otherwise fall back to in-process local adapter.
     if settings.gliner_base_url:
@@ -164,7 +172,11 @@ async def main() -> None:
             api_key=_extraction_api_key,
             model_id=settings.extraction_api_model_id,
             base_url=settings.extraction_api_base_url,
-            semaphore=ml_sem,
+            # Task #14: dedicated wide semaphore + sized httpx pool so N concurrent
+            # article handlers each get an extraction slot without queuing.
+            semaphore=extraction_sem,
+            max_connections=settings.deepinfra_max_connections,
+            max_keepalive_connections=settings.deepinfra_max_keepalive,
         )
         log.info(
             "extraction_deepinfra_adapter_selected",
