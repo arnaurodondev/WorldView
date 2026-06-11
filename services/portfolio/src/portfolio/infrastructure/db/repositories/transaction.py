@@ -7,13 +7,16 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
+from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.repositories import TransactionRepository
 from portfolio.domain.entities.transaction import Transaction
-from portfolio.domain.enums import TransactionDirection, TransactionType
+from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
 from portfolio.infrastructure.db.models.transaction import TransactionModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class SqlAlchemyTransactionRepository(TransactionRepository):
@@ -21,6 +24,27 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
         self._session = session
 
     def _to_entity(self, row: TransactionModel) -> Transaction:
+        # 2026-06-10 (BP candidate, found during TWR work): PLAN-0108 added
+        # ``trade_side`` to the entity + model + migration 0021 but this repo
+        # was never updated — hydration dropped the column entirely. Because
+        # ``Transaction.__post_init__`` REQUIRES trade_side for TRADE rows,
+        # every read that touched a TRADE row raised ValueError → 500 on
+        # realized-pnl / transactions page 2+ / TWR. Hydrate it properly and
+        # INFER the side from direction for legacy rows persisted while
+        # ``save()`` silently dropped the field (INFLOW=securities in=BUY,
+        # OUTFLOW=securities out=SELL — the exact mapping used on the write
+        # path in RecordTransactionUseCase).
+        trade_side: TradeSide | None = None
+        if row.transaction_type == TransactionType.TRADE:
+            if row.trade_side:
+                trade_side = TradeSide(row.trade_side)
+            else:
+                trade_side = TradeSide.BUY if row.direction == str(TransactionDirection.INFLOW) else TradeSide.SELL
+                logger.warning(
+                    "transaction_trade_side_inferred_from_direction",
+                    transaction_id=str(row.id),
+                    direction=row.direction,
+                )
         return Transaction(
             id=row.id,
             tenant_id=row.tenant_id,
@@ -40,6 +64,7 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
             # P2-E: broker-supplied description (Alembic 0020). NULL on all rows
             # before the migration and when SnapTrade omits the field.
             description=row.description,
+            trade_side=trade_side,
             created_at=row.created_at,
         )
 
@@ -166,6 +191,10 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
                 # P2-E (Wave G): broker-supplied human-readable description.
                 # Nullable; historical rows + brokers that omit it stay NULL.
                 description=transaction.description,
+                # 2026-06-10: persist trade_side (PLAN-0108 follow-up — the
+                # column existed since migration 0021 but save() never wrote
+                # it, so TRADE rows landed with NULL and broke hydration).
+                trade_side=str(transaction.trade_side) if transaction.trade_side is not None else None,
                 created_at=transaction.created_at,
             )
             self._session.add(row)

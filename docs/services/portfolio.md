@@ -63,7 +63,8 @@ All require `X-Internal-JWT` (RS256, issued by S9 per request).
 | DELETE | `/api/v1/portfolios/{id}` | Archive portfolio |
 | GET | `/api/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO) over `[from, to]` date window |
 | GET | `/api/v1/portfolios/{id}/value-history` | Equity-curve daily snapshots (`from`, `to`, `days`, `granularity=1d|1w|1m`); response includes `metadata.last_snapshot_at` and `metadata.next_scheduled_run_utc` |
-| GET | `/api/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown; includes `prices_stale` and `prices_as_of` fields |
+| GET | `/api/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown; includes `prices_stale`, `prices_as_of`, and `buying_power` (v1: equals `cash`, margin not modelled — 2026-06-10 sprint gap #5) |
+| GET | `/api/v1/portfolios/{id}/twr` | Flow-adjusted time-weighted return series (2026-06-10 sprint gap #3). Query: `days` (1-3650, default 90). Daily sub-period returns between external flows (BUY/SELL/TRADE/DEPOSIT/WITHDRAWAL; DIVIDEND/INTEREST/FEE excluded), end-of-day flow convention `r_t = (V_t - F_t - V_{t-1}) / V_{t-1}`, geometrically linked. Response: `{portfolio_id, from_date, to_date, points: [{date, twr_cum_pct, nav}], flow_days}`. See `ComputeTwrUseCase` |
 | GET | `/api/v1/portfolios/{id}/holdings/{instrument_id}/lots` | FIFO open lots for a single holding — open-date, qty, cost-per-share, days-held, ST/LT classification, optional `unrealised_pnl` (PLAN-0088 E-2) |
 | GET | `/api/v1/portfolios/{id}/concentration` | Herfindahl-Hirschman concentration metrics: HHI, diversified/moderate/concentrated/empty label, top-3 share, top-5 positions (PLAN-0088 E-3) |
 
@@ -71,7 +72,7 @@ All require `X-Internal-JWT` (RS256, issued by S9 per request).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio |
+| GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio. Items carry `ticker`/`name`/`entity_id`/`asset_class` enriched via instruments LEFT JOIN (all nullable; `asset_class` added 2026-06-10, sprint gap #1) |
 | POST | `/api/v1/transactions` | Record transaction |
 | GET | `/api/v1/transactions` | List transactions — paginated |
 | GET | `/api/v1/instruments` | List local instrument refs — paginated |

@@ -287,6 +287,7 @@ class TestGetExposureUseCase:
             leverage=Decimal(0),
             prices_stale=False,
             prices_as_of=None,
+            buying_power=Decimal(0),
         )
 
     async def test_full_price_coverage(self) -> None:
@@ -316,6 +317,10 @@ class TestGetExposureUseCase:
         assert result.net_exposure_pct == Decimal(1)
         # leverage = invested / total_cost = 2600 / (10*100 + 5*200) = 2600 / 2000 = 1.3
         assert result.leverage == Decimal("1.3")
+        # 2026-06-10 gap #5: buying_power v1 semantics — always equals cash
+        # (margin not modelled). The field exists so the frontend renders a
+        # server-stated value instead of inferring it.
+        assert result.buying_power == result.cash == Decimal(0)
 
         # Single batch round-trip — never N+1.
         assert len(prices.calls) == 1
@@ -429,6 +434,7 @@ class TestGetExposureUseCase:
             leverage=Decimal(0),
             prices_stale=False,
             prices_as_of=None,
+            buying_power=Decimal(0),
         )
         # Crucially: we did NOT call the price client — the early return
         # short-circuited the loop, avoiding wasted quote round-trips.

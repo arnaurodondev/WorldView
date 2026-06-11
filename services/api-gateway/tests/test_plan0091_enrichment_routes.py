@@ -361,6 +361,9 @@ async def test_sector_breakdown_groups_by_sector_and_computes_weight(authed_app,
     assert seg["count"] == 2
     assert seg["weight"] == pytest.approx(1.0)
     assert seg["market_value"] == pytest.approx(2000.0)
+    # 2026-06-10 gap #2: each segment lists its member instrument UUIDs so the
+    # frontend can join segments back to holdings rows by id (not by name).
+    assert sorted(seg["instrument_ids"]) == sorted([iid_1, iid_2])
     assert body["covered_pct"] == pytest.approx(1.0)
     assert body["as_of"] is not None
 
@@ -413,6 +416,9 @@ async def test_sector_breakdown_unknown_sector_reduces_covered_pct(authed_app, a
     assert "Unknown" in sectors
     # Only 50% of MV has a known sector
     assert body["covered_pct"] == pytest.approx(0.5)
+    # 2026-06-10 gap #2: instrument_ids land in the right segment.
+    assert sectors["Healthcare"]["instrument_ids"] == [iid_known]
+    assert sectors["Unknown"]["instrument_ids"] == [iid_unknown]
 
 
 @pytest.mark.asyncio

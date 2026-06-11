@@ -82,6 +82,13 @@ class ExposureResult:
     ``prices_as_of`` is left as None for v1 — the upstream ``CurrentPriceClient``
     port doesn't yet surface a per-quote timestamp. The field is reserved
     so the frontend can rely on a stable shape when v2 wires it up.
+
+    ``buying_power`` (2026-06-10 frontend-enhancement sprint, gap #5):
+    v1 semantics are ``buying_power == cash`` — margin is NOT modelled, so
+    available buying power is exactly the uninvested cash balance. The field
+    exists so the frontend stops inferring it client-side; when margin
+    support lands, only this computation changes (``cash + margin_available``)
+    and the wire contract stays stable.
     """
 
     invested: Decimal
@@ -91,6 +98,9 @@ class ExposureResult:
     leverage: Decimal
     prices_stale: bool = False
     prices_as_of: datetime | None = None
+    # v1: always equals ``cash`` (no margin modelling). Defaulted so existing
+    # constructor call sites stay valid — forward-compatible add (R11).
+    buying_power: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -150,6 +160,8 @@ class GetExposureUseCase:
                 leverage=zero,
                 prices_stale=False,
                 prices_as_of=None,
+                # v1: buying_power == cash (no margin) — see dataclass docstring.
+                buying_power=zero,
             )
 
         # Fetch current prices for ALL distinct instruments in a single
@@ -205,4 +217,6 @@ class GetExposureUseCase:
             # v1 leaves prices_as_of=None — the port doesn't yet surface
             # a per-quote timestamp. See dataclass docstring.
             prices_as_of=None,
+            # v1: buying_power == cash (no margin) — see dataclass docstring.
+            buying_power=cash,
         )

@@ -48,12 +48,21 @@ class EnrichedHolding:
     JOIN is an infrastructure concern — the Holding domain entity must not carry
     optional ticker/name fields that only exist when the instrument ref is present.
     This DTO is purely application-layer transport.
+
+    2026-06-10 (frontend-enhancement sprint, gap #1): ``asset_class`` joins
+    the enrichment set. Holdings previously lacked it, forcing the frontend
+    to derive the ASSET column from the *transactions* page — holdings whose
+    transactions weren't on the current page rendered "—". Same nullable
+    semantics as ticker/name: ``None`` when the instrument record is absent.
     """
 
     holding: Holding
     ticker: str | None
     name: str | None
     entity_id: UUID | None
+    # Nullable + defaulted so existing constructor call sites (fakes, tests)
+    # keep working — forward-compatible field add per R11.
+    asset_class: str | None = None
 
 
 class GetHoldingsUseCase:

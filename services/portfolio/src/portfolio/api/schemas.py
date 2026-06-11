@@ -179,6 +179,12 @@ class HoldingResponse(BaseModel):
     ticker: str | None = None
     name: str | None = None
     entity_id: UUID | None = None
+    # 2026-06-10 (frontend-enhancement sprint, gap #1): asset_class joins the
+    # enrichment set so the holdings table can render the ASSET column without
+    # cross-referencing the transactions page (which only covers instruments
+    # with a transaction on the current page — everything else showed "—").
+    # Forward-compatible add (R11): nullable with default, never required.
+    asset_class: str | None = None
 
     @field_serializer("quantity", "average_cost")
     def serialize_decimal(self, v: Decimal) -> str:
@@ -547,6 +553,10 @@ class ExposureResponse(BaseModel):
     renders a yellow "Prices stale" badge above the gross-exposure number
     so the user understands the figure may not reflect today's market.
     ``prices_as_of`` is reserved for v2 (see ExposureResult docstring).
+
+    ``buying_power`` (2026-06-10, gap #5): v1 semantics — equals ``cash``
+    because margin is not modelled. Explicit field so the frontend renders
+    a server-stated value instead of inferring it. Forward-compatible add.
     """
 
     invested: Decimal
@@ -556,10 +566,49 @@ class ExposureResponse(BaseModel):
     leverage: Decimal
     prices_stale: bool = False
     prices_as_of: datetime | None = None
+    # v1: always equals cash (no margin). Defaulted for wire compatibility.
+    buying_power: Decimal = Decimal(0)
 
-    @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage")
+    @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage", "buying_power")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+# ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ────────
+
+
+class TwrPointResponse(BaseModel):
+    """One day on the TWR curve.
+
+    ``twr_cum_pct`` — cumulative time-weighted return since the first
+    snapshot in the window, in percent (first point is always 0.0).
+    ``nav`` — the raw daily snapshot value, serialised as an 8-dp string
+    to match every other Decimal in the API.
+    """
+
+    date: date
+    twr_cum_pct: float
+    nav: Decimal
+
+    @field_serializer("nav")
+    def serialize_nav(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class TwrResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/twr`` response.
+
+    Daily time-weighted return series, geometrically linked between
+    external cash flows (see ``ComputeTwrUseCase`` for the formula and
+    the flow-classification rules). ``flow_days`` counts sub-periods that
+    had a non-zero external flow — a sanity-check signal for the caller.
+    """
+
+    portfolio_id: UUID
+    from_date: date
+    to_date: date
+    points: list[TwrPointResponse]
+    flow_days: int
 
 
 # ── PLAN-0051 Wave A — Realised P&L (T-A-1-04) ────────────────────────────────

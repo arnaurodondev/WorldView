@@ -627,6 +627,41 @@ async def get_portfolio_value_history(portfolio_id: str, request: Request) -> An
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ────────
+
+
+@router.get("/portfolios/{portfolio_id}/twr")
+async def get_portfolio_twr(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/twr → S1 Portfolio service.
+
+    Daily flow-adjusted time-weighted-return series: sub-period returns
+    between external cash flows (transactions), geometrically linked.
+    Replaces the frontend's NAV-relative approximation. Forwards the
+    optional ``days`` query param (default 90 on the S1 side). Response:
+    ``{portfolio_id, from_date, to_date, points: [{date, twr_cum_pct,
+    nav}], flow_days}`` — see S1 ``ComputeTwrUseCase`` for the formula.
+
+    S1 returns 404 when the portfolio is missing or not owned by the
+    caller — surfaced unchanged to the frontend.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # WHY UUID validation: portfolio_id appears in a downstream URL —
+    # defensive parsing prevents path injection (same rule as /bundle).
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="portfolio_id must be a UUID")  # noqa: B904
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/twr",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # F-204 (QA iter-2): admin trigger so an operator can rebuild today's
 # portfolio_value_snapshots row after a manual data fix. The frontend does
 # not call this — the gateway exposes it for ops use through curl/dev tools
@@ -1095,6 +1130,10 @@ async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) ->
 
     # Step 3 — aggregate: one pass over holdings, O(N)
     totals: dict[str, dict[str, float]] = defaultdict(lambda: {"mv": 0.0, "count": 0.0})
+    # 2026-06-10 gap #2: collect the instrument UUIDs per sector so the
+    # frontend can join segments back to holdings rows by id (previously it
+    # had to do a fragile name-alias match against the sector string).
+    ids_by_sector: dict[str, list[str]] = defaultdict(list)
     total_mv = 0.0
     covered_mv = 0.0
 
@@ -1114,6 +1153,7 @@ async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) ->
         sector = sector_map.get(iid, "Unknown")
         totals[sector]["mv"] += mv
         totals[sector]["count"] += 1.0
+        ids_by_sector[sector].append(iid)
         total_mv += mv
         if sector != "Unknown":
             covered_mv += mv
@@ -1124,6 +1164,7 @@ async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) ->
             weight=round(vals["mv"] / total_mv, 6) if total_mv > 0 else 0.0,
             count=int(vals["count"]),
             market_value=round(vals["mv"], 2),
+            instrument_ids=ids_by_sector[sector],
         )
         for sector, vals in sorted(totals.items(), key=lambda x: -x[1]["mv"])
     ]

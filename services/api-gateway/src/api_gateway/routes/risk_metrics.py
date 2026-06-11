@@ -623,7 +623,7 @@ async def _fetch_spy_ohlcv(
 async def get_risk_metrics(
     portfolio_id: str,
     request: Request,
-    lookback_days: int = Query(default=90, ge=10, le=3650),
+    lookback_days: int = Query(default=90, ge=5, le=3650),
 ) -> Response:
     """Return drawdown, volatility, Sharpe, Sortino, beta vs SPY for a portfolio.
 
@@ -637,6 +637,18 @@ async def get_risk_metrics(
       SPY data unavailable, etc.).
 
     The frontend renders every ``null`` as "—" — see RiskMetricsStrip.
+
+    Lookback floor (2026-06-10 frontend-enhancement sprint, gap #4):
+    ``lookback_days`` floor lowered 10 → 5. DESIGN CHOICE — "compute with
+    whatever's available and flag low-sample": a short window now returns
+    200 instead of 422; metrics that need >= ``_MIN_RETURNS`` (10) daily
+    returns stay ``null`` and ``data_quality.status`` reads
+    ``"insufficient_data"`` (the low-sample flag), while endpoint-based
+    metrics (``period_return``, ``cagr``) still compute from as few as 2
+    points. We did NOT lower ``_MIN_RETURNS`` — variance estimates on < 10
+    samples are statistically meaningless and publishing them would be
+    dishonest. The frontend can therefore safely request 5-9 day windows
+    and render the honest partial response.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")

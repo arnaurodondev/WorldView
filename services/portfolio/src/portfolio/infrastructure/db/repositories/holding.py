@@ -54,21 +54,31 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
         yet been synced from S3 (race condition between SnapTrade sync and instrument
         consumer). LEFT JOIN ensures all holdings are returned even without an instrument
         record — the enrichment fields default to None and the frontend degrades gracefully.
+
+        2026-06-10 (gap #1): ``asset_class`` added to the same JOIN — no new
+        query, no DDL (instruments.asset_class already exists).
         """
         stmt = (
-            select(HoldingModel, InstrumentModel.symbol, InstrumentModel.name, InstrumentModel.entity_id)
+            select(
+                HoldingModel,
+                InstrumentModel.symbol,
+                InstrumentModel.name,
+                InstrumentModel.entity_id,
+                InstrumentModel.asset_class,
+            )
             .outerjoin(InstrumentModel, HoldingModel.instrument_id == InstrumentModel.id)
             .where(HoldingModel.portfolio_id == portfolio_id)
         )
         result = await self._session.execute(stmt)
         enriched: list[EnrichedHolding] = []
-        for holding_row, symbol, name, entity_id in result.tuples():
+        for holding_row, symbol, name, entity_id, asset_class in result.tuples():
             enriched.append(
                 EnrichedHolding(
                     holding=self._to_entity(holding_row),
                     ticker=symbol,
                     name=name,
                     entity_id=entity_id,
+                    asset_class=asset_class,
                 ),
             )
         return enriched
@@ -99,7 +109,13 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             return []
 
         stmt = (
-            select(HoldingModel, InstrumentModel.symbol, InstrumentModel.name, InstrumentModel.entity_id)
+            select(
+                HoldingModel,
+                InstrumentModel.symbol,
+                InstrumentModel.name,
+                InstrumentModel.entity_id,
+                InstrumentModel.asset_class,
+            )
             .outerjoin(InstrumentModel, HoldingModel.instrument_id == InstrumentModel.id)
             .where(HoldingModel.portfolio_id.in_(portfolio_ids))
         )
@@ -108,15 +124,16 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
         # Per-instrument accumulators.
         qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
         cost_qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))  # SUM(qty * avg_cost)
-        # Carry the first (holding, ticker, name, entity_id) seen for each instrument
-        # so we can reconstruct an EnrichedHolding without losing the joined fields.
-        first_seen: dict[UUID, tuple[HoldingModel, str | None, str | None, UUID | None]] = {}
+        # Carry the first (holding, ticker, name, entity_id, asset_class) seen for
+        # each instrument so we can reconstruct an EnrichedHolding without losing
+        # the joined fields.
+        first_seen: dict[UUID, tuple[HoldingModel, str | None, str | None, UUID | None, str | None]] = {}
 
-        for holding_row, symbol, name, entity_id in result.tuples():
+        for holding_row, symbol, name, entity_id, asset_class in result.tuples():
             iid = holding_row.instrument_id
             qty_sum[iid] += holding_row.quantity
             cost_qty_sum[iid] += holding_row.quantity * holding_row.average_cost
-            first_seen.setdefault(iid, (holding_row, symbol, name, entity_id))
+            first_seen.setdefault(iid, (holding_row, symbol, name, entity_id, asset_class))
 
         enriched: list[EnrichedHolding] = []
         for iid, total_qty in qty_sum.items():
@@ -125,7 +142,7 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             # and refuses to re-bind it to ``str | None`` here. Distinct names
             # for the unpacked snapshot tuple side-step the collision and
             # also make it explicit that these come from ``first_seen``.
-            base_row, symbol_val, name_val, entity_id_val = first_seen[iid]
+            base_row, symbol_val, name_val, entity_id_val, asset_class_val = first_seen[iid]
             # NULLIF(SUM(qty), 0) — avoid division by zero for fully-closed positions
             # that still have stale holding rows (shouldn't happen, but defensive).
             weighted_cost = (cost_qty_sum[iid] / total_qty) if total_qty != 0 else Decimal(0)
@@ -148,6 +165,7 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
                     ticker=symbol_val,
                     name=name_val,
                     entity_id=entity_id_val,
+                    asset_class=asset_class_val,
                 ),
             )
         return enriched

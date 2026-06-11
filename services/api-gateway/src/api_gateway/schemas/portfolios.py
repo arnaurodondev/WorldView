@@ -64,6 +64,11 @@ class SectorBreakdownSegment(BaseModel):
     weight: float = 0.0  # fraction 0-1 of total market value
     count: int = 0  # number of holdings in this sector
     market_value: float = 0.0  # absolute market value in portfolio currency
+    # 2026-06-10 (frontend-enhancement sprint, gap #2): the instrument UUIDs
+    # belonging to this segment. Lets the frontend map sector filters back to
+    # holdings rows by id instead of a fragile name-alias join. Defaulted []
+    # so older cached responses without the field still validate.
+    instrument_ids: list[str] = []
 
 
 class SectorBreakdownResponse(BaseModel):

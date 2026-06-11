@@ -268,7 +268,44 @@ async def test_risk_metrics_passes_value_history_404_through(
 
 @pytest.mark.asyncio
 async def test_risk_metrics_lookback_bounds(authed_app) -> None:
-    """lookback_days < 10 → 422 (Pydantic validation)."""
+    """lookback_days < 5 → 422 (Pydantic validation).
+
+    2026-06-10 frontend-enhancement sprint, gap #4: the floor was lowered
+    from 10 to 5 — short windows now return an honest 200 with nulled
+    metrics + ``data_quality.status="insufficient_data"`` instead of a 422.
+    Values below the new floor still 422.
+    """
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics",
+            params={"lookback_days": "4"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_risk_metrics_lookback_5_returns_200_with_low_sample_flag(
+    authed_app,
+    authed_mock_clients,
+) -> None:
+    """Gap #4 contract: lookback_days=5 is now accepted.
+
+    With < 10 daily returns every return-based metric is null and the
+    response flags ``data_quality.status == "insufficient_data"`` — the
+    documented low-sample signal. ``period_return`` still computes (it
+    only needs the window's endpoints).
+    """
+    today = date.today()  # noqa: DTZ011 — date-only math, tz-irrelevant in test
+    points = [{"date": (today - timedelta(days=5 - i)).isoformat(), "value": 100.0 + i} for i in range(5)]
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"points": points}).encode()),
+    )
+    # SPY legs (instrument search + OHLCV) — empty is fine; beta degrades.
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items": []}'),
+    )
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
@@ -276,7 +313,85 @@ async def test_risk_metrics_lookback_bounds(authed_app) -> None:
             params={"lookback_days": "5"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lookback_days"] == 5
+    # Low-sample flag — the documented "compute what's available" choice.
+    assert body["data_quality"]["status"] == "insufficient_data"
+    # Return-based metrics are honestly null on 4 daily returns…
+    assert body["sharpe"] is None
+    assert body["volatility_annualized"] is None
+    # …but endpoint-based metrics still compute (104/100 - 1 = 4%).
+    assert body["period_return"] == pytest.approx(0.04)
+
+
+# ── TWR proxy (2026-06-10 frontend-enhancement sprint, gap #3) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_twr_requires_auth(app, mock_clients) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/portfolios/00000000-0000-0000-0000-000000000001/twr")
+    assert resp.status_code == 401
+    mock_clients.portfolio.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_twr_rejects_non_uuid_portfolio_id(authed_app, authed_mock_clients) -> None:
+    """Path-injection guard: non-UUID portfolio_id → 422, no downstream call."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/not-a-uuid/twr",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
     assert resp.status_code == 422
+    authed_mock_clients.portfolio.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_twr_proxies_to_s1_with_days_param(authed_app, authed_mock_clients) -> None:
+    """``days`` flows through unchanged; S1 body is returned verbatim."""
+    pid = "00000000-0000-0000-0000-000000000001"
+    s1_body = json.dumps(
+        {
+            "portfolio_id": pid,
+            "from_date": "2026-05-11",
+            "to_date": "2026-06-10",
+            "points": [{"date": "2026-06-09", "twr_cum_pct": 0.0, "nav": "1000.00000000"}],
+            "flow_days": 0,
+        },
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, s1_body))
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/portfolios/{pid}/twr",
+            params={"days": "30"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200
+    args, kwargs = authed_mock_clients.portfolio.get.call_args
+    assert args[0] == f"/api/v1/portfolios/{pid}/twr"
+    assert kwargs["params"]["days"] == "30"
+    body = resp.json()
+    assert body["points"][0]["twr_cum_pct"] == 0.0
+    assert body["flow_days"] == 0
+
+
+@pytest.mark.asyncio
+async def test_twr_passes_404_through(authed_app, authed_mock_clients) -> None:
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(404, b'{"error_code":"PORTFOLIO_NOT_FOUND"}'),
+    )
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/00000000-0000-0000-0000-00000000dead/twr",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 404
 
 
 # ── Pure-function reference tests (T-46-5-03 acceptance: Sharpe ±0.01) ─────

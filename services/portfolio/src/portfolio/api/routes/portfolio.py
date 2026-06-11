@@ -27,6 +27,8 @@ from portfolio.api.schemas import (
     PortfolioResponse,
     RealizedPnLResponse,
     TopPositionItem,
+    TwrPointResponse,
+    TwrResponse,
     ValueHistoryMetadata,
     ValueHistoryPoint,
     ValueHistoryResponse,
@@ -38,6 +40,7 @@ from portfolio.application.use_cases.compute_concentration import (
     ComputeConcentrationQuery,
     ComputeConcentrationUseCase,
 )
+from portfolio.application.use_cases.compute_twr import ComputeTwrQuery, ComputeTwrUseCase
 from portfolio.application.use_cases.create_portfolio import CreatePortfolioCommand, CreatePortfolioUseCase
 from portfolio.application.use_cases.get_exposure import GetExposureQuery, GetExposureUseCase
 from portfolio.application.use_cases.get_holding_lots import (
@@ -315,6 +318,59 @@ async def get_value_history(
     )
 
 
+# ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ─────────
+
+
+@router.get("/portfolios/{portfolio_id}/twr", response_model=TwrResponse)
+async def get_twr(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    days: int = Query(default=90, ge=1, le=3650),
+) -> TwrResponse:
+    """Return the daily flow-adjusted time-weighted-return series.
+
+    Replaces the frontend's NAV-relative approximation: TWR computes
+    sub-period returns between external cash flows (transactions) and
+    geometrically links them, so deposits/withdrawals/trades no longer
+    masquerade as performance. Formula, flow-classification rules and
+    edge-case handling are documented in :class:`ComputeTwrUseCase`.
+
+    Window: ``[today - days, today]`` (UTC). NAV points come from the
+    daily ``portfolio_value_snapshots``; flows from ``transactions``.
+
+    Returns 404 (standard exception handler) when the portfolio is
+    missing, in another tenant, or owned by another user.
+
+    R27: read-only path → ``ReadOnlyUnitOfWork``.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    today = datetime.now(tz=UTC).date()
+    start = today - timedelta(days=days)
+
+    uc = ComputeTwrUseCase()
+    result = await uc.execute(
+        ComputeTwrQuery(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+            from_date=start,
+            to_date=today,
+        ),
+        uow,
+    )
+
+    return TwrResponse(
+        portfolio_id=result.portfolio_id,
+        from_date=result.from_date,
+        to_date=result.to_date,
+        points=[TwrPointResponse(date=p.date, twr_cum_pct=p.twr_cum_pct, nav=p.nav) for p in result.points],
+        flow_days=result.flow_days,
+    )
+
+
 # ── PLAN-0051 Wave A — realised P&L ───────────────────────────────────────────
 
 
@@ -429,6 +485,8 @@ async def get_exposure(
         # stale" badge instead of pretending cost-basis is live market value.
         prices_stale=result.prices_stale,
         prices_as_of=result.prices_as_of,
+        # 2026-06-10 gap #5: v1 buying_power == cash (no margin modelled).
+        buying_power=result.buying_power,
     )
 
 

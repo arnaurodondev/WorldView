@@ -89,6 +89,9 @@ async def get_holdings(
             ticker=eh.ticker,
             name=eh.name,
             entity_id=eh.entity_id,
+            # 2026-06-10 gap #1: asset_class enriched via the same instruments
+            # LEFT JOIN as ticker/name — None when the instrument is absent.
+            asset_class=eh.asset_class,
         )
         for eh in enriched_holdings
     ]
