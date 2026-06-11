@@ -1313,6 +1313,14 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
+    # 3 replicas: the article topic has 12 partitions but a single serial
+    # consumer (~120 docs/h) cannot keep up with ingest (250-480 docs/h), so
+    # lag grew unboundedly. Kafka rebalances the 12 partitions 4/4/4 across
+    # the 3 members of the same consumer group. Replicas require no
+    # container_name and no host port binding (both true here). Equivalent
+    # CLI form: docker compose up -d --scale nlp-pipeline-article-consumer=3
+    deploy:
+      replicas: 3
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
