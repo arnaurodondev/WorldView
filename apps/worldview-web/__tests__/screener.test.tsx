@@ -224,8 +224,13 @@ describe("ScreenerPage — structure", () => {
     // and OWNERSHIP group (ANALYST TGT, ANALYST UPSIDE, CONSENSUS, INSIDER 90D,
     // INST OWN%, SHORT %) on top of the existing FUNDAMENTALS and RATIOS groups.
     // IB-L5: added INTELLIGENCE group (NEWS 7D, BRIEF SCORE) — default-visible.
-    // Total is now 34 rendered columnheader roles (group headers + leaf columns
-    // both receive role="columnheader" in AG Grid).
+    // COUNT SEMANTICS (clarified in Wave-2): the vitest AG Grid shim
+    // (vitest.setup.ts) renders one columnheader per LEAF ColDef and ignores
+    // `hide` — so 34 = total leaf-column catalogue size, NOT the visible set
+    // (the hidden IB-L3/L4 opt-ins and, since Wave-2, the hidden SCORE column
+    // are all counted). This pins "no ColDef silently dropped/added"; the
+    // default-VISIBILITY contract is pinned separately by the SCORE test
+    // below and lib/__tests__/screener-columns.test.ts.
     const headers = screen.getAllByRole("columnheader");
     expect(headers.length).toBe(34);
 
@@ -317,22 +322,42 @@ describe("ScreenerPage — data rows", () => {
     });
   });
 
-  it("shows HeatCell score of 75 for AAPL (market_impact_score 0.75)", async () => {
-    render(<ScreenerPage />, { wrapper: makeWrapper() });
-    await waitFor(() => {
-      // AAPL has market_impact_score=0.75 → HeatCell displays "75"
-      expect(screen.getByText("75")).toBeInTheDocument();
-    });
+  // ── Wave-2 (2026-06-10): SCORE column is hidden by default ────────────────
+  // market_impact_score has NO backend data source (live-confirmed: absent
+  // from every row, default and filtered views) — a permanently-"—" column
+  // erodes trust, so the column is opt-in now. These tests REPLACE the old
+  // "shows HeatCell score of 75 / em-dash for null score" pair at equal
+  // strength: the real grid's default visibility is driven by exactly two
+  // inputs — the ColDef's `hide` flag (first paint) and the prefs catalogue
+  // default (applyColumnState on grid-ready) — and both are pinned here.
+  // WHY not a DOM-absence assertion: the vitest AG Grid shim
+  // (vitest.setup.ts, shared file) renders every leaf ColDef and ignores
+  // `hide`, so "no SCORE header in the DOM" is untestable at page level
+  // without weakening the shared mock for every other surface.
+  it("ships the SCORE ColDef with hide:true (hidden at first paint — Wave-2)", async () => {
+    const { createAgScreenerColumns } = await import(
+      "@/components/screener/ag-screener-columns"
+    );
+    const defs = createAgScreenerColumns({});
+    // SCORE is a standalone (non-grouped) ColDef.
+    const score = defs.find(
+      (d) => !("children" in d) && (d as { colId?: string }).colId === "score",
+    ) as { hide?: boolean; cellRenderer?: unknown } | undefined;
+    expect(score).toBeDefined();
+    expect(score?.hide).toBe(true);
+    // The renderer survives — the column stays fully functional as an opt-in
+    // for when the backend ships market_impact_score data.
+    expect(score?.cellRenderer).toBeDefined();
   });
 
-  it("shows em-dash for TSLA (null market_impact_score)", async () => {
-    render(<ScreenerPage />, { wrapper: makeWrapper() });
-    await waitFor(() => {
-      // TSLA has null market_impact_score → HeatCell shows "—"
-      // Multiple "—" exist (Price, Revenue, Beta, Volume also show "—")
-      const dashes = screen.getAllByText("—");
-      expect(dashes.length).toBeGreaterThanOrEqual(1);
-    });
+  it("defaults the score prefs entry to hidden but keeps it in the catalogue (opt-in)", async () => {
+    // The prefs catalogue drives applyColumnState on grid-ready AND the
+    // ColumnSettingsPopover checkbox list — the entry must survive (so users
+    // can opt in) while defaulting to hidden.
+    const { DEFAULT_COLUMNS } = await import("@/lib/screener-columns");
+    const score = DEFAULT_COLUMNS.find((c) => c.key === "score");
+    expect(score).toBeDefined();
+    expect(score?.visible).toBe(false);
   });
 
   it("backend-pending columns (Revenue, Beta, Price, Volume) show em-dash", async () => {

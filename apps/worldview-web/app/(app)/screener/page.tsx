@@ -92,6 +92,10 @@ import { AlertTriangle, Inbox, SearchX } from "lucide-react";
 // screener query is in flight (replaces the blank grid body).
 import { ScreenerTableSkeleton } from "@/components/screener/ScreenerTableSkeleton";
 import type { ScreenerResult, ScreenerRequest, OHLCVBar } from "@/types/api";
+// Wave-2: typed view of the new flat backend fields (volume / high_52w /
+// low_52w) — see lib/api/screener.ts for why this lives in the screener
+// surface rather than on the shared types/api.ts ScreenerResult.
+import type { ScreenerRowEnriched } from "@/lib/api/screener";
 import { SavedScreensDialog } from "@/components/screener/SavedScreensDialog";
 import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
 import { ExportMenu, type ExportColumn } from "@/components/screener/ExportMenu";
@@ -243,6 +247,22 @@ export default function ScreenerPage() {
   // ROUND-4 (item 1): `refetch` is destructured so the error state can offer a
   // real Retry (re-fires the SAME query — filters + offset preserved) instead
   // of forcing the user to reload the page or wiggle a filter to recover.
+  //
+  // CHG% DATA DECISION (Wave-2 investigation, 2026-06-10): the CHG% column
+  // stays sourced from `daily_return`, which only ~32/596 instruments carry —
+  // most rows truthfully show "—". Quote-derived enrichment was investigated
+  // and REJECTED for now:
+  //   - POST /v1/quotes/batch (the only no-N+1 option) returns ONLY
+  //     {bid, ask, last, volume} — no change / change_pct / previous close,
+  //     so a day-change cannot be computed from it (live-verified).
+  //   - GET /v1/quotes/{id} DOES carry change_pct, but calling it per row is
+  //     exactly the 50–200-request N+1 this page must avoid.
+  //   - Batch-quote coverage is the SAME sparse ~32-instrument set that
+  //     already has daily_return, so even a fixed batch endpoint would not
+  //     widen CHG% coverage today.
+  // UNBLOCK PATH (backend): add change_pct (or previous_close) to the
+  // /v1/quotes/batch response — then a single batch call here can fill CHG%
+  // for every quoted row.
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: qk.screener.page(filterSerialized, offset),
     queryFn: () => createGateway(accessToken).runScreener(request),
@@ -441,8 +461,11 @@ export default function ScreenerPage() {
               const span = lo + Math.abs(hi);
               return span === 0 ? 100 : Math.round(Math.min(100, Math.max(0, (lo / span) * 100)));
             }
-            // volume column displays avg_volume_30d — export the same field.
-            case "volume":    return row.avg_volume_30d ?? null;
+            // Wave-2: the VOLUME column now displays the latest 1-day volume
+            // (`volume`, new flat backend field) — export the same field so
+            // the file mirrors the on-screen cell. The 30d average remains a
+            // separate (non-exported) brightness input.
+            case "volume":    return (row as ScreenerRowEnriched).volume ?? null;
             case "sparkline": return "";
             default:          return "";
           }

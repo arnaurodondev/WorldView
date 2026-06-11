@@ -163,6 +163,8 @@ describe("Round-4: empty/missing metrics dict maps every metric field to null", 
   });
 
   // Every numeric ScreenerResult field the transformer derives from `metrics`.
+  // Wave-2 (2026-06-10): + volume, high_52w, low_52w (new flat backend fields)
+  // — they must obey the same null contract as every other metric.
   const METRIC_FIELDS = [
     "current_price", "market_cap", "pe_ratio", "daily_return", "revenue",
     "beta", "market_impact_score", "avg_volume_30d", "forward_pe",
@@ -172,7 +174,7 @@ describe("Round-4: empty/missing metrics dict maps every metric field to null", 
     "analyst_target_price", "analyst_consensus_rating", "insider_net_buy_90d",
     "institutional_ownership_pct", "short_percent", "news_count_7d",
     "llm_relevance_7d_max", "display_relevance_7d_weighted",
-    "recent_contradiction_count",
+    "recent_contradiction_count", "volume", "high_52w", "low_52w",
   ] as const;
 
   it("metrics:{} → null on every metric field (renderers then show dashes)", async () => {
@@ -220,5 +222,177 @@ describe("Round-4: empty/missing metrics dict maps every metric field to null", 
 
     expect(result.results[0].pe_ratio).toBeNull();
     expect(result.results[0].market_cap).toBeNull();
+  });
+});
+
+// ── Wave-2 (2026-06-10): flat backend payload — new fields + POST-always ─────
+//
+// WHY THIS BLOCK: the Wave-1 backend rework changed the screener contract in
+// three load-bearing ways the transformer must consume:
+//   1. Rows are FLAT (no nested `metrics` dict) — the row[...] ?? metrics[...]
+//      chains must resolve flat keys.
+//   2. Three new fields ship on every row: `volume` (latest 1d bar volume),
+//      `high_52w` / `low_52w` (absolute 52-week range prices).
+//   3. GET /v1/fundamentals/screen was REMOVED from the gateway (the path now
+//      falls into /{instrument_id} and 422s) — runScreener must POST for
+//      EVERY request shape, including the legacy "default filter" shape that
+//      used to trigger the GET branch.
+
+describe("Wave-2: flat payload mapping (volume / high_52w / low_52w)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A realistic Wave-1 backend row: flat, no `metrics` dict at all. */
+  function flatRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const row = baseRow(overrides);
+    delete (row as Record<string, unknown>).metrics;
+    return row;
+  }
+
+  it("maps the flat `volume` field (latest 1d bar volume)", async () => {
+    mockFetch({ results: [flatRow({ volume: 62_969 })], total: 1 });
+
+    const api = createScreenerApi("token");
+    const result = await api.runScreener({ filters: [], limit: 1, offset: 0 });
+
+    expect(result.results[0].volume).toBe(62_969);
+  });
+
+  it("maps flat high_52w / low_52w (absolute 52-week range prices)", async () => {
+    mockFetch({
+      results: [flatRow({ high_52w: 236.2647, low_52w: 140.6677 })],
+      total: 1,
+    });
+
+    const api = createScreenerApi("token");
+    const result = await api.runScreener({ filters: [], limit: 1, offset: 0 });
+
+    expect(result.results[0].high_52w).toBe(236.2647);
+    expect(result.results[0].low_52w).toBe(140.6677);
+  });
+
+  it("keeps volume and avg_volume_30d as DISTINCT fields (brightness ratio inputs)", async () => {
+    // The VOLUME column displays `volume` and dims/brightens on the
+    // volume / avg_volume_30d ratio — a transformer that collapsed the two
+    // keys would silently break the brightness signal.
+    mockFetch({
+      results: [flatRow({ volume: 50_000, avg_volume_30d: 1_000_000 })],
+      total: 1,
+    });
+
+    const api = createScreenerApi("token");
+    const result = await api.runScreener({ filters: [], limit: 1, offset: 0 });
+
+    expect(result.results[0].volume).toBe(50_000);
+    expect(result.results[0].avg_volume_30d).toBe(1_000_000);
+  });
+
+  it("maps the full key-metrics set on a FILTERED-view-shaped flat row", async () => {
+    // Wave-1's headline fix: filtered responses now carry the FULL key-metrics
+    // set, not just the filtered metric. Simulate a row as returned for a
+    // pe_ratio filter (live-verified shape, 2026-06-10) and assert every
+    // column-backing field lands flattened — this is the regression test for
+    // "apply a P/E filter and every other column blanks to —".
+    mockFetch({
+      results: [
+        flatRow({
+          pe_ratio: 39.8889,           // the filtered metric…
+          market_cap: 176_661_676_032, // …plus everything else:
+          revenue: 25_903_800_320,
+          beta: 1.275,
+          roe: 0.3683,
+          operating_margin: 0.2731,
+          revenue_growth_yoy: 0.584,
+          dividend_yield: 0.006,
+          forward_pe: 27.933,
+          dist_from_52w_high_pct: -0.228373,
+          dist_from_52w_low_pct: 0.526596,
+          high_52w: 166.7105,
+          low_52w: 90.9661,
+          volume: 4_987,
+          avg_volume_30d: 7_897_136,
+          analyst_target_price: 182.2778,
+          news_count_7d: 1,
+        }),
+      ],
+      total: 1,
+    });
+
+    const api = createScreenerApi("token");
+    const result = await api.runScreener({
+      filters: [{ metric: "pe_ratio", min_value: 5, max_value: 40 }],
+      limit: 1,
+      offset: 0,
+    });
+
+    const row = result.results[0];
+    expect(row.pe_ratio).toBe(39.8889);
+    expect(row.market_cap).toBe(176_661_676_032);
+    expect(row.revenue).toBe(25_903_800_320);
+    expect(row.beta).toBe(1.275);
+    expect(row.roe).toBe(0.3683);
+    expect(row.operating_margin).toBe(0.2731);
+    expect(row.revenue_growth_yoy).toBe(0.584);
+    expect(row.dividend_yield).toBe(0.006);
+    expect(row.forward_pe).toBe(27.933);
+    expect(row.dist_from_52w_high_pct).toBe(-0.228373);
+    expect(row.dist_from_52w_low_pct).toBe(0.526596);
+    expect(row.high_52w).toBe(166.7105);
+    expect(row.low_52w).toBe(90.9661);
+    expect(row.volume).toBe(4_987);
+    expect(row.avg_volume_30d).toBe(7_897_136);
+    expect(row.analyst_target_price).toBe(182.2778);
+    expect(row.news_count_7d).toBe(1);
+  });
+});
+
+describe("Wave-2: runScreener ALWAYS POSTs (GET route removed from gateway)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("POSTs even for the legacy default-filter shape that used to take the GET branch", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], total: 0 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const api = createScreenerApi("token");
+    // EXACTLY the shape the old isDefaultFilter check matched:
+    // one market_capitalization filter, min 0, no max, no sector.
+    await api.runScreener({
+      filters: [{ metric: "market_capitalization", min_value: 0 }],
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    // POST to the bare /screen path — never the old GET querystring form
+    // (which now 422s against GET /v1/fundamentals/{instrument_id}).
+    expect(init.method).toBe("POST");
+    expect(url).toContain("/v1/fundamentals/screen");
+    expect(url).not.toContain("/screen?");
+  });
+
+  it("POSTs for the empty-filters default view (filters: [])", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], total: 0 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const api = createScreenerApi("token");
+    await api.runScreener({ filters: [], limit: 50, offset: 0 });
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    // The request body must carry filters: [] — the backend's optimised
+    // no-filter path keys off it.
+    expect(JSON.parse(String(init.body))).toMatchObject({ filters: [] });
   });
 });

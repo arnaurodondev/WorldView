@@ -10,6 +10,35 @@ import type {
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
+/**
+ * ScreenerRowEnriched — Wave-2 (2026-06-10) additive fields on top of the
+ * shared ScreenerResult type.
+ *
+ * WHY a local extension type (not new fields on types/api.ts ScreenerResult):
+ * types/api.ts is a SHARED file owned by no single surface; this sprint runs
+ * several surface agents concurrently and the screener surface must stay
+ * self-contained (same precedent as SnapshotVolumeFields in
+ * features/screener/lib/build-filters.ts). ScreenerResult already carries an
+ * `[key: string]: unknown` index signature, so these keys are type-legal on
+ * the object — this interface just gives the screener's own renderers a
+ * typed view of them.
+ *
+ * FIELD PROVENANCE (Wave-1 backend, POST /v1/fundamentals/screen):
+ *   volume    — latest 1-day OHLCV bar volume (NOT the 30d average; that is
+ *               the separate avg_volume_30d snapshot column). Used by the
+ *               VOLUME column, with brightness derived from volume /
+ *               avg_volume_30d.
+ *   high_52w  — absolute 52-week high price (USD). Replaces the old
+ *               tooltip derivation `price / (1 + dist_high)` which needed a
+ *               live quote (sparse: ~40/596 instruments have one).
+ *   low_52w   — absolute 52-week low price (USD). Same rationale.
+ */
+export interface ScreenerRowEnriched extends ScreenerResult {
+  volume?: number | null;
+  high_52w?: number | null;
+  low_52w?: number | null;
+}
+
 export function createScreenerApi(t: string | undefined) {
   return {
     /**
@@ -25,9 +54,13 @@ export function createScreenerApi(t: string | undefined) {
      * Used by Screener page filter form
      *
      * PLAN-0052 platform-QA round 4 (2026-05-01): the backend response
-     * is `{instrument_id, ticker, name, exchange, sector, metrics: {…}}`
+     * used to be `{instrument_id, ticker, name, exchange, sector, metrics: {…}}`
      * but the frontend `ScreenerResult` type expects flat fields
      * (`gics_sector`, `current_price`, `market_cap`, `pe_ratio`, etc.).
+     * Wave-2 update (2026-06-10): the Wave-1 backend now emits FLAT rows
+     * (no nested `metrics` dict) — the `row[...] ?? metrics[...]` fallback
+     * chains below handle both shapes, so this transformer is agnostic to
+     * which one is in flight.
      * Without a transformer every metric column rendered "—" and
      * row-clicks tried to navigate to `/instruments/undefined` because
      * `entity_id` was missing too. We flatten the metrics dict and map
@@ -38,17 +71,18 @@ export function createScreenerApi(t: string | undefined) {
      * row-click navigation lands on the correct entity page.
      */
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
-      // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
-      // filter metric, which excludes instruments that lack that metric's data.
-      // The GET /fundamentals/screen endpoint does a plain instruments scan
-      // (no metric join) and returns all instruments — the intended default view.
-      const isDefaultFilter =
-        request.filters.length === 1 &&
-        request.filters[0].metric === "market_capitalization" &&
-        request.filters[0].min_value === 0 &&
-        request.filters[0].max_value === undefined &&
-        !request.filters[0].sector;
-
+      // ── Wave-2 (2026-06-10): ALWAYS POST — the GET route is GONE ──────────
+      // The gateway removed `GET /v1/fundamentals/screen` in Wave 1: the path
+      // now falls through to `GET /v1/fundamentals/{instrument_id}` where
+      // "screen" fails UUID parsing with a 422 (live-verified 2026-06-10).
+      // The old GET branch existed because the POST path used to INNER JOIN on
+      // each filter metric and only echo the FILTERED metrics — every other
+      // column blanked to "—" the moment a filter applied. Wave 1 fixed that
+      // backend-side: POST now returns the FULL key-metrics set (market_cap,
+      // pe_ratio, revenue, roe, volume, high_52w/low_52w, snapshot fields, …)
+      // for BOTH the default view (`filters: []`, live total=666) and filtered
+      // views (live-verified with a pe_ratio filter: 100/100 rows carried
+      // market_cap, revenue, roe, etc.). So one POST path serves everything.
       const raw = await apiFetch<
         {
           results?: Array<Record<string, unknown>>;
@@ -56,14 +90,7 @@ export function createScreenerApi(t: string | undefined) {
           total?: number;
           count?: number;
         } & Record<string, unknown>
-      >(
-        isDefaultFilter
-          ? `/v1/fundamentals/screen?limit=${request.limit}&offset=${request.offset ?? 0}`
-          : "/v1/fundamentals/screen",
-        isDefaultFilter
-          ? { method: "GET", token: t }
-          : { method: "POST", body: request, token: t },
-      );
+      >("/v1/fundamentals/screen", { method: "POST", body: request, token: t });
       // Backend response uses either `results` or `items`; tolerate both.
       const rawRows = (raw.results ?? raw.items ?? []) as Array<Record<string, unknown>>;
       const flattened: ScreenerResult[] = rawRows.map((row) => {
@@ -118,10 +145,32 @@ export function createScreenerApi(t: string | undefined) {
             metrics["revenue_ttm"] ?? metrics["revenue_usd"] ?? metrics["revenue"] ?? row["revenue"],
           ),
           beta: num(row["beta"] ?? metrics["beta"]),
+          // market_impact_score has NO backend data source (confirmed Wave-2,
+          // 2026-06-10: the field is absent from every live row — default AND
+          // filtered). Kept in the flattened shape because the SCORE column
+          // definition survives as an opt-in (hidden by default, see
+          // ag-screener-columns.tsx) and the export accessor reads it.
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],
           ),
           avg_volume_30d: num(metrics["avg_volume_30d"] ?? row["avg_volume_30d"]),
+          // ── Wave-2 (2026-06-10): new flat fields from the Wave-1 backend ────
+          // The backend now emits these top-level on every row (default AND
+          // filtered views). The metrics-dict fallbacks are kept for
+          // back-compat with any older payload shape still in flight.
+          //
+          // volume — latest 1-day bar volume. Distinct from avg_volume_30d:
+          // the VOLUME column renders `volume` and uses the volume /
+          // avg_volume_30d ratio to set cell brightness (above-average volume
+          // renders at full opacity, below-average dims).
+          volume: num(row["volume"] ?? metrics["volume"]),
+          // high_52w / low_52w — absolute 52-week high/low prices (USD).
+          // The 52W RANGE tooltip previously DERIVED these from current_price
+          // + the dist_from_52w_*_pct fractions, which silently dropped the
+          // dollar range for the ~93% of instruments with no live quote.
+          // Real values ship on every row now (200/200 live coverage).
+          high_52w: num(row["high_52w"] ?? metrics["high_52w"]),
+          low_52w: num(row["low_52w"] ?? metrics["low_52w"]),
           // ── PRD-0099 Wave I: new fundamental columns ─────────────────────────
           // Backend stores these metrics with suffixed names in fundamental_metrics
           // table (e.g. roe_ttm), but the frontend ScreenerResult type uses shorter
@@ -147,10 +196,15 @@ export function createScreenerApi(t: string | undefined) {
             row["revenue_growth_yoy"],
           ),
           // ── IB-L3: computed OHLCV-derived returns (period_type=SNAPSHOT) ─────
-          // Stored as fundamental_metrics rows with section=computed_returns.
-          // The backend's no-filter path does NOT project these via key_metrics
-          // (they would add 8 more LEFT JOINs to the already-expensive query).
-          // They appear in metrics[] only when an explicit filter references them.
+          // Wave-2 (2026-06-10): the Wave-1 backend now projects the two 52W
+          // distance fields in the key-metrics set on EVERY view (default +
+          // filtered; live coverage 195/200), so the 52W RANGE column renders
+          // without an explicit filter. The return_1m/3m/6m/ytd/1y/3y fields
+          // are still NOT in key_metrics — they only appear on a row when an
+          // explicit filter references that metric (live-verified: a
+          // return_1m filter surfaces return_1m and nothing else). The
+          // opt-in RTN columns therefore show "—" on unfiltered views —
+          // truthful, and documented as a remaining backend gap.
           dist_from_52w_high_pct: num(
             metrics["dist_from_52w_high_pct"] ?? row["dist_from_52w_high_pct"],
           ),
@@ -196,7 +250,11 @@ export function createScreenerApi(t: string | undefined) {
           recent_contradiction_count: num(
             metrics["recent_contradiction_count"] ?? row["recent_contradiction_count"],
           ),
-        } as unknown as ScreenerResult;
+          // WHY ScreenerRowEnriched (not plain ScreenerResult): the three
+          // Wave-2 fields above (volume, high_52w, low_52w) are typed on the
+          // local extension interface — the cast documents that every
+          // flattened row carries them (possibly null).
+        } as unknown as ScreenerRowEnriched;
       });
       return {
         results: flattened,

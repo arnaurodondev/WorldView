@@ -49,6 +49,26 @@
 export const SCREENER_COLUMNS_KEY = "worldview:screenerColumns:v1";
 
 /**
+ * SCORE_HIDDEN_MIGRATION_KEY — one-time migration marker (Wave-2, 2026-06-10).
+ *
+ * WHY THIS EXISTS: the SCORE column default flipped visible:true → false
+ * because market_impact_score has no backend data source (permanently "—").
+ * loadColumnPrefs deliberately keeps the USER's stored `visible` choice
+ * authoritative — which means anyone whose prefs were written while score
+ * defaulted to visible:true would keep seeing the dead column forever. This
+ * marker lets the read path coerce score → hidden EXACTLY ONCE:
+ *   - marker absent  → force score.visible = false, persist, set marker.
+ *   - marker present → the user's choice wins again (so deliberately
+ *     re-enabling score from the popover sticks across reloads — important
+ *     for when the backend eventually ships the score and users opt back in).
+ *
+ * WHY not a v1→v2 storage-key bump: a key bump would wipe ALL column prefs
+ * (order + every visibility choice) to change one flag — needlessly hostile.
+ */
+export const SCORE_HIDDEN_MIGRATION_KEY =
+  "worldview:screenerColumns:scoreHiddenMigration:v1";
+
+/**
  * ESSENTIAL_COLUMN_KEYS — columns that can NEVER be hidden (Round 2).
  *
  * WHY: ticker is the row's identity (and the row-click navigation key); name
@@ -147,7 +167,19 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   Object.freeze({ key: "divYield",      label: "Div Y%",      sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
   Object.freeze({ key: "roe",           label: "ROE%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
   Object.freeze({ key: "beta",          label: "Beta",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: true }),
+  // ── score demoted to opt-in (Wave-2, 2026-06-10) ────────────────────────────
+  // WHY visible: false (was true): market_impact_score has NO backend data
+  // source — the Wave-2 live audit confirmed the field is absent from every
+  // screener row (default and filtered views alike; the PRD-0020 scoring
+  // pipeline never shipped a screener projection). A column that renders "—"
+  // on 100% of rows forever erodes trust in every other dash in the table.
+  // The entry STAYS in the catalogue (not deleted) so:
+  //   - ColumnSettingsPopover still lists it — users can opt in the moment
+  //     the backend ships data (the ColDef + HeatCell renderer still work).
+  //   - Saved column orders that include "score" keep merging cleanly.
+  // Stale localStorage written when this defaulted to visible:true is healed
+  // by the one-time migration in loadColumnPrefs (SCORE_HIDDEN_MIGRATION_KEY).
+  Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: false }),
   Object.freeze({ key: "range52w",      label: "52W Range",   sortable: false, align: "right",                                visible: true }),
   Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: true }),
   // ── Opt-in columns (hidden by default — user reveals via ⚙ popover) ─────────
@@ -199,6 +231,20 @@ function cloneDefaults(): ScreenerColumn[] {
   return DEFAULT_COLUMNS.map((c) => ({ ...c }));
 }
 
+/**
+ * markScoreMigrationDone — flag the Wave-2 score-hidden migration as applied.
+ * Best-effort: quota/private-mode failures are swallowed (same policy as
+ * saveColumnPrefs) — worst case the coercion re-runs on the next load, which
+ * is idempotent (it only flips score visible→hidden, never the reverse).
+ */
+function markScoreMigrationDone(): void {
+  try {
+    window.localStorage.setItem(SCORE_HIDDEN_MIGRATION_KEY, "1");
+  } catch {
+    // ignore — see docstring
+  }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -222,7 +268,14 @@ export function loadColumnPrefs(): ScreenerColumn[] {
   if (!isBrowser()) return cloneDefaults();
   try {
     const raw = window.localStorage.getItem(SCREENER_COLUMNS_KEY);
-    if (!raw) return cloneDefaults();
+    if (!raw) {
+      // No stored prefs — the new defaults (score hidden) apply directly.
+      // Set the migration marker NOW so that if the user later opts back
+      // INTO score via the popover, the coercion below can never revert
+      // their deliberate choice on a subsequent load.
+      markScoreMigrationDone();
+      return cloneDefaults();
+    }
     const stored: unknown = JSON.parse(raw);
     if (!Array.isArray(stored)) return cloneDefaults();
 
@@ -256,6 +309,23 @@ export function loadColumnPrefs(): ScreenerColumn[] {
     // Step 3: append any default columns not yet seen (newly added in code).
     for (const def of DEFAULT_COLUMNS) {
       if (!seen.has(def.key)) merged.push({ ...def });
+    }
+
+    // ── Wave-2 one-time SCORE migration (see SCORE_HIDDEN_MIGRATION_KEY) ────
+    // Stored prefs written while score defaulted to visible:true would keep
+    // the dead column on screen forever (user `visible` choices win in the
+    // merge above, by design). Coerce it hidden exactly once, persist the
+    // result, and never touch it again — so a user who deliberately
+    // re-enables score from the popover AFTER this migration keeps it.
+    if (window.localStorage.getItem(SCORE_HIDDEN_MIGRATION_KEY) === null) {
+      const score = merged.find((c) => c.key === "score");
+      if (score && score.visible) {
+        score.visible = false;
+        // Persist the migrated state so saveColumnPrefs-free sessions (user
+        // never opens the popover) still read score-hidden on the next load.
+        saveColumnPrefs(merged);
+      }
+      markScoreMigrationDone();
     }
 
     return merged;

@@ -15,14 +15,19 @@
  * COLUMN GROUPS (Phase 5 requirement):
  *   Price group       — PRICE, CHG%
  *   Fundamentals group — MKT CAP, P/E, REVENUE, BETA
- * Standalone: TICKER (pinned left), NAME, SECTOR, SCORE, 52W RANGE, VOLUME,
- * TREND (30D).
+ * Standalone: TICKER (pinned left), NAME, SECTOR, SCORE (opt-in since Wave-2 —
+ * no backend data source), 52W RANGE, VOLUME (latest 1d volume, brightness vs
+ * 30d average), TREND (30D).
  *
  * WHO USES IT: app/(app)/screener/page.tsx
  */
 
 import type { ColDef, ColGroupDef, ICellRendererParams } from "ag-grid-community";
 import type { ScreenerResult, OHLCVBar } from "@/types/api";
+// Wave-2 (2026-06-10): typed view of the new flat backend fields
+// (volume, high_52w, low_52w). See lib/api/screener.ts for why the extension
+// interface lives in the screener surface instead of types/api.ts.
+import type { ScreenerRowEnriched } from "@/lib/api/screener";
 import { HeatCell } from "./HeatCell";
 import { MiniChart } from "./MiniChart";
 import { cn } from "@/lib/utils";
@@ -288,18 +293,30 @@ function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
       // for a "mid-range" position signal (not bullish/bearish).
       : "bg-warning/70";
 
-  // ── Tooltip: exact 52W low / high prices (ROUND-1 item 2) ─────────────────
-  // The backend does NOT ship the absolute 52W low/high prices — only the
-  // relative distances. When the live price is available we can derive them:
-  //   dist_low  = (price - low)  / low   →  low  = price / (1 + dist_low)
-  //   dist_high = (price - high) / high  →  high = price / (1 + dist_high)
-  // (dist_high is stored as a negative fraction, so 1 + dist_high < 1 and the
-  // derived high is correctly ABOVE the current price.)
-  // WHY guard against division by ~0: if dist_high were exactly -1 (price at
-  // $0 relative to high) the formula would divide by zero — clamp to "n/a".
+  // ── Tooltip: exact 52W low / high prices (Wave-2: REAL values) ────────────
+  // Wave-2 (2026-06-10): the Wave-1 backend now ships the ABSOLUTE 52W
+  // high/low prices (`high_52w` / `low_52w`) on every row — default AND
+  // filtered views (live coverage 200/200). Prefer them: the old derivation
+  // (low = price / (1 + dist_low), high = price / (1 + dist_high)) needed a
+  // live `current_price`, which only ~7% of instruments have — so the dollar
+  // range was silently missing from almost every tooltip.
+  //
+  // WHY keep the derivation as a FALLBACK (not delete it): older cached
+  // payloads / a backend rollback would otherwise lose the dollar range
+  // entirely; the formula is still correct whenever a live price exists.
+  const enriched = data as ScreenerRowEnriched | undefined;
+  const realLow = enriched?.low_52w;
+  const realHigh = enriched?.high_52w;
   const price = data?.current_price;
   let exactRange = "";
-  if (price != null && 1 + distLow > 0 && 1 + distHigh > 0) {
+  if (realLow != null && realHigh != null) {
+    // Primary path: absolute values straight from the backend.
+    exactRange = ` | 52W low ${formatPrice(realLow)} — high ${formatPrice(realHigh)}`;
+  } else if (price != null && 1 + distLow > 0 && 1 + distHigh > 0) {
+    // Fallback path: derive from the live quote + relative distances.
+    // (dist_high is stored as a negative fraction, so 1 + dist_high < 1 and
+    // the derived high is correctly ABOVE the current price. The 1+x > 0
+    // guards prevent division by ~0 when a distance is exactly -1.)
     const low52w = price / (1 + distLow);
     const high52w = price / (1 + distHigh);
     exactRange = ` | 52W low ${formatPrice(low52w)} — high ${formatPrice(high52w)}`;
@@ -319,24 +336,83 @@ function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
 }
 
 /**
- * VolumeCellRenderer — displays `avg_volume_30d` (30-day average daily volume)
- * from the `instrument_fundamentals_snapshot` table.
+ * volumeBrightnessClass — semantic text class for the VOLUME cell, driven by
+ * the latest-volume / 30d-average ratio.
  *
- * WHY avg_volume_30d (not today's volume): today's volume is not stored in the
- * screener's fundamental_metrics projection. The 30-day average is a better
- * signal for liquidity screening anyway — single-day volume is noisy. The
- * backend already projects avg_volume_30d via the snapshot LEFT JOIN.
+ * WHY exported: the brightness rule is load-bearing UX (a dim cell must mean
+ * "below-average activity", never a styling accident) — exporting lets the
+ * unit tests pin the thresholds without mounting AG Grid.
+ *
+ * RULES (Wave-2, 2026-06-10):
+ *   ratio ≥ 1   → "text-foreground"        (above/at average — full opacity,
+ *                                            the row "lights up" on unusual
+ *                                            activity, same idiom as Finviz's
+ *                                            relative-volume highlighting)
+ *   ratio < 1   → "text-muted-foreground"  (below average — dimmed, quiet day)
+ *   no ratio    → "text-foreground"        (avg_volume_30d missing/zero: we
+ *                                            cannot judge, so render neutral
+ *                                            full opacity rather than implying
+ *                                            "quiet" with a dim cell)
+ *
+ * WHY palette tokens (not opacity-NN utilities): the design system mandates
+ * semantic tokens; text-muted-foreground IS the canonical "dimmed data" tint
+ * used by every other muted cell in the screener.
+ */
+export function volumeBrightnessClass(
+  volume: number | null | undefined,
+  avgVolume30d: number | null | undefined,
+): string {
+  if (volume == null) return "text-muted-foreground"; // the "—" dash itself
+  if (avgVolume30d == null || avgVolume30d <= 0) return "text-foreground";
+  return volume / avgVolume30d >= 1 ? "text-foreground" : "text-muted-foreground";
+}
+
+/**
+ * VolumeCellRenderer — displays the LATEST 1-day `volume` (Wave-2).
+ *
+ * WHY `volume` now (was avg_volume_30d): the Wave-1 backend added the latest
+ * 1d bar volume to the screener payload — "VOLUME" meaning today's tape is
+ * the universal terminal convention (Bloomberg/Finviz both show latest volume
+ * in the VOLUME column and keep the average as a separate opt-in). The 30-day
+ * average still rides along on every row (`avg_volume_30d`) and powers the
+ * brightness signal below.
+ *
+ * BRIGHTNESS (Wave-2 requirement): cells render at full opacity when volume
+ * is at/above the 30-day average and dimmed when below — an at-a-glance
+ * "where is the action today" scan across the column. Exact thresholds live
+ * in volumeBrightnessClass (exported for tests).
+ *
+ * DATA REALITY NOTE (2026-06-10): in the current seed dataset the latest 1d
+ * bar volumes (~10³–10⁵) are orders of magnitude below the snapshot's
+ * avg_volume_30d (~10⁶–10⁸ real-world figures), so most cells render dim.
+ * That is the truthful output of the rule — flagged as a backend data-scale
+ * gap in the Wave-2 report, NOT something to paper over here.
  */
 function VolumeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
-  const v = data?.avg_volume_30d;
+  const row = data as ScreenerRowEnriched | undefined;
+  const v = row?.volume;
   if (v == null) {
     return (
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>
     );
   }
+  const avg = row?.avg_volume_30d;
+  // Hover detail: exact ratio so a power user can see HOW far above/below
+  // average today's tape is (the colour alone is a 1-bit signal).
+  const ratio = avg != null && avg > 0 ? v / avg : null;
+  const title =
+    ratio != null
+      ? `Latest volume ${formatCompact(v, { adaptive: true, maxDecimals: 1 })} — ${ratio.toFixed(2)}× 30d avg`
+      : `Latest volume ${formatCompact(v, { adaptive: true, maxDecimals: 1 })} (no 30d average to compare)`;
   // Compact format: 1_200_000 → "1.2M", 340_000 → "340K"
   return (
-    <span className="font-mono text-[11px] tabular-nums text-foreground">
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        volumeBrightnessClass(v, avg),
+      )}
+      title={title}
+    >
       {formatCompact(v, { adaptive: true, maxDecimals: 1 })}
     </span>
   );
@@ -1202,13 +1278,30 @@ export function createAgScreenerColumns(
       ],
     } satisfies ColGroupDef<ScreenerResult>,
 
-    // ── SCORE ─────────────────────────────────────────────────────────────────
+    // ── SCORE — HIDDEN BY DEFAULT (Wave-2 decision, 2026-06-10) ──────────────
+    // market_impact_score has NO data source anywhere in the backend (confirmed
+    // during the Wave-2 audit: the field is absent from every live row, default
+    // AND filtered — the PRD-0020 price-impact labelling pipeline that was meant
+    // to feed it never shipped a projection into the screener payload). A
+    // column that is permanently "—" for 100% of rows erodes trust in every
+    // OTHER dash in the table ("is that one fake too?"), so it must not ship
+    // in the default view.
+    //
+    // WHY hide:true here AND visible:false in lib/screener-columns.ts:
+    //   - `hide: true` makes the DEFAULT deterministic at first paint (the
+    //     header-count tests assert synchronously, before onGridReady applies
+    //     localStorage prefs).
+    //   - The prefs entry keeps the column in ColumnSettingsPopover so a user
+    //     can still opt in once the backend ships the score (the ColDef +
+    //     HeatCell renderer are fully functional — only the data is missing).
     {
       colId: "score",
       headerName: "SCORE",
-      headerTooltip: "Market Impact Score (0–1)",
+      headerTooltip:
+        "Market Impact Score (0–1) — no backend data source yet; column is opt-in until the scoring pipeline ships.",
       field: "market_impact_score",
       sortable: true,
+      hide: true,
       width: SCREENER_AG_COL_WIDTHS.score,
       cellRenderer: ScoreCellRenderer,
     } satisfies ColDef<ScreenerResult>,
@@ -1238,11 +1331,16 @@ export function createAgScreenerColumns(
     } satisfies ColDef<ScreenerResult>,
 
     // ── VOLUME ────────────────────────────────────────────────────────────────
+    // Wave-2: field switched avg_volume_30d → volume (latest 1d bar volume,
+    // new in the Wave-1 backend payload). Sorting therefore ranks by today's
+    // tape; brightness (full vs dim) encodes today-vs-30d-average — see
+    // VolumeCellRenderer.
     {
       colId: "volume",
       headerName: "VOLUME",
-      headerTooltip: "30-day average daily volume (from instrument_fundamentals_snapshot)",
-      field: "avg_volume_30d",
+      headerTooltip:
+        "Latest daily volume. Bright = at/above 30-day average volume; dim = below average.",
+      field: "volume",
       sortable: true,
       width: SCREENER_AG_COL_WIDTHS.volume,
       cellRenderer: VolumeCellRenderer,

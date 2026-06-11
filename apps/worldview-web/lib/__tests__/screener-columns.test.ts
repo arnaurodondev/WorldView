@@ -15,17 +15,22 @@ import {
   DEFAULT_COLUMNS,
   loadColumnPrefs,
   SCREENER_COLUMNS_KEY,
+  SCORE_HIDDEN_MIGRATION_KEY,
 } from "@/lib/screener-columns";
 
 describe("screener-columns DEFAULT_COLUMNS", () => {
-  // ── §6.3 14-cap regression guard ───────────────────────────────────────────
-  // WHY 14 exactly (not "≤ 14"): a hard equality is strictly stronger than the
-  // PRD bound and forces an intentional decision on every change. If you need
-  // to ship a new default-visible column, drop an existing one in the same PR
-  // and update this number with rationale in the commit body.
-  it("exposes exactly 14 default-visible columns (PRD-0089 §6.3 density cap)", () => {
+  // ── §6.3 density-cap regression guard ──────────────────────────────────────
+  // WHY a hard equality (not "≤ 14"): it forces an intentional decision on
+  // every change. If you need to ship a new default-visible column, drop an
+  // existing one in the same PR and update this number with rationale in the
+  // commit body.
+  // WHY 13 (was 14, Wave-2 2026-06-10): the SCORE column was demoted to
+  // opt-in because market_impact_score has NO backend data source (the column
+  // rendered "—" on 100% of rows). The cap REMAINS ≤14 — 13 leaves exactly
+  // one slot of headroom for the next default-visible column.
+  it("exposes exactly 13 default-visible columns (PRD-0089 §6.3 density cap)", () => {
     const visibleCount = DEFAULT_COLUMNS.filter((c) => c.visible).length;
-    expect(visibleCount).toBe(14);
+    expect(visibleCount).toBe(13);
   });
 
   // ── Opt-in safety net ──────────────────────────────────────────────────────
@@ -37,6 +42,17 @@ describe("screener-columns DEFAULT_COLUMNS", () => {
     const fwd = DEFAULT_COLUMNS.find((c) => c.key === "forwardPe");
     expect(fwd).toBeDefined();
     expect(fwd?.visible).toBe(false);
+  });
+
+  // ── Wave-2: SCORE demoted to opt-in (no backend data source) ──────────────
+  // Same safety-net pattern as forwardPe: the catalogue entry MUST survive so
+  // ColumnSettingsPopover can offer the column once the backend ships
+  // market_impact_score data. Deleting it would also orphan any saved column
+  // order that includes "score".
+  it("retains score as a hidden-by-default opt-in column (Wave-2 — no data source)", () => {
+    const score = DEFAULT_COLUMNS.find((c) => c.key === "score");
+    expect(score).toBeDefined();
+    expect(score?.visible).toBe(false);
   });
 
   // ── Catalogue uniqueness ───────────────────────────────────────────────────
@@ -115,5 +131,62 @@ describe("loadColumnPrefs — corrupted localStorage healing (Round 4)", () => {
     const cols = loadColumnPrefs();
     expect(cols.find((c) => c.key === "ticker")?.visible).toBe(true);
     expect(cols.find((c) => c.key === "name")?.visible).toBe(true);
+  });
+});
+
+// ── Wave-2: one-time SCORE-hidden migration ───────────────────────────────────
+//
+// WHY THIS BLOCK: the SCORE default flipped visible:true → false (no backend
+// data source), but loadColumnPrefs keeps the USER's stored `visible` choice
+// authoritative by design — so prefs saved under the old default would pin the
+// dead column visible forever. The migration coerces it hidden exactly once
+// (marker key), after which a deliberate re-enable sticks across reloads.
+
+describe("loadColumnPrefs — Wave-2 score-hidden migration", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("coerces a stale visible:true score pref to hidden on first read", () => {
+    // Simulate prefs written while score defaulted to visible:true.
+    window.localStorage.setItem(
+      SCREENER_COLUMNS_KEY,
+      JSON.stringify([{ key: "score", visible: true }]),
+    );
+    const cols = loadColumnPrefs();
+    expect(cols.find((c) => c.key === "score")?.visible).toBe(false);
+    // The migration marker is set so the coercion never re-runs…
+    expect(window.localStorage.getItem(SCORE_HIDDEN_MIGRATION_KEY)).not.toBeNull();
+    // …and the migrated state is PERSISTED (a session that never opens the
+    // popover must still read score-hidden on its next load).
+    const persisted = JSON.parse(
+      window.localStorage.getItem(SCREENER_COLUMNS_KEY) ?? "[]",
+    ) as Array<{ key: string; visible: boolean }>;
+    expect(persisted.find((c) => c.key === "score")?.visible).toBe(false);
+  });
+
+  it("respects a deliberate post-migration re-enable (marker present → user wins)", () => {
+    // The user opted back into score AFTER the migration ran (e.g. backend
+    // shipped the data). Their choice must survive every subsequent load.
+    window.localStorage.setItem(SCORE_HIDDEN_MIGRATION_KEY, "1");
+    window.localStorage.setItem(
+      SCREENER_COLUMNS_KEY,
+      JSON.stringify([{ key: "score", visible: true }]),
+    );
+    const cols = loadColumnPrefs();
+    expect(cols.find((c) => c.key === "score")?.visible).toBe(true);
+  });
+
+  it("sets the marker on a fresh (no stored prefs) load so future re-enables stick", () => {
+    expect(window.localStorage.getItem(SCORE_HIDDEN_MIGRATION_KEY)).toBeNull();
+    const cols = loadColumnPrefs();
+    // Fresh defaults already hide score…
+    expect(cols.find((c) => c.key === "score")?.visible).toBe(false);
+    // …and the marker is set immediately, so a later save with score:true is
+    // never clobbered by the one-time coercion.
+    expect(window.localStorage.getItem(SCORE_HIDDEN_MIGRATION_KEY)).not.toBeNull();
   });
 });
