@@ -47,6 +47,14 @@ _EODHD_CREDIT_COST: dict[str, float] = {
 # Intraday timeframes that hit /api/intraday (5 credits each).
 _INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
 
+# FIX-INTRADAY-DEDUP: all intraday OHLCV timeframes whose incremental tasks must
+# use a per-minute dedupe bucket instead of a per-day bucket.  With day-truncated
+# range_start:range_end the dedupe_key is identical for every scheduler tick of
+# the same UTC day, so ON CONFLICT DO NOTHING swallows every re-enqueue and the
+# pipeline fetches intraday bars exactly once per day (~2% of expected bars).
+# Daily-and-slower timeframes keep the day bucket (original FIX-DEDUP intent).
+_INTRADAY_DEDUP_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
 
 @dataclass
 class SchedulerTickResult:
@@ -186,8 +194,15 @@ class ScheduleDueTasksUseCase:
                     tasks.extend(backfill_tasks)
                     backfill_policies.append(policy)
             else:
-                # Incremental mode — schedule if due and no active task exists
-                if policy.is_due(watermark.current_bar_ts):
+                # Incremental mode — schedule if due and no active task exists.
+                # FIX-WALLCLOCK: is_due() expects the WALL-CLOCK time of the last
+                # run, not a data timestamp.  current_bar_ts is the data high-water
+                # mark (e.g. tomorrow-midnight for a full-day range), which made
+                # every policy "not due" until the next UTC day — pinning all
+                # incremental policies to exactly one fetch per day.
+                # last_success_at is written by the worker on every successful
+                # fetch (watermark_repository.save) and is the correct clock.
+                if policy.is_due(watermark.last_success_at):
                     # FIX-VARIANT: task_variant (computed above for watermark)
                     # must also be passed to has_active_task so fundamentals
                     # tasks (variant="annual") are detected as active.
@@ -237,7 +252,23 @@ class ScheduleDueTasksUseCase:
         # ON CONFLICT DO NOTHING never fires, causing unbounded task growth.
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         range_start = today
-        range_end = today + timedelta(days=1)
+        if policy.dataset_type == DatasetType.OHLCV and (policy.timeframe or "") in _INTRADAY_DEDUP_TIMEFRAMES:
+            # FIX-INTRADAY-DEDUP: bucket intraday tasks per MINUTE, not per day.
+            # A day-stable dedupe_key makes ON CONFLICT DO NOTHING swallow every
+            # same-day re-enqueue, so intraday policies fetched once per day.
+            # Truncating range_end to the minute gives each scheduler tick in a
+            # new minute a distinct dedupe_key while still deduping ticks that
+            # land within the same minute.  range_start stays at day-start: the
+            # full-day refetch is cheap (Alpaca batches 1000 symbols/call) and
+            # downstream bar upserts are idempotent.
+            range_end = now.replace(second=0, microsecond=0)
+            if range_end <= range_start:
+                # Guard for ticks in the 00:00 UTC minute — DateRange requires
+                # start < end strictly.
+                range_end = range_start + timedelta(minutes=1)
+        else:
+            # Daily-and-slower datasets keep the stable full-day bucket.
+            range_end = today + timedelta(days=1)
         date_range = DateRange(start=range_start, end=range_end)
 
         if policy.dataset_type == DatasetType.OHLCV:

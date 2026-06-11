@@ -142,10 +142,15 @@ async def test_incremental_policy_due_creates_task() -> None:
 
 @pytest.mark.unit
 async def test_incremental_policy_not_due_skips() -> None:
-    """A policy that ran 10s ago (interval=3600) produces no tasks."""
+    """A policy that ran 10s ago (interval=3600) produces no tasks.
+
+    FIX-WALLCLOCK: dueness is gated on the WALL-CLOCK ``last_success_at``
+    (written by the worker on every successful fetch), not the data
+    timestamp ``current_bar_ts``.
+    """
     policy = _make_policy(symbol="AAPL")
     now = datetime.now(UTC)
-    wm = _make_watermark(current_bar_ts=now - timedelta(seconds=10))
+    wm = _make_watermark(last_success_at=now - timedelta(seconds=10))
     uow = _make_uow(policies=[policy], watermark=wm, add_many_return=0)
 
     uc = ScheduleDueTasksUseCase(uow)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Any
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from market_ingestion.domain.enums import Provider
 from market_ingestion.domain.errors import (
     InvalidStateTransition,
@@ -365,7 +366,12 @@ async def commit_transaction(
             watermark = locked
 
         data_changed = watermark.has_changed(new_sha256)
-        new_ts = task.range_end if task.range_end is not None else task.created_at
+        # FIX-FUTURE-WM: clamp the watermark to wall-clock now.  Incremental
+        # daily tasks carry range_end = tomorrow-midnight; advancing the
+        # watermark into the FUTURE made every same-day follow-up look stale
+        # (new_ts <= current_bar_ts), suppressing both the watermark advance
+        # and the outbox event for the rest of the day.
+        new_ts = min(task.range_end, utc_now()) if task.range_end is not None else task.created_at
         if watermark.current_bar_ts is None or new_ts > watermark.current_bar_ts:
             watermark.advance_bar_ts(new_ts)
         else:
