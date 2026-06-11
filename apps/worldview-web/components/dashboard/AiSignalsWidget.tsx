@@ -1,32 +1,40 @@
 /**
- * components/dashboard/AiSignalsWidget.tsx — Top AI price-impact signals
+ * components/dashboard/AiSignalsWidget.tsx — AI news-event signal feed
  *
- * WHY THIS EXISTS: S6 produces article-level price-impact signals (label + confidence
- * score) every time a new article is processed. Surfacing the top 6 on the dashboard
- * gives traders a real-time feed of ML-detected market-moving signals without
- * navigating away from the dashboard morning routine.
+ * WHY THIS EXISTS: S6 extracts financial events (earnings, M&A, guidance cuts,
+ * product launches, …) from every ingested article. This widget surfaces the
+ * latest of those signals so a trader scanning the dashboard sees WHICH
+ * entities have news-flow, WHAT kind of event fired, in WHICH direction, and
+ * WHEN — without leaving the morning-routine screen.
  *
- * WHY col-span-2 (Row 3): signals are compact by design — ticker, a 4px bar, and
- * a score percentage. A narrow 2-column cell (~15% of viewport width) is sufficient
- * and leaves room for the other Row 3 widgets at 4+4+2+2.
+ * 2026-06-10 OVERHAUL — the previous version showed "9ECB ——— 95%" rows:
+ *  - UUID prefixes leaked when ticker resolution failed (fixed server-side:
+ *    S9 routes/signals.py now resolves entity NAME too and drops entities the
+ *    KG doesn't know);
+ *  - duplicate tickers repeated 3x with no differentiation (fixed: S9 dedups
+ *    per article, and this widget groups remaining signals per ENTITY with an
+ *    expandable "×N" cluster toggle);
+ *  - the bare % and the 4px bar implied a price-move prediction. The number
+ *    is the LLM's EXTRACTION CONFIDENCE — and since live values are pinned at
+ *    0.90–0.95 the bar was visually constant decoration. It is replaced by a
+ *    direction glyph + signal-type chip, with a tooltip that defines the %.
  *
- * WHY score bar (not just text): the bar encodes magnitude visually so traders can
- * rank signals at a glance without reading numbers — Bloomberg-style compact encoding.
+ * WHY 2-minute refetch: signals are generated as articles arrive (continuous).
+ * A 2-minute window catches new signals promptly without hammering S9/S6 —
+ * faster than fundamentals (5min), slower than quotes (1min).
  *
- * WHY 2-minute refetch: signals are generated as articles arrive (continuous). A
- * 2-minute window catches new signals promptly without hammering S9/S6. This is
- * faster than fundamentals (5min) but slower than quotes (1min) — appropriate for
- * a near-real-time signal feed.
- *
- * WHO USES IT: app/(app)/dashboard/page.tsx (Row 3, col-span-2)
+ * WHO USES IT: app/(app)/dashboard/page.tsx (Row 2, col-span-3)
  * DATA SOURCE: S9 GET /v1/signals/ai via createGateway().getAiSignals(limit)
- * DESIGN REFERENCE: PLAN-0043 Wave A-5, PRD-0020 Signal Scoring
+ *   (services/api-gateway routes/signals.py — enriched + deduplicated feed)
+ * DESIGN REFERENCE: PLAN-0043 Wave A-5, PRD-0020 Signal Scoring,
+ *   components/dashboard/ai-signals/* (group row, types, grouping logic)
  */
 
 "use client";
 // WHY "use client": uses useQuery (TanStack), useAuth (React context), and useRouter
 // for row-click navigation. None of these work in Next.js server components.
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
@@ -40,20 +48,27 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 // Round 3 named the state but offered no recovery path.
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { Radar } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { AiSignal } from "@/types/api";
+// Grouping + row rendering live in the ai-signals/ subdir so each piece is
+// independently testable (pure grouping fn, router-free row component).
+import { groupSignalsByEntity } from "@/components/dashboard/ai-signals/group-signals";
+import { SignalGroupRow } from "@/components/dashboard/ai-signals/SignalGroupRow";
+import type { EnrichedAiSignal } from "@/components/dashboard/ai-signals/types";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
- * AiSignalsWidget — compact list of top AI price-impact signals.
+ * AiSignalsWidget — grouped feed of AI-extracted news-event signals.
  *
- * Renders up to 6 rows, each showing:
- *  - ticker (or entity_id prefix if no ticker resolved)
- *  - proportional fill bar (colored by label)
- *  - score percentage (right-aligned, colored by label)
+ * Renders one 22px row per ENTITY (newest first), each showing:
+ *  - direction glyph + color (▲ bullish / ▼ bearish / ▪ neutral)
+ *  - ticker in mono — falls back to the entity NAME, never a UUID prefix
+ *  - signal-type chip ("Earnings", "M&A", "Product launch", …)
+ *  - "×N" toggle when several signals cluster on one entity (expands to the
+ *    per-signal evidence rows with the triggering headline)
+ *  - extraction-confidence % with a tooltip defining the metric
+ *  - relative time of the latest signal
  *
- * Rows are clickable and navigate to /instruments/{entity_id}.
+ * Rows navigate to /instruments/{ticker} (entity_id fallback when unlisted).
  */
 export function AiSignalsWidget() {
   const { accessToken } = useAuth();
@@ -69,6 +84,17 @@ export function AiSignalsWidget() {
     staleTime: 120_000,
     refetchInterval: 120_000,
   });
+
+  // Cast is safe: EnrichedAiSignal only ADDS optional fields to AiSignal, so
+  // both the new enriched payload and a legacy payload satisfy it. See
+  // ai-signals/types.ts for why the extension lives there, not types/api.ts.
+  const signals: EnrichedAiSignal[] = useMemo(() => data?.signals ?? [], [data]);
+
+  // Group per entity — MUST be called before any early return (Rules of
+  // Hooks: every render must call the same hooks in the same order, so no
+  // hook may sit below a conditional `return`). useMemo keeps the grouping
+  // from re-running on unrelated re-renders (e.g. parent state changes).
+  const groups = useMemo(() => groupSignalsByEntity(signals), [signals]);
 
   // ── Loading state ───────────────────────────────────────────────────────────
   // Round 4 (item 2): every return branch carries the same role="region" +
@@ -118,8 +144,6 @@ export function AiSignalsWidget() {
     );
   }
 
-  const signals = data?.signals ?? [];
-
   // ── Empty state ─────────────────────────────────────────────────────────────
   // Named empty state (Round 3 item 4) — Radar icon gives the "scanning for
   // signals" category cue; copy key dashboard.no-signals.
@@ -146,16 +170,18 @@ export function AiSignalsWidget() {
     <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
       <WidgetHeader signalCount={signals.length} />
 
-      {/* Signal rows — one row per signal, each 22px tall (§0 terminal rule) */}
+      {/* Entity rows — one 22px row per ENTITY (§0 terminal rule). Grouping
+          turned the old "BAC, BAC, BAC" repetition into a single "BAC ×3"
+          row that expands into its per-signal evidence lines. */}
       <div className="flex-1 divide-y divide-border/30 overflow-auto">
-        {signals.map((signal) => (
-          <SignalRow
-            key={signal.signal_id}
-            signal={signal}
+        {groups.map((group) => (
+          <SignalGroupRow
+            key={group.key}
+            group={group}
             // PRD-0089 F2 step 11 (§6.6): ticker-first URL — falls back to
-            // UUID when signal is not instrument-scoped.
-            onClick={() =>
-              router.push(`/instruments/${signal.ticker || signal.entity_id}`)
+            // the KG entity_id when the entity is not a listed instrument.
+            onNavigate={() =>
+              router.push(`/instruments/${group.ticker || group.entityId}`)
             }
           />
         ))}
@@ -183,101 +209,6 @@ function WidgetHeader({ signalCount }: { signalCount?: number }) {
           {signalCount}
         </span>
       )}
-    </div>
-  );
-}
-
-// ── SignalRow ─────────────────────────────────────────────────────────────────
-
-interface SignalRowProps {
-  signal: AiSignal;
-  onClick: () => void;
-}
-
-/**
- * SignalRow — single signal row: ticker label, fill bar, score percentage.
- *
- * WHY separate sub-component: keeps the list map clean and the bar-width
- * calculation logic independently readable.
- */
-function SignalRow({ signal, onClick }: SignalRowProps) {
-  // ── Derived display values ─────────────────────────────────────────────────
-
-  // WHY ticker ?? entity_id.slice(0,4): some signals are for entities that have
-  // no ticker yet (e.g., private companies, ETFs under ingestion). Showing the
-  // first 4 chars of entity_id is a readable fallback that signals "data exists".
-  const label = signal.ticker ?? signal.entity_id.slice(0, 4).toUpperCase();
-
-  // WHY Math.round(score * 100): score is 0.0–1.0 float; display as integer % for
-  // compact monospace rendering. "87%" is cleaner than "86.7%" at text-[9px].
-  const scorePct = Math.round(signal.score * 100);
-
-  // WHY these specific color classes for each label:
-  //  POSITIVE → text-positive / bg-positive: teal-green (--positive = #26A69A)
-  //  NEGATIVE → text-negative / bg-negative: muted red (--negative = #EF5350)
-  //  NEUTRAL  → text-muted-foreground / bg-muted-foreground/50: grey, secondary
-  // These match TradingView's up/down color convention used throughout the app.
-  // Round 3 (item 2): semantic Tailwind utilities (text-positive / bg-positive)
-  // replace the arbitrary-value text-[hsl(var(--positive))] forms — §15.11
-  // mandates the semantic utilities for JSX text/background contexts (the
-  // hsl(var()) form is reserved for canvas/SVG/raw-CSS contexts only).
-  const colorText =
-    signal.label === "POSITIVE"
-      ? "text-positive"
-      : signal.label === "NEGATIVE"
-        ? "text-negative"
-        : "text-muted-foreground";
-
-  const colorBar =
-    signal.label === "POSITIVE"
-      ? "bg-positive"
-      : signal.label === "NEGATIVE"
-        ? "bg-negative"
-        : "bg-muted-foreground/50";
-
-  return (
-    <div
-      // Round 3 (item 5): focus-visible ring (inset — flush row inside an
-      // overflow container) so keyboard tabbing shows where focus is.
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-      onClick={onClick}
-      onKeyDown={(e) => e.key === "Enter" && onClick()}
-      role="button"
-      tabIndex={0}
-      // WHY title shows article_title: the compact row can't show the full article
-      // title inline. The tooltip gives a preview without requiring a click.
-      title={signal.article_title ?? undefined}
-      aria-label={`${label} — ${signal.label} signal, ${scorePct}% confidence`}
-    >
-      {/* Ticker label — fixed 36px width so all bars start at the same x position */}
-      <span className="w-[36px] shrink-0 truncate font-mono text-[10px] font-medium tabular-nums text-foreground">
-        {label}
-      </span>
-
-      {/* Score bar track — fills available horizontal space */}
-      {/* WHY h-[4px] (not h-1 = 4px): same visual result; explicit px value for
-          clarity since the bar is the primary visual encoding of signal strength. */}
-      <div className="relative h-[4px] flex-1 rounded-none bg-muted/30">
-        {/* Bar fill — proportional to score, colored by label direction */}
-        <div
-          className={cn("absolute inset-y-0 left-0", colorBar)}
-          style={{ width: `${scorePct}%` }}
-        />
-      </div>
-
-      {/* Score percentage — right-aligned, monospace, colored by label */}
-      {/* Round 3 (item 1, ADR-F-15 / §15.9): bumped 9px → 10px. The score IS a
-          financial data value (signal confidence %) and the design system sets
-          a hard 10px floor for data values — 9px is reserved for timestamps /
-          counts / category labels only. w-[30px] fits "100%" at 10px mono. */}
-      <span
-        className={cn(
-          "w-[30px] shrink-0 text-right font-mono text-[10px] tabular-nums",
-          colorText,
-        )}
-      >
-        {scorePct}%
-      </span>
     </div>
   );
 }

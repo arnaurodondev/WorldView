@@ -15,6 +15,7 @@ from api_gateway.routes.instruments import router as instruments_router
 from api_gateway.routes.intelligence import router as intelligence_router
 from api_gateway.routes.market import router as market_router
 from api_gateway.routes.portfolio import router as portfolio_router
+from api_gateway.routes.signals import router as signals_router
 
 # Combined router — all domain routers merged in registration order.
 # WHY order matters: FastAPI evaluates routes in registration order.
@@ -35,6 +36,11 @@ router.include_router(dashboard_router)
 router.include_router(content_router)
 router.include_router(instruments_router)
 router.include_router(intelligence_router)
+# signals_router MUST come before market_router: both register GET
+# /v1/signals/ai and FastAPI resolves in registration order. signals.py is the
+# enriched 2026-06-10 replacement (dedup + entity-name + polarity-aware labels);
+# the legacy handler in market.py is dead code pending removal by its owner.
+router.include_router(signals_router)
 router.include_router(market_router)
 router.include_router(portfolio_router)
 
