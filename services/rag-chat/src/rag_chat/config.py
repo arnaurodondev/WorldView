@@ -275,6 +275,16 @@ class Settings(BaseSettings):
     # collapsed; the highest-display_relevance_score copy wins.
     brief_news_dedupe_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
 
+    # ── Follow-up suggestions SSE event ──────────────────────────────────────
+    # When True (default) the orchestrator emits a ``suggestions`` SSE event
+    # after the final answer with 3 deterministically-templated follow-up
+    # questions (zero extra LLM calls — see application/services/suggestions.py).
+    # NOTE: the orchestrator reads RAG_CHAT_SUGGESTIONS_ENABLED from the
+    # environment per-call (same hot-toggle pattern as
+    # RAG_COMPLETION_CACHE_DISABLED); this field documents the knob and keeps
+    # it discoverable via Settings.
+    suggestions_enabled: bool = True  # RAG_CHAT_SUGGESTIONS_ENABLED
+
     # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
     # Stop-words stripped from the query string BEFORE the S7 alias fuzzy
     # match so generic English fragments ("space", "sector", "industry") do not

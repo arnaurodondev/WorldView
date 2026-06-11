@@ -22,6 +22,7 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.application.services.resolver_gates import TICKER_SHAPE_RE as _TICKER_SHAPE_RE
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -255,6 +256,18 @@ class IntelligenceHandler(ToolHandler):
         )
         return None
 
+    async def resolve_name(self, tool_name: str, entity_name: str) -> UUID | None:
+        """Public delegate for sibling handlers (BP-661).
+
+        ``NarrativeHandler`` resolves non-UUID ``entity_id`` strings through
+        this wrapper so the S7 alias-search + tiebreaker pipeline lives in
+        exactly one place. Returns None when S7 is not wired.
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool=tool_name, port="s7")
+            return None
+        return await self._resolve_entity_by_name(tool_name, entity_name)
+
     async def _resolve_entity_by_name(self, tool_name: str, entity_name: str) -> UUID | None:
         """Resolve entity_name to UUID via entity_context fuzzy-match or S7 alias search.
 
@@ -268,6 +281,32 @@ class IntelligenceHandler(ToolHandler):
         )
         if use_context and self._entity_context is not None:
             return self._entity_context.entity_id
+
+        # ── BP-661: ticker-first resolution ───────────────────────────────
+        # When the LLM passes a ticker-shaped string ("AAPL") as
+        # entity_name, the S7 alias embedding search is dominated by noisy
+        # ticker-derived aliases ("AAPL Stock", "AAPL.US") which trip the
+        # ambiguity gates below. S6's ticker resolver matches the exact
+        # ``ticker`` column (phantom-twin aware), so try it first and fall
+        # through to the alias pipeline only on a miss.
+        _stripped_name = entity_name.strip()
+        if self._s6 is not None and _TICKER_SHAPE_RE.match(_stripped_name):
+            try:
+                _ticker_hit = await asyncio.wait_for(
+                    self._s6.resolve_entity_by_ticker(_stripped_name),
+                    timeout=self._timeout,
+                )
+            except Exception as e:
+                log.warning("tool_ticker_resolution_failed", tool=tool_name, ticker=_stripped_name, error=str(e))
+                _ticker_hit = None
+            if _ticker_hit is not None:
+                log.info(
+                    "tool_entity_resolved_by_ticker",
+                    tool=tool_name,
+                    ticker=_stripped_name,
+                    resolved_entity_id=str(_ticker_hit),
+                )
+                return _ticker_hit
 
         # F-LIVE-NEW-001: strip generic stop-words BEFORE the fuzzy match so
         # phrases like "AI semiconductor space" cannot collide with SpaceX on

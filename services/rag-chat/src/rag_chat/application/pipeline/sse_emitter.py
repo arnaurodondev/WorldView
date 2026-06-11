@@ -105,6 +105,21 @@ class SSEEmitter:
             ),
         }
 
+    def emit_suggestions(self, suggestions: list[str]) -> dict[str, str]:
+        """Emit server-derived follow-up suggestions after the final answer.
+
+        Wire shape (forward-compatible — the frontend prefers server-sent
+        suggestions over its client-templated ones when this event arrives):
+
+            event: suggestions
+            data: ["question 1", "question 2", "question 3"]
+
+        Derivation is deterministic (no extra LLM call) — see
+        ``rag_chat.application.services.suggestions``. Toggled by
+        ``RAG_CHAT_SUGGESTIONS_ENABLED`` (default true).
+        """
+        return {"event": "suggestions", "data": json.dumps(suggestions)}
+
     def emit_contradictions(self, contradictions: list[ContradictionRef]) -> dict[str, str]:
         """Emit contradiction references detected during retrieval."""
         return {
@@ -393,6 +408,36 @@ class SSEEmitter:
             ),
         }
 
+    # ── result_preview bounds (tool_result SSE enrichment) ────────────────────
+    # Hard caps so the tool_result SSE frame stays small regardless of how many
+    # items / how large the titles a tool returns. 3 items x ~80 chars title +
+    # ~64 chars id keeps the preview well under ~500 bytes of JSON.
+    _PREVIEW_MAX_ITEMS = 3
+    _PREVIEW_TITLE_MAX_CHARS = 80
+    _PREVIEW_ID_MAX_CHARS = 64
+
+    @classmethod
+    def build_result_preview(cls, items: list[Any]) -> list[dict[str, str | None]]:
+        """Build a small, bounded preview of tool-result items for the SSE frame.
+
+        Each entry carries the item's ``item_id`` and its citation title when
+        present. Inputs are duck-typed (RetrievedItem or anything with
+        ``item_id`` / ``citation_meta.title``) so handler-specific result
+        shapes never crash the emitter — unknown shapes degrade to id-only
+        entries, never to an exception.
+        """
+        preview: list[dict[str, str | None]] = []
+        for item in items[: cls._PREVIEW_MAX_ITEMS]:
+            raw_id = getattr(item, "item_id", None)
+            title = getattr(getattr(item, "citation_meta", None), "title", None)
+            preview.append(
+                {
+                    "id": str(raw_id)[: cls._PREVIEW_ID_MAX_CHARS] if raw_id is not None else None,
+                    "title": str(title)[: cls._PREVIEW_TITLE_MAX_CHARS] if title else None,
+                }
+            )
+        return preview
+
     def emit_tool_result(
         self,
         tool_name: str,
@@ -402,6 +447,8 @@ class SSEEmitter:
         reason: str | None = None,
         status_code: int | None = None,
         elapsed_ms: int | None = None,
+        duration_ms: int | None = None,
+        result_preview: list[dict[str, str | None]] | None = None,
     ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
 
@@ -428,6 +475,14 @@ class SSEEmitter:
             reason:     transport_error reason code (None for non-transport statuses).
             status_code:upstream HTTP status (5xx only; None otherwise).
             elapsed_ms: wall-clock ms spent on the failing call (transport_error only).
+            duration_ms: server-measured wall-clock ms for this tool execution
+                         (set for ALL statuses, unlike elapsed_ms). The
+                         frontend prefers duration_ms when present and falls
+                         back to its own client-side measurement otherwise.
+            result_preview: bounded preview (≤3 entries of {id, title}) built
+                         via :meth:`build_result_preview`. Omitted when None
+                         or empty so the legacy SSE shape is preserved for
+                         error/empty results.
         """
         payload: dict[str, object] = {
             "type": "tool_result",
@@ -435,16 +490,20 @@ class SSEEmitter:
             "status": status,
             "item_count": item_count,
         }
-        # Only attach the optional transport-error fields when populated so
-        # the legacy SSE shape stays byte-identical for non-error tool_results
-        # (frontend snapshot tests and the chat-eval harness both pattern-match
-        # on the existing 4-key payload).
+        # Only attach the optional fields when populated so the legacy SSE
+        # shape stays byte-identical for callers that did not opt in
+        # (frontend snapshot tests and the chat-eval harness both
+        # pattern-match on the existing 4-key payload).
         if reason is not None:
             payload["reason"] = reason
         if status_code is not None:
             payload["status_code"] = status_code
         if elapsed_ms is not None:
             payload["elapsed_ms"] = elapsed_ms
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        if result_preview:
+            payload["result_preview"] = result_preview
         return {
             "event": "tool_result",
             "data": json.dumps(payload),

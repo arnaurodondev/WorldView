@@ -330,3 +330,59 @@ async def test_proxy_brief_create_alert_requires_auth(app, mock_clients) -> None
 
     assert resp.status_code == 401
     mock_clients.rag_chat.post.assert_not_called()
+
+
+# ── Morning brief force-regenerate proxy ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_morning_generate_passthrough(authed_app, authed_mock_clients) -> None:
+    """POST /v1/briefings/morning/generate → S8 forwarded; 202 + body passed through.
+
+    WHY: backs the dashboard "Regenerate" button — S8 bypasses its staleness
+    check and regenerates; S9 must pass the 202 + {"status": "queued"}
+    envelope through unchanged.
+    """
+    body = b'{"status": "queued", "generated_at": "2026-06-10T06:00:00+00:00"}'
+    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(202, body))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/morning/generate",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "queued"
+
+    authed_mock_clients.rag_chat.post.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.post.call_args
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert "/api/v1/briefings/morning/generate" in path_arg
+
+
+@pytest.mark.asyncio
+async def test_proxy_morning_generate_requires_auth(app, mock_clients) -> None:
+    """POST /v1/briefings/morning/generate without auth → 401; S8 never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/v1/briefings/morning/generate")
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_proxy_morning_generate_timeout_returns_503(authed_app, authed_mock_clients) -> None:
+    """S8 timeout during regeneration → 503 (not 500) so the frontend can retry."""
+    authed_mock_clients.rag_chat.post = AsyncMock(side_effect=httpx.TimeoutException("LLM slow"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/morning/generate",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503

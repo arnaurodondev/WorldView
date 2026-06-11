@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from collections import Counter as _Counter
@@ -1762,6 +1763,12 @@ class ChatOrchestratorUseCase:
                 # "I cannot reach <upstream> right now" instead of the
                 # misleading "no data was found".
                 _te = _transport_errors_by_call_id.get(id(tc))
+                # tool_result SSE enrichment: server-measured duration_ms (all
+                # statuses) + a bounded result_preview (ok results only). The
+                # frontend prefers duration_ms over its own client-side timing
+                # when present; result_preview lets it render the first items'
+                # titles inline without waiting for the citations event.
+                _duration_ms = int(_per_tool_latency * 1000)
                 if _te is not None:
                     yield p.emitter.emit_tool_result(
                         tc.name,
@@ -1770,9 +1777,17 @@ class ChatOrchestratorUseCase:
                         reason=_te.reason,
                         status_code=_te.status_code,
                         elapsed_ms=_te.elapsed_ms,
+                        duration_ms=_duration_ms,
                     )
                 else:
-                    yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
+                    _preview_items = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    yield p.emitter.emit_tool_result(
+                        tc.name,
+                        status=_status,
+                        item_count=_count,
+                        duration_ms=_duration_ms,
+                        result_preview=p.emitter.build_result_preview(_preview_items),
+                    )
 
                 # E-12: record each tool call outcome.
                 _success = _count > 0
@@ -2642,6 +2657,25 @@ class ChatOrchestratorUseCase:
         yield p.emitter.emit_citations(citations)
         yield p.emitter.emit_contradictions(contradiction_refs)
 
+        # ── Follow-up suggestions (server-derived, zero extra LLM calls) ─────
+        # Deterministic templating from the turn's resolved entities + the
+        # tools that actually ran — see application/services/suggestions.py.
+        # The frontend prefers these over its client-templated fallbacks.
+        # Per-call env read (same pattern as RAG_COMPLETION_CACHE_DISABLED)
+        # so the toggle takes effect without a service restart.
+        if os.environ.get("RAG_CHAT_SUGGESTIONS_ENABLED", "true").strip().lower() != "false":
+            from rag_chat.application.services.suggestions import derive_followup_suggestions
+
+            try:
+                _suggestions = derive_followup_suggestions(
+                    entities=list(entities),
+                    tool_names=list(_executed_tool_names),
+                    intent=intent.value,
+                )
+                yield p.emitter.emit_suggestions(_suggestions)
+            except Exception as _sugg_exc:  # pragma: no cover — never break the stream for a nicety
+                log.warning("suggestions_derivation_failed", error=str(_sugg_exc))
+
         # ── Step 10: Persist + cache + metrics ───────────────────────────────────
         thread_id: UUID = request.thread_id or _new_thread_id()
         latency_ms = int((datetime.now(tz=UTC) - start).total_seconds() * 1000)
@@ -3318,16 +3352,27 @@ class ChatOrchestratorUseCase:
                 )
 
                 _alt_block = ToolUseBlock(name=alt_name, input=projected, tool_use_id=f"fallback_{alt_name}")
+                _alt_t0 = time.monotonic()
                 _alt_result = await tool_executor.execute(_alt_block)
+                _alt_duration_ms = int((time.monotonic() - _alt_t0) * 1000)
                 _alt_count = (
                     len(_alt_result) if isinstance(_alt_result, list) else (1 if _alt_result is not None else 0)
                 )
                 _alt_status = "ok" if _alt_count > 0 else ("empty" if _alt_result is not None else "error")
 
-                sse_events_out.append(emitter.emit_tool_result(alt_name, status=_alt_status, item_count=_alt_count))
+                _alt_items = _alt_result if isinstance(_alt_result, list) else ([_alt_result] if _alt_result else [])
+                sse_events_out.append(
+                    emitter.emit_tool_result(
+                        alt_name,
+                        status=_alt_status,
+                        item_count=_alt_count,
+                        duration_ms=_alt_duration_ms,
+                        result_preview=emitter.build_result_preview(_alt_items),
+                    )
+                )
 
                 # Record on audit log so /chat_audit_log captures the retry.
-                audit.record_tool_call(alt_name, success=_alt_count > 0, latency_ms=0)
+                audit.record_tool_call(alt_name, success=_alt_count > 0, latency_ms=_alt_duration_ms)
 
                 if _alt_count > 0:
                     log.info(  # type: ignore[no-any-return]

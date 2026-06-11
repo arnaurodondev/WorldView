@@ -379,10 +379,14 @@ class ChatPipeline:
                 canonical_name=re.canonical_name,
                 similarity=float(re.confidence),
                 payload=re,
+                # BP-661: carry the ticker so the query-ticker tiebreak can
+                # rescue ticker-only queries ("what is AAPL?") from the
+                # delta-ambiguity bail when a phantom twin is present.
+                ticker=getattr(re, "ticker", None),
             )
             for re in raw_entities
         ]
-        accepted, rejected = filter_resolver_candidates(candidates, config=_config)
+        accepted, rejected = filter_resolver_candidates(candidates, config=_config, query_text=message)
 
         # Emit per-rejection-cause metrics so operators can monitor the
         # gate in prod. ``source="orchestrator_s6"`` disambiguates this
@@ -404,6 +408,19 @@ class ChatPipeline:
                 similarity=r.similarity,
                 reason=r.rejection_reason,
             )
+
+        # BP-661 observability: log tiebreak-admitted accepts so operators
+        # can audit every resolution that bypassed the delta-ambiguity bail.
+        for a in accepted:
+            if a.accepted_reason:
+                log.info(  # type: ignore[no-any-return]
+                    "orchestrator_resolver_tiebreak_applied",
+                    entity_id=a.entity_id,
+                    canonical_name=a.canonical_name,
+                    ticker=a.ticker,
+                    similarity=a.similarity,
+                    reason=a.accepted_reason,
+                )
 
         # Unwrap payloads back to ResolvedEntity. The original objects
         # are kept opaque inside GatedEntity.payload so we don't have to

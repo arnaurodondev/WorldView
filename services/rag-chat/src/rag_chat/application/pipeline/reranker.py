@@ -310,7 +310,7 @@ class DeepInfraReranker:
         http_client: httpx.AsyncClient | None = None,
         timeout: float = _DEEPINFRA_DEFAULT_TIMEOUT,
         max_docs: int = _DEEPINFRA_MAX_DOCS,
-        cost_recorder: "CostRecorder | None" = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         # cost_recorder accepted for interface symmetry with CohereReranker (PLAN-0107).
         # No per-call cost recording yet for DeepInfra rerank — rerank pricing

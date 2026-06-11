@@ -556,7 +556,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve the narrative for. "
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name "
+                        "(e.g. 'Apple Inc.'). Tickers and names are resolved server-side (BP-661). "
                         "Auto-injected from entity scope when available."
                     ),
                     required=False,
@@ -590,7 +591,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve paths for. Auto-injected from entity scope when available."
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name. "
+                        "Resolved server-side. Auto-injected from entity scope when available."
                     ),
                     required=False,
                 ),
@@ -623,8 +625,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve health data for. "
-                        "Auto-injected from entity scope when available."
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name. "
+                        "Resolved server-side. Auto-injected from entity scope when available."
                     ),
                     required=False,
                 ),
@@ -660,7 +662,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve intelligence for. "
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name "
+                        "(e.g. 'Apple Inc.'). Tickers and names are resolved server-side (BP-661). "
                         "Auto-injected from entity scope when available."
                     ),
                     required=False,

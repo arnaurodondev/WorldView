@@ -667,6 +667,160 @@ async def generate_instrument_brief(
     )
 
 
+# ── Morning brief force-regenerate endpoint ───────────────────────────────────
+
+
+class MorningGenerateResponse(BaseModel):
+    """Response for POST /api/v1/briefings/morning/generate.
+
+    status is always "queued" — unlike the instrument lazy-generate endpoint
+    there is no "cached" short-circuit because the WHOLE POINT of this
+    endpoint is to bypass the cache (dashboard "Regenerate" button).
+
+    generated_at lets the caller confirm the brief is fresh without an extra
+    round-trip; the canonical payload is still fetched via
+    GET /v1/briefings/morning (which now hits the just-written cache).
+    """
+
+    status: Literal["queued"]
+    generated_at: str | None = None
+
+
+@router.post("/briefings/morning/generate", status_code=202)
+async def generate_morning_brief(request: Request) -> Any:
+    """Force-regenerate the authenticated user's morning brief.
+
+    Unlike GET /briefings/morning (which serves cached/lastgood briefs and
+    only generates cold), this endpoint ALWAYS regenerates — it bypasses the
+    staleness/cache check entirely. Job semantics mirror the instrument
+    lazy-generate endpoint (202 + status="queued"); generation itself runs
+    synchronously within the request (same as the instrument endpoint) and
+    the fresh brief is written to BOTH cache keys (fresh + lastgood) so the
+    follow-up GET returns the new brief immediately.
+
+    Flow:
+      1. Rate-limit: shares the brief_gen_rate:{user_id}:{hour} Valkey
+         counter with the instrument endpoint (60 generations/user/hour
+         across both — a brief regen costs the same LLM tokens either way).
+      2. Generate via execute_public_morning (or the agentic generator when
+         RAG_CHAT_BRIEF_AGENTIC_ENABLED — same branch as the GET route).
+      3. Write briefing:morning:v2:{user_id} + lastgood keys.
+      4. Return 202 + {"status": "queued", "generated_at": ...}.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    import math
+
+    user_id = _extract_user_id(request)
+    tenant_id = _extract_tenant_id(request)
+    valkey = _get_valkey(request)
+    cache_key = f"briefing:morning:v2:{user_id}"
+    lastgood_key = f"briefing:morning:lastgood:{user_id}"
+
+    # ── Step 1: Rate limit (shared 60/user/hour bucket) ───────────────────────
+    # WHY shared with the instrument endpoint: both trigger a full LLM
+    # generation; a per-endpoint bucket would double the effective quota.
+    if valkey is not None:
+        now_utc = datetime.now(tz=UTC)
+        hour_bucket = now_utc.strftime("%Y%m%d%H")
+        rate_key = f"brief_gen_rate:{user_id}:{hour_bucket}"
+        try:
+            count = await valkey.incr(rate_key)
+            if count == 1:
+                await valkey.expire(rate_key, 3600)
+            if count > 60:
+                next_hour = now_utc.replace(minute=0, second=0, microsecond=0, tzinfo=UTC) + timedelta(hours=1)
+                retry_after = math.ceil((next_hour - now_utc).total_seconds())
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Brief generation quota exceeded (60/hour). Retry after {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fail-open: Valkey down → allow generation (availability > strict throttling).
+            log.warning("generate_brief_rate_check_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 2: Generate (bypasses cache by design) ───────────────────────────
+    # WHY set_current_jwt: same rationale as GET /briefings/morning — the
+    # gatherer's S1/S3/S6/S7 calls read the JWT from the ContextVar.
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    internal_jwt = request.headers.get("X-Internal-JWT")
+    set_current_jwt(internal_jwt)
+    uc = _get_briefing_uc(request)
+    _settings = request.app.state.settings
+    try:
+        if getattr(_settings, "brief_agentic_enabled", False):
+            from rag_chat.application.use_cases.agentic_brief_generator import AgenticBriefGenerator
+
+            _factory = request.app.state.tool_executor_factory
+            _tool_executor = _factory.for_request(
+                user_id=UUID(user_id) if user_id else None,
+                tenant_id=UUID(tenant_id) if tenant_id else None,
+                internal_jwt=internal_jwt,
+            )
+            _agentic = AgenticBriefGenerator(
+                llm_chain=request.app.state.llm_chain,
+                tool_executor=_tool_executor,
+                settings=_settings,
+                fallback=uc,
+            )
+            result = await _agentic.generate(
+                user_id=UUID(user_id),
+                tenant_id=UUID(tenant_id),
+            )
+        else:
+            result = await uc.execute_public_morning(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                internal_jwt=internal_jwt,
+            )
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+    except Exception as exc:
+        log.error("generate_morning_brief_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+
+    # ── Step 3: Write BOTH cache keys so the follow-up GET serves fresh ───────
+    fresh_resp = PublicBriefingResponse(
+        narrative=result.get("content", ""),
+        risk_summary=result.get("risk_summary", {}),
+        citations=result.get("citations", []),
+        generated_at=result["generated_at"],
+        cached=False,
+        entity_id=None,
+        summary=result.get("summary"),
+        sections=result.get("sections", []),
+        confidence=result.get("confidence", 1.0),
+        lead=result.get("lead"),
+        is_stale=False,
+        summary_paragraph=result.get("summary_paragraph"),
+    )
+    if valkey is not None:
+        try:
+            payload_json = fresh_resp.model_dump_json()
+            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
+            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
+        except Exception as exc:
+            log.warning("briefing_cache_write_failed", error=str(exc), key=cache_key)  # type: ignore[no-any-return]
+
+    log.info(  # type: ignore[no-any-return]
+        "generate_morning_brief_queued",
+        user_id=user_id,
+        generated_at=str(result.get("generated_at")),
+    )
+
+    # ── Step 4: 202 Accepted (route-level status_code) ────────────────────────
+    return MorningGenerateResponse(
+        status="queued",
+        generated_at=str(result["generated_at"]) if result.get("generated_at") is not None else None,
+    )
+
+
 # ── PLAN-0066 Wave B: brief history endpoint ──────────────────────────────────
 
 

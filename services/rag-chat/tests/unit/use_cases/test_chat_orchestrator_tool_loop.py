@@ -96,12 +96,17 @@ def _make_pipeline(
     pipeline.emitter.emit_tool_call = MagicMock(
         side_effect=lambda name, inp, **kw: {"event": "tool_call", "data": json.dumps({"tool": name})}
     )
+    # **kw absorbs the optional enrichment kwargs (duration_ms, result_preview,
+    # reason, status_code, elapsed_ms) — these tests assert on the core triple.
     pipeline.emitter.emit_tool_result = MagicMock(
-        side_effect=lambda name, status="ok", item_count=0: {
+        side_effect=lambda name, status="ok", item_count=0, **kw: {
             "event": "tool_result",
             "data": json.dumps({"tool": name, "status": status, "item_count": item_count}),
         }
     )
+    # build_result_preview must return a JSON-serialisable list (a bare
+    # MagicMock would crash json.dumps inside the real emitter when used).
+    pipeline.emitter.build_result_preview = MagicMock(return_value=[])
     pipeline.emitter.emit_error = MagicMock(
         side_effect=lambda code, msg: {"event": "error", "data": json.dumps({"code": code, "message": msg})}
     )
@@ -370,6 +375,24 @@ class TestToolCallsEmitted:
         event_types = [e.get("event") for e in events]
 
         assert "tool_result" in event_types
+
+        # tool_result enrichment: the orchestrator must pass the
+        # server-measured duration_ms + a result_preview to the emitter
+        # (frontend prefers duration_ms over its own client-side timing).
+        result_calls = pipeline.emitter.emit_tool_result.call_args_list
+        assert result_calls, "expected at least one emit_tool_result call"
+        _kwargs = result_calls[0].kwargs
+        assert isinstance(_kwargs.get("duration_ms"), int)
+        assert "result_preview" in _kwargs
+
+        # Server-derived follow-up suggestions: exactly 3 strings, emitted
+        # after the answer (default-on; RAG_CHAT_SUGGESTIONS_ENABLED=false
+        # disables).
+        pipeline.emitter.emit_suggestions.assert_called_once()
+        _suggestions = pipeline.emitter.emit_suggestions.call_args.args[0]
+        assert len(_suggestions) == 3
+        assert all(isinstance(s, str) and s for s in _suggestions)
+
         # tool_call must appear before tool_result
         assert event_types.index("tool_call") < event_types.index("tool_result")
 

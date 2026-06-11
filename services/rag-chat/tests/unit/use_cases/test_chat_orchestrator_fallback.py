@@ -278,7 +278,7 @@ def _make_pipeline(first_llm_response: Any, stream_chunks: list[str] | None = No
 
     pipeline.emitter.emit_tool_call = MagicMock(side_effect=_emit_tool_call)
     pipeline.emitter.emit_tool_result = MagicMock(
-        side_effect=lambda name, status="ok", item_count=0: {
+        side_effect=lambda name, status="ok", item_count=0, **kw: {
             "event": "tool_result",
             "data": json.dumps({"tool": name, "status": status, "item_count": item_count}),
         }

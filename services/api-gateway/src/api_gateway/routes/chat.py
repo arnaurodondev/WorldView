@@ -408,6 +408,36 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.post("/briefings/morning/generate", status_code=202)
+async def generate_morning_briefing(request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/morning/generate → S8 RAG/Chat service.
+
+    Requires authentication. Forces regeneration of the user's morning brief
+    (bypasses the staleness/cache check) — backs the dashboard "Regenerate"
+    button, which previously could only refetch the cached brief.
+
+    Job semantics mirror the instrument lazy-generate proxy: S8 responds
+    202 + {"status": "queued", "generated_at": ...} once the fresh brief is
+    generated and cached; the frontend then refetches GET /v1/briefings/morning.
+
+    WHY a timeout guard: regeneration invokes a full LLM call (same cost as
+    the cold GET path); the rag-chat client timeout is 120 s — on timeout we
+    return 503 (not 500) so the frontend can show a friendly retry message.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    try:
+        resp = await clients.rag_chat.post(
+            "/api/v1/briefings/morning/generate",
+            headers=headers,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/briefings/morning/history")
 async def get_morning_brief_history(request: Request) -> Any:
     """Proxy GET /api/v1/briefings/morning/history → S8 RAG/Chat service (PLAN-0066 Wave B).

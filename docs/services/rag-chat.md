@@ -162,7 +162,8 @@ unchanged — R11: never break wire format.
 | `thinking` | `{"stage": str}` — emitted before first LLM call; shows pulsing indicator in UI |
 | `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion"}` |
 | `tool_call` | `{"type": "tool_call", "tool": str, "label": str, "input": dict, "status": "running"}` — emitted before each tool executes |
-| `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty", "item_count": int}` — emitted after each tool completes |
+| `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty" \| "transport_error", "item_count": int, "duration_ms"?: int, "result_preview"?: [{"id", "title"}]}` — emitted after each tool completes. `duration_ms` is server-measured; `result_preview` is bounded to 3 entries (80-char titles) |
+| `suggestions` | JSON array of exactly 3 follow-up question strings — emitted after `contradictions`. Derived deterministically from resolved entities + executed tools (no extra LLM call); toggled by `RAG_CHAT_SUGGESTIONS_ENABLED` (default true) |
 | `token` | `{"text": "..."}` — streamed LLM output chunk |
 | `citations` | `[{ref, id, title, url, source, published_at}]` |
 | `contradictions` | `[...]` |
@@ -709,6 +710,7 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 |--------|------|------|-------------|
 | POST | `/internal/v1/briefings` | X-Internal-Token | Generate portfolio risk narrative for email digest |
 | GET | `/api/v1/briefings/morning` | X-Internal-JWT | Morning briefing (proxied via S9) |
+| POST | `/api/v1/briefings/morning/generate` | X-Internal-JWT | Force-regenerate the morning brief — bypasses the cache/staleness check (dashboard Regenerate button). 202 + `{"status": "queued", "generated_at"}`; shares the 60/hr `brief_gen_rate` bucket with instrument generate; writes both fresh + lastgood cache keys (proxied via S9 `POST /v1/briefings/morning/generate`) |
 | GET | `/api/v1/briefings/instrument/{entity_id}` | X-Internal-JWT | Instrument briefing |
 
 **`POST /internal/v1/briefings`**: consumed by S10 email scheduler. Rate-limited to
