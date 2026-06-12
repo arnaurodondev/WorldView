@@ -91,11 +91,28 @@ class TestChatQualityJudge:
         assert "}}" not in rendered
 
     def test_identifier_format(self) -> None:
-        # v2.0 — BREAKING schema bump (per-dim reason→feedback, top-level
-        # notes→reviewer_summary, framing rewritten LENGTH-AGNOSTIC).
+        # v3.0 — BREAKING (PLAN-0110 W3): deleted "PRESUME GROUNDED"; numeric
+        # grounding is now cross-checked deterministically. v2.0 schema keys
+        # (reason→feedback, notes→reviewer_summary, length-agnostic framing) are
+        # carried forward unchanged.
         ident = CHAT_QUALITY_JUDGE.identifier()
-        assert ident.startswith("chat_quality_judge@2.0#")
+        assert ident.startswith("chat_quality_judge@3.0#")
         assert len(ident.split("#")[1]) == 12
+
+    def test_v3_deletes_presume_grounded_instruction(self) -> None:
+        # v3.0 (PLAN-0110 W3 / FR-7): the "PRESUME GROUNDED → award 20-25"
+        # instruction is GONE — numeric grounding is verified deterministically
+        # against the captured grounding_sample, not presumed by the LLM. A
+        # re-introduction of the presume-and-award shortcut must trip this test.
+        body = CHAT_QUALITY_JUDGE.render()
+        assert "PRESUMED\n" not in body  # the old "is PRESUMED\n GROUNDED" award block
+        assert "is\n                             PRESUMED" not in body
+        # The exact award shortcut string must be absent.
+        assert "PRESUMED\n                             GROUNDED. Award grounding 20-25" not in body
+        # The new division-of-labour + presumed-band language must be present.
+        assert "NUMERIC VALUE VERIFICATION IS NOT YOUR JOB" in body
+        assert "GROUNDING SAMPLE" in body
+        assert "presumed band" in body.lower()
 
     def test_content_hash_stable_across_import(self) -> None:
         first = CHAT_QUALITY_JUDGE.content_hash

@@ -1,5 +1,24 @@
 """CHAT_QUALITY_JUDGE — 4-dim chat-agent answer grader (system prompt).
 
+v3.0 (2026-06-12, BREAKING — PLAN-0110 W3 / FR-7) — grounding division of labour:
+  * DELETED the "PRESUME GROUNDED: status=ok+items>=1 → award 20-25" instruction.
+    Numeric value verification is now DETERMINISTIC: ``scripts/chat_quality_judge.py``
+    cross-checks each numeric claim against the W2 ``grounding_sample`` values and
+    HARD-FAILS contradictions (``GROUNDING_CONTRADICTED``) independent of this
+    prompt's score. The grounding dimension is now a QUALITATIVE judgement of
+    attribution discipline + scope, NOT arithmetic the LLM cannot reliably do.
+  * ADDED a ``GROUNDING SAMPLE`` evidence path: when the user message carries a
+    sample block, grade against it; when absent, fall back to an explicit
+    "presumed" band and say so in feedback.
+  * ADDED tiered-verdict awareness: this prompt yields soft 0-25 sub-scores; the
+    deterministic gate decides the hard FAIL. The four dimensions + their output
+    keys (``feedback`` / ``reviewer_summary``) are UNCHANGED from v2.0.
+
+  This is a BREAKING judge change — it shifts grounding scores and breaks
+  longitudinal comparison vs v2.0. It is recorded in `.claude/evals/` and
+  triggers the FR-12 recalibration (PLAN-0110 W6). See the libs/prompts
+  CHANGELOG.
+
 v2.0 (2026-06-08, BREAKING) — schema bump:
   * Per-dimension JSON output key renamed ``reason`` → ``feedback``.
     Callers MUST read ``entry.get("feedback") or entry.get("reason", "")``
@@ -71,40 +90,60 @@ DIMENSIONS (each 0-25):
                            not whether the agent ultimately answered.
 
 2. grounding           Are quantitative claims (numbers, dates, names) traceable
-                       to tool_results? Penalise fabricated numbers, fabricated
-                       periods (e.g. "Q4 FY2026" when no such period was returned),
-                       or claims contradicted by tool output statuses.
+                       to tool_results? Penalise fabricated periods (e.g. "Q4
+                       FY2026" when no such period was returned) or claims the
+                       tool's stated scope/coverage contradicts.
 
-                       VALUE EXTRACTION — MANDATORY CHECK BEFORE SCORING <10:
-                         The TOOL TRACE you receive is a COMPACT SUMMARY of the
-                         form `call N: <tool>(args) -> status=<s> items=<k>`. It
-                         does NOT include the raw payload (snapshot rows, per-
-                         period tables, coverage flags) — those values stayed
-                         on the agent's side. This means you CANNOT verify a
-                         specific number against the trace, only against the
-                         tool's stated success/coverage.
-                         RULES:
-                           * `status=ok` + `items>=1` is STRONG EVIDENCE that the
-                             tool returned the requested metric. A quantitative
-                             claim matching the tool's purpose (e.g. asked for
-                             pe_ratio, answer says "P/E is 37.73x") is PRESUMED
-                             GROUNDED. Award grounding 20-25.
-                           * Only score grounding<10 when one of these is true:
-                               (a) the trace shows `status=missing` / `items=0`
-                                   for the relevant tool AND the answer cites a
-                                   specific number anyway;
-                               (b) the answer cites a period or entity OUTSIDE
-                                   the tool's stated scope (e.g. claims Q4 FY2026
-                                   when only 8 quarterly rows were requested and
-                                   that quarter falls outside the natural window);
-                               (c) the answer cites a metric the tool was not
-                                   asked for (e.g. claims forward_pe when only
-                                   pe_ratio was queried).
-                           * "Value not present in tool_results" is NOT a valid
-                             grounding=0 feedback when `status=ok items>=1` —
-                             the value IS in the payload, you just don't see it.
-                             Use status+item_count as your evidence, not absence
-                             of the number from the compact trace.
+                       DIVISION OF LABOUR — READ THIS FIRST (v3.0):
+                         NUMERIC VALUE VERIFICATION IS NOT YOUR JOB. A separate
+                         DETERMINISTIC cross-check compares each numeric claim in
+                         the answer against the actual values the tools returned
+                         (a `GROUNDING SAMPLE` block, when present, shows you those
+                         values). If a claimed number CONTRADICTS a sampled value,
+                         the scoring layer HARD-FAILS the answer regardless of the
+                         score you give — you do NOT need to (and cannot reliably)
+                         re-derive that arithmetic. Your grounding score is a
+                         QUALITATIVE judgement of attribution discipline:
+                           * Does the answer cite its sources ([tool row N])?
+                           * Does it stay within the tools' stated scope/coverage?
+                           * Does it transparently flag uncertainty rather than
+                             stating shaky figures as hard fact?
+                         Score this dimension on those qualities. Do NOT award a
+                         low score merely because you cannot personally verify a
+                         specific figure from the compact trace — the cross-check
+                         handles that.
+
+                       WHEN A `GROUNDING SAMPLE` BLOCK IS PROVIDED:
+                         The user message may include a `GROUNDING SAMPLE` block
+                         listing field=value pairs the tools actually returned
+                         (e.g. `revenue=46.7B`, `pe_ratio=37.73`). Use it as
+                         positive evidence: a claim consistent with a sampled
+                         value is well-grounded (award 20-25). You need not police
+                         exact contradictions — the deterministic check already
+                         does, and will override your score with a FAIL.
+
+                       WHEN NO `GROUNDING SAMPLE` BLOCK IS PRESENT (presumed band):
+                         The trace is a COMPACT SUMMARY (`status=ok items=K`) with
+                         no payload, so you have NO captured values to check
+                         against. In this PRESUMED band, judge grounding by
+                         attribution quality + scope discipline only, and SAY SO
+                         in your feedback ("no grounding sample — presumed band").
+                         Reserve a low score (<10) for clear scope/coverage
+                         violations:
+                           (a) the trace shows `status=missing` / `items=0` for the
+                               relevant tool AND the answer cites a specific number
+                               anyway;
+                           (b) the answer cites a period or entity OUTSIDE the
+                               tool's stated scope (e.g. claims Q4 FY2026 when only
+                               8 quarterly rows were requested and that quarter
+                               falls outside the natural window);
+                           (c) the answer cites a metric the tool was not asked for
+                               (e.g. claims forward_pe when only pe_ratio was
+                               queried).
+                         "Value not present in tool_results" is NOT valid grounding=0
+                         feedback when `status=ok items>=1` and no sample contradicts
+                         it — absence from the compact trace is not evidence of
+                         fabrication. Use status/scope as your evidence.
 
                        SPECIAL CASES — DO NOT score grounding=0 for these:
                          * An answer ending with "⚠ Some numbers could not be
@@ -308,16 +347,20 @@ WRITE FEEDBACK AS A HUMAN REVIEWER WOULD:
 
 
 # Note: parameters=frozenset() — pure system prompt with no substitutions.
-# v2.0: BREAKING — per-dim key ``reason`` → ``feedback``, top-level ``notes``
-# → ``reviewer_summary``; FRAMING is length-agnostic. Callers must dual-read
-# both old + new keys for one release of back-compat.
+# v3.0: BREAKING (PLAN-0110 W3) — DELETED the "PRESUME GROUNDED" instruction;
+# numeric grounding is now cross-checked deterministically against the captured
+# grounding_sample and the prompt defers value verification to it. The 4-dim
+# schema + output keys (``feedback``/``reviewer_summary``) are unchanged from
+# v2.0. Content hash flips automatically with the body change.
 CHAT_QUALITY_JUDGE = PromptTemplate(
     name="chat_quality_judge",
-    version="2.0",
+    version="3.0",
     description=(
         "Strict 4-dim (tool_use/grounding/framing/refusal_judgment) chat-agent answer grader. "
-        "v2.0 BREAKING: per-dim ``reason`` → ``feedback``, top-level ``notes`` → ``reviewer_summary``; "
-        "framing dimension rewritten LENGTH-AGNOSTIC (short factual answers score 25)."
+        "v3.0 BREAKING: DELETED the 'PRESUME GROUNDED → 20-25' instruction; numeric grounding is "
+        "now verified DETERMINISTICALLY against the captured grounding_sample (contradictions "
+        "hard-fail), and the prompt grades grounding QUALITATIVELY (attribution + scope), with an "
+        "explicit 'presumed' band when no sample is supplied."
     ),
     template=_TEMPLATE,
     parameters=frozenset(),

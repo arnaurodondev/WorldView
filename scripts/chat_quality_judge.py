@@ -87,6 +87,15 @@ _MAX_TOTAL = _MAX_PER_DIMENSION * len(DIMENSION_KEYS)  # 100
 _PASS_THRESHOLD = 85
 _WARN_THRESHOLD = 60
 
+# PLAN-0110 W3 (FR-4 / FR-12): the tiered verdict SCHEMA version. Distinct from
+# the judge PROMPT version (``CHAT_QUALITY_JUDGE.version``) — this bumps only
+# when the Python scoring schema changes shape (e.g. a new InvariantCode, a
+# banding change), so a longitudinal trend store (W4) can detect a
+# discontinuity in the verdict objects independently of a prompt re-word. W1
+# introduced the tiered schema (1.0); W3 added the populated numeric
+# cross-check + GROUNDING_CONTRADICTED wiring → bump to 1.1.
+VERDICT_MODEL_VERSION = "1.1"
+
 # ── Hardening constants (audit 2026-06-11 F1/F3/F4) ───────────────────────
 # The benchmark's original verdict was a pure ``sum(4 dims)`` with PASS>=85.
 # That let a catastrophic single-dimension failure (e.g. grounding=10 =
@@ -505,11 +514,52 @@ def _build_user_prompt(inp: JudgeInput) -> str:
 
     tool_trace = "\n".join(tool_trace_lines) if tool_trace_lines else "  (no tool calls)"
 
+    # PLAN-0110 W3 (T-W3-03 / FR-7): render the captured GROUNDING SAMPLE values
+    # so the judge can reason over the SAME evidence the deterministic
+    # cross-check uses (feedback_prompt_input_mismatch — one source of truth).
+    # The block is omitted entirely when no tool_result carried a sample, which
+    # keeps the v2.x trace-only prompt byte-identical for sample-free runs and
+    # signals the judge's "presumed band" path.
+    grounding_block = _build_grounding_sample_block(inp.tool_results)
+
     return (
         f"QUESTION:\n{inp.prompt}\n\n"
         f"RUBRIC:\n{json.dumps(inp.rubric.to_dict(), indent=2)}\n\n"
         f"TOOL TRACE:\n{tool_trace}\n\n"
+        f"{grounding_block}"
         f"ANSWER:\n{inp.answer_text or '<empty>'}\n"
+    )
+
+
+def _build_grounding_sample_block(tool_results: list[dict[str, Any]] | None) -> str:
+    """Render the captured ``grounding_sample`` field values for the judge prompt.
+
+    Returns ``"GROUNDING SAMPLE:\\n  <tool>.<field> = <value>\\n...\\n\\n"`` when
+    at least one tool_result carried a W2 ``grounding_sample`` with fields, else
+    an EMPTY string (the block is omitted → the v2.x trace-only prompt is
+    byte-identical for sample-free runs, and the judge takes its "presumed band"
+    path). The values shown here are the SAME ones the deterministic
+    ``cross_check_grounding`` reads, so the prompt and the cross-check never
+    diverge (feedback_prompt_input_mismatch).
+    """
+    lines: list[str] = []
+    for tr in tool_results or []:
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        fields = sample.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            continue
+        tool_name = str(tr.get("tool") or "?")
+        for fname, fval in fields.items():
+            lines.append(f"  {tool_name}.{fname} = {fval}")
+    if not lines:
+        return ""
+    body = "\n".join(lines)
+    return (
+        "GROUNDING SAMPLE (actual values the tools returned — use as evidence; "
+        "a contradicted number is hard-failed deterministically):\n"
+        f"{body}\n\n"
     )
 
 
@@ -909,6 +959,362 @@ def first_fired_invariant(gate_results: dict[InvariantCode, bool]) -> InvariantC
 
 
 # --------------------------------------------------------------------------
+# Programmatic numeric grounding cross-check (PLAN-0110 W3 / T-W3-01, FR-6)
+# --------------------------------------------------------------------------
+#
+# THE PROBLEM. The LLM judge alone cannot *verify* a number — it only sees a
+# compact tool trace (``status=ok items=K``), not the raw payload. So a
+# fabricated "$5.4B revenue" reads as plausibly-grounded to the judge. W2 fixed
+# the EVIDENCE side: the backend now optionally streams a bounded, redacted
+# ``grounding_sample`` ({fields:{field:str_value}, sampled_rows, total_rows,
+# truncated}) on each ``tool_result`` frame, captured into the artefact.
+#
+# THIS MODULE is the DETERMINISTIC, LLM-free cross-check that consumes those
+# samples. It extracts quantitative claims from the answer, associates each to a
+# sampled field BY NAME, and classifies it:
+#   * matched      — claim value ≈ the sampled value for that field (tolerance).
+#   * contradicted — claim is associated to a field whose sampled value it
+#                    DISPROVES (outside tolerance). This is the only class that
+#                    HARD-FAILs (trips GROUNDING_CONTRADICTED). "Absent" never
+#                    fails — we only fail on a value the tool actually returned.
+#   * unmatched    — a number with no associated sampled field (no evidence
+#                    either way; neutral).
+#
+# EVIDENCE MODE. When at least one sample is present we set
+# ``evidence_mode="verified"`` (the check had real values to bite on). With NO
+# samples we fall back to ``evidence_mode="presumed"`` (today's legacy
+# behaviour) and NEVER fail — absence is not contradiction.
+#
+# FALSE-POSITIVE GUARDS (F-2, mandatory):
+#   * numbers inside ``` fenced code / inline-code blocks are ignored (they are
+#     usually tool-arg echoes / identifiers, not prose claims);
+#   * a claim must be associated to the SAME field (the field name or a known
+#     alias must appear near the number) — we never compare a revenue claim to
+#     an EPS sample;
+#   * equality is tolerance-based (relative + absolute) so rounding ("$46.7B" vs
+#     46_742_000_000) and unit scaling (B/M/K) never trip a contradiction;
+#   * 4-digit bare integers that look like calendar years (1900-2099) and values
+#     that are part of a citation marker (``[... row 3]``) are not treated as
+#     magnitude claims.
+
+# Field-name aliases: the human-readable words an answer uses for a sampled
+# field. The cross-check associates a number to a field when the field name OR
+# one of its aliases appears within ``_CLAIM_FIELD_WINDOW`` chars of the number.
+# Forward-compatible: unknown fields still match on their own name (snake_case
+# split into words), so a brand-new sampled field needs no code change to be
+# checkable — aliases only ADD natural-language synonyms.
+_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "revenue": ("revenue", "sales", "total revenue", "net revenue"),
+    "eps": ("eps", "earnings per share"),
+    "gross_profit": ("gross profit", "gross_profit"),
+    "net_income": ("net income", "net_income", "earnings", "profit"),
+    "pe_ratio": ("p/e", "pe ratio", "pe_ratio", "price-to-earnings", "price to earnings"),
+    "forward_pe": ("forward p/e", "forward pe", "forward_pe"),
+    "market_cap": ("market cap", "market capitalization", "market_cap"),
+    "ebitda": ("ebitda",),
+    "operating_income": ("operating income", "operating_income"),
+    "free_cash_flow": ("free cash flow", "free_cash_flow", "fcf"),
+    "dividend_yield": ("dividend yield", "dividend_yield"),
+    "price": ("price", "share price", "trading at", "quote"),
+}
+
+# How far (chars) on EITHER side of a number we look for a field-name / alias to
+# associate the claim with a sampled field. A short window keeps "revenue is X …
+# eps is Y" from cross-associating.
+_CLAIM_FIELD_WINDOW = 60
+
+# Tolerance for declaring two magnitudes EQUAL (and therefore NOT contradicted).
+# A claim within EITHER bound of a sample counts as matched. Generous on
+# purpose: the answer rounds ("$46.7B" for 46_742_000_000) and the sample may be
+# truncated — we only want to fire on a genuine, large discrepancy.
+_GROUNDING_REL_TOL = 0.05  # 5% relative
+_GROUNDING_ABS_TOL = 1e-6  # absolute floor so tiny values (0.0) compare sanely
+
+# Scale suffixes the answer uses (case-insensitive). ``%`` is handled
+# separately (a percentage claim is compared as a plain number, not scaled).
+_SCALE_SUFFIX: dict[str, float] = {
+    "k": 1e3,
+    "m": 1e6,
+    "mn": 1e6,
+    "million": 1e6,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "tn": 1e12,
+    "trillion": 1e12,
+}
+
+# A numeric claim in PROSE: an optional ``$``, a mantissa with optional thousands
+# separators + decimal, and an optional scale word/suffix. We deliberately do
+# NOT match bare 4-digit years here (filtered in ``_is_yearlike``) or numbers
+# embedded in identifiers (the fenced/inline-code strip removes those first).
+#
+# The suffix alternation is anchored so a scale LETTER is only consumed when it
+# is a standalone token — ``(?![A-Za-z])`` after the short ``[kmbt]…`` form stops
+# "2026 the" from being read as "2026 t(rillion)" (the ``t`` is the start of
+# "the", not a suffix). ``%`` and the spelled-out words are unambiguous.
+_CLAIM_NUMBER_RE = re.compile(
+    r"\$?\s?(?P<num>\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s?"
+    r"(?P<suffix>%|trillion|billion|million|(?:bn|mn|tn|[kmbt]b?n?)(?![A-Za-z]))?",
+    re.IGNORECASE,
+)
+
+
+def _strip_code_spans(text: str) -> str:
+    """Blank out fenced + inline code so numbers inside them are not claims (F-2).
+
+    We REPLACE the code spans with equal-length whitespace rather than deleting
+    them so the character offsets of the surviving prose are unchanged — the
+    field-association window logic relies on stable offsets.
+    """
+    out = text
+    # Fenced ``` ... ``` blocks (DOTALL) first, then inline `...` spans.
+    for pat in (re.compile(r"```.*?```", re.DOTALL), re.compile(r"`[^`]*`")):
+
+        def _blank(m: re.Match[str]) -> str:
+            return " " * len(m.group(0))
+
+        out = pat.sub(_blank, out)
+    return out
+
+
+def _is_yearlike(raw: str, suffix: str) -> bool:
+    """True when a bare 4-digit integer looks like a calendar year (1900-2099)."""
+    if suffix:
+        return False
+    if "," in raw or "." in raw:
+        return False
+    try:
+        v = int(raw)
+    except ValueError:
+        return False
+    return 1900 <= v <= 2099 and len(raw) == 4
+
+
+def _coerce_number(raw: str, suffix: str) -> float | None:
+    """Parse a claim token (mantissa + optional scale suffix) to a float.
+
+    ``"46.7", "B"`` → 46_700_000_000.0 ; ``"37.73", ""`` → 37.73 ;
+    ``"5", "%"`` → 5.0 (percent is compared as a plain number).
+    Returns ``None`` when the mantissa is not parseable.
+    """
+    cleaned = raw.replace(",", "")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    sfx = (suffix or "").lower()
+    if sfx and sfx != "%":
+        value *= _SCALE_SUFFIX.get(sfx, 1.0)
+    return value
+
+
+def _sample_value_to_float(raw: Any) -> float | None:
+    """Coerce a SAMPLED field value (a capped str from W2) to a float.
+
+    Samples are strings (``str(value)[:32]``). They may carry their own scale
+    suffix / ``$`` / ``%`` / commas (e.g. ``"46.7B"``, ``"$46,742,000,000"``,
+    ``"37.73"``). We reuse the same claim regex so sample + claim are scaled
+    identically (feedback_prompt_input_mismatch: one parser, one source).
+    """
+    s = str(raw).strip()
+    if not s:
+        return None
+    m = _CLAIM_NUMBER_RE.fullmatch(s.strip())
+    if m is None:
+        # Fall back to a loose search (e.g. trailing units like "46.7B USD").
+        m = _CLAIM_NUMBER_RE.search(s)
+    if m is None:
+        return None
+    return _coerce_number(m.group("num"), m.group("suffix") or "")
+
+
+def _values_within_tolerance(claim: float, sample: float) -> bool:
+    """True when two magnitudes are equal within rel OR abs tolerance."""
+    if claim == sample:
+        return True
+    diff = abs(claim - sample)
+    if diff <= _GROUNDING_ABS_TOL:
+        return True
+    denom = max(abs(claim), abs(sample))
+    return denom > 0 and (diff / denom) <= _GROUNDING_REL_TOL
+
+
+def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict[str, list[float]]:
+    """Gather ``{field: [sampled_float, ...]}`` from every captured grounding_sample.
+
+    Reads the W2 ``grounding_sample.fields`` map off each tool_result entry. A
+    field may appear in several tool results / sampled rows, so we keep a LIST of
+    candidate values per field. Non-numeric / unparseable sample values are
+    dropped (they cannot contradict a number).
+    """
+    fields: dict[str, list[float]] = {}
+    for tr in tool_results or []:
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        raw_fields = sample.get("fields")
+        if not isinstance(raw_fields, dict):
+            continue
+        for fname, fval in raw_fields.items():
+            num = _sample_value_to_float(fval)
+            if num is None:
+                continue
+            fields.setdefault(str(fname), []).append(num)
+    return fields
+
+
+def _field_candidates(field: str) -> set[str]:
+    """The lowercased name-forms (snake, spaced, aliases) that name ``field``."""
+    candidates = {field.lower(), field.replace("_", " ").lower()}
+    candidates.update(a.lower() for a in _FIELD_ALIASES.get(field, ()))
+    return {c for c in candidates if c}
+
+
+def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: list[str]) -> str | None:
+    """Return the SINGLE SAMPLED field nearest the claim, or None.
+
+    SAME-FIELD guard (F-2). We compute the closest field-name mention to the
+    number across the FULL universe of known field names (``_FIELD_ALIASES`` +
+    the sampled field names themselves), then:
+      * if the nearest mention belongs to a SAMPLED field → return it;
+      * if the nearest mention belongs to a known-but-NOT-sampled field (e.g.
+        "EPS" when only ``revenue`` was sampled) → return None. The number is
+        about a different metric we have no sample for; comparing it to a
+        farther-away sampled field would be a false contradiction.
+      * if no field name sits within the window → None (unmatched, neutral).
+
+    This stops "Revenue was $46.7B; EPS came in at $5.40" from contradicting the
+    revenue sample with the EPS number: "eps" is nearer the $5.40 than "revenue".
+    """
+    start, end = span
+    lo = max(0, start - _CLAIM_FIELD_WINDOW)
+    hi = min(len(answer_lower), end + _CLAIM_FIELD_WINDOW)
+
+    # The universe of field names we recognise: every alias key + every sampled
+    # field name. Map each name-form back to its canonical field key.
+    universe: dict[str, str] = {}
+    for canonical in set(sampled_fields) | set(_FIELD_ALIASES):
+        for name in _field_candidates(canonical):
+            # Prefer a sampled field's claim on a shared name-form so a sampled
+            # field is never shadowed by an unsampled alias of the same word.
+            if name not in universe or canonical in sampled_fields:
+                universe[name] = canonical
+
+    # Financial prose names the metric BEFORE the number ("revenue was X",
+    # "EPS came in at Y"). So we prefer the nearest field name that PRECEDES the
+    # claim; only if none precedes within the window do we fall back to the
+    # nearest following name. Tracked separately so a closer FOLLOWING mention of
+    # another metric never steals a number that its own preceding label owns.
+    best_pre: tuple[int, str] | None = None  # (distance, canonical)
+    best_post: tuple[int, str] | None = None
+    for name, canonical in universe.items():
+        search_from = lo
+        while True:
+            pos = answer_lower.find(name, search_from, hi)
+            if pos == -1:
+                break
+            name_end = pos + len(name)
+            search_from = pos + 1
+            if name_end <= start:  # name PRECEDES the claim
+                dist = start - name_end
+                if best_pre is None or dist < best_pre[0]:
+                    best_pre = (dist, canonical)
+            elif pos >= end:  # name FOLLOWS the claim
+                dist = pos - end
+                if best_post is None or dist < best_post[0]:
+                    best_post = (dist, canonical)
+            else:  # overlapping (rare) → treat as a zero-distance preceding match
+                if best_pre is None or 0 < best_pre[0]:
+                    best_pre = (0, canonical)
+
+    chosen = best_pre or best_post
+    if chosen is not None and chosen[1] in sampled_fields:
+        return chosen[1]
+    return None
+
+
+def cross_check_grounding(
+    answer_text: str,
+    tool_results: list[dict[str, Any]] | None,
+) -> GroundingCheck:
+    """Deterministically cross-check numeric claims against captured samples (FR-6).
+
+    Returns a populated :class:`GroundingCheck`. ``contradicted > 0`` is what
+    trips the ``GROUNDING_CONTRADICTED`` invariant (hard FAIL) in
+    :func:`evaluate_invariants`.
+
+    Algorithm (LLM-free, deterministic):
+      1. Collect ``{field: [sample_floats]}`` from every captured
+         ``grounding_sample`` (W2). No samples → return a zeroed ``presumed``
+         GroundingCheck (legacy fallback — NEVER fails for absence).
+      2. Strip fenced/inline code so identifier numbers aren't treated as claims.
+      3. For every numeric claim in the prose, find the sampled fields ASSOCIATED
+         with it by name/alias within a window. For each associated field:
+           * within tolerance of ANY sampled value → ``matched``;
+           * outside tolerance of EVERY sampled value → ``contradicted`` (record
+             the nearest sample + delta as an example).
+         A claim associated to NO sampled field is ``unmatched`` (neutral).
+    """
+    grounding_fields = _collect_grounding_fields(tool_results)
+    # No evidence at all → legacy "presumed" mode. We do NOT scan the answer:
+    # with nothing to compare against, every number would be ``unmatched`` noise.
+    if not grounding_fields:
+        return GroundingCheck(evidence_mode="presumed")
+
+    cleaned = _strip_code_spans(answer_text or "")
+    cleaned_lower = cleaned.lower()
+    field_names = list(grounding_fields)
+    matched = 0
+    unmatched = 0
+    contradicted = 0
+    examples: list[dict[str, Any]] = []
+
+    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
+        raw_num = m.group("num")
+        suffix = m.group("suffix") or ""
+        if _is_yearlike(raw_num, suffix):
+            continue
+        claim_val = _coerce_number(raw_num, suffix)
+        if claim_val is None:
+            continue
+        span = m.span()
+
+        # Which SINGLE sampled field does the prose associate with this number?
+        field_name = _nearest_field(cleaned_lower, span, field_names)
+        if field_name is None:
+            unmatched += 1
+            continue
+
+        samples = grounding_fields[field_name]
+        if any(_values_within_tolerance(claim_val, s) for s in samples):
+            matched += 1
+            continue
+
+        # Outside tolerance of EVERY sample for this field → contradiction.
+        nearest_sample = min(samples, key=lambda s: abs(claim_val - s))
+        contradicted += 1
+        examples.append(
+            {
+                "field": field_name,
+                "claim": claim_val,
+                "claim_text": m.group(0).strip(),
+                "nearest_sample": nearest_sample,
+                "delta": abs(claim_val - nearest_sample),
+            }
+        )
+
+    return GroundingCheck(
+        matched=matched,
+        unmatched=unmatched,
+        contradicted=contradicted,
+        examples=examples,
+        evidence_mode="verified",
+    )
+
+
+# --------------------------------------------------------------------------
 # Public judge entry point
 # --------------------------------------------------------------------------
 
@@ -996,6 +1402,57 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
     }
 
 
+def _grounding_contradicted_fail_result(
+    grounding_check: GroundingCheck,
+    *,
+    judge_prompt_id: str,
+) -> dict[str, Any]:
+    """Build a hard-FAIL verdict for a deterministic numeric CONTRADICTION (W3).
+
+    Mirror of ``_degenerate_fail_result`` for the GROUNDING_CONTRADICTED gate.
+    The LLM judge is NOT consulted: a claimed value the tool's own sampled value
+    disproves is fabrication-with-evidence, the most severe class — so we hard-
+    FAIL deterministically (works offline, F-4). The populated ``GroundingCheck``
+    (with examples) is carried on the VerdictDecision + the legacy ``veto`` so the
+    report (W5) can render the claim-vs-sample mismatch.
+    """
+    ex = grounding_check.examples[0] if grounding_check.examples else {}
+    text = (
+        f"GROUNDING CONTRADICTED: {grounding_check.contradicted} numeric claim(s) "
+        f"disproved by a sampled tool value (e.g. claim "
+        f"{ex.get('claim_text', ex.get('claim'))!r} for field {ex.get('field')!r} "
+        f"vs sample {ex.get('nearest_sample')}). The agent stated a number the "
+        f"tool's own payload contradicts — fabrication."
+    )
+    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results[InvariantCode.GROUNDING_CONTRADICTED] = False
+    decision = VerdictDecision(
+        verdict=Verdict.FAIL,
+        quality_score=0,
+        fail_reason=InvariantCode.GROUNDING_CONTRADICTED,
+        gate_results=gate_results,
+        grounding_check=grounding_check,
+        dimensions={k: 0 for k in DIMENSION_KEYS},
+    )
+    return {
+        "verdict": "FAIL",
+        "score": 0,
+        "dimensions": {k: {"score": 0, "feedback": text, "reason": text} for k in DIMENSION_KEYS},
+        "reviewer_summary": text,
+        "notes": text,  # back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        "veto": {
+            "type": "grounding_contradicted",
+            "reason": "numeric_claim_contradicted",
+            "contradicted": grounding_check.contradicted,
+            "examples": list(grounding_check.examples),
+            "detail": text,
+        },
+        "verdict_decision": decision.to_dict(),
+    }
+
+
 def judge_answer(
     inp: JudgeInput,
     *,
@@ -1032,6 +1489,17 @@ def judge_answer(
         degenerate_reason = detect_tool_failure_nonanswer(inp.answer_text, inp.rubric, inp.tool_results)
     if degenerate_reason is not None:
         return _degenerate_fail_result(degenerate_reason, judge_prompt_id=judge_prompt_id)
+
+    # ── Deterministic numeric grounding cross-check (PLAN-0110 W3 / FR-6) ──
+    # A numeric CONTRADICTION (a claimed value a sampled tool value disproves) is
+    # an LLM-free hard failure — so we run it BEFORE the SKIPPED short-circuit
+    # below. This makes GROUNDING_CONTRADICTED meaningful in offline / CI mode
+    # too (F-4): a fabricated number is caught even with no DEEPINFRA_API_KEY.
+    # With no samples the check returns ``presumed`` (contradicted=0) and this is
+    # a no-op — the answer flows on to the normal SKIPPED / LLM path.
+    grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
+    if grounding_check.contradicted > 0:
+        return _grounding_contradicted_fail_result(grounding_check, judge_prompt_id=judge_prompt_id)
 
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
@@ -1209,9 +1677,13 @@ def _finalise_verdict(
     # judge is GROUNDING_FLOOR — but we run the FULL gate so the VerdictDecision
     # carries an accurate, complete ``gate_results`` map (FR-3), and so a future
     # caller invoking ``_finalise_verdict`` directly still gets correct gating.
-    # GROUNDING_CONTRADICTED is wired but inert until W3 (presumed check).
-    grounding_check = GroundingCheck()  # zeroed/presumed in W1; populated in W3
+    # PLAN-0110 W3 (T-W3-02): the numeric cross-check is now LIVE. We compute the
+    # GroundingCheck from the answer + the W2-captured grounding samples on
+    # ``inp.tool_results``; ``contradicted > 0`` trips GROUNDING_CONTRADICTED in
+    # the gate. With no samples the cross-check returns a zeroed ``presumed``
+    # check (legacy behaviour — never fails for absence).
     if inp is not None:
+        grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
         gate_results = evaluate_invariants(
             inp.answer_text,
             inp.tool_results,
@@ -1220,8 +1692,11 @@ def _finalise_verdict(
             grounding_score=grounding_score,
         )
     else:
-        # No inputs → we can only evaluate the grounding floor (we still have the
-        # judge sub-score). All answer-text gates default to "passed".
+        # No inputs → no answer/samples to cross-check, so the GroundingCheck is
+        # the zeroed ``presumed`` default. We can only evaluate the grounding
+        # floor (we still have the judge sub-score); other gates default to
+        # "passed".
+        grounding_check = GroundingCheck()
         gate_results = {code: True for code in _ALL_INVARIANTS}
         if grounding_score < GROUNDING_VETO_FLOOR:
             gate_results[InvariantCode.GROUNDING_FLOOR] = False
@@ -1241,7 +1716,34 @@ def _finalise_verdict(
         verdict = "FAIL"
 
     veto: dict[str, Any] | None = None
-    if grounding_score < GROUNDING_VETO_FLOOR:
+    # PLAN-0110 W3 (T-W3-02): a numeric CONTRADICTION is the most severe veto and
+    # is checked FIRST (matching the gate's _INVARIANT_PRIORITY where
+    # GROUNDING_CONTRADICTED outranks GROUNDING_FLOOR). A claim a sampled value
+    # disproves is fabrication-with-evidence — strictly worse than a low soft
+    # grounding sub-score. We mirror it into the legacy ``verdict``/``veto`` keys
+    # so report readers on the back-compat path also see the FAIL + the
+    # claim-vs-sample mismatch.
+    if grounding_check.contradicted > 0:
+        pre_veto_verdict = verdict
+        verdict = "FAIL"
+        ex = grounding_check.examples[0] if grounding_check.examples else {}
+        veto_detail = (
+            f"GROUNDING CONTRADICTED: {grounding_check.contradicted} numeric "
+            f"claim(s) disproved by a sampled tool value (e.g. claim "
+            f"{ex.get('claim_text', ex.get('claim'))!r} for field "
+            f"{ex.get('field')!r} vs sample {ex.get('nearest_sample')}). Verdict "
+            f"forced FAIL (sum={total} would otherwise have been {pre_veto_verdict})."
+        )
+        veto = {
+            "type": "grounding_contradicted",
+            "reason": "numeric_claim_contradicted",
+            "contradicted": grounding_check.contradicted,
+            "examples": list(grounding_check.examples),
+            "detail": veto_detail,
+            "pre_veto_verdict": pre_veto_verdict,
+        }
+        reviewer_summary = (f"{veto_detail} {reviewer_summary}").strip()[:800]
+    elif grounding_score < GROUNDING_VETO_FLOOR:
         pre_veto_verdict = verdict
         verdict = "FAIL"
         veto_detail = (
@@ -1313,7 +1815,11 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     scored_totals: list[int] = []
     # Audit 2026-06-11 — failure-first aggregates. We tally the deterministic /
     # veto FAIL classes so the report can lead with them instead of an average.
-    veto_counts: dict[str, int] = {"grounding": 0, "degenerate": 0, "tool_failure": 0}
+    # PLAN-0110 W3: ``grounding_contradicted`` is the new W3 veto class (a numeric
+    # claim disproved by a sampled tool value) — counted separately from the soft
+    # ``grounding`` floor veto so the report can distinguish "fabrication proven
+    # against evidence" from "low soft grounding sub-score".
+    veto_counts: dict[str, int] = {"grounding": 0, "grounding_contradicted": 0, "degenerate": 0, "tool_failure": 0}
     # PLAN-0110 W1 — tiered-verdict aggregates. Counts of the NEW Verdict bands
     # and a histogram of which InvariantCode triggered each FAIL, both read from
     # the structured ``verdict_decision`` block (None when judge skipped/errored).

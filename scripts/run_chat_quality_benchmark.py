@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -83,12 +84,15 @@ from chat_eval.harness import (  # noqa: E402
     _read_sse_events,
 )
 from chat_quality_judge import (  # noqa: E402
+    VERDICT_MODEL_VERSION,
     JudgeInput,
     Rubric,
+    _DEFAULT_JUDGE_MODEL,
     build_input_from_artifact,
     judge_answer,
     summarise_judge_records,
 )
+from prompts.evaluation import CHAT_QUALITY_JUDGE  # noqa: E402
 
 # isort: on
 
@@ -1259,6 +1263,13 @@ def _regrade_existing_run(runs_dir: Path) -> int:
 
     judge_summary = {
         "schema_version": _JUDGE_SUMMARY_SCHEMA_VERSION,
+        # PLAN-0110 W3 (FR-12): stamp the judge identity on the offline re-grade
+        # summary too, so a re-graded run records WHICH prompt/model/schema
+        # produced its verdicts (the re-grade may use a newer judge than the
+        # original chat run).
+        "judge_prompt_version": CHAT_QUALITY_JUDGE.version,
+        "judge_model_id": os.environ.get("CHAT_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL),
+        "verdict_model_version": VERDICT_MODEL_VERSION,
         "per_question": judge_records,
         **summarise_judge_records(judge_records),
     }
@@ -1422,6 +1433,17 @@ def main(argv: list[str] | None = None) -> int:
         "total_runs": len(per_q_records),
         # Used by the Markdown renderer for the H1 heading.
         "out_dir_label": out_dir.name,
+        # PLAN-0110 W3 (FR-12 / §6.4): stamp the exact judge identity on every
+        # run so longitudinal comparisons (W4 trend store) can detect a verdict
+        # discontinuity caused by a prompt re-word / model swap / schema bump —
+        # not a genuine quality regression. ``judge_prompt_version`` is the
+        # semver of CHAT_QUALITY_JUDGE; ``judge_prompt_id`` carries the
+        # content-addressed identifier; ``judge_model_id`` is the LLM that
+        # graded; ``verdict_model_version`` is the tiered-schema version.
+        "judge_prompt_version": CHAT_QUALITY_JUDGE.version,
+        "judge_prompt_id": CHAT_QUALITY_JUDGE.identifier(),
+        "judge_model_id": os.environ.get("CHAT_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL),
+        "verdict_model_version": VERDICT_MODEL_VERSION,
     }
     (out_dir / "_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
