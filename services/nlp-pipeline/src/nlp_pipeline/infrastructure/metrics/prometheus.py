@@ -44,6 +44,20 @@ s6_extraction_entity_ref_hallucinated_total = prometheus_client.Counter(
     "(hallucination signal — refs invented by the model rather than copied from input)",
 )
 
+# Task #22 (BP-677): deep-extraction window-level transient failures (timeouts,
+# 429s, 5xx, connection errors — anything the extraction adapter raises as a
+# RetryableError). Previously these were silently swallowed and substituted with
+# an empty {events:[], claims:[], relations:[]} result, making a timed-out
+# extraction indistinguishable from a genuinely empty article (the ~16% timeout
+# rate was hidden as fake "0 events/0 claims/0 relations" completions). This
+# counter makes the per-window timeout rate observable in Prometheus.
+deep_extraction_window_timeout_total = prometheus_client.Counter(
+    "deep_extraction_window_timeout_total",
+    "Deep-extraction (Block 10) windows that failed with a transient/timeout error "
+    "(RetryableError) instead of returning a parsed result. A non-zero rate here "
+    "explains all-zero extraction completions that are degraded, not truly empty.",
+)
+
 nlp_sectioning_fallback_total = prometheus_client.Counter(
     "nlp_sectioning_fallback_total",
     "Times the synthetic (fallback) sectioner was used because source_type was unknown",

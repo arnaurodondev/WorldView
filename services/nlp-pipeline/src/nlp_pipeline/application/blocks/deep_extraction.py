@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
+from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
@@ -42,6 +43,24 @@ if TYPE_CHECKING:
     from nlp_pipeline.domain.models import Chunk, EntityMention
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _record_window_timeout() -> None:
+    """Increment the deep-extraction window-timeout Prometheus counter.
+
+    Task #22 (BP-677): makes the per-window transient-failure (timeout) rate
+    observable in Prometheus, not just logs. Uses a lazy import (matching the
+    PrometheusNlpMetrics adapter style) so the application layer does not import
+    the infrastructure metrics singleton at module load, and so pure-function
+    callers/tests work even when prometheus_client is unavailable.
+    """
+    try:
+        from nlp_pipeline.infrastructure.metrics.prometheus import deep_extraction_window_timeout_total
+
+        deep_extraction_window_timeout_total.inc()
+    except Exception:  # metrics must never break extraction
+        logger.debug("deep_extraction.metric_inc_failed", metric="deep_extraction_window_timeout_total")
+
 
 # ── Window configuration (PRD §6.7 Block 10) ─────────────────────────────────
 
@@ -369,8 +388,27 @@ async def run_deep_extraction_block(
     # Build text windows
     windows = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
 
-    # Run extraction per window
+    # Run extraction per window.
+    #
+    # Task #22 (BP-677): we MUST distinguish a transient/timeout failure from a
+    # genuinely empty extraction. The extraction adapter (DeepSeekExtractionAdapter
+    # et al.) raises ``RetryableError`` for every transient condition — wall-clock
+    # timeout, ``APITimeoutError``, ``APIConnectionError``, 429 rate-limit and 5xx
+    # (see ml_clients/adapters/deepseek_extraction.py). The previous code caught
+    # ``except Exception`` and substituted an empty result, so a timed-out window
+    # merged to all-zero and was logged as a NORMAL ``deep_extraction.complete``.
+    # Downstream could not tell "model found nothing" from "model timed out" — the
+    # ~16% timeout rate was hidden as fake "0 events/0 claims/0 relations".
+    #
+    # New behaviour:
+    #   * A RetryableError on a window is counted (``timed_out_windows``) and NOT
+    #     silently treated as a successful empty result.
+    #   * A genuine parse/empty result (the adapter returned, but with no content)
+    #     is a *successful* window — it contributes a real (possibly empty) dict.
+    #   * After the loop, retry semantics are decided (see below).
     window_results: list[ExtractionResult] = []
+    timed_out_windows = 0
+    total_windows = len(windows)
     for window_text in windows:
         try:
             result = await _run_extraction_window(
@@ -382,12 +420,62 @@ async def run_deep_extraction_block(
                 usage_logger=usage_logger,
             )
             window_results.append(result)
+        except RetryableError:
+            # Transient/timeout failure — DO NOT substitute an empty result as if
+            # the window succeeded. Track it so the completion event/return value
+            # can flag the doc as degraded, and so a timed-out doc is retried
+            # rather than persisted as a clean zero.
+            timed_out_windows += 1
+            _record_window_timeout()
+            logger.warning(
+                "deep_extraction.window_timeout",
+                doc_id=str(doc_id),
+                timed_out_windows=timed_out_windows,
+                total_windows=total_windows,
+                exc_info=True,
+            )
         except Exception:
+            # Non-retryable / unexpected failure for this window. This is NOT a
+            # transient timeout (those are caught above), so we preserve the
+            # historical behaviour of recording an empty window and continuing —
+            # the doc is not flagged degraded for a non-transient parse-shaped
+            # failure. (FatalError-class problems propagate from the adapter and
+            # are not caught here.)
             logger.warning("deep_extraction.window_failed", doc_id=str(doc_id), exc_info=True)
             window_results.append({"events": [], "claims": [], "relations": []})
 
+    degraded = timed_out_windows > 0
+
+    # Retry semantics (Task #22):
+    #   * If EVERY window timed out (no successful window produced a result), there
+    #     is nothing real to persist — raising ``RetryableError`` makes the article
+    #     consumer re-deliver / dead-letter the whole doc (its batch handler treats
+    #     ConsumerError as retryable; see article_consumer._process_one). This is
+    #     strictly better than committing an empty-but-fake extraction.
+    #   * If SOME windows succeeded and some timed out (partial), we PERSIST the
+    #     good windows but flag ``degraded=true`` + ``timed_out_windows`` so the
+    #     loss is visible and the doc is re-queueable, rather than silently dropping
+    #     the timed-out windows' content. We prefer keeping the good windows over
+    #     re-running the whole doc (which would re-pay for the successful windows).
+    if timed_out_windows > 0 and len(window_results) == 0:
+        logger.warning(
+            "deep_extraction.all_windows_timed_out",
+            doc_id=str(doc_id),
+            timed_out_windows=timed_out_windows,
+            total_windows=total_windows,
+        )
+        raise RetryableError(
+            f"deep extraction timed out on all {timed_out_windows}/{total_windows} " f"windows for doc {doc_id}",
+        )
+
     # Merge deduplicated results
     merged = _merge_results_safe(window_results)
+    # Surface degradation on the merged result so the caller (and any persistence
+    # path) can carry it forward. Kept as plain dict keys to avoid changing the
+    # ExtractionResult shape consumed by _merge_results_safe / downstream readers,
+    # which only ever look up events/claims/relations.
+    merged["degraded"] = degraded
+    merged["timed_out_windows"] = timed_out_windows
 
     # Build entity_id lookup from resolved mentions
     entity_id_by_ref: dict[str, UUID] = {}
@@ -440,6 +528,12 @@ async def run_deep_extraction_block(
         claims=len(merged.get("claims", [])),
         relations=len(merged.get("relations", [])),
         signals=len(signal_events),
+        # Task #22 (BP-677): degraded=true means at least one window timed out and
+        # its content was lost — an all-zero result here is NOT a truly empty
+        # article. timed_out_windows quantifies the loss. A fully-successful doc
+        # logs degraded=false, timed_out_windows=0 (unchanged from before).
+        degraded=degraded,
+        timed_out_windows=timed_out_windows,
     )
 
     return merged, signal_events
