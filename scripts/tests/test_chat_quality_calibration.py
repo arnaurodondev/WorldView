@@ -460,5 +460,11 @@ def test_committed_labels_load_blank() -> None:
         pytest.skip("gold_labels.yaml not assembled in this checkout")
     ls = cal.load_labels()
     assert ls.errors == []
-    assert ls.labelled == 0  # blank — human fills next
+    # The committed gold set has since been fully human-labelled (the harness was
+    # built to start blank, but the calibration session filled every entry). The
+    # loader must accept the labelled file without error; ``labelled`` is now in
+    # ``[0, total]`` rather than strictly 0. We assert the loader is consistent
+    # (no errors, labelled ≤ total) rather than re-asserting the long-gone blank
+    # state, which would force the gold labels back to empty (out of scope here).
     assert ls.total >= 1
+    assert 0 <= ls.labelled <= ls.total

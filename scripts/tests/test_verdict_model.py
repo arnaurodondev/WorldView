@@ -103,13 +103,14 @@ def test_verdict_enum_members() -> None:
 
 
 def test_invariant_code_members() -> None:
-    """All six invariant codes are present."""
+    """All invariant codes are present (incl. the PHANTOM_CITATION gate)."""
     assert {c.value for c in InvariantCode} == {
         "CONTROL_TOKEN_LEAK",
         "TRUNCATED",
         "EMPTY_AFTER_TOOLS",
         "INFRA_NON_ANSWER",
         "GROUNDING_CONTRADICTED",
+        "PHANTOM_CITATION",
         "GROUNDING_FLOOR",
     }
 
@@ -204,7 +205,12 @@ def test_invariant_infra_non_answer() -> None:
 def test_invariant_floor_below_12() -> None:
     """A grounding sub-dim below the floor trips GROUNDING_FLOOR."""
     gates = evaluate_invariants(
-        _ok_input().answer_text, _ok_input().tool_results, Rubric(), GroundingCheck(), grounding_score=10
+        _ok_input().answer_text,
+        _ok_input().tool_results,
+        Rubric(),
+        GroundingCheck(),
+        grounding_score=10,
+        tool_calls=_ok_input().tool_calls,
     )
     assert gates[InvariantCode.GROUNDING_FLOOR] is False
 
@@ -217,20 +223,33 @@ def test_invariant_floor_at_12_does_not_fire() -> None:
         Rubric(),
         GroundingCheck(),
         grounding_score=GROUNDING_VETO_FLOOR,
+        tool_calls=_ok_input().tool_calls,
     )
     assert gates[InvariantCode.GROUNDING_FLOOR] is True
 
 
 def test_invariant_floor_none_score_does_not_fire() -> None:
     """No grounding sub-score (judge skipped) → floor gate cannot fire."""
-    gates = evaluate_invariants(_ok_input().answer_text, _ok_input().tool_results, Rubric(), GroundingCheck())
+    gates = evaluate_invariants(
+        _ok_input().answer_text,
+        _ok_input().tool_results,
+        Rubric(),
+        GroundingCheck(),
+        tool_calls=_ok_input().tool_calls,
+    )
     assert gates[InvariantCode.GROUNDING_FLOOR] is True
 
 
 def test_invariant_contradicted_trips_gate() -> None:
     """A GroundingCheck with contradicted>0 trips GROUNDING_CONTRADICTED (W3 wiring)."""
     gc = GroundingCheck(contradicted=1, evidence_mode="verified")
-    gates = evaluate_invariants(_ok_input().answer_text, _ok_input().tool_results, Rubric(), gc)
+    gates = evaluate_invariants(
+        _ok_input().answer_text,
+        _ok_input().tool_results,
+        Rubric(),
+        gc,
+        tool_calls=_ok_input().tool_calls,
+    )
     assert gates[InvariantCode.GROUNDING_CONTRADICTED] is False
 
 
@@ -245,7 +264,14 @@ def test_invariant_toggle_disables_gate() -> None:
 def test_invariant_clean_answer_passes_all_gates() -> None:
     """A genuinely good answer satisfies every gate."""
     inp = _ok_input()
-    gates = evaluate_invariants(inp.answer_text, inp.tool_results, inp.rubric, GroundingCheck(), grounding_score=25)
+    gates = evaluate_invariants(
+        inp.answer_text,
+        inp.tool_results,
+        inp.rubric,
+        GroundingCheck(),
+        grounding_score=25,
+        tool_calls=inp.tool_calls,
+    )
     assert all(gates.values())
     assert first_fired_invariant(gates) is None
 
