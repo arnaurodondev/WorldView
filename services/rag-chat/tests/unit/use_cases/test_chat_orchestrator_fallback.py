@@ -294,6 +294,9 @@ def _make_pipeline(first_llm_response: Any, stream_chunks: list[str] | None = No
     pipeline.emitter.emit_status = MagicMock(return_value={"event": "status", "data": "{}"})
     pipeline.emitter.emit_thinking = MagicMock(return_value={"event": "thinking", "data": "{}"})
     pipeline.emitter.emit_token = MagicMock(side_effect=lambda t: {"event": "token", "data": json.dumps({"text": t})})
+    pipeline.emitter.emit_final_answer = MagicMock(
+        side_effect=lambda t: {"event": "final_answer", "data": json.dumps({"text": t})}
+    )
     pipeline.emitter.emit_citations = MagicMock(return_value={"event": "citations", "data": "[]"})
     pipeline.emitter.emit_contradictions = MagicMock(return_value={"event": "contradictions", "data": "[]"})
     pipeline.emitter.emit_metadata = MagicMock(return_value={"event": "metadata", "data": "{}"})
@@ -442,14 +445,14 @@ class TestFallbackChainIntegration:
         # Pipeline reaches the done event normally.
         assert "done" in event_types
 
-    def test_all_tools_errored_still_emits_all_tools_failed(self) -> None:
+    def test_all_tools_errored_emits_worded_refusal(self) -> None:
         """FIX-LIVE-Y regression: when every tool item is None (genuine error,
-        not empty list), the hard ``all_tools_failed`` path MUST still fire.
+        not empty list), the hard ``all_tools_failed`` path fires and the loop
+        short-circuits (no graceful-no-data LLM turn for bona-fide crashes).
 
-        This is the legacy behaviour we want to preserve — only "clean empty"
-        results get the graceful-no-data treatment; bona-fide tool crashes
-        (e.g. upstream HTTP 500, asyncio.TimeoutError) keep their loud error
-        verdict so operators see the real failure.
+        2026-06-12 root-cause audit Theme E (fix #3): the path no longer emits an
+        EMPTY error body (read as a crash). It now streams a worded
+        "I couldn't find a match…" answer so the body is never empty.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -462,7 +465,7 @@ class TestFallbackChainIntegration:
 
         # execute_all returns [None] (one tool slot, errored) — and all three
         # fallback alts also return None (errored). This is the only path
-        # that should still escalate to all_tools_failed.
+        # that should still escalate to the hard refusal.
         factory = _make_factory_with_execute_side_effect(
             execute_all_return=[None],
             execute_side_effects=[None, None, None],
@@ -474,8 +477,11 @@ class TestFallbackChainIntegration:
 
         events = asyncio.run(_collect_events(orch, request, uow))
 
-        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
-        assert "all_tools_failed" in error_codes
+        # Worded refusal body (final_answer) present; no empty error event.
+        final_events = [e for e in events if e.get("event") == "final_answer"]
+        assert len(final_events) == 1
+        assert "couldn't find a match" in json.loads(final_events[0]["data"])["text"]
+        assert not any(e.get("event") == "error" for e in events)
 
     def test_fallback_chain_exhaustion_falls_through_to_graceful_no_data(self) -> None:
         """When EVERY alt returns empty (clean, not errored), FIX-LIVE-Y kicks in.

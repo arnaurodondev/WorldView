@@ -378,16 +378,20 @@ async def test_portfolio_query_calls_portfolio_tool():
 
 @pytest.mark.asyncio
 async def test_all_tools_failed_returns_graceful_answer():
-    """All tool executions return None/empty; orchestrator emits error, skips second turn.
+    """All tool executions return None; orchestrator emits a WORDED refusal, skips second turn.
 
     This is the all-tools-failed guard (step 7 in the pipeline docstring).
     Without this guard, the LLM would produce hallucinated answers from empty context.
     The orchestrator MUST NOT call stream_chat if no tool returned data.
 
+    2026-06-12 root-cause audit Theme E (fix #3): the guard no longer emits an
+    EMPTY error body (read as a crash). It now streams a worded "I couldn't find
+    a match…" answer (token + final_answer) so the body is never empty.
+
     Assertions:
-    1. An 'error' SSE event is emitted (not a 'token' event)
+    1. A worded 'final_answer' event is emitted (non-empty body)
     2. stream_chat is NOT called (no second LLM turn)
-    3. The error event carries code="all_tools_failed"
+    3. No bare 'error' event (the empty-body crash UX is gone)
     """
     # All tools return None (network failure / no matching data)
     llm_response = _make_tool_response_with_calls("search_documents", {"query": "Apple risks"})
@@ -399,21 +403,16 @@ async def test_all_tools_failed_returns_graceful_answer():
 
     event_names = [e.get("event") for e in events]
 
-    # Error event must be emitted
-    assert "error" in event_names, f"Expected 'error' event on all-tools-failed, got: {event_names}"
-
-    # No token event — second turn must NOT have been called
-    assert "token" not in event_names, f"Did NOT expect 'token' event when all tools failed, got: {event_names}"
+    # Worded answer body must be emitted (final_answer), never an empty error.
+    assert "final_answer" in event_names, f"Expected 'final_answer' event, got: {event_names}"
+    assert "error" not in event_names, f"Did NOT expect 'error' event, got: {event_names}"
+    final_events = [e for e in events if e.get("event") == "final_answer"]
+    body = json.loads(final_events[0]["data"])["text"]
+    assert "couldn't find a match" in body
+    assert body.strip() != ""
 
     # Verify stream_chat was never called (hallucination guard enforced)
     llm_chain.stream_chat.assert_not_called()
-
-    # The error event carries the code inside the JSON-encoded "data" field.
-    # SSEEmitter.emit_error() returns {"event": "error", "data": json.dumps({"code": ..., "message": ...})}
-    error_events = [e for e in events if e.get("event") == "error"]
-    assert any(
-        json.loads(e.get("data", "{}")).get("code") == "all_tools_failed" for e in error_events
-    ), f"Expected error code='all_tools_failed' in data, got: {error_events}"
 
 
 @pytest.mark.asyncio

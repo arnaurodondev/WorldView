@@ -89,6 +89,9 @@ def _make_pipeline(
         return_value={"event": "thinking", "data": json.dumps({"stage": "tool_classification"})}
     )
     pipeline.emitter.emit_token = MagicMock(side_effect=lambda t: {"event": "token", "data": json.dumps({"text": t})})
+    pipeline.emitter.emit_final_answer = MagicMock(
+        side_effect=lambda t: {"event": "final_answer", "data": json.dumps({"text": t})}
+    )
     pipeline.emitter.emit_citations = MagicMock(return_value={"event": "citations", "data": "[]"})
     pipeline.emitter.emit_contradictions = MagicMock(return_value={"event": "contradictions", "data": "[]"})
     pipeline.emitter.emit_metadata = MagicMock(return_value={"event": "metadata", "data": "{}"})
@@ -620,10 +623,15 @@ class TestToolCallsEmitted:
 
 class TestAllToolsFailed:
     def test_orchestrator_all_tools_failed_returns_early(self) -> None:
-        """When all tools return None, the orchestrator emits error and stops.
+        """When all tools return None, the orchestrator emits a WORDED refusal and stops.
 
         CRITICAL: second LLM turn must NOT be called when all tools fail.
         Without this guard the LLM would hallucinate from empty context.
+
+        2026-06-12 root-cause audit Theme E (fix #3): the orchestrator no longer
+        hard-returns an EMPTY error body (``safety_unknown_ticker`` read as a
+        crash). It now streams a worded "I couldn't find a match…" answer
+        (token + final_answer + done) so the body is never empty.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -650,15 +658,19 @@ class TestAllToolsFailed:
         events = asyncio.run(_collect_events(orch, request, uow))
         event_types = [e.get("event") for e in events]
 
-        # Must emit error and NOT call second turn
-        assert "error" in event_types
+        # Must NOT call second turn, and the answer body must be worded (never empty).
         assert second_turn_called[0] is False
+        assert "final_answer" in event_types
+        final = next(e for e in events if e.get("event") == "final_answer")
+        assert "couldn't find a match" in json.loads(final["data"])["text"]
+        # No bare error event — the empty-body crash UX is gone.
+        assert "error" not in event_types
 
-    def test_orchestrator_all_tools_failed_error_code(self) -> None:
-        """all_tools_failed guard must emit error code 'all_tools_failed'."""
+    def test_orchestrator_all_tools_failed_emits_worded_body(self) -> None:
+        """all_tools_failed path streams a worded body (token + final_answer), not an empty error."""
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
-        tool_block = _make_tool_use_block("get_price_history")
+        tool_block = _make_tool_use_block("get_price_history", {"ticker": "ZZZQQQ"})
         first_resp = _make_llm_tool_response(tool_calls=[tool_block])
         pipeline = _make_pipeline(first_llm_response=first_resp)
 
@@ -670,11 +682,15 @@ class TestAllToolsFailed:
         uow = MagicMock()
 
         events = asyncio.run(_collect_events(orch, request, uow))
-        error_events = [e for e in events if e.get("event") == "error"]
-
-        assert len(error_events) >= 1
-        error_data = json.loads(error_events[0]["data"])
-        assert error_data["code"] == "all_tools_failed"
+        # The worded message echoes the not-found ticker pulled from the tool input.
+        final_events = [e for e in events if e.get("event") == "final_answer"]
+        assert len(final_events) == 1
+        body = json.loads(final_events[0]["data"])["text"]
+        assert "ZZZQQQ" in body
+        assert body.strip() != ""
+        # Token stream carried the body too (UI never sees an empty stream).
+        token_text = "".join(json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token")
+        assert "ZZZQQQ" in token_text
 
     def test_orchestrator_partial_tool_failure_continues(self) -> None:
         """Mixed results (some None, some items) → second LLM turn runs.

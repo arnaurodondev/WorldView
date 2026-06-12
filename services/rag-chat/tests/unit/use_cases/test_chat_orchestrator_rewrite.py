@@ -75,6 +75,26 @@ def _make_budget() -> Any:
     return b
 
 
+def _nonempty_pool() -> list[Any]:
+    """A tool-item list with at least one structured numeric value.
+
+    These tests patch ``NumericGroundingValidator`` to control the validate()
+    verdicts, so the item content is irrelevant to the validator. But the
+    2026-06-12 Theme-A empty-pool refusal gate runs the REAL flatten helper on
+    ``tool_items`` BEFORE the validator — so the pool must be non-empty, else the
+    gate refuses up front and the rewrite-guard branches under test never run.
+    """
+    from rag_chat.application.services.numeric_grounding import FieldKind
+
+    item = MagicMock()
+    item.text = "tool row"
+    item.value = 181.5e9
+    item.field_kind = FieldKind.REVENUE
+    item.citation_meta = None
+    item.item_id = "tool:fundamentals:AAPL"
+    return [item]
+
+
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 
@@ -115,7 +135,7 @@ class TestRewriteSkippedForSingleDigitRevenue:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -162,7 +182,7 @@ class TestDefeatistRewriteRejected:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -207,7 +227,7 @@ class TestDefeatistRewriteRejected:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -314,7 +334,7 @@ class TestW50BannerSuppressionOnFullCoverage:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -357,7 +377,7 @@ class TestW50BannerSuppressionOnFullCoverage:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -444,7 +464,7 @@ class TestRewriteHistoryFiltersPriorAssistantDraft:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=prose_draft,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=history,
                     budget=_make_budget(),
                 )

@@ -665,6 +665,79 @@ def _has_grounding_citation(
     return False
 
 
+# ── Phantom-citation gate (2026-06-12 root-cause audit, Theme A) ──────────────
+#
+# WHY: the dominant fabrication mechanism is the LLM emitting a number (or a
+# prose fact) and attaching an INVENTED ``[tool_name row N]`` provenance tag for
+# a tool it NEVER called. The validator's ``_has_grounding_citation`` bracket
+# fast-path then accepts the number because a bracket citation sits within
+# ±50 chars — i.e. the LLM's own fake tag satisfies the grounding check.
+#
+# Verified disjoint-set cases (run_20260612T183758Z):
+#   * tc_portfolio_dividend_yielders — cites ``[query_fundamentals row N]`` but
+#     only ``get_portfolio_context`` ran.
+#   * agg_q5_tsla_macro — cites ``[query_macro row N]`` but only
+#     ``get_economic_calendar`` / ``search_documents`` / ``get_entity_news`` ran.
+#   * iter3_apple_suppliers_compound — cites ``[supplier_list row 0]`` /
+#     ``[tsmc_business row 0]`` — both invented.
+#
+# DETECTION: the ``[name row N]`` form (a STRUCTURED tool-row provenance tag) is
+# unambiguous — it is the exact shape the tool layer emits and the LLM mimics to
+# fake grounding. We deliberately ONLY flag the ``row N`` form: bare ``[name]``
+# tags collide with legitimate non-tool markers (``[unverified]``, ``[redacted]``,
+# relation types like ``[partner_of]``, ``[N1]`` citation markers, ``[entity:UUID]``
+# refs). A ``[name row N]`` whose ``name`` is NOT in the called-tools set is a
+# fabrication marker, full stop.
+_TOOL_ROW_CITATION_RE = re.compile(
+    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
+    re.IGNORECASE,
+)
+
+
+def find_phantom_tool_citations(
+    response: str,
+    called_tool_names: Iterable[str],
+) -> set[str]:
+    """Return the lower-cased tool names cited as ``[name row N]`` that were NEVER called.
+
+    A non-empty result means the answer fabricated a tool-row provenance tag —
+    the single cheapest deterministic fabrication signal (see module comment).
+    Only the structured ``[name row N]`` form is considered so legitimate
+    non-tool bracket markers (``[unverified]``, ``[entity:UUID]``, ``[N1]``) are
+    never misread as phantom tool citations.
+
+    ``called_tool_names`` is the set of tools actually invoked this turn. When
+    it is empty EVERY ``[name row N]`` tag is phantom (no tool ran, so any
+    tool-row citation is invented) — which is exactly the empty-tool
+    fabrication shape we want to reject.
+    """
+    called = {str(t).strip().lower() for t in called_tool_names if t}
+    cited = {m.group("tool").lower() for m in _TOOL_ROW_CITATION_RE.finditer(response)}
+    return cited - called
+
+
+def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:
+    """Return the number of structured numeric values flattened from *tool_results*.
+
+    Public, deterministic wrapper around :func:`_flatten_tool_values` so the
+    orchestrator can detect the EMPTY-POOL case (tools returned nothing / were
+    not called → no values to ground against) without re-implementing the
+    flatten logic. ``0`` means the grounding candidate pool is empty.
+    """
+    return len(_flatten_tool_values(tool_results))
+
+
+def response_has_numeric_claims(response: str) -> bool:
+    """Return ``True`` when *response* contains at least one extractable number.
+
+    Used by the empty-pool refusal gate: an answer that makes specific numeric
+    claims with an EMPTY grounding pool is fabricating (nothing can corroborate
+    those numbers). Citation markers (``[N7]``) are stripped first by the
+    extractor so they do not count as numbers.
+    """
+    return bool(_extract_numbers(response))
+
+
 def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
     """Yield (value, raw_token, surrounding_context) for every number in *text*.
 
@@ -1315,6 +1388,9 @@ __all__ = [
     "ToolValue",
     "UnsupportedNumber",
     "classify_number",
+    "find_phantom_tool_citations",
+    "flatten_tool_values_count",
+    "response_has_numeric_claims",
 ]
 
 

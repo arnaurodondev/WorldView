@@ -182,15 +182,33 @@ _TOOL_NARRATION_LEAD_RE = re.compile(
     r"^("
     # "I will fetch...", "I'll fetch..." — note 'll attaches without whitespace.
     r"I(?:\s+will|'ll)\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find)"
+    # 2026-06-12 root-cause audit Theme D: plan-prose leads. The
+    # ``chain_nvda_competitor_growth_rank`` FAIL shipped a pure plan
+    # ("I'll start by identifying… Let me first get…"). These open a
+    # FUTURE-tense plan, not an answer — treat them as narration leads.
+    r"|I(?:\s+will|'ll)\s+(?:start|begin)\s+by"
     # "I'm fetching..."
     r"|I'm\s+(?:fetching|pulling|retrieving|calling|searching|looking\s*up)"
-    # "Let me fetch..."
-    r"|Let\s+me\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find)"
+    # "Let me fetch..." / "Let me first ..." / "Let me begin by ..." /
+    # "Let me start by ..."
+    r"|Let\s+me\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find|first|begin|start)"
     # "First, I'll ..." / "Now I'll ..." / "Next, I'll ..."
     r"|First[,\s]+I(?:\s+will|'ll)"
     r"|Now\s+I(?:\s+will|'ll)"
     r"|Next[,\s]+I(?:\s+will|'ll)"
     r")\b[^.\n]*[.\n]+\s*",
+    re.IGNORECASE,
+)
+
+# 2026-06-12 root-cause audit Theme D: a markdown ``**Step N:**`` plan block —
+# the ``chain_nvda_competitor_growth_rank`` answer was a sequence of
+# ``**Step 1: Find NVIDIA's competitors**`` headers with future-tense prose
+# under each. This is a planning skeleton, never a real answer. Sibling of
+# ``_TOOL_PLAN_BLOCK_RE`` (which targets ``**Tool calls:**`` headers). We strip
+# the header line and any immediately-following prose up to the next blank line
+# or next ``**Step`` header so plan scaffolding never ships as the final answer.
+_TOOL_PLAN_STEP_RE = re.compile(
+    r"\*\*Step\s+\d+\s*:[^\n*]*\*\*[ \t]*\n?",
     re.IGNORECASE,
 )
 _TOOL_PLAN_BLOCK_RE = re.compile(
@@ -311,6 +329,9 @@ def _strip_tool_narration(text: str, tool_names: frozenset[str] | None = None) -
     text = _TOOL_NARRATION_LEAD_RE.sub("", text, count=1)
     # 2. Strip **Tool calls:** markdown blocks (keep them out of final answer).
     text = _TOOL_PLAN_BLOCK_RE.sub("", text)
+    # 2b. Theme D: strip ``**Step N:**`` plan-skeleton headers (chain questions
+    #     leak a multi-step plan instead of an answer).
+    text = _TOOL_PLAN_STEP_RE.sub("", text)
     # 3. Strip any tool-call-like XML tags.
     text = _TOOL_XML_RE.sub("", text)
     # 4. Strip fenced/bare JSON tool-call objects (BP-675).
@@ -359,6 +380,43 @@ _GROUNDING_BANNER_RE = re.compile(
 )
 
 
+# Theme D plan-only guard: future-tense plan-prose line leads. A line that
+# OPENS with one of these and carries no substantive payload is plan scaffolding,
+# not an answer. Broader than ``_TOOL_NARRATION_LEAD_RE`` (which is anchored at
+# the start of the WHOLE answer); this matches the start of ANY line.
+_PLAN_LINE_LEAD_RE = re.compile(
+    r"^\s*(?:I(?:\s+will|'ll)\b|I'm\s+(?:going\s+to|fetching|pulling|retrieving|calling|searching|looking)"
+    r"|Let\s+me\b|First[,\s]|Now\s+I\b|Next[,\s]|Then\s+I\b|To\s+(?:answer|do)\s+this\b)",
+    re.IGNORECASE,
+)
+# Substantive-content signals — if ANY are present the answer is NOT plan-only.
+_SUBSTANTIVE_NUMBER_RE = re.compile(r"\d")
+_SUBSTANTIVE_CITATION_RE = re.compile(r"\[(?:N\d+|entity:|article:)", re.IGNORECASE)
+
+
+def _is_plan_only_narration(text: str) -> bool:
+    """Return True when *text* is a future-tense PLAN with no substantive answer.
+
+    2026-06-12 root-cause audit Theme D: ``chain_nvda_competitor_growth_rank``
+    shipped a plan ("I'll start by… **Step 1**… I'll search… Let me first…")
+    instead of an answer. After stripping ``**Step N:**`` headers, EVERY
+    remaining non-empty line opens with a plan-prose lead and there is no
+    substantive payload (no digits, no markdown table row, no citation marker).
+    Conservative on purpose — a single line with real content (a number, a table
+    pipe, a citation) disqualifies the text so genuine answers are never flagged.
+    """
+    stripped = _TOOL_PLAN_STEP_RE.sub("", text)
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    # Any substantive payload anywhere → not plan-only.
+    body = "\n".join(lines)
+    if "|" in body or _SUBSTANTIVE_NUMBER_RE.search(body) or _SUBSTANTIVE_CITATION_RE.search(body):
+        return False
+    # Every remaining line must open with a plan-prose lead.
+    return all(_PLAN_LINE_LEAD_RE.match(ln) for ln in lines)
+
+
 def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> bool:
     """Return True when *text* is predominantly a leaked tool-call / planning stub.
 
@@ -390,12 +448,20 @@ def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> b
     has_tool_signal = bool(
         _TOOL_XML_RE.search(text)
         or _TOOL_PLAN_BLOCK_RE.search(text)
+        # Theme D: a ``**Step N:**`` plan skeleton is a tool/planning signal too
+        # (chain_nvda_competitor_growth_rank shipped a plan, not an answer).
+        or _TOOL_PLAN_STEP_RE.search(text)
         or _TOOL_NARRATION_LEAD_RE.search(text)
         or has_json_tool_call
         or has_named_tool_call
     )
     if not has_tool_signal:
         return False
+    # Theme D: a future-tense plan with no substantive payload is a stub even if
+    # the post-scrub remainder is long (the ``**Step N:**`` headers strip but the
+    # plan prose under them survives). Flag it directly.
+    if _is_plan_only_narration(text):
+        return True
     # Measure collapse against the content MINUS any trailing grounding banner —
     # the banner is appended post-rewrite and is not "real answer" content.
     base = _GROUNDING_BANNER_RE.sub("", text).strip()
@@ -822,6 +888,31 @@ def _successful_item_count(result: Any) -> int:
     return 1
 
 
+# ── 2026-06-12 root-cause audit Theme A — refusal strings ────────────────────
+# Worded (never empty) refusals returned by the grounding gates. They REPLACE
+# the fabricated answer and the caller marks the turn grounded=False so it is
+# never written to the completion cache (poisoning it for 24h).
+_PHANTOM_CITATION_REFUSAL = (
+    "I could not verify this against the data I actually retrieved — the answer "
+    "referenced tool results that were not part of this query. I won't present "
+    "unverified figures. Please rephrase your question, or ask about a specific "
+    "ticker or metric so I can pull the data directly."
+)
+_EMPTY_POOL_REFUSAL = (
+    "I couldn't retrieve any data to support the specific figures for this "
+    "question, so I won't report numbers I cannot verify. The data source may "
+    "be unavailable or hold no records for this request — please try again, or "
+    "narrow the question to a specific ticker, metric, or time period."
+)
+# Theme D: fallback when the synthesis turn produced only a plan and the
+# single re-prompt failed to yield a substantive answer.
+_PLAN_ONLY_REFUSAL = (
+    "I wasn't able to complete this multi-step question with the data available. "
+    "Please try rephrasing it, or break it into a more specific question (a single "
+    "company, metric, or comparison) and I'll answer directly."
+)
+
+
 _FALLBACK_MAP: dict[str, list[str]] = {
     # search_documents → relaxed-filter retry → claims → intelligence bundle
     # WHY this order: cheapest first (same tool, looser filters), then claims
@@ -1027,6 +1118,34 @@ _ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
 # "tsla" ↔ "tesla" → false refusal. Pulling "TSLA" from the prior tool call
 # bridges the gap without weakening BP-604.
 _TICKER_LIKE_FIELDS: frozenset[str] = frozenset({"ticker", "tickers", "symbol", "symbols"})
+
+
+def _extract_ticker_hint(tool_calls: list[Any]) -> str | None:
+    """Best-effort extraction of the ticker/symbol the LLM searched for.
+
+    2026-06-12 root-cause audit Theme E (fix #3): when a single not-found-ticker
+    query errors out (``safety_unknown_ticker`` — "What's the revenue of
+    ZZZQQQ?"), the worded refusal reads far better with the actual symbol
+    echoed back ("I couldn't find a match for 'ZZZQQQ'"). We pull it from the
+    failed tool inputs' ticker/symbol/entity-name fields — the LLM put the
+    user's symbol there. Returns the first non-empty scalar value found, or
+    ``None`` when no ticker-like argument is present (caller falls back to a
+    generic message).
+    """
+    for tc in tool_calls:
+        tc_input = getattr(tc, "input", None) or {}
+        if not isinstance(tc_input, dict):
+            continue
+        for key in ("ticker", "symbol", "entity_ticker", "entity_name", "entity_id"):
+            val = tc_input.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            if isinstance(val, list | tuple) and val:
+                first = val[0]
+                if isinstance(first, str) and first.strip():
+                    return first.strip()
+    return None
+
 
 # Chat-eval pack-10 (2026-06-12): tools that answer UNIVERSE / AGGREGATE /
 # SCREENER questions — by construction they are NOT scoped to a single anchor
@@ -2532,7 +2651,28 @@ class ChatOrchestratorUseCase:
                         query_length=len(_q),
                         query_first_word=_q_word,
                     )
-                    yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
+                    # 2026-06-12 root-cause audit Theme E (fix #3): a genuine
+                    # not-found single-ticker error (``safety_unknown_ticker``:
+                    # "What's the revenue of ZZZQQQ?") previously hard-returned
+                    # an EMPTY answer body, which reads as a crash. Emit a WORDED
+                    # message naming the ticker so the user can correct the
+                    # symbol. We stream it as a normal answer (token +
+                    # final_answer + done) rather than an error event so the
+                    # body is never empty.
+                    _ticker_hint = _extract_ticker_hint(tool_calls)
+                    if _ticker_hint:
+                        _worded = (
+                            f"I couldn't find a match for '{_ticker_hint}'. Please double-check the "
+                            "symbol or provide more context (company name, exchange) and I'll try again."
+                        )
+                    else:
+                        _worded = (
+                            "I couldn't find a match for that symbol. Please double-check it or "
+                            "provide more context (company name, exchange) and I'll try again."
+                        )
+                    yield p.emitter.emit_token(_worded)
+                    yield p.emitter.emit_final_answer(_worded)
+                    yield p.emitter.emit_done()
                     return
 
             # ── E-6: Soft budget checks ───────────────────────────────────────
@@ -3032,6 +3172,58 @@ class ChatOrchestratorUseCase:
                     delta_chars=_pre_scrub_len - len(full_text),
                 )
 
+        # ── 2026-06-12 root-cause audit Theme D: plan-only synthesis guard ────
+        # ``chain_nvda_competitor_growth_rank`` shipped a future-tense PLAN
+        # ("I'll start by… **Step 1**… I'll search… Let me first…") as the final
+        # answer — the narration scrub alone leaves the plan prose under the
+        # ``**Step N:**`` headers. When the synthesised answer is plan-only with
+        # no substantive payload, re-prompt ONCE to answer directly using the
+        # tool results already in ``messages``; if the re-prompt ALSO returns a
+        # plan (or empty), replace it with a bounded refusal so we never ship a
+        # plan-only stub. ``_plan_only_refused`` is folded into ``grounding_passed``
+        # below so a refused plan is never cached.
+        _plan_only_refused = False
+        if full_text and _is_plan_only_narration(full_text):
+            log.warning(  # type: ignore[no-any-return]
+                "synthesis_plan_only_detected",
+                chars=len(full_text),
+            )
+            _plan_reprompt = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "Answer the question NOW using the tool results above. "
+                        "Do NOT narrate a plan, list steps, or say what you will do next — "
+                        "give the final answer directly with the data already retrieved."
+                    ),
+                },
+            ]
+            _reprompted = ""
+            try:
+                async for _chunk in p.llm_chain.stream_chat(
+                    _plan_reprompt,
+                    max_tokens=budget.max_tokens_final,
+                    temperature=0.0,
+                    tools=[],
+                    seed=request.seed,
+                ):
+                    _reprompted += _chunk
+            except Exception as exc:  # — degrade gracefully, never crash the turn
+                log.warning("synthesis_plan_only_reprompt_failed", error=str(exc))  # type: ignore[no-any-return]
+                _reprompted = ""
+            _reprompted = _strip_tool_narration(_reprompted, _registry_tool_names)
+            if _reprompted.strip() and not _is_plan_only_narration(_reprompted):
+                full_text = _reprompted
+                log.info("synthesis_plan_only_repaired", chars=len(full_text))  # type: ignore[no-any-return]
+            else:
+                full_text = _PLAN_ONLY_REFUSAL
+                _plan_only_refused = True
+                log.warning(  # type: ignore[no-any-return]
+                    "synthesis_plan_only_refused",
+                    reprompt_chars=len(_reprompted),
+                )
+
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
         # Before any other synthesis check, confirm that AT LEAST ONE
         # retrieved item references an entity from the original question.
@@ -3049,7 +3241,10 @@ class ChatOrchestratorUseCase:
         # refusal REPLACES the streamed full_text so downstream synthesis +
         # citation passes see a coherent message; ``grounded=False`` is
         # captured in structured logs for ops visibility.
-        grounded = True
+        # Theme D: a plan-only refusal also sets grounded=False so the numeric /
+        # entity grounding passes skip the bounded refusal string and it is never
+        # cached (folded via grounding_passed below).
+        grounded = not _plan_only_refused
         # Chat-eval pack-10 (2026-06-12): skip the guard for universe/aggregate/
         # screener questions — they have no single anchor entity, S6 mis-resolves
         # the question to garbage, and the calendar/screener/movers items carry
@@ -3116,6 +3311,13 @@ class ChatOrchestratorUseCase:
                     messages=messages,
                     budget=budget,
                     entity_context=entity_context,
+                    # 2026-06-12 root-cause audit Theme A fix #2: feed the
+                    # actually-called tool names so (a) the phantom-citation
+                    # gate can flag ``[tool row N]`` tags naming uncalled tools
+                    # and (b) the validator's existing tool-name cross-check
+                    # (numeric_grounding._has_grounding_citation) finally
+                    # activates instead of accepting any bracket citation.
+                    called_tool_names=list(_executed_tool_names),
                     # PLAN-0107 follow-up: forward eval-mode seed to inner
                     # stream_chat rewrite for reproducibility.
                     seed=request.seed,
@@ -3360,6 +3562,7 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         entity_context: Any = None,
+        called_tool_names: list[str] | None = None,
         seed: int | None = None,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
@@ -3391,10 +3594,59 @@ class ChatOrchestratorUseCase:
         deterministic so the Sub-Plan G G-3 chat regression suite can
         re-run the validator on stored fixtures and get stable results.
         """
-        from rag_chat.application.services.numeric_grounding import NumericGroundingValidator
+        from rag_chat.application.services.numeric_grounding import (
+            NumericGroundingValidator,
+            find_phantom_tool_citations,
+            flatten_tool_values_count,
+            response_has_numeric_claims,
+        )
+
+        _called = list(called_tool_names or [])
+        # The phantom-citation gate needs the GROUND TRUTH set of called tools.
+        # Only run it when the caller explicitly supplied that set (the live
+        # orchestrator always does). When ``called_tool_names is None`` we have
+        # no ground truth — skip the gate (a stub-rewrite test that does not pass
+        # the set must not be refused just because it cites a real tool).
+        _have_called_set = called_tool_names is not None
+
+        # ── 2026-06-12 root-cause audit Theme A fix #1 — PHANTOM-CITATION GATE ──
+        # The dominant fabrication shape: the LLM invents a number and tags it
+        # with ``[tool_name row N]`` for a tool it NEVER called. The bracket
+        # fast-path in the validator then accepts the number because its OWN
+        # fake tag sits within ±50 chars. A structured ``[name row N]`` whose
+        # ``name`` is not in the called-tools set is a deterministic fabrication
+        # marker — refuse outright (grounded=False so it is NEVER cached) rather
+        # than let the rewrite/banner path rationalise it. Catches ~6/17 FAILs
+        # (tc_portfolio_dividend_yielders, agg_q5_tsla_macro,
+        # chain_macro_event_market_reaction, chain_portfolio_worst_fundamentals,
+        # chain_unhealthy_entity_investigation, iter3_apple_suppliers_compound).
+        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
+        if _phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_phantom_citation_refused",
+                phantom_tools=sorted(_phantom),
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        # ── Theme A fix #2 — EMPTY-POOL REFUSAL ────────────────────────────────
+        # When the answer makes specific numeric claims but the grounding
+        # candidate pool is EMPTY (every tool returned nothing / no tool ran),
+        # nothing can corroborate those numbers — the bracket fast-path would
+        # still pass them on a stray citation. Refuse rather than ship invented
+        # figures. Gated on numeric claims so empty-tool prose answers (handled
+        # by the entity-grounding pass) are untouched.
+        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_empty_pool_refused",
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_empty_pool").inc()
+            return _EMPTY_POOL_REFUSAL, False
 
         validator = NumericGroundingValidator()
-        first_result = validator.validate(response, tool_items)
+        first_result = validator.validate(response, tool_items, called_tool_names=_called)
         if first_result.passed:
             rag_grounding_validation_total.labels(result="passed").inc()
             return response, True
@@ -3592,8 +3844,18 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
-        # Re-validate the rewrite.
-        second_result = validator.validate(rewritten, tool_items)
+        # Re-validate the rewrite. Theme A fix #2: also re-run the
+        # phantom-citation gate on the rewrite — a rewrite that re-invents a
+        # ``[tool row N]`` tag must not pass either. Same ground-truth guard.
+        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
+        if _rewrite_phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_phantom_citation_refused",
+                phantom_tools=sorted(_rewrite_phantom),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+        second_result = validator.validate(rewritten, tool_items, called_tool_names=_called)
         if second_result.passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True

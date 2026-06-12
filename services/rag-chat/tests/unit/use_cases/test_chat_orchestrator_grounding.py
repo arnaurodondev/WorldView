@@ -1469,7 +1469,11 @@ class TestNumericRewriteDegradationGuard:
         pipeline.llm_chain.stream_chat = _stream_chat
 
         item = MagicMock()
-        item.text = "Article headline with no numbers\n  Source: news"
+        # Carry an unrelated number (15%) so the grounding pool is NON-EMPTY
+        # (otherwise the Theme-A empty-pool gate would pre-empt this test). The
+        # 42% claim still does not match 15%, so numeric grounding fails and the
+        # rewrite path runs — exactly the BP-670 worse-rewrite scenario.
+        item.text = "Article headline notes a 15% move\n  Source: news"
         item.citation_meta = None
         item.item_id = "tool:entity_news:abc"
 
@@ -1613,3 +1617,160 @@ class TestUniverseQuestionSkipsEntityGroundingGuard:
         # refusal (item text mentions only AAPL/MSFT/GOOGL, question = Pandora).
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
         assert "cannot find information about the entities" in assistant_response.content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-06-12 root-cause audit Theme A — PHANTOM-CITATION GATE + EMPTY-POOL REFUSAL
+#
+# The dominant fabrication mechanism: the LLM invents numbers and tags them with
+# ``[tool_name row N]`` for tools it NEVER called. The grounding validator's
+# bracket fast-path then accepts the number because the fake tag sits within
+# ±50 chars. ``_run_grounding_validation`` must DETERMINISTICALLY refuse such an
+# answer (grounded=False so it is never cached) when fed the called-tool set.
+#
+# Artifacts: run_20260612T183758Z/{q_tc_portfolio_dividend_yielders,
+# q_agg_q5_tsla_macro, q_iter3_apple_suppliers_compound}.json.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestPhantomCitationGate:
+    @staticmethod
+    def _orch() -> Any:
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        return ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+    @staticmethod
+    def _row_with_value(value: float) -> MagicMock:
+        from contracts.numeric_grounding import FieldKind
+
+        item = MagicMock()
+        item.text = "Portfolio position"
+        item.value = value
+        item.field_kind = FieldKind.RATIO
+        item.citation_meta = None
+        item.item_id = "tool:portfolio:AAPL"
+        return item
+
+    def test_phantom_query_fundamentals_refused(self) -> None:
+        """Dividend-yielders answer cites [query_fundamentals row N]; only get_portfolio_context ran."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        # Verbatim shape from q_tc_portfolio_dividend_yielders.json.
+        response = (
+            "| **Apple (AAPL)** | 0.46% [query_fundamentals row 0] |\n"
+            "| **Microsoft (MSFT)** | 0.72% [query_fundamentals row 1] |"
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        # The rewrite stream must NEVER be reached — the gate fires first.
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(0.46)],
+                messages=[{"role": "user", "content": "dividend yields?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_portfolio_context"],
+            )
+        )
+        assert passed is False, "phantom-citation answer must fail grounding (never cached)"
+        assert text == _PHANTOM_CITATION_REFUSAL
+        assert "query_fundamentals" not in text
+
+    def test_phantom_query_macro_refused(self) -> None:
+        """agg_q5_tsla_macro cites [query_macro row N]; only get_economic_calendar ran."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "The Federal Reserve is expected to hold rates at 4.25%-4.50% [query_macro row 0]. "
+            "GDP is projected to grow at 1.8% [query_macro row 1]."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(4.25)],
+                messages=[{"role": "user", "content": "macro events for Tesla?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_economic_calendar", "search_documents", "get_entity_news"],
+            )
+        )
+        assert passed is False
+        assert text == _PHANTOM_CITATION_REFUSAL
+
+    def test_real_called_tool_citation_passes_gate(self) -> None:
+        """A [get_fundamentals_history row N] tag for a CALLED tool does NOT trip the phantom gate."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        # The cited tool WAS called, and the number matches the tool value, so the
+        # answer passes grounding entirely (no refusal). No quarter label so the
+        # quarter-grounding sub-check stays out of the way.
+        response = "Apple's dividend yield is 0.46% [get_fundamentals_history row 0]."
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=MagicMock(),
+                response=response,
+                tool_items=[self._row_with_value(0.46)],
+                messages=[{"role": "user", "content": "revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+            )
+        )
+        assert passed is True
+        assert text != _PHANTOM_CITATION_REFUSAL
+        assert text == response
+
+
+class TestEmptyPoolRefusal:
+    @staticmethod
+    def _orch() -> Any:
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        return ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+    def test_numeric_claims_with_empty_pool_refused(self) -> None:
+        """Specific numbers + empty tool-value pool → refuse (cannot corroborate)."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _EMPTY_POOL_REFUSAL,
+            AgentBudget,
+        )
+
+        # Tool returned a text-only row with NO numbers → empty numeric pool.
+        empty_item = MagicMock()
+        empty_item.text = "no matching rows returned"
+        empty_item.value = None
+        empty_item.field_kind = None
+        empty_item.citation_meta = None
+        empty_item.item_id = "tool:fundamentals:ZZZ"
+
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        response = "Revenue was $24.7B and EPS was $1.40 last quarter."
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[empty_item],
+                messages=[{"role": "user", "content": "revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+            )
+        )
+        assert passed is False
+        assert text == _EMPTY_POOL_REFUSAL

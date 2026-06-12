@@ -854,3 +854,91 @@ class TestEntityTagTickerPreference:
         tool_text = "Apple article\n  Published: 2026-06-10T12:08:41+00:00"
         result = validator.validate(response, [_row_with_text(tool_text)])
         assert result.passed, [u.snippet for u in result.unsupported]
+
+
+# ── Phantom-citation gate (2026-06-12 root-cause audit, Theme A) ──────────────
+#
+# VERBATIM artifacts from
+# tests/validation/chat_quality_benchmark/runs/run_20260612T183758Z/. These
+# answers cite ``[tool row N]`` provenance tags for tools that were NEVER called
+# — the dominant fabrication mechanism. ``find_phantom_tool_citations`` returns
+# the disjoint set so the orchestrator can refuse them.
+class TestPhantomToolCitations:
+    def test_dividend_yielders_phantom_query_fundamentals(self) -> None:
+        """tc_portfolio_dividend_yielders cites [query_fundamentals row N], only get_portfolio_context ran."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "| **Apple (AAPL)** | 0.46% [query_fundamentals row 0] |\n"
+            "| **Microsoft (MSFT)** | 0.72% [query_fundamentals row 1] |"
+        )
+        called = ["get_portfolio_context"]
+        assert find_phantom_tool_citations(answer, called) == {"query_fundamentals"}
+
+    def test_tsla_macro_phantom_query_macro(self) -> None:
+        """agg_q5_tsla_macro cites [query_macro row N]; only get_economic_calendar/search_documents ran."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "The Federal Reserve is expected to hold interest rates steady at "
+            "4.25%-4.50% [query_macro row 0]. The U.S. economy is projected to "
+            "grow at 1.8% [query_macro row 1]."
+        )
+        called = ["get_economic_calendar", "search_documents", "get_entity_news"]
+        assert find_phantom_tool_citations(answer, called) == {"query_macro"}
+
+    def test_apple_suppliers_phantom_invented_tools(self) -> None:
+        """iter3_apple_suppliers_compound cites two fully-invented tools."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "Apple's top suppliers include TSMC [supplier_list row 0]. "
+            "TSMC's main business is semiconductor foundry services [tsmc_business row 0]."
+        )
+        called = ["get_entity_intelligence", "search_entity_relations", "search_documents", "get_entity_graph"]
+        assert find_phantom_tool_citations(answer, called) == {"supplier_list", "tsmc_business"}
+
+    def test_real_called_tool_citation_not_phantom(self) -> None:
+        """da_msft cites [get_fundamentals_history row N] for a CALLED tool — not phantom."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = "Revenue was $64.7B [get_fundamentals_history row 0]."
+        called = ["get_fundamentals_history", "search_claims", "search_documents", "search_events"]
+        assert find_phantom_tool_citations(answer, called) == set()
+
+    def test_unverified_marker_is_not_a_phantom_tool(self) -> None:
+        """[unverified] is a legitimate marker, not a [tool row N] provenance tag."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        # ``[unverified]`` lacks the ``row N`` form so it is never read as a tool cite.
+        answer = "The forward P/E is 28.5 [unverified]."
+        assert find_phantom_tool_citations(answer, ["get_fundamentals_history"]) == set()
+
+    def test_empty_called_set_flags_every_tool_row_tag(self) -> None:
+        """When no tool ran, every [tool row N] tag is phantom."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = "Revenue was $24.7B [query_fundamentals row 0]."
+        assert find_phantom_tool_citations(answer, []) == {"query_fundamentals"}
+
+
+class TestEmptyPoolHelpers:
+    def test_response_has_numeric_claims(self) -> None:
+        from rag_chat.application.services.numeric_grounding import response_has_numeric_claims
+
+        assert response_has_numeric_claims("Revenue was $24.7B last quarter.")
+        # Citation markers are stripped before extraction, so [N7] is not a number.
+        assert not response_has_numeric_claims("No data was found for this entity [N7].")
+
+    def test_flatten_tool_values_count_empty_pool(self) -> None:
+        """Tools that returned no structured numeric rows → pool count 0."""
+        from rag_chat.application.services.numeric_grounding import flatten_tool_values_count
+
+        # Text-only rows with no value/field_kind contribute no numeric pool values.
+        assert flatten_tool_values_count([_row_with_text("no rows returned")]) == 0
+        assert flatten_tool_values_count([]) == 0
+
+    def test_flatten_tool_values_count_nonempty(self) -> None:
+        from rag_chat.application.services.numeric_grounding import flatten_tool_values_count
+
+        assert flatten_tool_values_count([_row_with_value(24.7e9, FieldKind.REVENUE)]) >= 1

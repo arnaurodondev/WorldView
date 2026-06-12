@@ -173,3 +173,64 @@ def test_is_tool_call_stub_clean_answer_not_flagged() -> None:
     """A real prose answer that merely quotes JSON is not a stub."""
     text = 'NVDA reported revenue of $26.0B. The raw row was {"revenue": 26000000000}.'
     assert _is_tool_call_stub(text, _REGISTRY) is False
+
+
+# ── Theme D: plan-only synthesis stub (2026-06-12 root-cause audit) ───────────
+#
+# VERBATIM artifact from chain_nvda_competitor_growth_rank
+# (run_20260612T183758Z): the shipped answer was a future-tense PLAN with
+# ``**Step N:**`` headers and no substantive payload — a degenerate non-answer.
+_NVDA_PLAN_ONLY_ANSWER = (
+    "I'll start by identifying NVIDIA's main competitors and then check their revenue growth.\n\n"
+    "**Step 1: Find NVIDIA's competitors**\n\n"
+    "I'll search for relationships and entity paths for NVIDIA.\n\n"
+    "**Step 2: Get competitor revenue data**\n\n"
+    "Let me first get the entity intelligence for NVIDIA to identify competitors, "
+    "then fetch fundamentals for those competitors."
+)
+
+
+def test_step_header_lead_extends_narration_lead() -> None:
+    """'I'll start by ...' opening is now stripped as a narration lead (Theme D)."""
+    text = "I'll start by identifying NVIDIA's competitors. NVDA revenue was $26.0B."
+    out = _strip_tool_narration(text)
+    assert "I'll start by" not in out
+    assert "$26.0B" in out
+
+
+def test_let_me_first_lead_stripped() -> None:
+    """'Let me first ...' plan-prose lead is stripped (Theme D)."""
+    text = "Let me first get the entity intelligence.\nThe answer is 42% market share."
+    out = _strip_tool_narration(text)
+    assert "Let me first" not in out
+    assert "42% market share" in out
+
+
+def test_step_headers_stripped() -> None:
+    """``**Step N:**`` plan headers are removed."""
+    text = "**Step 1: Find competitors**\nAMD and Intel compete with NVIDIA in GPUs."
+    out = _strip_tool_narration(text)
+    assert "Step 1" not in out
+    assert "AMD and Intel compete" in out
+
+
+def test_nvda_plan_only_answer_is_stub() -> None:
+    """The verbatim chain_nvda plan-only answer is flagged as a tool-call/planning stub."""
+    assert _is_tool_call_stub(_NVDA_PLAN_ONLY_ANSWER) is True
+
+
+def test_plan_with_substantive_content_not_stub() -> None:
+    """A plan-lead answer that DOES carry real content (a number) is NOT a stub."""
+    # Opens with a plan lead but contains a substantive numeric claim → real answer.
+    text = (
+        "I'll summarise the competitor revenues.\n\n"
+        "**Step 1: Competitors**\n\n"
+        "AMD reported $22.7B and Intel reported $54.2B last year."
+    )
+    assert _is_tool_call_stub(text) is False
+
+
+def test_plan_only_table_answer_not_stub() -> None:
+    """A markdown table (pipe present) is substantive, never a plan-only stub."""
+    text = "**Step 1: Compare**\n\n| Company | Revenue |\n|---|---|\n| AMD | $22.7B |"
+    assert _is_tool_call_stub(text) is False
