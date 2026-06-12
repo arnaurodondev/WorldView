@@ -126,9 +126,13 @@ async def cypher_path(
     """Find shortest path(s) between two entities using Apache AGE Cypher.
 
     Returns 503 when ``KNOWLEDGE_GRAPH_CYPHER_ENABLED=false``.
-    Returns 504 when the AGE query exceeds the 5 s statement_timeout.
+    Returns 504 when the AGE query exceeds the 30 s statement_timeout backstop.
     Returns 404 when source or target entity does not exist.
     Returns 422 when ``source_entity_id == target_entity_id`` or ``max_hops > 5``.
+
+    Performance (BP-687): path discovery uses staged shortest-first probing in the
+    use case (one exact hop length at a time, stopping at the first hit) so hub-to-hub
+    pairs no longer expand the full O(degree^N) frontier; the 30 s timeout is a backstop.
     """
     try:
         result = await CypherPathUseCase().execute(
@@ -156,7 +160,7 @@ async def cypher_path(
         _log.warning("cypher_path_timeout")
         raise HTTPException(
             status_code=504,
-            detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the 5 s statement_timeout"},
+            detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the 30 s statement_timeout"},
         ) from exc
 
     return CypherPathResponse(

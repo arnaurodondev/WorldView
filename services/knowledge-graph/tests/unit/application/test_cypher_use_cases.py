@@ -194,13 +194,14 @@ class TestCypherPathUseCase:
                 target_entity_id=_TGT,
             )
 
-    async def test_path_query_uses_20s_statement_timeout(self) -> None:
-        """The path query must use a 20 s statement_timeout, NOT the old 5 s (BP-686).
+    async def test_path_query_uses_30s_statement_timeout_backstop(self) -> None:
+        """The path query must use a 30 s statement_timeout backstop (BP-687).
 
-        An undirected variable-length path between two hub entities is a strictly
-        harder traversal than a neighbourhood walk; with the old 5 s budget hub-to-hub
-        paths (e.g. OpenAI↔Microsoft) timed out → 504, dead-ending traverse_graph chat
-        questions. The path budget must match the neighbourhood query's 20 s.
+        Round 1 (BP-686) raised 5 s → 20 s, but hub-to-hub paths (OpenAI↔Microsoft)
+        still occasionally exceeded 20 s because the open-range ``-[*1..3]-`` query
+        enumerated the full O(degree^3) frontier. Round 2 (BP-687) makes the query
+        fast via staged shortest-first probing and raises the timeout to 30 s as a
+        pure BACKSTOP — it should now rarely bind.
         """
         from knowledge_graph.application.use_cases.cypher_path import (
             _STATEMENT_TIMEOUT_MS,
@@ -208,10 +209,10 @@ class TestCypherPathUseCase:
         )
         from sqlalchemy import text
 
-        # The module-level constant is the single authoritative deadline.
-        assert _STATEMENT_TIMEOUT_MS == "20000", (
-            "path query statement_timeout must be 20 s (matching cypher_neighborhood), "
-            "not the old 5 s that timed out on hub-to-hub paths (BP-686)"
+        # The module-level constant is the single authoritative deadline (backstop).
+        assert _STATEMENT_TIMEOUT_MS == "30000", (
+            "path query statement_timeout backstop must be 30 s (BP-687), "
+            "not the old 5 s / 20 s that timed out on hub-to-hub paths"
         )
 
         uc = CypherPathUseCase()
@@ -226,17 +227,17 @@ class TestCypherPathUseCase:
         )
 
         # The SET LOCAL statement_timeout statement actually issued to the DB must
-        # carry the 20 s value (guards against the constant being read but a stale
+        # carry the 30 s value (guards against the constant being read but a stale
         # literal being embedded in the SQL string).
         timeout_stmts = [
             str(c.args[0]) for c in session.execute.call_args_list if c.args and "statement_timeout" in str(c.args[0])
         ]
         assert any(
-            "20000" in s for s in timeout_stmts
-        ), f"expected a SET LOCAL statement_timeout = '20000' call, got: {timeout_stmts}"
+            "30000" in s for s in timeout_stmts
+        ), f"expected a SET LOCAL statement_timeout = '30000' call, got: {timeout_stmts}"
         assert not any(
-            "5000" in s for s in timeout_stmts
-        ), f"path query must NOT issue the old 5000 ms timeout, got: {timeout_stmts}"
+            "5000" in s or "20000" in s for s in timeout_stmts
+        ), f"path query must NOT issue the old 5000/20000 ms timeout, got: {timeout_stmts}"
         # Sanity: the issued statement matches what the use case builds.
         assert str(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
 
@@ -261,73 +262,160 @@ class TestCypherPathUseCase:
         assert result.source_entity_id == _SRC
         assert result.target_entity_id == _TGT
 
-    async def test_max_hops_embedded_in_cypher_literal(self) -> None:
-        """max_hops is embedded as a numeric literal *1..N in the AGE Cypher pattern.
+    async def test_max_hops_embedded_in_legacy_open_range_form(self) -> None:
+        """Legacy open-range builder (exact_hops=None) embeds *1..N with ORDER BY.
 
         BP-461 (2026-05-11): confirmed-working AGE 1.5.0 syntax uses variable-length
         matching with ``ORDER BY length(p)`` instead of ``shortestPath()`` or list
-        comprehensions (both unsupported in AGE 1.5.0).
+        comprehensions (both unsupported in AGE 1.5.0). The open-range form is
+        retained (exact_hops=None) but the use case now drives the staged form.
         """
-        from knowledge_graph.application.use_cases.cypher_path import (
-            CypherPathUseCase,
-            _build_path_sql,
-        )
+        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
 
-        # max_hops is embedded as *1..N in the Cypher variable-length path pattern.
+        # Open-range (legacy) form: *1..N with ORDER BY length(p).
         sql2 = _build_path_sql(src_str, tgt_str, max_hops=2, all_paths=False)
         sql3 = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
-        assert "*1..2" in sql2, "max_hops=2 must appear as *1..2 in Cypher pattern"
-        assert "*1..3" in sql3, "max_hops=3 must appear as *1..3 in Cypher pattern"
+        assert "*1..2" in sql2, "open-range max_hops=2 must appear as *1..2 in Cypher pattern"
+        assert "*1..3" in sql3, "open-range max_hops=3 must appear as *1..3 in Cypher pattern"
         assert "$max_hops" not in sql2, "max_hops must be a literal, not a $param"
         assert "shortestPath" not in sql2, "shortestPath() is not supported by AGE 1.5.0"
         assert "allShortestPaths" not in sql3, "allShortestPaths() is not supported by AGE 1.5.0"
+        assert "ORDER BY length(p)" in sql3, "open-range form sorts shortest-first via ORDER BY"
 
-        # execute() always makes exactly 4 calls: LOAD 'age', SET search_path,
-        # SET LOCAL statement_timeout, then the AGE Cypher query.
-        session = _make_session(execute_returns=[])
-        entity_repo = _make_entity_repo(exists=True)
+    async def test_staged_builder_pins_exact_hop_length_and_drops_order_by(self) -> None:
+        """BP-687: exact_hops form pins *L..L and OMITS ORDER BY (early-exit enabler).
+
+        The staged optimisation issues one fixed-length probe per depth. A single
+        exact hop length is already uniform, so ``ORDER BY length(p)`` is dropped —
+        and its removal is exactly what lets AGE stop after LIMIT matches instead of
+        materialising and sorting the whole O(degree^N) frontier (the 504 root cause).
+        """
+        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
+
+        src_str = str(_SRC)
+        tgt_str = str(_TGT)
+
+        sql_l1 = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False, exact_hops=1)
+        sql_l2 = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False, exact_hops=2)
+        sql_l3 = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=True, exact_hops=3)
+
+        # Pattern is pinned to the exact length, NOT the open range *1..N.
+        assert "*1..1" in sql_l1
+        assert "*2..2" in sql_l2
+        assert "*3..3" in sql_l3
+        assert "*1..3" not in sql_l3, "staged form must not use the open range *1..3"
+
+        # ORDER BY must be ABSENT in the staged form — this is the early-exit enabler.
+        for sql in (sql_l1, sql_l2, sql_l3):
+            assert "ORDER BY" not in sql, "staged exact-hop form must omit ORDER BY (early exit)"
+            assert "shortestPath" not in sql
+            assert "allShortestPaths" not in sql
+
+        # LIMIT still caps results: 1 for all_paths=False, 5 for all_paths=True.
+        assert "LIMIT 1" in sql_l1
+        assert "LIMIT 5" in sql_l3
+
+    async def test_staged_execution_stops_at_first_non_empty_depth(self) -> None:
+        """BP-687: probing stops at the shortest depth that yields a path (early exit).
+
+        Direct (1-hop) connections — the OpenAI↔Microsoft case — must resolve with a
+        SINGLE Cypher probe and never expand the deeper 2-/3-hop frontier. We assert
+        exactly ONE *L..L Cypher query ran (the L=1 probe), plus the 3 setup calls.
+        """
+        from unittest.mock import MagicMock
+
+        from knowledge_graph.application.use_cases.cypher_path import CypherPathUseCase
+
         uc = CypherPathUseCase()
+        entity_repo = _make_entity_repo(exists=True)
+
+        # L=1 probe returns a row; deeper probes must never be issued.
+        one_path_result = MagicMock()
+        one_path_result.fetchall.return_value = [(None, None)]  # a single (nodes, rels) row
+        setup_result = MagicMock()
+        setup_result.fetchall.return_value = []
+
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                setup_result,  # LOAD 'age'
+                setup_result,  # SET search_path
+                setup_result,  # SET LOCAL statement_timeout
+                one_path_result,  # L=1 probe — HITS, must stop here
+            ]
+        )
+
         await uc.execute(
             session,
             entity_repo,
             cypher_enabled=True,
             source_entity_id=_SRC,
             target_entity_id=_TGT,
-            max_hops=2,
+            max_hops=3,
         )
+
+        # 3 setup + exactly 1 Cypher probe = 4 total. No L=2/L=3 probes were issued.
         assert session.execute.call_count == 4, (
-            "execute() must make exactly 4 calls: LOAD 'age', SET search_path, "
-            "SET LOCAL statement_timeout, and the AGE Cypher query"
+            "a 1-hop hit must stop staged probing after the L=1 query — got "
+            f"{session.execute.call_count} calls (deeper frontier was expanded)"
+        )
+        # The single Cypher probe must be the *1..1 exact-length form.
+        cypher_calls = [str(c.args[0]) for c in session.execute.call_args_list if "ag_catalog.cypher" in str(c.args[0])]
+        assert len(cypher_calls) == 1, f"expected exactly 1 Cypher probe, got {len(cypher_calls)}"
+        assert "*1..1" in cypher_calls[0], "the winning probe must be the exact 1-hop form *1..1"
+
+    async def test_staged_execution_probes_deeper_when_shorter_empty(self) -> None:
+        """BP-687: when no shorter path exists, probing ascends 1 → 2 → 3.
+
+        Guards the regression direction: a pair connected only at 3 hops (e.g. some
+        Apple→Anthropic chains) must still be found — the staged loop must probe
+        L=1 (empty), L=2 (empty), then L=3 (hit), preserving discovery.
+        """
+        from unittest.mock import MagicMock
+
+        from knowledge_graph.application.use_cases.cypher_path import CypherPathUseCase
+
+        uc = CypherPathUseCase()
+        entity_repo = _make_entity_repo(exists=True)
+
+        empty = MagicMock()
+        empty.fetchall.return_value = []
+        hit = MagicMock()
+        hit.fetchall.return_value = [(None, None)]
+
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                empty,  # LOAD 'age'
+                empty,  # SET search_path
+                empty,  # SET LOCAL statement_timeout
+                empty,  # L=1 probe — no direct edge
+                empty,  # L=2 probe — no 2-hop path
+                hit,  # L=3 probe — found
+            ]
         )
 
-    async def test_all_paths_uses_limit_in_cypher(self) -> None:
-        """all_paths=True → LIMIT 5 in AGE Cypher; all_paths=False → LIMIT 1.
+        result = await uc.execute(
+            session,
+            entity_repo,
+            cypher_enabled=True,
+            source_entity_id=_SRC,
+            target_entity_id=_TGT,
+            max_hops=3,
+        )
 
-        AGE 1.5.0 does not support ``allShortestPaths()`` or ``shortestPath()``.
-        The result count is controlled via a LIMIT clause in the Cypher body.
-        ``ORDER BY length(p)`` ensures shorter paths come first.
-        """
-        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
-
-        src_str = str(_SRC)
-        tgt_str = str(_TGT)
-        sql_single = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
-        sql_all = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=True)
-
-        # AGE 1.5.0-incompatible functions must never appear
-        assert "shortestPath" not in sql_single
-        assert "allShortestPaths" not in sql_all
-
-        # LIMIT is embedded as a numeric literal in the Cypher body
-        assert "LIMIT 1" in sql_single
-        assert "LIMIT 5" in sql_all
-
-        # ORDER BY length(p) must be present (shortest-first ordering)
-        assert "ORDER BY length(p)" in sql_single
-        assert "ORDER BY length(p)" in sql_all
+        # 3 setup + 3 probes (1,2,3) = 6 calls; the L=3 hit terminates the loop.
+        assert session.execute.call_count == 6
+        cypher_calls = [str(c.args[0]) for c in session.execute.call_args_list if "ag_catalog.cypher" in str(c.args[0])]
+        assert len(cypher_calls) == 3, f"expected 3 ascending probes, got {len(cypher_calls)}"
+        assert "*1..1" in cypher_calls[0]
+        assert "*2..2" in cypher_calls[1]
+        assert "*3..3" in cypher_calls[2]
+        # A 3-hop path must still be discovered (no regression in reachability).
+        assert result.paths_found == 1
 
     async def test_relation_types_filter_applied_post_hoc(self) -> None:
         """relation_types filter excludes paths whose edges don't match."""

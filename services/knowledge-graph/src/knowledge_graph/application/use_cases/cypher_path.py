@@ -71,7 +71,7 @@ class CypherDisabledError(KnowledgeGraphError):
 
 
 class CypherTimeoutError(KnowledgeGraphError):
-    """Raised when the AGE Cypher query exceeds the 20 s statement_timeout."""
+    """Raised when the AGE Cypher query exceeds the 30 s statement_timeout backstop."""
 
 
 class CypherEntityNotFoundError(KnowledgeGraphError):
@@ -122,36 +122,79 @@ class CypherPathResult:
 
 # ── AGE SQL helpers ───────────────────────────────────────────────────────────
 
-# Statement timeout — 20 s to match the neighborhood query (cypher_neighborhood.py).
-# WHY raised from 5 s (BP-686, 2026-06-12): an undirected variable-length path
-# ``(s)-[*1..N]-(t)`` between two well-connected hub entities (e.g. OpenAI↔Microsoft)
-# is a strictly *harder* traversal than a single egocentric neighbourhood walk, yet
-# it previously got only 5 s while the neighbourhood query got 20 s. Hub-to-hub path
-# discovery routinely exceeded 5 s → ``cypher_path_timeout`` → 504 Gateway Timeout,
-# dead-ending every ``traverse_graph`` chat question. Aligning to the neighbourhood
-# budget (20 s) removes the asymmetry. The route handler awaits this use case directly
-# (no separate upstream HTTP/asyncio timeout in the KG service), so this constant is
-# the single authoritative deadline for the path query.
-_STATEMENT_TIMEOUT_MS = "20000"
+# Statement timeout — 30 s BACKSTOP only (BP-687, 2026-06-12).
+# This is deliberately a safety net, NOT the mechanism we rely on. The real fix
+# for the hub-to-hub blow-up (OpenAI↔Microsoft 504s) is the *staged shortest-first*
+# traversal below (`_execute_staged`): we probe one exact hop length at a time
+# (1, then 2, then 3) and STOP at the first length that yields a path, instead of
+# the old ``-[*1..3]- ... ORDER BY length(p)`` which forced AGE to enumerate the
+# entire O(avg_degree^3) variable-length frontier before it could sort+LIMIT.
+# Most hub pairs connect at 1-2 hops, so the explosive 3-hop frontier is never
+# materialised. The route handler awaits this use case directly (no separate
+# upstream HTTP/asyncio timeout in the KG service), so this constant is the single
+# authoritative deadline for the path query — but it should now rarely bind.
+_STATEMENT_TIMEOUT_MS = "30000"
+
+# Number of paths returned when all_paths=True (top-K cap embedded as a Cypher LIMIT
+# so the planner can stop scanning after K matches at the winning hop length).
+_ALL_PATHS_LIMIT = 5
 
 
-def _build_path_sql(source_id_str: str, target_id_str: str, max_hops: int, all_paths: bool) -> str:
+def _build_path_sql(
+    source_id_str: str,
+    target_id_str: str,
+    max_hops: int,
+    all_paths: bool,
+    *,
+    exact_hops: int | None = None,
+) -> str:
     """Build AGE Cypher SQL for shortest-path discovery between two entities.
 
     Uses the confirmed-working AGE 1.5.0 syntax (BP-461, 2026-05-11):
-      ``MATCH p = (s:entity {...})-[*1..N]-(t:entity {...})``
-      ``RETURN nodes(p) AS nodes_col, relationships(p) AS rels_col``
-      ``ORDER BY length(p) LIMIT N``
+      ``MATCH p = (s:entity {...})-[*L..L]-(t:entity {...})``
+      ``RETURN nodes(p) AS nodes_col, relationships(p) AS rels_col LIMIT N``
+
+    Optimisation (BP-687, 2026-06-12) — *staged shortest-first*:
+      When ``exact_hops`` is given, the relationship pattern is pinned to that
+      EXACT length (``*L..L``), not the open range ``*1..max_hops``. The caller
+      (:meth:`CypherPathUseCase._execute_staged`) issues these probes in
+      increasing order (1, 2, …, max_hops) and stops at the first that returns
+      a row. A single fixed-length match needs no ``ORDER BY length(p)`` (every
+      result is already the same, shortest-so-far length), which is what made
+      the old open-range query materialise and sort the whole frontier before
+      it could apply ``LIMIT`` — the root cause of the hub-to-hub 504s. AGE can
+      now stop after ``LIMIT`` matches at the current depth and never expand the
+      explosive deeper frontier when a shorter path exists.
+
+      When ``exact_hops`` is None the legacy open-range pattern (``*1..max_hops``
+      with ``ORDER BY length(p)``) is emitted — retained for callers/tests that
+      want the single-query form; ``_execute_staged`` does not use it.
 
     WHY NOT ``shortestPath()``: AGE 1.5.0 raises "function does not exist".
     WHY NOT ``[n IN nodes(p) | n]``: AGE 1.5.0 raises syntax error on ``|``.
-    ``ORDER BY length(p)`` achieves shortest-first ordering without these functions.
 
     Source/target IDs are pre-validated by ``_UUID_RE`` — only [0-9a-fA-F-] chars,
-    safe to embed as Cypher string literals. ``max_hops`` is a Pydantic-validated
-    int [1, 5]. Both are embedded as literals (no $params) — see BP-450 / BP-459-C.
+    safe to embed as Cypher string literals. ``max_hops``/``exact_hops`` are
+    validated ints. All are embedded as literals (no $params) — see BP-450 / BP-459-C.
     """
-    limit = 5 if all_paths else 1
+    limit = _ALL_PATHS_LIMIT if all_paths else 1
+
+    if exact_hops is not None:
+        # Staged form: pin the pattern to one exact hop length. No ORDER BY needed
+        # (single length ⇒ already uniform), so AGE stops after LIMIT matches at
+        # this depth without enumerating the full O(degree^max_hops) frontier.
+        return (
+            "SELECT nodes_col, rels_col"  # noqa: S608 — UUIDs validated by _UUID_RE; hop/limit are validated ints
+            " FROM ag_catalog.cypher('worldview_graph', $$"
+            f" MATCH p = (s:entity {{entity_id: '{source_id_str}'}})"
+            f"-[*{exact_hops}..{exact_hops}]-"
+            f"(t:entity {{entity_id: '{target_id_str}'}})"
+            " RETURN nodes(p) AS nodes_col, relationships(p) AS rels_col"
+            f" LIMIT {limit}"
+            " $$) AS (nodes_col agtype, rels_col agtype)"
+        )
+
+    # Legacy open-range form (kept for completeness / single-query callers).
     return (
         "SELECT nodes_col, rels_col"  # noqa: S608 — UUIDs validated by _UUID_RE; max_hops/limit are validated ints
         " FROM ag_catalog.cypher('worldview_graph', $$"
@@ -275,7 +318,7 @@ class CypherPathUseCase:
     ------
         CypherDisabledError:       KNOWLEDGE_GRAPH_CYPHER_ENABLED=false.
         CypherEntityNotFoundError: source or target entity not in canonical_entities.
-        CypherTimeoutError:        AGE query exceeded 20 s statement_timeout.
+        CypherTimeoutError:        AGE query exceeded 30 s statement_timeout backstop.
 
     """
 
@@ -316,17 +359,15 @@ class CypherPathUseCase:
         await _setup_age_session(session)
         await session.execute(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
 
-        sql = _build_path_sql(source_id_str, target_id_str, max_hops, all_paths)
-        try:
-            result = await session.execute(text(sql))
-            rows = result.fetchall()
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            if "timeout" in exc_str or "canceling" in exc_str or "statement_timeout" in exc_str:
-                raise CypherTimeoutError("AGE Cypher query exceeded 20 s statement_timeout") from exc
-            raise
+        rows = await self._execute_staged(
+            session,
+            source_id_str=source_id_str,
+            target_id_str=target_id_str,
+            max_hops=max_hops,
+            all_paths=all_paths,
+        )
 
-        paths = self._build_paths(list(rows), relation_types)
+        paths = self._build_paths(rows, relation_types)
         elapsed_ms = int(time.monotonic() * 1000 - start_ms)
         return CypherPathResult(
             source_entity_id=source_entity_id,
@@ -335,6 +376,74 @@ class CypherPathUseCase:
             paths_found=len(paths),
             query_time_ms=elapsed_ms,
         )
+
+    async def _execute_staged(
+        self,
+        session: AsyncSession,
+        *,
+        source_id_str: str,
+        target_id_str: str,
+        max_hops: int,
+        all_paths: bool,
+    ) -> list[Any]:
+        """Probe hop lengths 1..max_hops in order; return rows from the first that hits.
+
+        This is the heart of the BP-687 optimisation. Instead of one open-range
+        ``-[*1..max_hops]-`` query (which forces AGE to enumerate the full
+        O(avg_degree^max_hops) frontier before ``ORDER BY length(p)`` + ``LIMIT``
+        can pick the shortest), we issue one *exact-length* query per hop depth
+        and STOP at the first depth that returns any path:
+
+          L=1: direct edge?      → if yes, done (1 cheap query, no frontier blow-up)
+          L=2: 2-hop path?       → only reached when no direct edge exists
+          L=3: 3-hop path?       → only reached when nothing shorter connects them
+
+        For the hub pairs that caused the 504s (e.g. OpenAI↔Microsoft, connected
+        directly via INVESTMENT_IN), the L=1 probe returns immediately and the
+        expensive L=3 frontier is never expanded. Worst case (no path at all) is
+        the same as before: every depth is probed, but each is a bounded
+        fixed-length match with a LIMIT, which the planner can short-circuit.
+
+        Shortest-first is guaranteed by construction: we ascend hop length and
+        return on the first non-empty depth, so ``ORDER BY length(p)`` is no
+        longer needed (and its removal is precisely what lets AGE stop early).
+
+        all_paths semantics: with ``all_paths=False`` we want a single shortest
+        path, so we stop at the first non-empty depth (LIMIT 1 inside Cypher).
+        With ``all_paths=True`` we want up to ``_ALL_PATHS_LIMIT`` shortest paths;
+        each depth's query already caps at that LIMIT, so the first non-empty
+        depth yields the shortest paths. We do NOT keep probing deeper after the
+        first hit even for all_paths=True — a strictly longer path is by
+        definition not among the "shortest" set, so deeper probing would only
+        re-introduce the expensive frontier we are trying to avoid.
+        """
+        collected: list[Any] = []
+        for hops in range(1, max_hops + 1):
+            sql = _build_path_sql(
+                source_id_str,
+                target_id_str,
+                max_hops,
+                all_paths,
+                exact_hops=hops,
+            )
+            try:
+                result = await session.execute(text(sql))
+                rows = result.fetchall()
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if "timeout" in exc_str or "canceling" in exc_str or "statement_timeout" in exc_str:
+                    raise CypherTimeoutError(
+                        f"AGE Cypher query exceeded {_STATEMENT_TIMEOUT_MS} ms statement_timeout",
+                    ) from exc
+                raise
+            if rows:
+                # First non-empty depth wins (the shortest). Stop probing deeper —
+                # a longer path is never preferred over a shorter one, and this is
+                # exactly what prevents the deeper O(degree^N) frontier from ever
+                # being expanded when a shorter connection exists.
+                collected = list(rows)
+                break
+        return collected
 
     def _build_paths(
         self,
