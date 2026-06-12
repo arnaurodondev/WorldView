@@ -461,6 +461,22 @@ session has refactored the loop, adapt to the new shape but keep the change mini
 
 ## Wave 3 — Numeric Grounding Cross-Check + Judge Prompt v3.0
 
+> **STATUS: SHIPPED 2026-06-12.** `cross_check_grounding` + `_nearest_field`
+> association (tolerance/scale/fence/year-aware) populate `GroundingCheck` and
+> trip `GROUNDING_CONTRADICTED` on a sampled-value contradiction (hard FAIL);
+> absent samples → `presumed` (no fail). Judge prompt bumped v2.0→**v3.0**
+> (BREAKING): "PRESUME GROUNDED" deleted, grounding graded qualitatively, a
+> `GROUNDING SAMPLE` evidence block rendered into the user prompt. FR-12 stamps
+> (`judge_prompt_version` / `judge_model_id` / `verdict_model_version`) added to
+> `_meta.json` + `_judge_summary.json`; `VERDICT_MODEL_VERSION=1.1`. Breaking
+> record: `.claude/evals/prompt_changes/2026-06-12-chat_quality_judge-v3.0.md`
+> + `libs/prompts/CHANGELOG.md`. 18 new tests (synthetic
+> contradiction/match/absent + fence/same-field/year guards). **Runner
+> threading was minimal**: W2 already flows samples into
+> `JudgeInput.tool_results` (via `build_input_from_artifact` + the live
+> `list(result.tool_results)` path), so only the FR-12 version stamps were added
+> to the runner.
+
 **Goal**: Turn captured grounding samples into a deterministic `GroundingCheck` (matched /
 unmatched / contradicted), feed samples to the judge, and **delete the "PRESUME GROUNDED"
 instruction** so grounding is scored against evidence. A contradicted claim trips
@@ -602,6 +618,25 @@ instruction** so grounding is scored against evidence. A contradicted claim trip
 ---
 
 ## Wave 4 — Durable Longitudinal Trend Store + Regression Diff
+
+> **STATUS: SHIPPED 2026-06-12.** New `scripts/chat_quality_trend.py` adds a
+> durable in-repo `TrendStore` (committed `tests/validation/chat_quality_benchmark/trend/trend.sqlite`
+> with tables `runs` + `question_results` per §6.4 + indexes `(question_id,run_ts)`
+> / `(run_ts)`, mirrored to a deterministic `trend.jsonl` sidecar). Appends are
+> **idempotent by `run_ts`** (DELETE+CASCADE+re-insert; same run_ts twice = one
+> row) and write only runner-supplied timestamps, so the committed files are
+> diff-stable. Short `BEGIN IMMEDIATE` transaction with sqlite-busy retry +
+> lock-free jsonl backstop (F-5/R42). The runner (`run_chat_quality_benchmark.py`)
+> projects each judged per-Q artefact's `verdict_decision` into typed rows,
+> appends one `runs` row + N×R `question_results` rows per run, and runs
+> `detect_regressions` vs the registered baseline **and** the rolling prior run —
+> emitting `_regressions.json` (per-question verdict downgrades PASS→WEAK/FAIL,
+> new invariants, new grounding contradictions, latency breaches, and
+> score-drop-beyond-noise-threshold=5) and a delimited regression block into
+> `_report.md`. `--set-baseline <run_ts>` pins an existing run (no chat run, one
+> baseline at a time); bare `--set-baseline` pins THIS run after append. 25 new
+> tests (schema/idempotency/busy-retry/concurrent/set-baseline/PASS→FAIL diff/
+> noise-threshold/empty-store-first-run + runner projection helpers).
 
 **Goal**: Persist one durable, queryable trend store across runs (SQLite + jsonl sidecar),
 append every run, and detect regressions vs a registered baseline + rolling window.

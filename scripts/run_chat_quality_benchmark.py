@@ -94,6 +94,16 @@ from chat_quality_judge import (  # noqa: E402
 )
 from prompts.evaluation import CHAT_QUALITY_JUDGE  # noqa: E402
 
+# PLAN-0110 W4 — the durable longitudinal trend store + regression detection.
+# Lives in its own module so the persistence + diff logic is unit-testable
+# without spinning up the whole runner (and without touching the judge).
+from chat_quality_trend import (  # noqa: E402
+    QuestionRow,
+    RunRow,
+    TrendStore,
+    detect_regressions,
+)
+
 # isort: on
 
 
@@ -887,6 +897,203 @@ def _render_regression_section(
     return lines
 
 
+# --------------------------------------------------------------------------
+# PLAN-0110 W4 — durable trend store integration + store-backed regressions
+# --------------------------------------------------------------------------
+#
+# The single ``--baseline`` diff above (audit 2026-06-11) compares this run vs
+# ONE prior run directory on disk. W4 layers a DURABLE store on top: every run
+# is appended to ``trend.sqlite`` (+ jsonl sidecar) and the run is diffed vs a
+# *registered* baseline AND a rolling window pulled FROM the store — so a
+# regression is caught even when the prior run directory has been deleted.
+
+
+def _artifact_question_rows(per_question_artifacts: list[dict[str, Any]]) -> list[QuestionRow]:
+    """Project each judged per-Q artefact into a typed ``QuestionRow``.
+
+    We read from the structured ``verdict_decision`` block (PLAN-0110 W1) — the
+    authoritative tiered verdict — never the legacy heuristic ``bucket``. A run
+    that was not judged (``--judge`` absent, or judge SKIPPED) has no
+    ``verdict_decision`` and is skipped here: the trend store only records graded
+    verdicts, so a non-judge smoke run appends an empty (0-question) run row
+    rather than polluting the series with un-graded placeholders.
+    """
+    rows: list[QuestionRow] = []
+    for art in per_question_artifacts:
+        judge = art.get("judge")
+        if not isinstance(judge, dict):
+            continue
+        decision = judge.get("verdict_decision")
+        if not isinstance(decision, dict):
+            continue
+        # ``verdict_decision.dimensions`` is the FLAT int form (4 keys, 0-25
+        # each) — distinct from the top-level ``dimensions`` block which is the
+        # nested {score,feedback,reason} judge output. We want the ints.
+        dims = decision.get("dimensions") or {}
+        gc = decision.get("grounding_check") or {}
+        # The per-Q artefact carries a ``slot`` like ``q_<id>__r1``; the trend
+        # store keys on (question_id, run_index). We derive run_index from the
+        # slot suffix when present, else fall back to a stable 0.
+        question_id = str(art.get("id") or art.get("slot") or "unknown")
+        run_index = _slot_run_index(str(art.get("slot") or ""))
+        rows.append(
+            QuestionRow(
+                question_id=question_id,
+                run_index=run_index,
+                verdict=str(decision.get("verdict") or "FAIL"),
+                fail_reason=decision.get("fail_reason"),
+                quality_score=int(decision.get("quality_score") or 0),
+                dim_tool_use=int(dims.get("tool_use") or 0),
+                dim_grounding=int(dims.get("grounding") or 0),
+                dim_framing=int(dims.get("framing") or 0),
+                # The judge dimension key is ``refusal_judgment``; the trend
+                # column is ``dim_refusal``.
+                dim_refusal=int(dims.get("refusal_judgment") or 0),
+                grounding_contradicted=int(gc.get("contradicted") or 0),
+                latency_breach=1 if _latency_breached(art) else 0,
+            )
+        )
+    return rows
+
+
+def _slot_run_index(slot: str) -> int:
+    """Best-effort 0-based repeat index from a slot like ``q_foo__r2`` → 1.
+
+    The runner names slots ``<id>__r<N>`` (1-based) when ``max_runs_per_q>1``
+    and just ``<id>`` for a single run. We map ``r<N>`` → N-1 so the trend
+    ``run_index`` is 0-based per PRD §6.4; anything unrecognised → 0.
+    """
+    marker = "__r"
+    if marker in slot:
+        tail = slot.rsplit(marker, 1)[1]
+        if tail.isdigit():
+            return max(int(tail) - 1, 0)
+    return 0
+
+
+def _build_run_row(
+    *,
+    run_ts: str,
+    started_at: str,
+    meta: dict[str, Any],
+    question_rows: list[QuestionRow],
+) -> RunRow:
+    """Assemble the run-level ``RunRow`` summary from the per-Q rows + meta.
+
+    Verdict counts + the mean additive quality_score are derived from the SAME
+    rows that go into ``question_results`` so the run summary can never silently
+    disagree with its detail (feedback_audit_returned_value_persistence).
+    """
+    counts = {"STRONG": 0, "PASS": 0, "WEAK": 0, "FAIL": 0}
+    for qr in question_rows:
+        counts[qr.verdict] = counts.get(qr.verdict, 0) + 1
+    scores = [qr.quality_score for qr in question_rows]
+    mean_score = round(sum(scores) / len(scores), 2) if scores else 0.0
+    return RunRow(
+        run_ts=run_ts,
+        started_at=started_at,
+        judge_prompt_version=str(meta.get("judge_prompt_version") or ""),
+        judge_model_id=str(meta.get("judge_model_id") or ""),
+        verdict_model_version=str(meta.get("verdict_model_version") or ""),
+        n_questions=len(question_rows),
+        n_pass=counts["PASS"],
+        n_weak=counts["WEAK"],
+        n_fail=counts["FAIL"],
+        n_strong=counts["STRONG"],
+        mean_quality_score=mean_score,
+        is_baseline=0,
+        questions=list(question_rows),
+    )
+
+
+def _compute_store_regressions(
+    *,
+    store: TrendStore,
+    run_ts: str,
+    current_rows: list[QuestionRow],
+    window: int = 5,
+) -> dict[str, Any]:
+    """Diff the current run vs the registered baseline + a rolling window.
+
+    Pulls the comparison rows FROM the store (not a run directory) so the diff
+    survives run-dir cleanup. The rolling window is the single run immediately
+    before this one (``window`` reserved for a future multi-run aggregate);
+    using the prior run keeps the "did this commit regress vs last commit"
+    signal sharp.
+    """
+    cur = [
+        {
+            "question_id": qr.question_id,
+            "run_index": qr.run_index,
+            "verdict": qr.verdict,
+            "fail_reason": qr.fail_reason,
+            "quality_score": qr.quality_score,
+            "grounding_contradicted": qr.grounding_contradicted,
+            "latency_breach": qr.latency_breach,
+        }
+        for qr in current_rows
+    ]
+
+    baseline_ts = store.get_baseline_run_ts()
+    baseline_rows = store.get_question_rows(baseline_ts) if baseline_ts else None
+
+    # Rolling window: the most recent prior run (excluding this run_ts).
+    prior = store.recent_run_ts(limit=1, before=run_ts)
+    window_ts = prior[0] if prior else None
+    window_rows = store.get_question_rows(window_ts) if window_ts else None
+
+    return detect_regressions(
+        current_rows=cur,
+        baseline_rows=baseline_rows,
+        baseline_label=baseline_ts,
+        window_rows=window_rows,
+        window_label=window_ts,
+    )
+
+
+def _render_store_regression_section(regressions: dict[str, Any]) -> list[str]:
+    """Render the W4 store-backed regression summary (a small, delimited block).
+
+    Kept deliberately compact + self-contained so the W5 report rewrite can call
+    it as-is for the top-of-report regression banner (FR-15) without untangling
+    it from the failure-first section.
+    """
+    lines: list[str] = ["## 📉 Regressions (durable trend, machine: `_regressions.json`)", ""]
+    total = int(regressions.get("total_regressions") or 0)
+    if not regressions.get("has_regressions"):
+        # Distinguish "compared, none found" from "nothing to compare against".
+        base = regressions.get("baseline") or {}
+        win = regressions.get("window") or {}
+        if not base.get("available") and not (win and win.get("available")):
+            lines.append("*(no prior run in the trend store — this is the first recorded run.)*")
+        else:
+            lines.append("**No regressions vs baseline or the prior run.** ✅")
+        lines.append("")
+        return lines
+
+    lines.append(f"**{total} regression(s) detected** ⬇️")
+    lines.append("")
+    for which in ("baseline", "window"):
+        block = regressions.get(which)
+        if not block or not block.get("available"):
+            continue
+        regs = block.get("regressions") or []
+        label = block.get("label") or "?"
+        kind = "registered baseline" if which == "baseline" else "prior run"
+        lines.append(f"**vs {kind}** `{label}` — {len(regs)} of {block.get('shared_questions', 0)} shared")
+        lines.append("")
+        if regs:
+            lines.append("| Question | Verdict | Score Δ | Why |")
+            lines.append("|----------|---------|--------:|-----|")
+            for r in regs:
+                qid = f"{r['question_id']}__r{int(r['run_index']) + 1}"
+                verdict = f"{r['verdict_from']} → {r['verdict_to']}"
+                why = "; ".join(r.get("reasons") or []) or "—"
+                lines.append(f"| `{qid}` | {verdict} | {r['score_delta']:+d} | {why} |")
+            lines.append("")
+    return lines
+
+
 def _render_report_md(
     *,
     meta: dict[str, Any],
@@ -1177,6 +1384,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "the same --out-dir parent is auto-picked. Pass 'none' to disable."
         ),
     )
+    # PLAN-0110 W4 (FR-15) — register a run as THE comparison baseline. When a
+    # run_ts is given, the runner pins that existing run and exits (no chat run).
+    # When the bare flag is passed (no value), the run produced by THIS
+    # invocation becomes the baseline after it is appended to the store.
+    p.add_argument(
+        "--set-baseline",
+        nargs="?",
+        const="__current__",
+        default=None,
+        metavar="RUN_TS",
+        help=(
+            "Register a baseline for trend regression diffs (FR-15). Pass an "
+            "existing run_ts to pin it (no chat run); pass the bare flag to pin "
+            "THIS run after it completes. Only one baseline exists at a time."
+        ),
+    )
     p.add_argument(
         "--max-runs-per-q",
         type=int,
@@ -1285,6 +1508,19 @@ def _regrade_existing_run(runs_dir: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    # PLAN-0110 W4 (FR-15) — pin-an-existing-run mode. ``--set-baseline <run_ts>``
+    # with a CONCRETE run_ts registers that run as the baseline and exits without
+    # running any chat calls. The sentinel ``__current__`` (bare flag) is handled
+    # AFTER the run completes, near the trend append.
+    set_baseline_arg: str | None = getattr(args, "set_baseline", None)
+    if set_baseline_arg is not None and set_baseline_arg != "__current__":
+        store = TrendStore()
+        if store.set_baseline(set_baseline_arg):
+            print(f"baseline registered: {set_baseline_arg}")
+            return 0
+        print(f"ERROR: run_ts {set_baseline_arg!r} not found in trend store.", file=sys.stderr)
+        return 2
 
     questions_path = (_REPO_ROOT / args.questions_file).resolve()
     # PLAN-0107 follow-up: accept directory (new layout) OR single .yaml file
@@ -1497,6 +1733,45 @@ def main(argv: list[str] | None = None) -> int:
             baseline_artifacts = _load_run_artifacts(baseline_dir)
             baseline_label = baseline_dir.name
 
+    # ── PLAN-0110 W4 — durable trend store append + store-backed regression ──
+    # We append BEFORE rendering the report so the regression diff (which pulls
+    # the rolling-window comparison from the store) sees a store that already
+    # contains the prior runs, and so the report can embed the regression block.
+    # Idempotent on run_ts: re-running the same run never duplicates rows.
+    trend_store = TrendStore()
+    question_rows = _artifact_question_rows(per_q_artifacts)
+    run_row = _build_run_row(
+        run_ts=run_ts,
+        started_at=started_at,
+        meta=meta,
+        question_rows=question_rows,
+    )
+    regressions: dict[str, Any]
+    try:
+        # Compute the diff vs baseline + prior run BEFORE appending this run, so
+        # the rolling-window lookup ("the run before this one") is not confused
+        # by this run already being present.
+        regressions = _compute_store_regressions(
+            store=trend_store,
+            run_ts=run_ts,
+            current_rows=question_rows,
+        )
+        trend_store.append_run(run_row)
+        # ``--set-baseline`` with the bare flag pins THIS run after it lands.
+        if set_baseline_arg == "__current__":
+            trend_store.set_baseline(run_ts)
+            print(f"baseline registered: {run_ts}")
+    except Exception as exc:  # — trend persistence must never sink a graded run
+        # The jsonl sidecar backstop (F-5) already captured the rows on a SQLite
+        # failure; surface a warning but keep the run artefacts/report intact.
+        print(f"WARN: trend-store append failed: {exc!r}", file=sys.stderr)
+        regressions = detect_regressions(
+            current_rows=[],
+            baseline_rows=None,
+            baseline_label=None,
+        )
+    (out_dir / "_regressions.json").write_text(json.dumps(regressions, indent=2, sort_keys=True))
+
     report_md = _render_report_md(
         meta=meta,
         summary=summary,
@@ -1505,6 +1780,10 @@ def main(argv: list[str] | None = None) -> int:
         baseline_artifacts=baseline_artifacts,
         baseline_label=baseline_label,
     )
+    # Append the durable, store-backed regression block (FR-15). Kept as a small,
+    # clearly-delimited addition so the W5 report rewrite can hoist it to the top
+    # without untangling it from the legacy single-baseline section above.
+    report_md = report_md.rstrip("\n") + "\n\n" + "\n".join(_render_store_regression_section(regressions)) + "\n"
     (out_dir / "_report.md").write_text(report_md)
 
     print()
@@ -1518,6 +1797,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"            dimension_avg={agg['dimension_avg']}")
     print(f"artifacts : {out_dir}")
     print(f"report    : {out_dir / '_report.md'}")
+    print(f"trend     : {trend_store.sqlite_path} (+ {trend_store.jsonl_path.name})")
+    print(f"regressions: {int(regressions.get('total_regressions') or 0)} (see {out_dir / '_regressions.json'})")
     return 0
 
 
