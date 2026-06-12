@@ -477,29 +477,46 @@ async def query_screen(
             # current_price (quotes.last) is intentionally NOT a page-sort target
             # here — it is a display-only enrichment, so it falls through to the
             # symbol default rather than driving which instruments make the page.
+            #
+            # ── PERFORMANCE FIX (2026-06-12, post-2d71ba1ae regression) ──────────
+            # The previous shape built ``page_sort_latest`` as an un-scoped
+            #   SELECT instrument_id, MAX(as_of_date) FROM fundamental_metrics
+            #   WHERE metric = :m GROUP BY instrument_id
+            # and self-JOINed it back for the value. Because the page IDs are not
+            # yet known (this very subquery selects them), the GROUP BY had to
+            # aggregate the ENTIRE ``metric = 'market_capitalization'`` partition
+            # (one row per instrument per snapshot date) BEFORE the LIMIT — exactly
+            # the full-scan-before-LIMIT the earlier 3-step fix (afde005a9 /
+            # c61e86c0b) removed for the DISPLAY joins. On a cold page cache the
+            # planner picked a nested-loop and blew the 8 s statement_timeout →
+            # 504 → ``screen_universe`` transport_error (audit Theme B).
+            #
+            # New shape: a single ``DISTINCT ON (instrument_id)`` scan ordered by
+            # ``(instrument_id, as_of_date DESC)``. This drops the aggregate + the
+            # self-JOIN (one index pass instead of two), and is backed by the
+            # covering index ``ix_fundamental_metrics_metric_instr_date_val``
+            # (migration 038): ``(metric, instrument_id, as_of_date DESC) INCLUDE
+            # (value_numeric)`` — so the WHERE-metric filter + per-instrument
+            # latest pick + value read are an INDEX-ONLY scan. The outer ORDER BY
+            # value DESC + LIMIT then sorts only the deduplicated latest-per-
+            # instrument set (one row per instrument), never the full history.
+            #
+            # CORRECTNESS is unchanged: DISTINCT ON (instrument_id) with
+            # ORDER BY instrument_id, as_of_date DESC returns the SAME latest row
+            # per instrument the MAX(as_of_date) self-JOIN did, so "top 5 by
+            # market cap" still ranks on each instrument's most-recent value
+            # (GOOGL/AVGO/META-class top-5, never the alphabetical CRM/IBM).
             sort_metric = FundamentalMetricModel
-            sort_latest_sq = (
-                select(
-                    sort_metric.instrument_id.label("instrument_id"),
-                    func.max(sort_metric.as_of_date).label("max_date"),
-                )
-                .where(sort_metric.metric == sort_by)
-                .group_by(sort_metric.instrument_id)
-                .subquery(name="page_sort_latest")
-            )
             sort_val_sq = (
                 select(
                     sort_metric.instrument_id.label("instrument_id"),
                     sort_metric.value_numeric.label("value_numeric"),
                 )
-                .join(
-                    sort_latest_sq,
-                    and_(
-                        sort_metric.instrument_id == sort_latest_sq.c.instrument_id,
-                        sort_metric.as_of_date == sort_latest_sq.c.max_date,
-                        sort_metric.metric == sort_by,
-                    ),
-                )
+                .where(sort_metric.metric == sort_by)
+                # DISTINCT ON keeps the first row per instrument in the ORDER BY;
+                # as_of_date DESC makes that "first" row the latest snapshot.
+                .order_by(sort_metric.instrument_id, sort_metric.as_of_date.desc())
+                .distinct(sort_metric.instrument_id)
                 .subquery(name="page_sort_val")
             )
             page_q = page_q.outerjoin(sort_val_sq, instr.id == sort_val_sq.c.instrument_id)

@@ -55,8 +55,18 @@ def _route_session(
     - ``information_schema`` → never hit (cache prefilled by conftest)
     - ``technicals_snapshots`` → technicals_rows
     - ``ohlcv_bars`` → volume_rows
-    - ``fundamental_metrics`` + ``DISTINCT`` → metric_rows (page enrichment)
+    - key-metric enrichment DISTINCT (projects ``metric AS metric``) → metric_rows
     - everything else → screen_rows (main query) / page_rows (page-IDs query)
+
+    NOTE: the rewritten default-sort page-selection query (Theme B fix,
+    2026-06-12) JOINs a ``DISTINCT ON (instrument_id)`` page-sort subquery that,
+    under the non-PostgreSQL default dialect, also renders as ``SELECT DISTINCT
+    fundamental_metrics ...``. We disambiguate it from the key-metric enrichment
+    DISTINCT by the metric predicate form: the enrichment filters ``metric IN
+    (...)`` (it fans out several display metrics), whereas the page-sort filters
+    ``metric = :p`` (a single sort metric) and selects only instrument_id +
+    value_numeric. Without this the page-sort query would be mis-routed to
+    ``metric_rows`` and the page would come back empty.
     """
 
     async def _execute(stmt: Any) -> MagicMock:
@@ -67,11 +77,12 @@ def _route_session(
             return result
         if captured is not None:
             captured.append(stmt)
+        flat = s.replace("\n", " ")
         if "technicals_snapshots" in s:
             result.all = MagicMock(return_value=technicals_rows or [])
         elif "ohlcv_bars" in s:
             result.all = MagicMock(return_value=volume_rows or [])
-        elif "SELECT DISTINCT fundamental_metrics" in s.replace("\n", " "):
+        elif "DISTINCT fundamental_metrics" in flat and "fundamental_metrics.metric IN" in flat:
             result.all = MagicMock(return_value=metric_rows or [])
         elif "count" in s.lower() and "km_" not in s and "total_count" not in s:
             result.scalar_one = MagicMock(return_value=1)

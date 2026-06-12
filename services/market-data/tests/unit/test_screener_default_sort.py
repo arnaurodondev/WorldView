@@ -47,10 +47,20 @@ def _capturing_session(
     Routing (same convention as test_screener_page_extras._route_session):
     - ``statement_timeout`` → no-op
     - ``technicals_snapshots`` / ``ohlcv_bars`` → empty (page-extras)
-    - ``SELECT DISTINCT fundamental_metrics`` → empty (key-metric enrichment)
+    - key-metric enrichment DISTINCT (projects ``metric``) → empty
     - count(*) → scalar 1
     - main screener SELECT (km_ aliases) → screen_rows
-    - everything else (the page-IDs query) → page_rows
+    - everything else (the page-IDs query, incl. the DISTINCT-ON page-sort) → page_rows
+
+    NOTE on the page-sort DISTINCT: the rewritten page-sort subquery (Theme B fix,
+    2026-06-12) uses ``DISTINCT ON (instrument_id)``. Under the non-PostgreSQL
+    default dialect SQLAlchemy renders that as a plain ``SELECT DISTINCT
+    fundamental_metrics.instrument_id ...`` (DISTINCT ON is PG-only), which would
+    otherwise collide with the key-metric enrichment routing. We disambiguate by
+    the metric predicate form: the ENRICHMENT query filters ``metric IN (...)``
+    (it fans out several display metrics), whereas the PAGE-SORT query filters
+    ``metric = :p`` (a single sort metric). Matching the ``metric IN`` form keeps
+    the page-sort query flowing to the ``page_rows`` branch.
     """
 
     async def _execute(stmt: Any) -> MagicMock:
@@ -61,9 +71,13 @@ def _capturing_session(
             return result
         if captured is not None:
             captured.append(stmt)
+        flat = s.replace("\n", " ")
         if "technicals_snapshots" in s or "ohlcv_bars" in s:
             result.all = MagicMock(return_value=[])
-        elif "SELECT DISTINCT fundamental_metrics" in s.replace("\n", " "):
+        elif "DISTINCT fundamental_metrics" in flat and "fundamental_metrics.metric IN" in flat:
+            # key-metric enrichment (_fetch_page_extras block 1): filters
+            # ``metric IN (...)``. The page-sort DISTINCT filters ``metric = :p``,
+            # so this match excludes it (it flows to the page_rows branch).
             result.all = MagicMock(return_value=[])
         elif "count" in s.lower() and "km_" not in s and "total_count" not in s:
             result.scalar_one = MagicMock(return_value=1)
@@ -103,18 +117,29 @@ def _page_row(instrument_id: str = "instr-001") -> MagicMock:
 
 
 def _main_sql(captured: list[Any]) -> str:
-    """Compile the page-selection query (no km_, no total_count, not DISTINCT)."""
+    """Compile the page-selection query (no km_, no total_count, not enrichment).
+
+    Compiles against the **PostgreSQL dialect** (the production driver is
+    asyncpg) so the ``DISTINCT ON`` page-sort rewrite renders as real
+    ``DISTINCT ON (...)`` rather than the default-dialect ``DISTINCT`` fallback.
+    The page-sort subquery (Theme B fix) filters ``metric = :p``, whereas the
+    key-metric enrichment DISTINCT filters ``metric IN (...)`` — so we exclude
+    the latter by its ``metric IN`` predicate.
+    """
+    from sqlalchemy.dialects import postgresql
+
     for stmt in captured:
-        s = str(stmt)
+        flat = str(stmt).replace("\n", " ")
+        is_enrichment = "DISTINCT fundamental_metrics" in flat and "fundamental_metrics.metric IN" in flat
         if (
-            "km_" not in s
-            and "total_count" not in s
-            and "SELECT DISTINCT fundamental_metrics" not in s.replace("\n", " ")
-            and "technicals_snapshots" not in s
-            and "ohlcv_bars" not in s
-            and "count" not in s.lower()
+            "km_" not in flat
+            and "total_count" not in flat
+            and not is_enrichment
+            and "technicals_snapshots" not in flat
+            and "ohlcv_bars" not in flat
+            and "count" not in flat.lower()
         ):
-            return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     raise AssertionError("page-selection query not captured")
 
 
@@ -147,6 +172,56 @@ async def test_no_filter_defaults_to_market_cap_page_sort() -> None:
     assert "'market_capitalization'" in page_sql
     assert "ORDER BY" in page_sql.upper()
     assert "DESC" in page_sql.upper()
+
+
+@pytest.mark.asyncio
+async def test_no_filter_page_sort_is_distinct_on_not_unscoped_group_by() -> None:
+    """The page-sort subquery must use DISTINCT ON, NOT an un-scoped GROUP BY.
+
+    REGRESSION GUARD (Theme B, 2026-06-12 — post-2d71ba1ae): the default-sort
+    page selection originally resolved "latest market_capitalization per
+    instrument" via
+
+        SELECT instrument_id, MAX(as_of_date) FROM fundamental_metrics
+        WHERE metric = 'market_capitalization'
+        GROUP BY instrument_id        -- whole-partition aggregate BEFORE LIMIT
+        ... self-JOIN back for value ...
+
+    Because the page IDs are not yet known, that aggregate scanned the ENTIRE
+    metric partition before the LIMIT — the full-scan-before-LIMIT that blew the
+    8 s statement_timeout (504 → screen_universe transport_error).
+
+    The performant rewrite is a single ``DISTINCT ON (instrument_id) ... ORDER
+    BY instrument_id, as_of_date DESC`` scan (backed by the covering index
+    ``ix_fundamental_metrics_metric_instr_date_val``, migration 038). This test
+    pins that SQL SHAPE so the regression cannot silently return:
+
+      * the page-sort subquery MUST contain ``DISTINCT ON``;
+      * it MUST NOT contain ``GROUP BY`` (the un-scoped aggregate);
+      * it MUST NOT carry a ``MAX(as_of_date)`` aggregate;
+      * it MUST still filter ``metric = 'market_capitalization'`` (correctness:
+        ranks each instrument's latest market cap, so top-5 stays GOOGL/AVGO/
+        META-class, never the alphabetical CRM/IBM).
+    """
+    captured: list[Any] = []
+    session = _capturing_session(
+        page_rows=[_page_row()],
+        screen_rows=[_get_screen_row(market_capitalization=Decimal("3e12"))],
+        captured=captured,
+    )
+
+    await query_screen(session, [], limit=5)
+
+    page_sql = _main_sql(captured)
+    upper = page_sql.upper()
+    # Performant shape present.
+    assert "DISTINCT ON" in upper, page_sql
+    # Un-scoped full-table aggregate-before-LIMIT shape absent.
+    assert "GROUP BY" not in upper, f"un-scoped GROUP-BY-before-LIMIT regressed:\n{page_sql}"
+    assert "MAX(" not in upper, f"MAX(as_of_date) aggregate regressed:\n{page_sql}"
+    # Correctness: still scoped to the market-cap metric and the latest snapshot.
+    assert "'market_capitalization'" in page_sql, page_sql
+    assert "AS_OF_DATE DESC" in upper, page_sql
 
 
 @pytest.mark.asyncio
