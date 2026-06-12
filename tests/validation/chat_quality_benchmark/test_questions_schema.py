@@ -166,3 +166,55 @@ def test_expected_depth_uses_canonical_values() -> None:
         if depth is not None and depth not in allowed:
             bad[str(q.get("id"))] = str(depth)
     assert not bad, f"expected_depth must be one of {sorted(allowed)}; offenders: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0110 W5 (F9/OQ-1) — single consolidated question catalogue.
+#
+# The chat_eval acceptance gate no longer owns a divergent ``questions.yaml`` —
+# it reads the canonical benchmark packs (this directory) and projects entries
+# that carry a ``chat_eval_id``. These tests pin the consolidation: one source,
+# no duplicate chat_eval ids, and every legacy q1..q8 / a10 still present.
+# ---------------------------------------------------------------------------
+
+# The full legacy chat_eval acceptance set — every id MUST survive the merge.
+_EXPECTED_CHAT_EVAL_IDS = {"q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "a10"}
+
+
+def test_chat_eval_questions_consolidated_into_canonical_catalogue() -> None:
+    """Every legacy chat_eval id maps to exactly one canonical benchmark entry."""
+    questions = _load_questions()
+    ce_ids = [str(q["chat_eval_id"]) for q in questions if q.get("chat_eval_id")]
+    # No duplicate chat_eval ids across the consolidated catalogue.
+    assert len(ce_ids) == len(set(ce_ids)), f"duplicate chat_eval_id values: {ce_ids}"
+    # No legacy question was dropped in the merge (F9: no silent loss).
+    assert set(ce_ids) == _EXPECTED_CHAT_EVAL_IDS, (
+        f"chat_eval acceptance ids drifted from the consolidated catalogue. "
+        f"got={sorted(set(ce_ids))} expected={sorted(_EXPECTED_CHAT_EVAL_IDS)}"
+    )
+
+
+def test_chat_eval_entries_carry_ground_truth_assertions() -> None:
+    """Each consolidated chat_eval entry carries the grader rubric (gt assertions)."""
+    questions = _load_questions()
+    missing = [
+        str(q.get("chat_eval_id"))
+        for q in questions
+        if q.get("chat_eval_id") and not isinstance(q.get("ground_truth_assertions"), dict)
+    ]
+    assert not missing, f"chat_eval entries missing ground_truth_assertions: {missing}"
+
+
+def test_single_question_catalogue_no_divergent_chat_eval_yaml() -> None:
+    """The legacy chat_eval/questions.yaml no longer holds a divergent catalogue.
+
+    It is retained as a deprecation stub that decodes to an empty list (or is
+    absent), so there is exactly ONE catalogue both runners read.
+    """
+    import yaml
+
+    legacy = (_HERE / ".." / "chat_eval" / "questions.yaml").resolve()
+    if not legacy.is_file():
+        return  # fully removed — also acceptable
+    decoded = yaml.safe_load(legacy.read_text())
+    assert not decoded, f"chat_eval/questions.yaml must be an empty stub post-W5, got: {decoded!r}"

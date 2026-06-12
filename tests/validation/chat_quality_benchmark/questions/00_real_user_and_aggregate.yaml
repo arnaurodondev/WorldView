@@ -45,6 +45,14 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q2 — the
+  # binary acceptance gate reads these ground_truth_assertions via the harness.
+  chat_eval_id: q2
+  ground_truth_assertions:
+    require_http_200: true
+    min_distinct_tools: 2
+    must_mention_any_of: [Bitcoin, BTC]
+    min_verdict: MARGINAL
   notes: 'User-reported quality issue. Watch for blanket "no data" refusals when
 
     MSTR articles exist in the corpus. Expect Bitcoin treasury context.
@@ -63,6 +71,14 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q6.
+  chat_eval_id: q6
+  ground_truth_assertions:
+    required_tools_any_of: [screen_universe]
+    min_ticker_mentions: 3
+    expected_ticker_candidates: [NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, MRVL]
+    forbid_invented_products: [MI300 design wins]
+    min_verdict: MARGINAL
   notes: 'Expect ≥3 tickers from {NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, MRVL}.
 
     '
@@ -79,6 +95,12 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q8.
+  chat_eval_id: q8
+  ground_truth_assertions:
+    required_tools_any_of: [traverse_graph, get_entity_paths]
+    must_mention_all_of: [OpenAI, Microsoft]
+    min_verdict: USEFUL
   notes: 'BP-461 fixed AGE Cypher path discovery (2026-05-11). Expect multi-hop
 
     paths: investment, partnership, exclusive cloud provider.
@@ -115,6 +137,15 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q4. The
+  # ``fixture: q4_ground_truth.yaml`` reference is preserved verbatim.
+  chat_eval_id: q4
+  ground_truth_assertions:
+    required_tools_any_of: [get_fundamentals_history]
+    forbid_amd_revenue_above_billions: 15.0
+    forbid_nvda_revenue_above_billions: 100.0
+    fixture: q4_ground_truth.yaml
+    min_verdict: USEFUL
   notes: 'Existing Q4 from chat_eval. Forbid AMD revenue >$15B/qtr, NVDA >$100B/qtr
 
     (hallucination tripwire).
@@ -133,6 +164,14 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q1.
+  chat_eval_id: q1
+  ground_truth_assertions:
+    required_tools_any_of: [compare_entities, get_entity_intelligence]
+    must_mention_at_least_n: 2
+    must_mention_candidates: [Samsung, Microsoft, Google, Huawei, Xiaomi]
+    forbid_hallucination: true
+    min_verdict: MARGINAL
   notes: Must mention ≥2 of {Samsung, Microsoft, Google, Huawei, Xiaomi}.
 
 - id: agg_q3_tim_cook
@@ -147,6 +186,14 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q3.
+  chat_eval_id: q3
+  ground_truth_assertions:
+    required_tools_any_of: [get_entity_intelligence, traverse_graph]
+    must_mention_all_of: [Apple]
+    should_mention_any_of: [Compaq, IBM]
+    forbid_duplicate_paragraphs: true
+    min_verdict: MARGINAL
   notes: Should mention Compaq or IBM. No duplicated paragraphs.
 
 - id: agg_q5_tsla_macro
@@ -161,6 +208,15 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q5. The
+  # chat_eval grader's required_tools_any_of set is preserved verbatim (it lists
+  # get_temporal_events / get_entity_event_exposures alongside the calendar).
+  chat_eval_id: q5
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of: [get_economic_calendar, get_temporal_events, get_entity_event_exposures]
+    min_distinct_tools: 2
+    min_verdict: MARGINAL
   notes: min_distinct_tools=2.
 
 - id: agg_q7_tsla_contradictions
@@ -175,6 +231,14 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q7.
+  chat_eval_id: q7
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of: [get_contradictions]
+    must_mention_any_of: [Tesla]
+    allow_empty_finding: true
+    min_verdict: MARGINAL
   notes: Empty finding allowed.
 
 - id: agg_a10_apple_anthropic_premise
@@ -189,6 +253,15 @@
     appropriate_refusal_ok: false
   budgets:
     max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml a10.
+  chat_eval_id: a10
+  ground_truth_assertions:
+    require_http_200: true
+    must_mention_any_of:
+      - cannot find evidence
+      - no evidence
+      - I cannot confirm
+    min_verdict: MARGINAL
   notes: 'False-premise question. Agent MUST refuse — answer should include
 
     "cannot find evidence" / "no evidence" / "I cannot confirm".

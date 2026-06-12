@@ -74,11 +74,115 @@ real-platform CI never silently relies on the fallback.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tests.validation.chat_eval.harness import ChatRunResult
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0110 W5 (OQ-1) — single-authority delegation to the tiered judge engine.
+#
+# The chat_eval binary acceptance gate (USEFUL/MARGINAL/USELESS/HARMFUL) used to
+# run its OWN, divergent hard-fail heuristics (degenerate-answer detection,
+# numeric-grounding hallucination, refusal classification). The PRD-0091 audit
+# (F6/OQ-1) made the TIERED ``chat_quality_judge`` engine the SINGLE SOURCE OF
+# TRUTH: the binary gate must DELEGATE its pass/fail to that engine's
+# deterministic invariant gate, not maintain a second scoring path.
+#
+# We import the tiered engine's LLM-FREE pieces (``detect_degenerate_answer``,
+# ``detect_tool_failure_nonanswer``, ``cross_check_grounding``,
+# ``evaluate_invariants``, ``compose_verdict``, ``Rubric``) from
+# ``scripts/chat_quality_judge.py``. These run with no network / no LLM, so the
+# delegation is deterministic and works in the unit lane (offline CI).
+#
+# Mapping (tiered → chat_eval binary, T-W5-03):
+#   * a FIRED hard invariant (CONTROL_TOKEN_LEAK / TRUNCATED / EMPTY_AFTER_TOOLS
+#     / INFRA_NON_ANSWER / GROUNDING_CONTRADICTED / GROUNDING_FLOOR) → the gate
+#     FAILS. A fabrication-class gate (GROUNDING_CONTRADICTED / GROUNDING_FLOOR)
+#     maps to HARMFUL (a confidently-wrong answer); every other fired gate maps
+#     to USELESS (a non-answer / leaked-scaffold). This is AT LEAST AS STRICT as
+#     the old heuristics — the tiered gate fires on the same degenerate classes
+#     PLUS the numeric grounding cross-check, so no previously-failing case is
+#     now allowed through.
+#   * no gate fired → the gate's hard-fail dimension is satisfied; the verdict
+#     then falls through to the rubric-advisory checks below (missing required
+#     tool / mention → MARGINAL), exactly as before. The tiered engine OWNS the
+#     hard pass/fail; the rubric only refines USEFUL↔MARGINAL.
+# ---------------------------------------------------------------------------
+
+# Resolve scripts/ on sys.path the same way scripts/tests/ + the schema test do
+# (no installed package). grading.py lives at tests/validation/chat_eval/.
+_SCRIPTS_DIR = (Path(__file__).resolve().parent / ".." / ".." / ".." / "scripts").resolve()
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from chat_quality_judge import (  # — sys.path mutation must precede import
+    InvariantCode,
+    Rubric,
+    VerdictDecision,
+    compose_verdict,
+    cross_check_grounding,
+    evaluate_invariants,
+)
+
+# The fabrication-class invariants — when one of these fires the answer is
+# confidently WRONG (a hallucinated number contradicted by tool data, or a
+# grounding score below the floor). These map to HARMFUL, the worst chat_eval
+# verdict; every other fired gate is a non-answer and maps to USELESS.
+_FABRICATION_INVARIANTS = frozenset({InvariantCode.GROUNDING_CONTRADICTED, InvariantCode.GROUNDING_FLOOR})
+
+
+def tiered_verdict_for(
+    result: ChatRunResult,
+    ground_truth_assertions: Mapping[str, Any] | None = None,
+) -> VerdictDecision:
+    """Run the LLM-FREE tiered invariant gate over a ``ChatRunResult`` (OQ-1).
+
+    This is the SINGLE-AUTHORITY entry point: it reuses the exact deterministic
+    gates the benchmark judge uses (``detect_degenerate_answer`` /
+    ``detect_tool_failure_nonanswer`` via ``evaluate_invariants`` +
+    ``cross_check_grounding``) and composes a tiered :class:`VerdictDecision`.
+
+    No LLM dimensions are available offline, so the soft ``quality_score`` is
+    left at 0 (its only effect is the WEAK/PASS/STRONG band, which the binary
+    gate maps ALL to "pass" — see ``grade_response``). The AUTHORITATIVE signal
+    the binary gate consumes is ``decision.fail_reason`` (which gate, if any,
+    fired). The ``ground_truth_assertions`` ``required_tools_any_of`` /
+    ``appropriate_refusal_ok`` map onto the tiered ``Rubric`` so the
+    ``INFRA_NON_ANSWER`` gate (expected-tool failure on an answerable question)
+    can fire correctly.
+    """
+    gt = dict(ground_truth_assertions or {})
+    answer = result.answer_text or ""
+    tool_results = list(result.tool_results)
+
+    # Build the tiered Rubric from the chat_eval ground-truth. The tiered engine
+    # reads ``expected_tools`` (for INFRA_NON_ANSWER) + ``appropriate_refusal_ok``.
+    rubric = Rubric(
+        expected_tools=list(gt.get("required_tools_any_of") or gt.get("expected_tools") or []),
+        appropriate_refusal_ok=bool(gt.get("allow_empty_finding") or gt.get("appropriate_refusal_ok") or False),
+    )
+
+    # Deterministic numeric claim↔sample cross-check (W3). Returns a zeroed
+    # ``presumed`` GroundingCheck when no grounding samples were captured, so it
+    # NEVER manufactures a contradiction for an answer with no evidence.
+    grounding_check = cross_check_grounding(answer, tool_results)
+
+    # The LLM-free invariant gate. ``grounding_score=None`` (no judge sub-score
+    # offline) means the GROUNDING_FLOOR gate cannot fire from delegation — we
+    # never invent a floor failure we can't measure.
+    gate_results = evaluate_invariants(
+        answer,
+        tool_results,
+        rubric,
+        grounding_check,
+        grounding_score=None,
+    )
+    return compose_verdict({}, gate_results, grounding_check)
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +638,34 @@ def grade_response(
             # No tool_results telemetry — preserve original behaviour.
             useless_reasons.append("response reads as a refusal")
 
+    # ── SINGLE-AUTHORITY hard-fail (PLAN-0110 W5 / OQ-1) ─────────────────
+    # The binary gate's HARD pass/fail is OWNED by the tiered engine: we run the
+    # same deterministic invariant gate the benchmark judge runs and let a FIRED
+    # gate force HARMFUL (fabrication-class) or USELESS (every other gate).
+    #
+    # This REPLACES the role of grading.py's own degenerate/leaked-token/empty
+    # heuristics as the authority — the tiered ``detect_degenerate_answer`` /
+    # ``detect_tool_failure_nonanswer`` / ``cross_check_grounding`` gates are now
+    # the source of the hard verdict. The legacy heuristic reasons above are
+    # KEPT (they only ADD strictness — a heuristic HARMFUL/USELESS is never
+    # discarded), so the gate can only get STRICTER, never weaker (R19). The
+    # tiered fired-gate is appended as an additional, authoritative reason.
+    tiered = tiered_verdict_for(result, gt)
+    if tiered.fail_reason is not None:
+        reason_str = f"tiered gate fired: {tiered.fail_reason.value}"
+        if tiered.fail_reason in _FABRICATION_INVARIANTS:
+            # Confidently-wrong (contradicted claim / sub-floor grounding) → HARMFUL.
+            if reason_str not in harmful_reasons:
+                harmful_reasons.append(reason_str)
+        else:
+            # Leaked scaffold / empty / truncated / infra non-answer → USELESS.
+            if reason_str not in useless_reasons:
+                useless_reasons.append(reason_str)
+
     # ── Verdict assembly ─────────────────────────────────────────────────
+    # HARMFUL > USELESS > MARGINAL > USEFUL. The tiered fired-gate above feeds
+    # the first two buckets, so the hard pass/fail is the tiered engine's; the
+    # rubric-advisory reasons only refine USEFUL↔MARGINAL below.
     if harmful_reasons:
         verdict = "HARMFUL"
         reasons = harmful_reasons + reasons
@@ -562,6 +693,19 @@ def grade_response(
         "orphan_rationalisations": orphan_rationals,
         "verdict": verdict,
         "reasons": reasons,
+        # PLAN-0110 W5 (OQ-1): the authoritative tiered signal the binary gate
+        # delegated to. Surfaced so callers/artefacts see the single source of
+        # truth, not just the derived binary verdict.
+        #
+        # ``tiered_fail_reason`` is the OFFLINE-authoritative signal: which hard
+        # invariant gate fired (None = none fired). ``tiered_verdict`` is "FAIL"
+        # ONLY when a gate actually fired — we deliberately do NOT report the
+        # soft-score band here, because no LLM dimensions exist offline (the band
+        # would always be a misleading "FAIL" on a sub-60 zero score). A clean
+        # answer therefore reports ``tiered_verdict=None`` (band undetermined
+        # without the LLM), not a false FAIL.
+        "tiered_verdict": tiered.verdict.value if tiered.fail_reason is not None else None,
+        "tiered_fail_reason": tiered.fail_reason.value if tiered.fail_reason is not None else None,
         "validator_real": is_real_validator,
         "latency_s": result.latency_s,
         # PLAN-0099 W1 T-W1-03: surface the new responsiveness metrics so

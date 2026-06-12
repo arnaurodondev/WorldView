@@ -1094,6 +1094,119 @@ def _render_store_regression_section(regressions: dict[str, Any]) -> list[str]:
     return lines
 
 
+# --------------------------------------------------------------------------
+# PLAN-0110 W5 — single authoritative verdict headline + expanded failures
+# --------------------------------------------------------------------------
+#
+# The report now prints EXACTLY ONE authoritative verdict system: the tiered
+# ``verdict_decision`` (STRONG/PASS/WEAK/FAIL) produced by the judge. The legacy
+# heuristic buckets (PASS/WARN/FAIL) and the soft average are DEMOTED into a
+# collapsed ``<details>`` appendix clearly labelled "legacy / non-authoritative"
+# (FR-18). FAIL always leads — the headline can never average a fabrication away.
+
+
+# Authoritative verdict order: FAIL first (most actionable), then WEAK, PASS,
+# STRONG. This is the DISPLAY order in the headline, independent of severity
+# rank — we lead with the failures a reader must act on.
+_VERDICT_DISPLAY_ORDER = ("FAIL", "WEAK", "PASS", "STRONG")
+
+
+def _verdict_decision(art: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the tiered ``verdict_decision`` block for a run, if present.
+
+    This is the AUTHORITATIVE tiered verdict (PLAN-0110 W1). A run that was not
+    judged (``--judge`` absent / judge SKIPPED) has no ``verdict_decision`` and
+    is excluded from the authoritative headline counts.
+    """
+    judge = art.get("judge")
+    if isinstance(judge, dict):
+        decision = judge.get("verdict_decision")
+        if isinstance(decision, dict):
+            return decision
+    return None
+
+
+def _render_authoritative_verdict_headline(artifacts: list[dict[str, Any]]) -> list[str]:
+    """Render the SINGLE authoritative tiered-verdict count line (FAIL-first).
+
+    This is the one verdict system a reader is shown in the headline (FR-18).
+    Counts are drawn from the tiered ``verdict_decision`` only — never the
+    legacy heuristic bucket. When no run carries a tiered verdict (a non-judge
+    smoke run) we say so explicitly rather than printing a misleading zero line.
+    """
+    lines: list[str] = ["## ⛔ Verdict (authoritative)", ""]
+    decided = [d for a in artifacts if (d := _verdict_decision(a)) is not None]
+    if not decided:
+        lines.append("*(no tiered verdicts — run with `--judge` to grade. The")
+        lines.append("legacy heuristic buckets in the appendix are advisory only.)*")
+        lines.append("")
+        return lines
+
+    counts: dict[str, int] = {}
+    for d in decided:
+        v = str(d.get("verdict") or "FAIL")
+        counts[v] = counts.get(v, 0) + 1
+    # FAIL leads, always — order by the fixed display order, then any unknowns.
+    ordered = [v for v in _VERDICT_DISPLAY_ORDER if counts.get(v)]
+    ordered += [v for v in sorted(counts) if v not in _VERDICT_DISPLAY_ORDER and counts[v]]
+    summary = " · ".join(f"{counts[v]} {v}" for v in ordered) or "(none)"
+    lines.append(f"**{summary}**  ← tiered verdict, FAIL first (the single authority).")
+    lines.append("")
+    return lines
+
+
+def _excerpt(text: str, *, limit: int = 160) -> str:
+    """One-line, length-capped excerpt of an answer for the failures section."""
+    flat = " ".join((text or "").split())
+    return (flat[:limit] + " …") if len(flat) > limit else (flat or "—")
+
+
+def _render_tiered_failures(artifacts: list[dict[str, Any]]) -> list[str]:
+    """Render every tiered FAIL, expanded so it is impossible to miss (FR-17).
+
+    For each run whose tiered verdict is FAIL we print:
+      * the slot + triggering ``InvariantCode`` (``fail_reason``);
+      * a one-line excerpt of the offending answer; and
+      * for ``GROUNDING_CONTRADICTED`` the claim-vs-sample mismatch inline
+        (claim value, nearest sampled value, delta) drawn from the
+        ``grounding_check.examples`` the W3 numeric cross-check populated.
+
+    A FAIL with no ``fail_reason`` (a sub-60 soft-score band FAIL, not a fired
+    gate) is still listed with its quality_score so a reader sees WHY it failed.
+    """
+    lines: list[str] = ["## ⛔ Failures (every FAIL — expanded)", ""]
+    fails = [(a, d) for a in artifacts if (d := _verdict_decision(a)) is not None and str(d.get("verdict")) == "FAIL"]
+    if not fails:
+        lines.append("**No tiered FAILs.** ✅")
+        lines.append("")
+        return lines
+
+    for art, decision in fails:
+        slot = art.get("slot") or art.get("id") or "?"
+        fail_reason = decision.get("fail_reason")
+        score = decision.get("quality_score")
+        if fail_reason:
+            lines.append(f"- `{slot}` — **FAIL[{fail_reason}]**")
+        else:
+            # Soft-band FAIL: no gate fired, the quality_score itself is < 60.
+            lines.append(f"- `{slot}` — **FAIL** (quality_score {score}/100 < 60 — soft-band fail)")
+        answer = ((art.get("result") or {}).get("answer_text")) or ""
+        lines.append(f'    answer excerpt: "{_excerpt(answer)}"')
+        # GROUNDING_CONTRADICTED — surface the claim↔sample mismatch inline so
+        # the contradiction is never hidden behind an averaged grounding score.
+        if fail_reason == "GROUNDING_CONTRADICTED":
+            examples = ((decision.get("grounding_check") or {}).get("examples")) or []
+            for ex in examples:
+                field_name = ex.get("field") or "?"
+                claim_text = ex.get("claim_text") or ex.get("claim")
+                nearest = ex.get("nearest_sample")
+                delta = ex.get("delta")
+                delta_str = f" (Δ {delta:g})" if isinstance(delta, int | float) else ""
+                lines.append(f"    claim `{claim_text}` vs sampled `{field_name}`={nearest}{delta_str}")
+    lines.append("")
+    return lines
+
+
 def _render_report_md(
     *,
     meta: dict[str, Any],
@@ -1102,6 +1215,7 @@ def _render_report_md(
     per_question_artifacts: list[dict[str, Any]],
     baseline_artifacts: list[dict[str, Any]] | None = None,
     baseline_label: str | None = None,
+    store_regressions: dict[str, Any] | None = None,
 ) -> str:
     """Render a human-readable Markdown report for a benchmark run.
 
@@ -1109,19 +1223,29 @@ def _render_report_md(
     ``per_question_artifacts`` is the list of ``q_<id>[_runN].json`` payloads
     (the runner passes them directly to avoid re-reading from disk).
 
-    Section order (FAILURE-FIRST, audit 2026-06-11 F5):
+    Section order (FAILURE-FIRST + SINGLE-AUTHORITY, PLAN-0110 W5 / §6.6.1):
       1. Run header (timing, base URL, judge model, filters)
-      2. ⛔ Failures first — min score, worst-N, fabrication list, degenerate
-         list, tool-failure list, latency-breach count (THE headline)
-      3. Regression vs baseline (when a baseline run is available)
-      4. Aggregate numbers (averages) — DEMOTED below the failures
-      5. Per-question detail (one ### per question, then #### per run)
-      6. Cross-question variance table + Errors section
+      2. ⛔ Verdict (authoritative) — the ONE tiered verdict count line, FAIL
+         first (FR-18); the legacy buckets are removed from the headline.
+      3. 📉 Regressions (durable trend) — surfaced AT THE TOP (FR-15), with a
+         link to the machine-readable ``_regressions.json``.
+      4. ⛔ Failures (every tiered FAIL — expanded): each FAIL with its
+         triggering ``InvariantCode``, an answer excerpt, and for
+         ``GROUNDING_CONTRADICTED`` the claim-vs-sample mismatch inline (FR-17).
+      5. ⛔ Failures first (legacy veto headline — worst-N / fabrication /
+         degenerate / tool-failure / latency-breach lists), kept for detail.
+      6. Regression vs baseline (single-baseline disk diff, when available).
+      7. <details> Soft-score appendix — the average + per-dimension means +
+         the legacy heuristic buckets, DEMOTED + collapsed + labelled
+         non-authoritative (FR-16/FR-18).
+      8. Per-question detail + variance table + Errors section.
 
-    Supports both v2.0 judge schema (``feedback`` / ``reviewer_summary``) and
-    v1.x (``reason`` / ``notes``) — falls back gracefully so old artefacts
-    still render without crashing. ``baseline_artifacts`` is optional; when
-    None the regression section renders an explicit "no baseline" note.
+    ``store_regressions`` is the W4 durable-trend regression block (FR-15); when
+    None the top-of-report regression banner is omitted (the runner always
+    passes it). Supports both v2.0 judge schema (``feedback`` /
+    ``reviewer_summary``) and v1.x (``reason`` / ``notes``) — falls back
+    gracefully so old artefacts still render. ``baseline_artifacts`` is
+    optional; when None the single-baseline section renders a "no baseline" note.
     """
     started = _parse_iso(meta.get("started_at"))
     ended = _parse_iso(meta.get("ended_at"))
@@ -1151,8 +1275,29 @@ def _render_report_md(
         lines.append(f"**Judge:** {judge_model}")
     lines.append("")
 
-    # --- FAILURES FIRST (the headline) ---------------------------------
-    # This block LEADS the report. The average is intentionally NOT here.
+    # --- AUTHORITATIVE VERDICT (the single headline) -------------------
+    # Exactly ONE verdict system in the headline (FR-18): the tiered verdict,
+    # FAIL first. The legacy heuristic buckets are NOT printed here — they live
+    # only in the collapsed soft-score appendix below, labelled non-authoritative.
+    lines.extend(_render_authoritative_verdict_headline(per_question_artifacts))
+
+    # --- Regressions AT THE TOP (FR-15) --------------------------------
+    # The durable-trend regression delta (downgrades, score drops, new
+    # invariants) is surfaced above any average + a link to the machine-readable
+    # ``_regressions.json`` is printed. When the runner did not compute a store
+    # diff (store_regressions=None) the banner is omitted.
+    if store_regressions is not None:
+        lines.extend(_render_store_regression_section(store_regressions))
+
+    # --- EXPANDED FAILURES (FR-17) -------------------------------------
+    # Every tiered FAIL, with its triggering invariant + answer excerpt +
+    # (for GROUNDING_CONTRADICTED) the claim-vs-sample mismatch inline.
+    lines.extend(_render_tiered_failures(per_question_artifacts))
+
+    # --- Legacy veto failure-first headline (detail) -------------------
+    # Kept for the worst-N / fabrication / degenerate / tool-failure / latency
+    # detail it provides; it is NO LONGER the headline (the tiered verdict above
+    # is). The average is intentionally NOT in this block.
     lines.extend(
         _render_failure_first_headline(
             judge_summary=judge_summary,
@@ -1160,7 +1305,7 @@ def _render_report_md(
         )
     )
 
-    # --- Regression vs baseline ----------------------------------------
+    # --- Regression vs baseline (single-baseline disk diff) ------------
     lines.extend(
         _render_regression_section(
             artifacts=per_question_artifacts,
@@ -1169,12 +1314,20 @@ def _render_report_md(
         )
     )
 
-    # --- Aggregate numbers (DEMOTED below the failures) ----------------
-    # These averages are a SECONDARY view — they smooth over the failures
-    # above and must never be read as the headline. The judge verdict is the
-    # AUTHORITATIVE grade; the legacy heuristic buckets are an advisory second
-    # opinion only (kept for the rollout, not a gate).
-    lines.append("## Aggregate numbers (secondary — see failures above)")
+    # --- Soft-score appendix (DEMOTED + COLLAPSED) ---------------------
+    # FR-16: the average + per-dimension means + the legacy heuristic buckets are
+    # the SECONDARY, smooth-over-failures view. They are collapsed inside a
+    # <details> block and clearly labelled non-authoritative so a reader is never
+    # shown two disagreeing scores at the same altitude (FR-18).
+    lines.append("<details>")
+    lines.append(
+        "<summary>Soft-score appendix (means, per-dimension averages, legacy buckets — non-authoritative)</summary>"
+    )
+    lines.append("")
+    lines.append("> These numbers smooth over the failures above and MUST NOT be")
+    lines.append("> read as the headline. The tiered **Verdict (authoritative)** at")
+    lines.append("> the top is the grade; the legacy heuristic buckets here are an")
+    lines.append("> advisory second opinion kept for the rollout — do not gate on them.")
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
@@ -1185,9 +1338,6 @@ def _render_report_md(
         score_min = judge_summary.get("score_min")
         score_min_str = f"{score_min} / 100" if isinstance(score_min, int | float) else "-"
         lines.append(f"| Judge min score | {score_min_str} |")
-        verdict_counts = judge_summary.get("verdict_counts") or {}
-        verdict_str = " · ".join(f"{c} {v}" for v, c in verdict_counts.items() if c) or "(none)"
-        lines.append(f"| Verdicts (AUTHORITATIVE) | {verdict_str} |")
         veto_counts = judge_summary.get("veto_counts") or {}
         if any(veto_counts.values()):
             veto_str = " · ".join(f"{c} {v}" for v, c in veto_counts.items() if c)
@@ -1203,11 +1353,7 @@ def _render_report_md(
     bucket_str = " · ".join(f"{c} {v}" for v, c in bucket_counts.items() if c) or "(none)"
     lines.append(f"| Heuristic buckets (legacy — ADVISORY ONLY, not authoritative) | {bucket_str} |")
     lines.append("")
-    lines.append(
-        "> **Authority:** the **Judge verdict** is the authoritative grade. "
-        "The legacy heuristic buckets are an advisory second opinion kept for "
-        "the rollout and may disagree; do not gate on them."
-    )
+    lines.append("</details>")
     lines.append("")
 
     # --- Per-question detail -------------------------------------------
@@ -1772,6 +1918,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     (out_dir / "_regressions.json").write_text(json.dumps(regressions, indent=2, sort_keys=True))
 
+    # PLAN-0110 W5: the durable store-backed regression block (FR-15) is now
+    # rendered AT THE TOP of the report (passed in via ``store_regressions``),
+    # not appended at the bottom — so a reader sees regressions before any
+    # average. ``_regressions.json`` (written above) is the machine-readable form.
     report_md = _render_report_md(
         meta=meta,
         summary=summary,
@@ -1779,11 +1929,8 @@ def main(argv: list[str] | None = None) -> int:
         per_question_artifacts=per_q_artifacts,
         baseline_artifacts=baseline_artifacts,
         baseline_label=baseline_label,
+        store_regressions=regressions,
     )
-    # Append the durable, store-backed regression block (FR-15). Kept as a small,
-    # clearly-delimited addition so the W5 report rewrite can hoist it to the top
-    # without untangling it from the legacy single-baseline section above.
-    report_md = report_md.rstrip("\n") + "\n\n" + "\n".join(_render_store_regression_section(regressions)) + "\n"
     (out_dir / "_report.md").write_text(report_md)
 
     print()

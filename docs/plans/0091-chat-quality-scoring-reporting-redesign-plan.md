@@ -769,9 +769,9 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 | test_report_contradiction_shows_claim_vs_sample | GROUNDING_CONTRADICTED renders claim+sample+delta | unit |
 
 **Acceptance criteria**:
-- [ ] Failure-first hierarchy; means demoted to collapsed appendix
-- [ ] One authoritative verdict; legacy buckets demoted/labelled (FR-18)
-- [ ] Each FAIL shows invariant + excerpt inline (FR-17)
+- [x] Failure-first hierarchy; means demoted to collapsed appendix
+- [x] One authoritative verdict; legacy buckets demoted/labelled (FR-18)
+- [x] Each FAIL shows invariant + excerpt inline (FR-17)
 
 ---
 
@@ -789,7 +789,7 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 - Render the regression delta (downgrades, score drops, new invariants) at the **top** of the report and link the machine-readable `_regressions.json`.
 
 **Acceptance criteria**:
-- [ ] Regressions appear above any average; `_regressions.json` referenced
+- [x] Regressions appear above any average; `_regressions.json` referenced
 
 ---
 
@@ -816,8 +816,8 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 - All `tests/validation/chat_eval/test_q*.py` + `test_new_topics_adversarial.py` + `test_iter3_topics.py` assert on `grade_response`; they must pass through the delegated engine unchanged in intent.
 
 **Acceptance criteria**:
-- [ ] No second scoring path: `chat_eval` PASS/FAIL is derived from the tiered engine
-- [ ] All existing `chat_eval` tests pass (R19)
+- [x] No second scoring path: `chat_eval` PASS/FAIL is derived from the tiered engine (`grading.py::tiered_verdict_for` → `grade_response` maps fired gate → HARMFUL/USELESS; legacy heuristics retained ADD-only so the gate can only get stricter)
+- [x] All existing `chat_eval` tests pass (R19) — 46 unit `test_grading.py` green; live-gated per-Q tests skip without a stack
 
 ---
 
@@ -841,8 +841,8 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 | `test_questions_schema.py` | schema validates the consolidated catalogue | unit |
 
 **Acceptance criteria**:
-- [ ] One canonical question catalogue; both entrypoints read it
-- [ ] No silent question loss; schema test green
+- [x] One canonical question catalogue (`chat_quality_benchmark/questions/*.yaml`); both entrypoints read it (benchmark runner natively; chat_eval via `harness.load_questions` projecting `chat_eval_id`-tagged entries). `chat_eval/questions.yaml` → deprecated empty stub.
+- [x] No silent question loss (all 9 q1..q8/a10 preserved + `ground_truth_assertions` merged in verbatim); schema test green + new `test_chat_eval_questions_consolidated_into_canonical_catalogue`
 
 ### Pre-read (W5)
 - `scripts/run_chat_quality_benchmark.py` (report section)
@@ -850,10 +850,10 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 - `tests/validation/chat_quality_benchmark/questions/`, `test_questions_schema.py`
 
 ### Validation Gate (W5)
-- [ ] ruff + mypy clean
-- [ ] ≥ 8 new/updated unit tests pass; **all** existing chat_eval tests green (R19)
-- [ ] Report leads with FAILs + regressions; means collapsed; one authoritative verdict
-- [ ] Single question catalogue; both runners read it
+- [x] ruff clean (touched files); mypy: no NEW errors introduced (pre-existing `_StandaloneClient`/harness `no-any-return`/`has-type` errors unchanged)
+- [x] 16 new unit tests pass (8 report + 6 grading delegation/loader + 2 schema consolidation); **all** existing chat_eval unit tests green (R19); live-stack per-Q + aggregate tests skip without `RAG_CHAT_BASE_URL`
+- [x] Report leads with FAILs + regressions; means collapsed in `<details>`; one authoritative verdict
+- [x] Single question catalogue; both runners read it
 
 ### Break Impact (W5)
 | Broken File | Why | Fix |

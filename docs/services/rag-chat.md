@@ -629,6 +629,35 @@ Use `python scripts/eval_retrieval.py --mode trust_sweep --trust-w-source <W>
 --trust-w-corroboration <W> --trust-w-extraction <W>` to run the eval harness
 (live sweep gated on PLAN-0063 §3 golden set completion).
 
+### Chat-Quality Scoring (PLAN-0110 — single authority)
+
+Chat answer quality has **one** authoritative scoring engine: the tiered
+`scripts/chat_quality_judge.py` (`VerdictDecision` = STRONG/PASS/WEAK/FAIL, with a
+deterministic, LLM-free **invariant gate** that hard-FAILs on
+`CONTROL_TOKEN_LEAK` / `TRUNCATED` / `EMPTY_AFTER_TOOLS` / `INFRA_NON_ANSWER` /
+`GROUNDING_CONTRADICTED` / `GROUNDING_FLOOR`).
+
+- **Benchmark runner** — `scripts/run_chat_quality_benchmark.py` produces a
+  **failure-first** `_report.md`: a single authoritative tiered-verdict count line
+  (FAIL first), the durable-trend regressions at the top (machine form:
+  `_regressions.json`), then every FAIL expanded with its triggering
+  `InvariantCode` + answer excerpt (and the claim-vs-sample mismatch inline for
+  `GROUNDING_CONTRADICTED`). The soft average + per-dimension means + the legacy
+  heuristic buckets are demoted into a collapsed `<details>` appendix labelled
+  non-authoritative.
+- **chat_eval acceptance gate** — `tests/validation/chat_eval/` is the binary
+  PASS/FAIL CI gate. Post-W5 it **delegates** its hard pass/fail to the tiered
+  engine: `grading.py::grade_response` calls `tiered_verdict_for(...)` (the
+  LLM-free invariant gate) and maps a fired fabrication-class gate → HARMFUL and
+  any other fired gate → USELESS. The legacy rubric heuristics are retained but
+  only refine USEFUL↔MARGINAL — there is no second divergent scoring path.
+- **Single question catalogue** — the canonical questions live in
+  `tests/validation/chat_quality_benchmark/questions/*.yaml`. Each acceptance
+  question carries both its judge `rubric:` and a `chat_eval_id:` +
+  `ground_truth_assertions:` block; `harness.load_questions()` reads those packs
+  and projects the `chat_eval_id`-tagged entries. The old
+  `tests/validation/chat_eval/questions.yaml` is a deprecated empty stub.
+
 ---
 
 ## Tenant Isolation

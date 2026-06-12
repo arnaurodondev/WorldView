@@ -111,6 +111,16 @@ def _artifact(
                 "refusal_judgment": {"score": 23, feedback_field: "Minor hedge."},
             },
             summary_field: "Solid summary; fix the uncited treasury figure.",
+            # PLAN-0110 W1/W5: the tiered verdict_decision is the AUTHORITATIVE
+            # block the report's single-authority headline reads.
+            "verdict_decision": {
+                "verdict": "PASS",
+                "quality_score": score,
+                "fail_reason": None,
+                "gate_results": {},
+                "grounding_check": {"matched": 0, "unmatched": 0, "contradicted": 0, "examples": []},
+                "dimensions": {"tool_use": 25, "grounding": 22, "framing": 25, "refusal_judgment": 23},
+            },
         },
     }
 
@@ -130,19 +140,21 @@ def test_report_renders_minimal_run() -> None:
     )
     assert md
     assert "# Chat Quality Benchmark — run_20260608T185920Z" in md
-    # Failure-first redesign (audit 2026-06-11 F5): the report now LEADS with
-    # the failures block; the average is DEMOTED into "Aggregate numbers".
+    # PLAN-0110 W5: the report now LEADS with the single authoritative tiered
+    # verdict; the average + legacy buckets are DEMOTED into a collapsed
+    # <details> soft-score appendix.
+    assert "## ⛔ Verdict (authoritative)" in md
     assert "## ⛔ Failures first" in md
-    # The headline (failures) appears BEFORE the aggregate average.
-    assert md.index("## ⛔ Failures first") < md.index("## Aggregate numbers")
-    assert "## Aggregate numbers" in md
+    # The authoritative verdict headline precedes the failures-first detail,
+    # which precedes the collapsed soft-score appendix.
+    assert md.index("## ⛔ Verdict (authoritative)") < md.index("## ⛔ Failures first")
+    assert md.index("## ⛔ Failures first") < md.index("Soft-score appendix")
+    assert "Soft-score appendix" in md
     assert "Judge avg score" in md
     assert "95.00 / 100" in md
-    assert "1 PASS" in md  # verdict roll-up
-    # Heuristic bucket row always renders, even without judge data, and is now
-    # explicitly labelled advisory-only (judge is authoritative).
+    # Heuristic bucket row always renders (in the appendix), and is now
+    # explicitly labelled advisory-only (the tiered verdict is authoritative).
     assert "Heuristic buckets (legacy" in md
-    assert "AUTHORITATIVE" in md
 
 
 def test_report_includes_per_question_answer_and_judge() -> None:
@@ -328,19 +340,21 @@ def test_report_counts_latency_breaches() -> None:
 
 
 def test_report_demotes_average_below_failures() -> None:
-    """The average is in 'Aggregate numbers (secondary ...)' AFTER the failures."""
+    """The average lives in a collapsed <details> soft-score appendix AFTER the failures (FR-16)."""
     md = _render_report_md(
         meta=_meta(),
         summary=_summary(),
         judge_summary=_judge_summary(),
         per_question_artifacts=[_artifact()],
     )
-    assert "## Aggregate numbers (secondary — see failures above)" in md
-    assert md.index("## ⛔ Failures first") < md.index("## Aggregate numbers")
-    # Judge is explicitly authoritative; legacy buckets advisory.
-    assert "Verdicts (AUTHORITATIVE)" in md
+    # The average is inside a collapsed <details> appendix, below the failures.
+    assert "<details>" in md
+    assert "Soft-score appendix" in md
+    assert md.index("## ⛔ Failures first") < md.index("Soft-score appendix")
+    # The collapse opens AFTER the failures-first block (the average is demoted).
+    assert md.index("## ⛔ Failures first") < md.index("<details>")
+    # Legacy buckets are advisory-only inside the appendix.
     assert "ADVISORY ONLY" in md
-    assert "**Authority:**" in md
 
 
 def test_report_regression_section_renders_deltas() -> None:
@@ -376,6 +390,158 @@ def test_report_regression_section_no_baseline() -> None:
     )
     assert "## Regression vs baseline" in md
     assert "no baseline run found" in md
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0110 W5 — single-authority headline + expanded tiered failures + top
+# regressions (T-W5-01 / T-W5-02 / FR-15..18)
+# ---------------------------------------------------------------------------
+
+
+def _tiered_fail_artifact(
+    *,
+    q_id: str,
+    slot: str | None = None,
+    fail_reason: str | None = "CONTROL_TOKEN_LEAK",
+    quality_score: int = 30,
+    answer: str = "<function_calls><invoke name=get_entity_news>",
+    grounding_examples: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build an artefact whose tiered ``verdict_decision`` is FAIL."""
+    art = _artifact(q_id=q_id, score=quality_score, answer=answer, bucket="FAIL")
+    art["slot"] = slot or f"q_{q_id}"
+    art["judge"]["verdict"] = "FAIL"
+    art["judge"]["verdict_decision"] = {
+        "verdict": "FAIL",
+        "quality_score": quality_score,
+        "fail_reason": fail_reason,
+        "gate_results": {},
+        "grounding_check": {
+            "matched": 0,
+            "unmatched": 0,
+            "contradicted": 1 if fail_reason == "GROUNDING_CONTRADICTED" else 0,
+            "examples": grounding_examples or [],
+        },
+        "dimensions": {"tool_use": 10, "grounding": 5, "framing": 10, "refusal_judgment": 5},
+    }
+    return art
+
+
+def test_report_failures_lead() -> None:
+    """The expanded FAIL section precedes the demoted soft-score appendix (FR-16)."""
+    arts = [_artifact(q_id="good", score=95), _tiered_fail_artifact(q_id="leak")]
+    md = _render_report_md(
+        meta=_meta(total_questions=2, total_runs=2),
+        summary=_summary(),
+        judge_summary=_judge_summary(),
+        per_question_artifacts=arts,
+    )
+    assert "## ⛔ Failures (every FAIL — expanded)" in md
+    # The expanded failures section comes before the means appendix.
+    assert md.index("## ⛔ Failures (every FAIL — expanded)") < md.index("Soft-score appendix")
+    # The failing slot + its invariant code are shown inline.
+    assert "`q_leak`" in md
+    assert "FAIL[CONTROL_TOKEN_LEAK]" in md
+
+
+def test_report_single_authority() -> None:
+    """Exactly one verdict system in the headline; legacy buckets demoted (FR-18)."""
+    md = _render_report_md(
+        meta=_meta(),
+        summary=_summary(bucket_counts={"PASS": 1, "WARN": 0, "FAIL": 0, "EXCEPTION": 0}),
+        judge_summary=_judge_summary(),
+        per_question_artifacts=[_artifact()],
+    )
+    # The single authoritative verdict headline is present and labelled.
+    assert "## ⛔ Verdict (authoritative)" in md
+    assert "single authority" in md
+    # The legacy heuristic buckets do NOT appear in the headline — they appear
+    # only inside the collapsed appendix, AFTER the <details> opener.
+    assert "Heuristic buckets (legacy" in md
+    assert md.index("<details>") < md.index("Heuristic buckets (legacy")
+    # And there is no second verdict-count line above the appendix.
+    head = md[: md.index("<details>")]
+    assert "Heuristic buckets" not in head
+
+
+def test_report_contradiction_shows_claim_vs_sample() -> None:
+    """GROUNDING_CONTRADICTED renders claim + sample + delta inline (FR-17)."""
+    examples = [
+        {
+            "field": "total_holdings",
+            "claim": 271474.0,
+            "claim_text": "271,474 BTC",
+            "nearest_sample": 252220.0,
+            "delta": 19254.0,
+        }
+    ]
+    art = _tiered_fail_artifact(
+        q_id="ru_mstr_news",
+        fail_reason="GROUNDING_CONTRADICTED",
+        answer="MSTR now holds 271,474 BTC after the latest purchase.",
+        grounding_examples=examples,
+    )
+    md = _render_report_md(
+        meta=_meta(),
+        summary=_summary(),
+        judge_summary=_judge_summary(),
+        per_question_artifacts=[art],
+    )
+    assert "FAIL[GROUNDING_CONTRADICTED]" in md
+    # Claim text, the contradicting sampled field + value, and the delta.
+    assert "271,474 BTC" in md
+    assert "total_holdings" in md
+    assert "252220" in md
+    assert "Δ 19254" in md
+
+
+def test_report_surfaces_store_regressions_at_top() -> None:
+    """The durable-trend regression banner is rendered above the soft-score appendix (FR-15)."""
+    store_regs = {
+        "total_regressions": 1,
+        "has_regressions": True,
+        "baseline": {
+            "available": True,
+            "label": "run_20260601T000000Z",
+            "shared_questions": 5,
+            "regressions": [
+                {
+                    "question_id": "ru_mstr_news",
+                    "run_index": 0,
+                    "verdict_from": "PASS",
+                    "verdict_to": "FAIL",
+                    "score_delta": -40,
+                    "reasons": ["verdict downgrade PASS→FAIL"],
+                }
+            ],
+        },
+        "window": {"available": False},
+    }
+    md = _render_report_md(
+        meta=_meta(),
+        summary=_summary(),
+        judge_summary=_judge_summary(),
+        per_question_artifacts=[_artifact()],
+        store_regressions=store_regs,
+    )
+    assert "## 📉 Regressions (durable trend, machine: `_regressions.json`)" in md
+    assert "PASS → FAIL" in md
+    # Regressions appear ABOVE any average (FR-15).
+    assert md.index("## 📉 Regressions") < md.index("Soft-score appendix")
+
+
+def test_report_omits_store_regression_banner_when_none() -> None:
+    """Without a store_regressions block the top banner is omitted (no crash)."""
+    md = _render_report_md(
+        meta=_meta(),
+        summary=_summary(),
+        judge_summary=_judge_summary(),
+        per_question_artifacts=[_artifact()],
+        store_regressions=None,
+    )
+    # The single-baseline section still renders; the durable banner is absent.
+    assert "## 📉 Regressions (durable trend" not in md
+    assert "## ⛔ Verdict (authoritative)" in md
 
 
 # ---------------------------------------------------------------------------
