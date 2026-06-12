@@ -77,6 +77,33 @@ async def test_period_movers_row_includes_last_price() -> None:
 
 
 @pytest.mark.asyncio
+async def test_period_movers_prev_bar_is_two_tier_left_join() -> None:
+    """Regression (chat-eval root cause C, 2026-06-12): non-1D periods empty.
+
+    The ``prev`` LATERAL MUST be a two-tier LEFT JOIN so instruments whose daily
+    history is shorter than the lookback window (the common case for 1W/1M in a
+    young universe) still produce a period return instead of being silently
+    dropped by an INNER JOIN. Pins the SQL shape so the fix cannot be reverted
+    without failing CI:
+      * ``LEFT JOIN LATERAL`` for ``prev`` (not a bare ``JOIN``)
+      * tier-1 predicate: ``bar_date <= latest.bar_date - INTERVAL ...``
+      * tier-2 fallback predicate: ``bar_date < latest.bar_date`` ordered ASC
+      * NULLS LAST so single-bar instruments (no prev) sort last, never first
+    """
+    session, captured = _session_with_mapping_rows([])
+    repo = PgOHLCVRepository(session)
+
+    await repo.get_period_movers(lookback_days=7, mover_type="gainers", limit=10)
+
+    sql = " ".join(str(captured[0][0]).split())
+    assert "LEFT JOIN LATERAL" in sql, "prev must be a LEFT JOIN to retain short-history instruments"
+    assert "bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)" in sql
+    assert "bar_date < latest.bar_date" in sql, "tier-2 fallback baseline must be present"
+    assert "ORDER BY bar_date ASC LIMIT 1" in sql, "tier-2 picks the OLDEST available baseline"
+    assert "NULLS LAST" in sql
+
+
+@pytest.mark.asyncio
 async def test_period_movers_null_last_price_stays_null() -> None:
     """NULL close (defensive) maps to None, never 0.0."""
     session, _ = _session_with_mapping_rows(
@@ -134,6 +161,26 @@ async def test_sector_returns_row_includes_top_mover() -> None:
     sql = str(captured[0][0])
     assert "ABS(return_pct) DESC" in sql
     assert "DISTINCT ON (sector)" in sql
+
+
+@pytest.mark.asyncio
+async def test_sector_returns_prev_bar_is_two_tier_left_join() -> None:
+    """Regression (chat-eval root cause C, 2026-06-12): sector 1W/1M collapse.
+
+    Mirrors the get_period_movers fix — the per-instrument ``prev`` LATERAL must
+    be a two-tier LEFT JOIN so short-history instruments still contribute to the
+    sector average instead of dropping out of the per_instrument CTE.
+    """
+    session, captured = _session_with_mapping_rows([])
+    repo = PgOHLCVRepository(session)
+
+    await repo.get_sector_period_returns(lookback_days=30)
+
+    sql = " ".join(str(captured[0][0]).split())
+    assert "LEFT JOIN LATERAL" in sql
+    assert "bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)" in sql
+    assert "bar_date < latest.bar_date" in sql
+    assert "ORDER BY bar_date ASC LIMIT 1" in sql
 
 
 @pytest.mark.asyncio

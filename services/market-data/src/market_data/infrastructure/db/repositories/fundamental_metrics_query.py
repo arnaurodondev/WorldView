@@ -384,6 +384,27 @@ async def query_screen(
     # SET LOCAL is session-safe for pooled connections (reverts at transaction end).
     await session.execute(text("SET LOCAL statement_timeout = '8000'"))
 
+    # ── Default ORDER BY (2026-06-12, chat-eval root cause #5) ───────────────
+    # WHY: before this, an absent ``sort_by`` left BOTH branches sorting by
+    # ``symbol`` (alphabetical) and then truncating at ``limit`` — so a
+    # "top 5 by market cap" request (no explicit sort) returned the first 5
+    # tickers alphabetically (CRM, IBM, …) rather than the genuine top-5
+    # (GOOGL/AVGO/META). The LLM then "sorted" only the 20 rows it happened to
+    # see, producing a confidently-WRONG ranked list (``iter3_top5_tech_marketcap``).
+    #
+    # Fix: when the caller does not pin a sort, default to the PRIMARY FILTER
+    # METRIC descending when a metric filter is present (so "revenue_growth_yoy
+    # ≥ 0.2, biggest first" works without an explicit sort), otherwise to
+    # ``market_capitalization`` descending (the natural "biggest companies first"
+    # default). The ORDER BY is applied in SQL BEFORE the LIMIT so the true
+    # top-N is always in the rendered page. ``sort_by`` is still resolved through
+    # ORM attributes / validated subquery columns below — never interpolated.
+    if sort_by is None:
+        primary_metric = next((f.metric for f in filters if f.metric), None)
+        sort_by = primary_metric if primary_metric is not None else "market_capitalization"
+        # A default-applied sort is "biggest/highest first" — descending.
+        sort_order = "desc"
+
     instr = InstrumentModel
     snap = InstrumentFundamentalsSnapshotModel
 
@@ -422,15 +443,86 @@ async def query_screen(
         #      660 x 10. Index ix_fundamental_metrics_instrument_metric
         #      (instrument_id, metric, as_of_date) makes this a 200-row index
         #      seek instead of a 230k-row scan.
-        page_q = (
-            select(instr.id, instr.symbol, instr.name, instr.exchange, instr.sector)
-            .order_by(instr.symbol.asc())
-            .offset(offset)
-            .limit(limit)
-        )
+        # ── Page-selection ORDER BY (2026-06-12, chat-eval root cause #5) ────
+        # WHY this is the heart of the "top-N" fix: the LIMIT/OFFSET that defines
+        # which instruments make the page is applied HERE. Previously this query
+        # ALWAYS ordered by ``symbol`` and ignored ``sort_by`` entirely, so a
+        # "top 5 by market cap" (no filters → this branch) returned the first 5
+        # tickers alphabetically, NOT the 5 largest. The metric sort that the
+        # SELECT below applied was cosmetic — it only reordered the already-wrong
+        # alphabetical page. We now resolve the requested ``sort_by`` to a
+        # sortable expression and order the PAGE query by it before LIMIT.
+        #
+        # ``sort_by`` is one of:
+        #   • ``ticker`` / ``name`` — direct instruments columns
+        #   • a snapshot column     — LEFT JOIN instrument_fundamentals_snapshot
+        #   • a fundamental_metrics metric (default ``market_capitalization``,
+        #     plus any ``_KEY_METRICS`` entry) — LEFT JOIN the latest value
+        # Anything unrecognised falls back to ``symbol`` ASC (the prior default)
+        # so an unknown sort key can never 500 the default screener view.
+        page_q = select(instr.id, instr.symbol, instr.name, instr.exchange, instr.sector)
+
+        page_sort_col: Any
+        if sort_by == "ticker":
+            page_sort_col = instr.symbol
+        elif sort_by == "name":
+            page_sort_col = instr.name
+        elif sort_by in snap_fields_available:
+            # Snapshot column — LEFT JOIN so instruments without a snapshot row
+            # still appear (NULL sorts last via nullslast below).
+            page_q = page_q.outerjoin(snap, instr.id == snap.instrument_id)
+            page_sort_col = getattr(snap, sort_by)
+        elif sort_by is not None and sort_by != "current_price":
+            # Treat as a fundamental_metrics metric: LEFT JOIN its latest value.
+            # current_price (quotes.last) is intentionally NOT a page-sort target
+            # here — it is a display-only enrichment, so it falls through to the
+            # symbol default rather than driving which instruments make the page.
+            sort_metric = FundamentalMetricModel
+            sort_latest_sq = (
+                select(
+                    sort_metric.instrument_id.label("instrument_id"),
+                    func.max(sort_metric.as_of_date).label("max_date"),
+                )
+                .where(sort_metric.metric == sort_by)
+                .group_by(sort_metric.instrument_id)
+                .subquery(name="page_sort_latest")
+            )
+            sort_val_sq = (
+                select(
+                    sort_metric.instrument_id.label("instrument_id"),
+                    sort_metric.value_numeric.label("value_numeric"),
+                )
+                .join(
+                    sort_latest_sq,
+                    and_(
+                        sort_metric.instrument_id == sort_latest_sq.c.instrument_id,
+                        sort_metric.as_of_date == sort_latest_sq.c.max_date,
+                        sort_metric.metric == sort_by,
+                    ),
+                )
+                .subquery(name="page_sort_val")
+            )
+            page_q = page_q.outerjoin(sort_val_sq, instr.id == sort_val_sq.c.instrument_id)
+            page_sort_col = sort_val_sq.c.value_numeric
+        else:
+            page_sort_col = None
+
+        if page_sort_col is not None:
+            # nullslast(): instruments missing the sort metric sort to the END in
+            # BOTH directions (a NULL market cap must never beat a real one).
+            # Secondary symbol sort gives a stable, deterministic tie-break.
+            page_order = page_sort_col.desc().nullslast() if sort_order == "desc" else page_sort_col.asc().nullslast()
+            page_q = page_q.order_by(page_order, instr.symbol.asc())
+        else:
+            page_q = page_q.order_by(instr.symbol.asc())
+
+        page_q = page_q.offset(offset).limit(limit)
         page_rows = (await session.execute(page_q)).all()
         if not page_rows:
             return [], 0
+        # Preserve the page query's sort order through to the response: page_ids
+        # is consumed below to scope the metric subqueries, and the final result
+        # is re-sorted using this same key so the rendered order matches.
         page_ids = [r.id for r in page_rows]
 
         total_row = await session.execute(select(func.count()).select_from(instr))
@@ -489,7 +581,13 @@ async def query_screen(
         for sf in snap_fields_available:
             select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
-        stmt = select(*select_cols).where(instr.id.in_(page_ids)).order_by(instr.symbol.asc())
+        # NB: no SQL ORDER BY here — the page query above already established
+        # the correct sorted top-N order (e.g. market cap DESC). We re-sort the
+        # enriched rows in Python by their position in ``page_ids`` so the
+        # rendered order matches the page selection exactly (a SQL ORDER BY on
+        # this enrichment SELECT would re-sort alphabetically and silently undo
+        # the metric sort — the original "top-N" bug).
+        stmt = select(*select_cols).where(instr.id.in_(page_ids))
         for sq in key_sqs.values():
             stmt = stmt.outerjoin(sq, instr.id == sq.c.instrument_id)
         stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
@@ -499,6 +597,11 @@ async def query_screen(
         rows = result.all()
         if not rows:
             return [], total
+
+        # Restore the page query's sort order (rows come back in arbitrary order
+        # because the IN (...) lookup is unordered).
+        _page_rank = {iid: idx for idx, iid in enumerate(page_ids)}
+        rows = sorted(rows, key=lambda r: _page_rank.get(r.instrument_id, len(page_ids)))
 
         # 2026-06-10: page-bounded extras — latest daily volume + absolute
         # 52-week high/low (key metrics already projected via the LATERALs

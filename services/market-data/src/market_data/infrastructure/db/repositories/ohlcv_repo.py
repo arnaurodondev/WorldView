@@ -287,6 +287,12 @@ class PgOHLCVRepository(OHLCVRepository):
         Uses LATERAL JOINs: first subquery finds the latest daily bar, second finds
         the closest daily bar at-or-before the lookback horizon.
 
+        2026-06-12 (chat-eval root cause C): the ``prev`` LATERAL is now a
+        two-tier ``LEFT JOIN`` (mirrors ``get_period_movers``) so sectors whose
+        instruments have a daily history SHORTER than the lookback window still
+        contribute a return instead of being silently dropped — this previously
+        made 1W/1M sector heatmaps collapse to a handful of long-history names.
+
         2026-06-10 (frontend audit gap #6): each sector row now also carries
         ``top_mover_ticker`` / ``top_mover_return_pct`` — the instrument with the
         largest ABSOLUTE period return within the sector. The frontend heatmap
@@ -307,11 +313,25 @@ class PgOHLCVRepository(OHLCVRepository):
                     WHERE instrument_id = i.id AND timeframe = '1d'
                     ORDER BY bar_date DESC LIMIT 1
                 ) latest ON true
-                JOIN LATERAL (
-                    SELECT close FROM ohlcv_bars
-                    WHERE instrument_id = i.id AND timeframe = '1d'
-                      AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
-                    ORDER BY bar_date DESC LIMIT 1
+                LEFT JOIN LATERAL (
+                    -- Two-tier prev: at-or-before horizon, else oldest bar
+                    -- before latest (see get_period_movers for rationale).
+                    SELECT close FROM (
+                        (
+                            SELECT close, bar_date, 0 AS tier FROM ohlcv_bars
+                            WHERE instrument_id = i.id AND timeframe = '1d'
+                              AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                            ORDER BY bar_date DESC LIMIT 1
+                        )
+                        UNION ALL
+                        (
+                            SELECT close, bar_date, 1 AS tier FROM ohlcv_bars
+                            WHERE instrument_id = i.id AND timeframe = '1d'
+                              AND bar_date < latest.bar_date
+                            ORDER BY bar_date ASC LIMIT 1
+                        )
+                    ) candidates
+                    ORDER BY tier ASC LIMIT 1
                 ) prev ON true
                 WHERE i.sector IS NOT NULL
             ),
@@ -372,6 +392,21 @@ class PgOHLCVRepository(OHLCVRepository):
 
         WHY daily bars + calendar lookback: see get_sector_period_returns docstring.
         offset: SQL OFFSET for paginating through the sorted leaderboard.
+
+        2026-06-12 (chat-eval root cause C — non-1D periods returned empty):
+        the ``prev`` LATERAL was an INNER JOIN requiring a daily bar AT OR BEFORE
+        ``latest.bar_date - N days``. For ``1D`` (N=1) virtually every instrument
+        has such a bar, so movers populated. For ``1W`` (N=7) / ``1M`` (N=30) any
+        instrument whose daily history is SHORTER than the lookback window had no
+        qualifying ``prev`` bar and was silently dropped by the INNER JOIN — so
+        the live ``period="1W"`` request collapsed to a 1-item placeholder
+        (``tc_movers_week_losers``). The fix makes ``prev`` a two-tier
+        ``LEFT JOIN LATERAL``: prefer the bar at-or-before the horizon, but fall
+        back to the OLDEST available bar strictly before ``latest`` when the
+        instrument's history is shorter than the window. ``period_return_pct`` is
+        then computed against the best-available baseline instead of dropping the
+        instrument. Instruments with only ONE daily bar (no prior bar at all)
+        still yield ``prev IS NULL`` → NULL return → sorted last via NULLS LAST.
         """
         order = "DESC" if mover_type == "gainers" else "ASC"
         # 2026-06-10 (frontend audit gap #4): also project the latest daily close
@@ -392,11 +427,30 @@ class PgOHLCVRepository(OHLCVRepository):
                 WHERE instrument_id = i.id AND timeframe = '1d'
                 ORDER BY bar_date DESC LIMIT 1
             ) latest ON true
-            JOIN LATERAL (
-                SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = '1d'
-                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
-                ORDER BY bar_date DESC LIMIT 1
+            LEFT JOIN LATERAL (
+                -- Tier 1: most recent bar at-or-before the lookback horizon.
+                -- Tier 2 (fallback): oldest bar strictly before ``latest`` when
+                -- the instrument's history is shorter than the window. Picking
+                -- the OLDEST (not newest) fallback maximises the lookback we can
+                -- honour with the data available, so a 1W return on an
+                -- instrument with 4 days of history compares latest vs its
+                -- earliest bar rather than dropping it.
+                SELECT close FROM (
+                    (
+                        SELECT close, bar_date, 0 AS tier FROM ohlcv_bars
+                        WHERE instrument_id = i.id AND timeframe = '1d'
+                          AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                        ORDER BY bar_date DESC LIMIT 1
+                    )
+                    UNION ALL
+                    (
+                        SELECT close, bar_date, 1 AS tier FROM ohlcv_bars
+                        WHERE instrument_id = i.id AND timeframe = '1d'
+                          AND bar_date < latest.bar_date
+                        ORDER BY bar_date ASC LIMIT 1
+                    )
+                ) candidates
+                ORDER BY tier ASC LIMIT 1
             ) prev ON true
             WHERE i.sector IS NOT NULL
             ORDER BY period_return_pct {order} NULLS LAST
