@@ -65,7 +65,14 @@ class PathInsightWorker:
         scorer: PathScorer service.
         template_matcher: PathTemplateMatcher service.
         instance_uuid: Stable worker identity used for SKIP LOCKED claim.
-        batch_size: Number of jobs to claim per cycle.
+        batch_size: Number of jobs to claim — and process CONCURRENTLY via
+                    ``asyncio.gather`` — per cycle.  PLAN-0111 A-5: lowered from
+                    10 to 3.  Each job fires a 2-hop AND a 3-hop AGE query, so a
+                    batch of 10 launched up to 20 heavy edge-expansion queries
+                    against Postgres at once, saturating it so they ALL breached
+                    the per-query statement_timeout and failed together.  Three
+                    concurrent jobs (≤6 in-flight queries) keeps Postgres below
+                    that cliff while still parallelising the work.
     """
 
     def __init__(
@@ -75,7 +82,7 @@ class PathInsightWorker:
         scorer: PathScorer,
         template_matcher: PathTemplateMatcher,
         instance_uuid: UUID,
-        batch_size: int = 10,
+        batch_size: int = 3,
     ) -> None:
         self._sf = session_factory
         self._path_discovery = path_discovery

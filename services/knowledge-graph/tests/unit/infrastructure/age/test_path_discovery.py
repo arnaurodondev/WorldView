@@ -267,3 +267,27 @@ class TestPathDiscovery:
         paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
         # Only 1 unique path despite 2 identical rows
         assert len(paths) == 1
+
+
+class TestTimeoutConstantsInvariant:
+    """Regression guard for the PLAN-0111 A-3 timeout inversion.
+
+    The DB-side ``statement_timeout`` MUST fire STRICTLY BEFORE the per-query
+    ``asyncio.wait_for`` budget so Postgres cancels its own query cleanly
+    instead of the client abandoning an orphaned connection (which produced
+    "could not send data to client: Broken pipe" log spam and 1,172 failed
+    path_insight_jobs).
+    """
+
+    def test_statement_timeout_strictly_less_than_per_query_wait_for(self) -> None:
+        from knowledge_graph.infrastructure.age import path_discovery as pd
+
+        # Per-query wait_for budget = half the overall discovery budget.
+        per_query_wait_for_s = pd._DISCOVERY_TIMEOUT_SECONDS / 2
+        statement_timeout_s = float(pd._STATEMENT_TIMEOUT_MS) / 1000.0
+
+        # DB cancels before the client → no orphaned query, no broken pipe.
+        assert statement_timeout_s < per_query_wait_for_s, (
+            f"statement_timeout ({statement_timeout_s}s) must be < per-query "
+            f"wait_for ({per_query_wait_for_s}s) — see PLAN-0111 A-3 / BP-688"
+        )

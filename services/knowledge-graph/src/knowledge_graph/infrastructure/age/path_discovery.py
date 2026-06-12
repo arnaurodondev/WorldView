@@ -50,9 +50,20 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# Statement timeout for the AGE multi-hop query — 60s per design spec (T-E1-03).
+# Overall discovery budget — 60s per design spec (T-E1-03).  Each of the two
+# per-query asyncio.wait_for() guards uses half of this (30s).
 _DISCOVERY_TIMEOUT_SECONDS = 60.0
-_STATEMENT_TIMEOUT_MS = "60000"
+
+# DB-side statement_timeout for each AGE query.  MUST be STRICTLY LESS than the
+# per-query wait_for budget (_DISCOVERY_TIMEOUT_SECONDS / 2 = 30s) so Postgres
+# cancels the query itself BEFORE the client gives up (PLAN-0111 A-3).  The
+# previous value (60000ms = 60s) inverted this: the client wait_for fired at
+# 30s and abandoned the connection while the DB kept executing to 60s, leaving
+# an orphaned query that logged "could not send data to client: Broken pipe" /
+# "connection to client lost" (1,172 failed path_insight_jobs).  At 25s the DB
+# raises a clean ``canceling statement due to statement timeout`` that is caught
+# and mapped to PathDiscoveryTimeoutError — no orphaned connection, no spam.
+_STATEMENT_TIMEOUT_MS = "25000"
 
 # Hard cap on returned paths per hop-length query.
 _PATH_LIMIT = 200
