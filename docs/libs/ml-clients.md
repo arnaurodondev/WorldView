@@ -106,6 +106,7 @@ All are `@dataclass(frozen=True)` — immutable.
 | `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `[gemini]` |
 | `DeepInfraDescriptionAdapter` | `EntityDescriptionClient` | DeepInfra (OpenAI-compat) | `Qwen/Qwen3-235B-A22B-Instruct-2507` (primary), `Qwen/Qwen3-32B` (fallback) | `[openai]` |
 | `CohereRerankAdapter` | (custom) | Cohere Rerank API v2 | `rerank-english-v3.0` | — |
+| `EmbeddingGemmaRouterAdapter` | (custom — *not* `EmbeddingClient`) | DeepInfra OpenAI-compat `/embeddings` | `google/embeddinggemma-300m` (768-dim, MRL→512/256/128) | — |
 | `NullDescriptionAdapter` | `EntityDescriptionClient` | No-op (always returns None) | — | — |
 
 **Error mapping contract** (all adapters):
@@ -414,6 +415,34 @@ BGE-large has a 512-token BERT context window. Texts exceeding ~512 tokens cause
 the GGML runner to abort (BP-121). Both `DeepInfraEmbeddingAdapter` and
 `OllamaEmbeddingAdapter` apply a 1500-character truncation limit so that ingestion
 embeddings and query embeddings remain in the same semantic space.
+
+### `EmbeddingGemmaRouterAdapter` — news-routing classifier (PLAN-0111 C-1)
+
+`google/embeddinggemma-300m` (DeepInfra, 768-dim) produces the **classifier input
+vector** for the news-routing cascade router: a short headline (`title + subtitle`)
+is embedded once, then a small calibrated head decides the routing tier.
+
+Key design points:
+
+- **Separate vector space.** This embedding is **never** ANN-compared against the
+  BGE retrieval vectors (`DeepInfraEmbeddingAdapter`, 1024-dim). To make that
+  invariant structural, the adapter is deliberately **not** an `EmbeddingClient`
+  and returns raw `list[list[float]]` rather than `EmbeddingOutput` — so it can't
+  be accidentally wired into the retrieval path.
+- **Task-specific prompts.** EmbeddingGemma is prompt-conditioned.
+  `embed_for_classification(texts)` prepends `task: classification | query: ` (the
+  router default, since the downstream use is a classifier). `embed_documents(
+  (title, content))` uses the retrieval form `title: {title} | text: {content}`.
+- **Matryoshka (MRL) truncation.** Native 768d; pass `dimensions=512|256|128` to
+  truncate **client-side** then **L2-renormalize** to unit norm (per the model
+  card). DeepInfra also accepts a server-side `dimensions` param, but we truncate
+  client-side so the renormalization is explicit and deterministic.
+- `encoding_format=float` (the model is float32/bfloat16, **not** float16); timeout
+  is wrapped in `httpx.Timeout` (BP-235). Verified live 2026-06-12: 200 OK, 768d,
+  ~0.32s; finance/finance cosine 0.76 > finance/sports 0.58.
+
+Config lives on `MLClientsSettings` (`router_embedding_*`); the API key is read
+from the environment (`*_DEEPINFRA_API_KEY`), never hardcoded.
 
 ---
 

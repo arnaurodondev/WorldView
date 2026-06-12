@@ -13,3 +13,12 @@ class MLClientsSettings(BaseSettings):
     extraction_model_id: str = "qwen2.5:7b-instruct"
     ner_model_path: str = "urchade/gliner_large-v2.1"
     max_ollama_concurrent: int = 4  # asyncio.Semaphore value
+
+    # News-routing cascade router embedding (PLAN-0111 Sub-Plan C).
+    # EmbeddingGemma lives in its OWN vector space (classifier input only) — it is
+    # NEVER ANN-compared against the BGE retrieval vectors. The API key is read
+    # from the environment, never hardcoded.
+    router_embedding_model_id: str = "google/embeddinggemma-300m"
+    router_embedding_base_url: str = "https://api.deepinfra.com/v1/openai"
+    router_embedding_dimensions: int = 768  # MRL cut point: 768/512/256/128
+    router_embedding_api_key: str = ""  # injected via env (e.g. *_DEEPINFRA_API_KEY)

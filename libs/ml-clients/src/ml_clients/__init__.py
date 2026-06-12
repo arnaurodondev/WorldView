@@ -1,5 +1,6 @@
 """ml-clients — ML model client protocols and adapters."""
 
+from ml_clients.adapters.embeddinggemma_router import EmbeddingGemmaRouterAdapter
 from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
 from ml_clients.config import MLClientsSettings
 from ml_clients.cost import estimate_cost, estimate_tokens_from_text
@@ -25,6 +26,7 @@ from ml_clients.usage_log import LlmCallUsage, LlmUsageLogProtocol
 
 __all__ = [
     "EmbeddingClient",
+    "EmbeddingGemmaRouterAdapter",
     "EmbeddingInput",
     "EmbeddingOutput",
     "EntityDescriptionClient",

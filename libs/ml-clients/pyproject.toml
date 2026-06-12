@@ -38,6 +38,7 @@ module = [
     "openai.*",
     "google.*",
     "google.genai.*",
+    "observability.*",
 ]
 ignore_missing_imports = true
 

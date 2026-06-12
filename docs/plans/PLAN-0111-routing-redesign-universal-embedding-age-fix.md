@@ -79,10 +79,10 @@ exist for LIGHT but chat queries chunk-granularity, so they're dead weight.
 Incremental: ship the learned classifier first, extend to the cascade. Built against
 `docs/thesis/references-routing-and-infra.md`.
 
-| Wave | Task |
-|------|------|
-| C-1 | EmbeddingGemma adapter in `libs/ml-clients` (DeepInfra; `task: classification` + `title:/text:` prompt; MRL truncation; 768d/256d) |
-| C-2 | Compute + persist router embedding on `title + subtitle` at routing time (new column/table for training + inference) |
+| Wave | Task | Status |
+|------|------|--------|
+| C-1 | EmbeddingGemma adapter in `libs/ml-clients` (DeepInfra; `task: classification` + `title:/text:` prompt; MRL truncation; 768d/256d) | ✅ done (`EmbeddingGemmaRouterAdapter`, 18 tests, live-verified `google/embeddinggemma-300m`) |
+| C-2 | Compute + persist router embedding on `title + subtitle` at routing time (new column/table for training + inference) | pending |
 | C-3 | Build labeled dataset: retroactive **extraction-yield** label per historical doc (≥1 relation/claim/event) JOINed to `routing_decisions`. Labels are now clean post the silent-except fix (timeouts no longer masquerade as "0 yield") |
 | C-4 | Train baseline **logistic + LightGBM** on Gemma embeddings → P(yield); **calibrate** (Platt / isotonic) for a meaningful decision threshold |
 | C-5 | **Ablation eval** (the thesis result): 5-hand-feature GBM (baseline-to-beat) vs embedding-classifier vs cascade, on a held-out labeled set; cost/accuracy table mirroring RouteLLM/FrugalGPT methodology |
