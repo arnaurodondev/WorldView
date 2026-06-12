@@ -53,6 +53,11 @@ import {
 
 import { parseInput } from "@/lib/chat/slash-commands";
 import { parseSSELine } from "@/lib/sse-parser";
+// QA Wave-3 closeout: streamed `citations` events carry the canonical rag-chat
+// shape (source_name/confidence/id) — normalize to the legacy Citation contract
+// the chat components expect, exactly like getThread() does for persisted
+// messages. Without this, CitationList crashes on `cite.source.toLowerCase()`.
+import { normalizeCitation } from "@/lib/api/chat";
 import type { Message } from "@/types/api";
 import type {
   AgentIterationEvent,
@@ -946,20 +951,32 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // CitationList component renders KG citations as plain text (no
               // <a> tag) when url is null/undefined.
               if (Array.isArray(data)) {
-                pendingCitations = data.filter(
-                  (c): c is NonNullable<Message["citations"]>[number] => {
-                    if (typeof c !== "object" || c === null) return false;
-                    const url = (c as Record<string, unknown>).url;
-                    // Accept citations without a URL (knowledge-graph sources).
-                    if (url === null || url === undefined) return true;
-                    // For citations that DO have a URL, enforce the safe-protocol
-                    // check to block javascript:/data: injection vectors.
-                    return (
-                      typeof url === "string" &&
-                      /^(https?:|mailto:)/i.test(url)
-                    );
-                  },
-                );
+                pendingCitations = data
+                  .filter(
+                    (c): c is NonNullable<Message["citations"]>[number] => {
+                      if (typeof c !== "object" || c === null) return false;
+                      const url = (c as Record<string, unknown>).url;
+                      // Accept citations without a URL (knowledge-graph sources).
+                      if (url === null || url === undefined) return true;
+                      // For citations that DO have a URL, enforce the safe-protocol
+                      // check to block javascript:/data: injection vectors.
+                      return (
+                        typeof url === "string" &&
+                        /^(https?:|mailto:)/i.test(url)
+                      );
+                    },
+                  )
+                  // QA Wave-3 closeout: the SSE wire shape is the canonical
+                  // rag-chat citation ({ref, id, source_name, confidence, …});
+                  // map onto the legacy contract (article_id/source/
+                  // relevance_score) so CitationList/CitationBar never touch
+                  // an undefined `source` (toLowerCase crash, see import note).
+                  .map(
+                    (c) =>
+                      normalizeCitation(c) as NonNullable<
+                        Message["citations"]
+                      >[number],
+                  );
               }
             } else if (eventName === "suggestions") {
               // Wave 2 (Wave-1 backend): server-generated follow-up

@@ -33,12 +33,13 @@
 
 import {
   useQuery,
+  useQueries,
   useInfiniteQuery,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
 import { useAccessToken } from "@/lib/api-client";
-import { apiFetch } from "./_client";
+import { apiFetch, GatewayError } from "./_client";
 // PLAN-0099 Wave 2: relation-detail + entity-events fetchers live in the KG
 // api module (single owner of /v1/relations + /v1/entities URL building);
 // these hooks only add TanStack cache policy on top.
@@ -77,6 +78,9 @@ const iqk = {
   /** Cache key for GET /v1/entities/{id}/events (PLAN-0099 Wave 2) */
   events: (entityId: string) =>
     ["entity-events", entityId] as const,
+  /** Cache key for GET /v1/articles/{document_id} (QA Wave-3 closeout) */
+  articleMeta: (documentId: string) =>
+    ["evidence-article-meta", documentId] as const,
 };
 
 // ── useEntityIntelligence ─────────────────────────────────────────────────────
@@ -241,6 +245,93 @@ export function useRelationDetail(relationId: string | null) {
     // with the default 3 retries would triple the pain for zero gain.
     retry: 1,
   });
+}
+
+// ── useEvidenceArticleMetadata (QA Wave-3 closeout, 2026-06-11) ──────────────
+
+/**
+ * EvidenceArticleMetadata — the reshaped article metadata contract returned by
+ * S9 GET /v1/articles/{document_id} (api-gateway routes/content.py, which
+ * resolves pipeline doc_ids against content-store's documents/batch).
+ */
+export interface EvidenceArticleMetadata {
+  document_id: string;
+  title: string | null;
+  url: string | null;
+  /** Aliases content-store's source_name (see the S9 route docstring). */
+  source: string | null;
+  source_type: string | null;
+  published_at: string | null;
+  word_count: number | null;
+}
+
+/**
+ * useEvidenceArticleMetadata — resolve evidence document_ids → article
+ * title/url for the EdgeInspector's provenance lines.
+ *
+ * WHY THIS EXISTS: relation evidence rows (GET /v1/relations/{id}) carry only
+ * document_id — intelligence_db has no article metadata (R9). The gateway
+ * later added GET /v1/articles/{document_id} (content-store resolution), but
+ * the Intelligence frontend predates that route and never called it, so the
+ * inspector showed only source_name + date. RelationEvidenceItem already has
+ * forward-compat `article_title`/`article_url` slots; this hook fills them
+ * client-side.
+ *
+ * WHY useQueries (one query per doc id, not one batch query): evidence lists
+ * repeat the same articles across edges of the same entity — per-document
+ * cache keys mean a title fetched for edge A is reused instantly for edge B.
+ * The inspector caps evidence at 25 rows, so worst case is 25 parallel GETs
+ * once per session.
+ *
+ * WHY staleTime Infinity: an article's title/url never changes after ingest.
+ *
+ * WHY 404 → null (cached): tombstoned/unknown doc_ids are a NORMAL state —
+ * the row keeps its source_name fallback, and we never refetch a known-missing
+ * id.
+ *
+ * @param documentIds evidence document_ids (duplicates/nulls already removed
+ *                    by the caller); order does not matter.
+ * @returns Map document_id → metadata for every RESOLVED article. Unresolved
+ *          (loading / 404 / error) ids are simply absent.
+ */
+export function useEvidenceArticleMetadata(
+  documentIds: ReadonlyArray<string>,
+): ReadonlyMap<string, EvidenceArticleMetadata> {
+  const token = useAccessToken();
+  // Stable, deduped ordering so the queries array (and thus the hook call
+  // sequence) is identical across re-renders with the same input set.
+  const unique = Array.from(new Set(documentIds)).sort();
+
+  const results = useQueries({
+    queries: unique.map((docId) => ({
+      queryKey: iqk.articleMeta(docId),
+      queryFn: async (): Promise<EvidenceArticleMetadata | null> => {
+        try {
+          return await apiFetch<EvidenceArticleMetadata>(
+            `/v1/articles/${encodeURIComponent(docId)}`,
+            { token: token ?? undefined },
+          );
+        } catch (err) {
+          // 404 = content-store doesn't know the doc (tombstoned) — a named
+          // empty state, not an error worth retrying or surfacing.
+          if (err instanceof GatewayError && err.status === 404) return null;
+          throw err;
+        }
+      },
+      staleTime: Infinity,
+      retry: 1,
+      enabled: !!token,
+    })),
+  });
+
+  // Plain construction (no useMemo): useQueries returns a fresh array each
+  // render anyway, so memoising on it would never hit. Map building over ≤25
+  // entries is trivially cheap.
+  const map = new Map<string, EvidenceArticleMetadata>();
+  results.forEach((r, i) => {
+    if (r.data) map.set(unique[i], r.data);
+  });
+  return map;
 }
 
 // ── useEntityEvents (PLAN-0099 Wave 2) ────────────────────────────────────────

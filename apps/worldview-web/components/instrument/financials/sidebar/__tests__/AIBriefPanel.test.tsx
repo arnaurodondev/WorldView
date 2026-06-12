@@ -212,4 +212,51 @@ describe("AIBriefPanel (T-30 rendering contract)", () => {
     // "Fourth sentence" must not appear (capped at 3).
     expect(screen.queryByText("Fourth sentence.")).not.toBeInTheDocument();
   });
+
+  // ── Regression: S9 sends risk_summary = {} (QA Wave-3, 2026-06-11) ─────────
+  //
+  // WHY: the live gateway serialises an EMPTY OBJECT for risk_summary when no
+  // risk data was computed (observed on GET /v1/briefings/instrument/{AAPL}).
+  // `{}` is truthy, so the old `brief.risk_summary && …top_risk_signals.map()`
+  // guard crashed with "Cannot read properties of undefined (reading 'map')"
+  // and error-boundaried the ENTIRE Financials tab. These tests pin the
+  // hasRiskSummary() field-level guard.
+  it("does not crash when risk_summary is an empty object ({}) from S9", () => {
+    const emptyRisk: Partial<InstrumentBrief> = {
+      ...SAMPLE_BRIEF,
+      // Cast: the declared type says "full object | null", but the live wire
+      // shape includes {} — exactly the mismatch this regression test pins.
+      risk_summary: {} as InstrumentBrief["risk_summary"],
+    };
+    mockUseInstrumentBrief.mockReturnValue({
+      brief: emptyRisk, status: "ready", errorMessage: null, retry: vi.fn(),
+    });
+    render(<AIBriefPanel entityId="test-entity" />);
+    // Bullets still render (the panel survived) …
+    expect(screen.getByText("Record iPhone 15 demand driving Q4 upside.")).toBeInTheDocument();
+    // … and no risk chip appears for an empty summary.
+    expect(screen.queryByText(/RISK$/)).not.toBeInTheDocument();
+    // The Expand dialog (which also renders the risk block) must not crash either.
+    fireEvent.click(screen.getByRole("button", { name: "Expand AI brief" }));
+    expect(screen.getByText("AI INSTRUMENT BRIEF")).toBeInTheDocument();
+  });
+
+  it("still renders the risk chip when risk_summary is fully populated", () => {
+    const withRisk: Partial<InstrumentBrief> = {
+      ...SAMPLE_BRIEF,
+      risk_summary: {
+        concentration_score: 0.8,
+        top_risk_signals: [{ signal_id: "sig-1", description: "Supplier concentration" }],
+        sector_breakdown: {},
+      },
+    };
+    mockUseInstrumentBrief.mockReturnValue({
+      brief: withRisk, status: "ready", errorMessage: null, retry: vi.fn(),
+    });
+    render(<AIBriefPanel entityId="test-entity" />);
+    expect(screen.getByText("HIGH RISK")).toBeInTheDocument();
+    // Dialog path renders the signal list.
+    fireEvent.click(screen.getByRole("button", { name: "Expand AI brief" }));
+    expect(screen.getByText(/Supplier concentration/)).toBeInTheDocument();
+  });
 });

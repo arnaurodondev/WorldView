@@ -86,6 +86,20 @@ export interface SSEEvent {
  * @returns SSEEvent | null
  */
 export function parseSSELine(line: string): SSEEvent | null {
+  // ── Rule 0: strip ONE trailing CR (QA Wave-3 closeout, 2026-06-11) ──────
+  // The SSE spec (WHATWG event-stream) allows lines to be terminated by
+  // CRLF, LF, or CR — and sse-starlette (S8 rag-chat) emits CRLF. Both
+  // stream readers split the byte stream on "\n" only, so every line
+  // arrives here with a trailing "\r":   "event: token\r" / "data: {...}\r".
+  // Without this strip the event name became "token\r", NO event ever
+  // matched ("done" included), zero tokens painted, and the reader-exhausted
+  // detector fired a false "Response interrupted" banner under an answer
+  // that only appeared via the post-stream thread refetch (observed live on
+  // the production container, 2026-06-11). Stripping exactly one CR keeps
+  // payload bytes intact (a JSON payload can never legitimately END with a
+  // raw CR — JSON strings escape control characters).
+  if (line.endsWith("\r")) line = line.slice(0, -1);
+
   // ── Rule 1: blank line ─────────────────────────────────────────────────
   // Blank lines are event-block terminators in the SSE spec. The caller
   // handles block boundaries; this function ignores them at the line level.

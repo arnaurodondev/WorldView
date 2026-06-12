@@ -12,23 +12,29 @@
  * entity summaries, and up to 25 evidence rows each carrying the raw
  * evidence_text chunk. This inspector renders all of it.
  *
- * ARTICLE-TITLE RESOLUTION (spec gap, documented):
+ * ARTICLE-TITLE RESOLUTION (QA Wave-3 closeout, 2026-06-11):
  * Evidence rows carry document_id but NOT article title/url (R9 — no article
- * metadata in intelligence_db). The S9 route `/v1/documents/{id}` proxies S4
- * *user-uploaded* documents, not pipeline articles, so it cannot resolve
- * pipeline document_ids (verified live: returns 500). We therefore render
- * source_name + evidence_date as the provenance line and keep forward-compat
- * slots (`article_title`/`article_url` on RelationEvidenceItem) that light up
- * automatically if a future gateway change embeds them.
+ * metadata in intelligence_db). The gateway added GET /v1/articles/{doc_id}
+ * (content-store resolution) AFTER this inspector shipped, so titles were
+ * never wired. We now resolve them client-side via useEvidenceArticleMetadata
+ * (per-document cached queries) and merge into the forward-compat
+ * `article_title`/`article_url` slots on RelationEvidenceItem. Rows whose
+ * document_id cannot be resolved (loading / 404 / tombstoned) keep the
+ * source_name + evidence_date fallback — never a dead slot.
  *
- * DATA SOURCE: useRelationDetail(relationId) → GET /v1/relations/{id}.
+ * DATA SOURCE: useRelationDetail(relationId) → GET /v1/relations/{id};
+ *              useEvidenceArticleMetadata → GET /v1/articles/{document_id}.
  * WHO USES IT: SelectionDetailPanel (edge mode).
  */
 
 "use client";
 // WHY "use client": TanStack Query hook + click handlers require the browser.
 
-import { useRelationDetail } from "@/lib/api/intelligence";
+import {
+  useRelationDetail,
+  useEvidenceArticleMetadata,
+  type EvidenceArticleMetadata,
+} from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDate } from "@/lib/utils";
 import type {
@@ -128,7 +134,19 @@ function EndpointPill({
 
 // ── Sub-component: one evidence row ─────────────────────────────────────────
 
-function EvidenceRow({ item }: { item: RelationEvidenceItem }) {
+function EvidenceRow({
+  item,
+  articleMeta,
+}: {
+  item: RelationEvidenceItem;
+  /** Resolved article metadata for item.document_id (undefined while loading
+   *  or when content-store doesn't know the doc — fallback rendering kicks in). */
+  articleMeta?: EvidenceArticleMetadata;
+}) {
+  // Merge order: gateway-embedded fields win (future-proof), then the
+  // client-side /v1/articles/{id} resolution, then null → source_name fallback.
+  const articleTitle = item.article_title ?? articleMeta?.title ?? null;
+  const articleUrl = item.article_url ?? articleMeta?.url ?? null;
   return (
     <li className="border-l-2 border-border/40 pl-2 py-1 space-y-0.5">
       {/* The chunk — quoted block, the reason the analyst opened this panel.
@@ -147,18 +165,19 @@ function EvidenceRow({ item }: { item: RelationEvidenceItem }) {
           data-testid="evidence-polarity-dot"
           aria-label={`Polarity ${item.polarity ?? "neutral"}`}
         />
-        {/* Forward-compat: article link renders ONLY if a future gateway
-            change embeds title/url (see file header). Falls back to
+        {/* Article link: title/url come either embedded on the evidence row
+            (future gateway change) or resolved client-side from
+            GET /v1/articles/{document_id} (see file header). Falls back to
             source_name — never a dead slot. */}
-        {item.article_url && item.article_title ? (
+        {articleUrl && articleTitle ? (
           <a
-            href={item.article_url}
+            href={articleUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-[10px] text-foreground/80 hover:underline truncate max-w-[260px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
-            title={item.article_title}
+            title={articleTitle}
           >
-            {item.article_title}
+            {articleTitle}
           </a>
         ) : (
           <span className="text-[10px] font-mono text-muted-foreground">
@@ -270,6 +289,15 @@ function EdgeDossier({
   const confidencePct =
     typeof detail.confidence === "number" ? Math.round(detail.confidence * 100) : null;
   const hasContra = (detail.strongest_contra_score ?? 0) > 0;
+
+  // Resolve article titles/urls for the evidence provenance lines (QA Wave-3).
+  // Nulls are filtered HERE so the hook receives a clean id list; the hook
+  // dedupes + sorts internally for stable query ordering.
+  const articleMetaById = useEvidenceArticleMetadata(
+    detail.evidence
+      .map((e) => e.document_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
 
   return (
     <div className="p-3 space-y-2.5 text-left">
@@ -391,7 +419,13 @@ function EdgeDossier({
         ) : (
           <ul role="list" className="space-y-1.5">
             {detail.evidence.map((item) => (
-              <EvidenceRow key={item.raw_id} item={item} />
+              <EvidenceRow
+                key={item.raw_id}
+                item={item}
+                articleMeta={
+                  item.document_id ? articleMetaById.get(item.document_id) : undefined
+                }
+              />
             ))}
           </ul>
         )}

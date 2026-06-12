@@ -260,6 +260,107 @@ describe("useChatStream", () => {
     expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
   });
 
+  // ── Regression: CRLF wire format (QA Wave-3 closeout, 2026-06-11) ─────────
+  //
+  // sse-starlette (S8) terminates every SSE line with \r\n. The hook splits
+  // the byte stream on "\n" only, so each parsed line carried a trailing
+  // "\r" — `pendingEventName` became "token\r", NO event matched (done
+  // included), zero tokens painted, and the reader-exhausted detector fired
+  // the false "Response interrupted before any content arrived" banner under
+  // a fully-delivered answer (observed live on the prod container). The fix
+  // strips one trailing CR inside parseSSELine. This test replays the EXACT
+  // live wire shape (named events + CRLF + trailing done frame).
+  it("CRLF wire format: named events parse, answer finalizes, no false interrupt", async () => {
+    const frames = [
+      'event: status\r\ndata: {"step": "loading_context"}\r\n\r\n',
+      'event: token\r\ndata: {"text": "BTC is "}\r\n\r\n',
+      'event: token\r\ndata: {"text": "$62,778"}\r\n\r\n',
+      'event: final_answer\r\ndata: {"text": "BTC is $62,778"}\r\n\r\n',
+      'event: suggestions\r\ndata: ["More about BTC?"]\r\n\r\n',
+      'event: metadata\r\ndata: {"intent": "GENERAL", "provider": "deepinfra", "latency_ms": 11536}\r\n\r\n',
+      'event: done\r\ndata: {"type": "done"}\r\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What is BTC-USD trading at right now?");
+    });
+
+    // The done frame finalized the stream cleanly: tokens accumulated into
+    // the assistant message, NO error banner, suggestions captured.
+    expect(result.current.chatError).toBeNull();
+    expect(result.current.streaming).toBeNull();
+    const assistant = result.current.localMessages.find(
+      (m) => "role" in m && m.role === "assistant",
+    ) as { content: string } | undefined;
+    expect(assistant?.content).toBe("BTC is $62,778");
+    expect(result.current.serverSuggestions).toEqual(["More about BTC?"]);
+  });
+
+  // ── Regression: streamed citations are normalized (QA Wave-3, 2026-06-11) ──
+  //
+  // The SSE `citations` wire shape is the canonical rag-chat citation
+  // ({ref, id, source_name, confidence, …} — verified live). CitationList
+  // calls `cite.source.toLowerCase()`, so an un-normalized streamed citation
+  // crashed the ENTIRE chat page behind the error boundary the moment the
+  // CRLF fix made this event parse at all. The hook must apply the same
+  // normalizeCitation mapping getThread() applies to persisted messages.
+  it("normalizes streamed citations (source_name → source) before attaching them", async () => {
+    const wireCitation = {
+      ref: 1,
+      item_type: "chunk",
+      id: "tool:entity_news:abc",
+      title: "Apple Unveils AI Reset",
+      url: "https://example.com/apple",
+      source_name: "news",
+      published_at: "2026-06-10T16:44:13+00:00",
+      entity_name: "AAPL",
+      confidence: 0.68,
+    };
+    const frames = [
+      'event: token\ndata: {"text": "Headlines [1]"}\n\n',
+      `event: citations\ndata: ${JSON.stringify([wireCitation])}\n\n`,
+      'event: done\ndata: {"type": "done"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("What's the latest news on Apple Inc.?");
+    });
+
+    const assistant = result.current.localMessages.find(
+      (m) => "role" in m && m.role === "assistant",
+    ) as { citations?: Array<Record<string, unknown>> } | undefined;
+    expect(assistant?.citations).toHaveLength(1);
+    const cite = assistant!.citations![0];
+    // Legacy contract fields are present (what CitationList consumes) …
+    expect(cite.source).toBe("news");
+    expect(cite.article_id).toBe("tool:entity_news:abc");
+    expect(cite.relevance_score).toBe(0.68);
+    // … and the canonical fields are preserved (CitationV2 migration).
+    expect(cite.source_name).toBe("news");
+    expect(cite.url).toBe("https://example.com/apple");
+  });
+
   it("cancel() mid-stream: aborts fetch, clears streaming, surfaces no error", async () => {
     const ar = makeAbortableReader();
     // The fetch mock honours the signal: when the test calls cancel(), the

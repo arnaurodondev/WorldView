@@ -125,6 +125,28 @@ function riskLabel(score: number): string {
   return "LOW RISK";
 }
 
+/**
+ * hasRiskSummary — narrow `brief.risk_summary` to a RENDERABLE shape.
+ *
+ * WHY THIS EXISTS (QA Wave-3 closeout, 2026-06-11): the declared type says
+ * `risk_summary` is either the full object or `null`, but S9 serialises an
+ * EMPTY OBJECT (`{}`) when no risk summary was computed (observed live on
+ * GET /v1/briefings/instrument/{id} for AAPL). `{}` is truthy, so the old
+ * `brief.risk_summary && …top_risk_signals.map(…)` guard passed and `.map`
+ * blew up with "Cannot read properties of undefined (reading 'map')" —
+ * which error-boundaried the ENTIRE Financials tab. Guard on the two fields
+ * we actually consume, not on object truthiness.
+ */
+function hasRiskSummary(
+  rs: { concentration_score?: number; top_risk_signals?: unknown } | null | undefined,
+): rs is { concentration_score: number; top_risk_signals: Array<{ signal_id: string; description: string }> } {
+  return (
+    rs != null &&
+    typeof rs.concentration_score === "number" &&
+    Array.isArray(rs.top_risk_signals)
+  );
+}
+
 // ── Status sub-components ─────────────────────────────────────────────────────
 
 function LoadingState() {
@@ -209,7 +231,7 @@ export function AIBriefPanel({ entityId }: AIBriefPanelProps) {
               <div className="text-[11px] font-mono leading-relaxed text-foreground whitespace-pre-wrap">
                 {brief.narrative}
               </div>
-              {brief.risk_summary && (
+              {hasRiskSummary(brief.risk_summary) && (
                 <div className="mt-4 border-t border-border pt-3">
                   <span className={`text-[10px] font-mono font-semibold ${riskLevelClass(brief.risk_summary.concentration_score)}`}>
                     {riskLabel(brief.risk_summary.concentration_score)}
@@ -257,8 +279,9 @@ export function AIBriefPanel({ entityId }: AIBriefPanelProps) {
         const bullets = extractBullets(brief.sections, brief.narrative);
         return (
           <div className="flex flex-col gap-1 px-2 py-2">
-            {/* Risk chip — from risk_summary if present */}
-            {brief.risk_summary && (
+            {/* Risk chip — from risk_summary if present.
+                hasRiskSummary (not truthiness): S9 can send `{}` — see helper. */}
+            {hasRiskSummary(brief.risk_summary) && (
               <span className={`self-start text-[8px] font-mono px-1 py-0.5 rounded-full ${riskLevelClass(brief.risk_summary.concentration_score)} bg-current/10`}>
                 {riskLabel(brief.risk_summary.concentration_score)}
               </span>

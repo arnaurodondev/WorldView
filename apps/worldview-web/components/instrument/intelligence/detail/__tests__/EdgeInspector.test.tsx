@@ -15,10 +15,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
-// Mock ONLY useRelationDetail — the inspector's single data dependency.
+// Mock the inspector's data dependencies: useRelationDetail (the dossier) and
+// useEvidenceArticleMetadata (QA Wave-3: per-document article title/url
+// resolution — defaults to "nothing resolved" so existing tests exercise the
+// source_name fallback path unchanged).
 const mockUseRelationDetail = vi.hoisted(() => vi.fn());
+const mockUseEvidenceArticleMetadata = vi.hoisted(() => vi.fn(() => new Map()));
 vi.mock("@/lib/api/intelligence", () => ({
   useRelationDetail: mockUseRelationDetail,
+  useEvidenceArticleMetadata: mockUseEvidenceArticleMetadata,
 }));
 
 import { EdgeInspector } from "@/components/instrument/intelligence/detail/EdgeInspector";
@@ -114,7 +119,12 @@ function setHookState(state: {
   });
 }
 
-beforeEach(() => mockUseRelationDetail.mockReset());
+beforeEach(() => {
+  mockUseRelationDetail.mockReset();
+  // Default: no titles resolved → provenance lines fall back to source_name.
+  mockUseEvidenceArticleMetadata.mockReset();
+  mockUseEvidenceArticleMetadata.mockReturnValue(new Map());
+});
 afterEach(() => cleanup());
 
 describe("EdgeInspector loaded dossier", () => {
@@ -181,6 +191,76 @@ describe("EdgeInspector loaded dossier", () => {
     expect(screen.getByText("conf 0.74")).toBeInTheDocument();
     // One polarity dot per evidence row.
     expect(screen.getAllByTestId("evidence-polarity-dot")).toHaveLength(2);
+  });
+
+  // ── QA Wave-3: client-side article title/url resolution ────────────────────
+  it("renders resolved article titles as links and passes evidence doc ids to the hook", () => {
+    setHookState({ data: RELATION });
+    // doc-2 resolves; doc-1 stays unresolved → source_name fallback.
+    mockUseEvidenceArticleMetadata.mockReturnValue(
+      new Map([
+        [
+          "doc-2",
+          {
+            document_id: "doc-2",
+            title: "Apple reclassified in IT index",
+            url: "https://example.com/apple-it",
+            source: "Reuters",
+            source_type: "eodhd_ticker_news",
+            published_at: "2026-05-30T08:00:00Z",
+            word_count: 250,
+          },
+        ],
+      ]),
+    );
+    render(<EdgeInspector relationId="rel-1" />);
+    // The hook receives the evidence document_ids (order preserved by caller).
+    expect(mockUseEvidenceArticleMetadata).toHaveBeenCalledWith(["doc-1", "doc-2"]);
+    // Resolved row: an external link with the article title.
+    const link = screen.getByRole("link", { name: "Apple reclassified in IT index" });
+    expect(link).toHaveAttribute("href", "https://example.com/apple-it");
+    expect(link).toHaveAttribute("target", "_blank");
+    // Once the title link renders, the source_name fallback for THAT row is
+    // replaced ("Reuters" only appeared as the fallback) …
+    expect(screen.queryByText("Reuters")).not.toBeInTheDocument();
+    // … while the unresolved row keeps its source_name fallback.
+    expect(screen.getByText("eodhd")).toBeInTheDocument();
+  });
+
+  it("prefers gateway-embedded article_title/article_url over the resolved map", () => {
+    const embedded = {
+      ...RELATION,
+      evidence: [
+        {
+          ...RELATION.evidence[0],
+          article_title: "Embedded title wins",
+          article_url: "https://example.com/embedded",
+        },
+      ],
+    };
+    setHookState({ data: embedded });
+    mockUseEvidenceArticleMetadata.mockReturnValue(
+      new Map([
+        [
+          "doc-1",
+          {
+            document_id: "doc-1",
+            title: "Resolved title loses",
+            url: "https://example.com/resolved",
+            source: null,
+            source_type: null,
+            published_at: null,
+            word_count: null,
+          },
+        ],
+      ]),
+    );
+    render(<EdgeInspector relationId="rel-1" />);
+    expect(screen.getByRole("link", { name: "Embedded title wins" })).toHaveAttribute(
+      "href",
+      "https://example.com/embedded",
+    );
+    expect(screen.queryByText("Resolved title loses")).not.toBeInTheDocument();
   });
 
   it("shows 'shown of total' when evidence_count exceeds the fetched page", () => {
