@@ -27,6 +27,7 @@ import { useChartSeries } from "@/components/instrument/chart/useChartSeries";
 import { CrosshairLegend } from "@/components/instrument/chart/CrosshairLegend";
 import {
   CHART_PERIOD_PRESETS,
+  DEFAULT_CHART_PERIOD,
   periodStartIso,
   type ChartPeriod,
 } from "@/components/instrument/chart/chartPeriods";
@@ -50,8 +51,15 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // ── Period state (Round-1 requirement 2) ───────────────────────────────────
   // WHY period (not raw timeframe): analysts pick a look-back window
   // (1D/1W/1M/3M/1Y/5Y); the bar resolution + fetch start date are derived
-  // from CHART_PERIOD_PRESETS. Default "1D" = today's session at 5-minute bars.
-  const [period, setPeriod] = useState<ChartPeriod>("1D");
+  // from CHART_PERIOD_PRESETS.
+  // WAVE-4 (2026-06-12): the default is now DEFAULT_CHART_PERIOD ("1Y" — daily
+  // bars), NOT "1D". The old "1D" default fetched 5-minute bars over 3 days and
+  // windowed to a single session, which the dev intraday store could only fill
+  // with ~10-30 candles (the sparse band the user reported). The 1Y default
+  // loads the full ~500-bar daily window and shows the last ~200 bars (see the
+  // visibleBars-aware windowing effect below), so the chart opens dense and
+  // readable with real history to pan back through.
+  const [period, setPeriod] = useState<ChartPeriod>(DEFAULT_CHART_PERIOD);
   const preset = CHART_PERIOD_PRESETS[period];
   // The derived bar resolution. 1M/3M/1Y all derive "1D" — they share one
   // fetch + one cache slot and differ only in the client-side visible range.
@@ -115,11 +123,19 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     queryKey: qk.instruments.ohlcv(instrumentId, timeframe),
     // WHY explicit `start`: S9 injects only a 90-day default for daily bars —
     // not enough for the 1Y period. periodStartIso derives the widest window
-    // any period sharing this resolution needs (366d daily / 1830d weekly).
+    // any period sharing this resolution needs (730d daily / 1830d weekly).
+    // WHY explicit `limit: 1000` (Wave-4, 2026-06-12): S3 caps the OHLCV result
+    // at 200 bars when no limit is given — which is exactly the ~200 the old
+    // default showed with NO history left to pan into. A high limit lets the
+    // daily window return its full ~500 bars (273 in the current dev dataset)
+    // so the chart opens showing ~200 with the rest loaded behind it. 1000 is a
+    // safe ceiling: more than any single resolution's window can contain, so it
+    // never truncates real data and the same value is correct for every period.
     queryFn: () =>
       createGateway(accessToken).getOHLCV(instrumentId, {
         timeframe,
         start: periodStartIso(period),
+        limit: 1000,
       }),
     enabled: !!accessToken && !!instrumentId,
     // WHY 5 min (was 1 min): leaving the Quote tab unmounts the chart; on
@@ -153,6 +169,29 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     if (!chart || !isChartReady || !bars || bars.length === 0) return;
     if (lastAppliedRangeKey.current === rangeKey) return;
 
+    // ── Bar-count windowing (Wave-4, 2026-06-12) ──────────────────────────────
+    // When the preset declares a precise `visibleBars` count (the 1Y default
+    // wants the last ~200 of ~500 loaded bars), window by LOGICAL bar index via
+    // setVisibleLogicalRange — this is the only API that promises an exact bar
+    // COUNT regardless of how many calendar days those bars span (trading days
+    // per calendar day vary, so a day-window can't). The logical scale runs
+    // 0..barsLength-1; we show the last `visibleBars` indices, clamped so a
+    // short series (fewer bars than the budget) just shows everything.
+    if (preset.visibleBars != null && bars.length > 0) {
+      const barsLength = bars.length;
+      const visibleBars = Math.min(preset.visibleBars, barsLength);
+      // Half-bar padding on each edge keeps the first/last candle off the axis
+      // gutter (lightweight-charts convention) without clipping them.
+      const fromIndex = Math.max(0, barsLength - visibleBars) - 0.5;
+      const toIndex = barsLength - 0.5;
+      chart.timeScale().setVisibleLogicalRange({
+        from: fromIndex as never,
+        to: toIndex as never,
+      });
+      lastAppliedRangeKey.current = rangeKey;
+      return;
+    }
+
     const firstSec = Math.floor(new Date(bars[0].timestamp).getTime() / 1000);
     const lastSec = Math.floor(new Date(bars[bars.length - 1].timestamp).getTime() / 1000);
     // Window start: lastBar - visibleDays, clamped to the first loaded bar so
@@ -174,7 +213,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
       });
     }
     lastAppliedRangeKey.current = rangeKey;
-  }, [data?.bars, isChartReady, period, instrumentId, preset.visibleDays, chartRef]);
+  }, [data?.bars, isChartReady, period, instrumentId, preset.visibleDays, preset.visibleBars, chartRef]);
 
   // ── Crosshair legend (Round-1 requirement 2c) ──────────────────────────────
   // Hovering a candle shows its O/H/L/C + volume in a corner overlay. The

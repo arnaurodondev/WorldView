@@ -26,6 +26,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const h = vi.hoisted(() => {
   const subscribeCrosshairMove = vi.fn();
   const setVisibleRange = vi.fn();
+  // Wave-4: the default daily view windows by BAR COUNT via
+  // setVisibleLogicalRange. Capture calls so the "~200 visible" test can assert
+  // the opening logical window spans ~200 bars.
+  const setVisibleLogicalRange = vi.fn();
   const scrollToRealTime = vi.fn();
   // Round-4 hardening (item 3e): track remove() so the dispose test can
   // assert the chart instance is torn down on unmount (no leaked instance).
@@ -39,7 +43,7 @@ const h = vi.hoisted(() => {
     setVisibleRange,
     timeToCoordinate: vi.fn(() => null),
     coordinateToTime: vi.fn(() => null),
-    setVisibleLogicalRange: vi.fn(),
+    setVisibleLogicalRange,
   }));
   const addSeries = vi.fn(() => ({
     setData: vi.fn((d: unknown[]) => setDataCalls.push(d)),
@@ -57,7 +61,7 @@ const h = vi.hoisted(() => {
     remove,
     removeSeries: vi.fn(),
   }));
-  return { createChart, addSeries, subscribeCrosshairMove, setVisibleRange, scrollToRealTime, remove, setDataCalls };
+  return { createChart, addSeries, subscribeCrosshairMove, setVisibleRange, setVisibleLogicalRange, scrollToRealTime, remove, setDataCalls };
 });
 
 vi.mock("lightweight-charts", () => ({
@@ -143,43 +147,73 @@ afterEach(() => cleanup());
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("OHLCVChart period selector", () => {
-  it("renders all 6 period pills with 1D selected by default", async () => {
+  it("renders all 6 period pills with 1Y selected by default", async () => {
+    // WAVE-4 (2026-06-12): the default selected period flipped from "1D" (5M
+    // intraday, ~10-30 sparse candles) to "1Y" (daily bars, ~200 visible of
+    // ~500 loaded). The pill set is unchanged; only the default highlight moved.
     await act(async () => { renderChart(makeClient()); });
     for (const p of ["1D", "1W", "1M", "3M", "1Y", "5Y"]) {
       expect(screen.getByRole("button", { name: p })).toBeInTheDocument();
     }
     expect(
-      screen.getByRole("button", { name: "1D" }).getAttribute("aria-pressed"),
+      screen.getByRole("button", { name: "1Y" }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
 
-  it("default 1D period fetches 5-minute bars with an explicit start date", async () => {
+  it("default period fetches DAILY bars with an explicit start + a high bar limit", async () => {
+    // WAVE-4: the default daily view must request the full ~500-bar window, so
+    // it passes an explicit limit (S3 caps at 200 without one). The old default
+    // fetched 5-minute bars over 3 days — now it's daily bars over ~730 days.
     await act(async () => { renderChart(makeClient()); });
     await waitFor(() => expect(mockGetOHLCV).toHaveBeenCalled());
     const [, params] = mockGetOHLCV.mock.calls[0];
-    expect(params.timeframe).toBe("5M");
+    expect(params.timeframe).toBe("1D");
     // start is a date-only ISO string (see periodStartIso).
     expect(params.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // High limit so the daily window isn't truncated at S3's 200-bar default.
+    expect(params.limit).toBeGreaterThanOrEqual(500);
   });
 
-  it("selecting 1Y fetches daily bars (shared 1M/3M/1Y resolution)", async () => {
+  it("opens with ~200 bars visible of the ~500 loaded (bar-count window)", async () => {
+    // The default 1Y preset windows the visible range to the LAST 200 BARS via
+    // setVisibleLogicalRange — independent of calendar-day span. With 500 loaded
+    // bars the opening logical window must be [≈300, ≈500] (the last 200), so
+    // there are ~300 bars of loaded history to pan back through. This is the
+    // core "load 500, show 200" requirement.
+    mockGetOHLCV.mockResolvedValue({
+      instrument_id: "ins-001", ticker: "", timeframe: "1D", bars: makeBars(500),
+    });
+    await act(async () => { renderChart(makeClient()); });
+    await waitFor(() => expect(h.setVisibleLogicalRange).toHaveBeenCalled());
+    // Find the windowing call (a logical range object with from/to indices).
+    const call = h.setVisibleLogicalRange.mock.calls.at(-1)![0] as { from: number; to: number };
+    const visibleSpan = call.to - call.from;
+    // ~200 bars wide (allow the half-bar edge padding, so 199-201).
+    expect(visibleSpan).toBeGreaterThanOrEqual(199);
+    expect(visibleSpan).toBeLessThanOrEqual(201);
+    // The window ends at the newest bar (right edge) and leaves ~300 loaded
+    // bars to the left of `from` to pan into.
+    expect(call.from).toBeGreaterThan(290);
+    expect(call.to).toBeGreaterThan(498);
+  });
+
+  it("selecting 1D fetches 5-minute intraday bars", async () => {
+    // Default is now 1Y (daily); switching to the 1D period must derive the 5M
+    // intraday resolution. (Pre-Wave-4 this asserted the inverse direction.)
     await act(async () => { renderChart(makeClient()); });
     await waitFor(() => expect(mockGetOHLCV).toHaveBeenCalled());
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "1Y" }));
+      fireEvent.click(screen.getByRole("button", { name: "1D" }));
     });
     await waitFor(() => {
       const calls = mockGetOHLCV.mock.calls.map(([, p]) => p.timeframe);
-      expect(calls).toContain("1D");
+      expect(calls).toContain("5M");
     });
   });
 
   it("switching 1Y → 3M does NOT refetch (same daily-bar cache slot)", async () => {
+    // Default is 1Y (daily bars) — the very first fetch is already "1D".
     await act(async () => { renderChart(makeClient()); });
-    await waitFor(() => expect(mockGetOHLCV).toHaveBeenCalled());
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "1Y" }));
-    });
     await waitFor(() => {
       expect(mockGetOHLCV.mock.calls.some(([, p]) => p.timeframe === "1D")).toBe(true);
     });
@@ -195,12 +229,13 @@ describe("OHLCVChart period selector", () => {
   it("writes fetched bars into the shared qk.instruments.ohlcv cache slot", async () => {
     // Regression guard for the Round-1 key fix: QuoteTab's SessionStatsStrip
     // passively subscribes to this exact key — a bespoke key here silently
-    // severs that data path (the pre-fix bug).
+    // severs that data path (the pre-fix bug). WAVE-4: the default period is now
+    // 1Y → "1D" resolution, so the shared slot key is ("ins-001", "1D").
     const qc = makeClient();
     await act(async () => { renderChart(qc); });
     await waitFor(() => {
       const cached = qc.getQueryData<{ bars: unknown[] }>(
-        qk.instruments.ohlcv("ins-001", "5M"),
+        qk.instruments.ohlcv("ins-001", "1D"),
       );
       expect(cached?.bars?.length).toBe(30);
     });

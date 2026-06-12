@@ -232,7 +232,12 @@ export function createInstrumentsApi(t: string | undefined) {
      */
     async getOHLCV(
       instrumentId: string,
-      params: { timeframe?: string; start?: string; end?: string } = {},
+      // WHY `limit` (added Wave-4, 2026-06-12): S3's OHLCV endpoint caps the
+      // result at 200 bars when no limit is given. The chart's default daily
+      // view wants the full ~500-bar history (so panning back has data), so it
+      // passes an explicit high limit. Other callers omit it and keep the
+      // 200-bar default. The value is sent as a query-string `limit=`.
+      params: { timeframe?: string; start?: string; end?: string; limit?: number } = {},
     ): Promise<OHLCVResponse> {
       // WHY special-case "1M": S3's Timeframe enum is case-sensitive.
       // All timeframes are lowercase EXCEPT ONE_MONTH which is "1M" (uppercase M).

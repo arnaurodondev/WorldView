@@ -81,6 +81,48 @@ describe("parseInstrumentBrief", () => {
     expect(lead).toBe("One-liner brief.");
     expect(body).toBe("");
   });
+
+  // ── Wave-4 (2026-06-12): full live-narrative regression ─────────────────────
+  // The exact AAPL brief fetched live on 2026-06-12 carries a "Key Events"
+  // section whose bullets begin with [YYYY-MM-DD] date brackets, plus a
+  // "[Q stale]" annotation and "$"/"%" data. These must all survive citation
+  // stripping; only the [cN] tokens are noise. This pins that the parser is
+  // safe on the production brief format end-to-end.
+  it("cleanly renders the full live AAPL narrative (dates, [Q stale], multi-citation)", () => {
+    const REAL = [
+      "## LEAD",
+      "Apple’s AI strategy reset with a major Siri upgrade at WWDC 2026 was met with a negative stock reaction, despite strong fundamentals and a deepening dependency on Alphabet for AI capabilities. [c7][c10][c12][c16][c17]",
+      "",
+      "---",
+      "",
+      "## DETAILS",
+      "### Price & Fundamentals",
+      "- Market Cap: $4.31T; Revenue TTM: $451.44B; Net Profit Margin: 27.2%. [c1]",
+      "- Consensus Target: $303.38; Most Recent Quarter: 2026-03-31 [Q stale]. [c1]",
+      "",
+      "### Key Events",
+      "- [2026-06-30] Earnings release for Q2 FY2026. [c9]",
+      "- [2026-06-12] Tim Cook to step down as CEO in September. [c14]",
+    ].join("\n");
+
+    const { lead, body } = parseInstrumentBrief(REAL);
+
+    // LEAD: a single clean sentence — no chrome, no citation tokens.
+    expect(lead).toContain("Apple’s AI strategy reset");
+    expect(lead).not.toContain("##");
+    expect(lead).not.toMatch(/\[c\d/);
+
+    // BODY: structure preserved, citations gone, real data intact.
+    expect(body).toContain("### Price & Fundamentals");
+    expect(body).toContain("### Key Events");
+    expect(body).toContain("$4.31T");
+    expect(body).toContain("27.2%");
+    expect(body).toContain("[Q stale]"); // annotation, NOT a citation → survives
+    expect(body).toContain("[2026-06-30]"); // date bracket → survives
+    expect(body).not.toMatch(/\[c\d/); // every [cN] stripped
+    expect(body).not.toMatch(/^---/m);
+    expect(body).not.toMatch(/^##\s*DETAILS/m);
+  });
 });
 
 describe("isBriefStale", () => {

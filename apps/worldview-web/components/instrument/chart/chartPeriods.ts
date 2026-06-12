@@ -62,8 +62,23 @@ export interface ChartPeriodPreset {
   /**
    * How far back the VISIBLE window reaches once data is loaded. The chart
    * sets timeScale().setVisibleRange(lastBar - visibleDays, lastBar).
+   *
+   * NOTE: this is a CALENDAR-DAY window — for daily/weekly bars markets are
+   * closed ~30% of calendar days (weekends/holidays), so `visibleDays` days
+   * back contains FEWER than `visibleDays` bars. Prefer `visibleBars` (below)
+   * for a precise bar-count window; `visibleDays` stays as the fallback for
+   * intraday periods where "one trading session" is naturally a time window.
    */
   readonly visibleDays: number;
+  /**
+   * OPTIONAL precise bar-count window (Wave-4, 2026-06-12). When set, the
+   * chart windows the visible range to the LAST `visibleBars` loaded bars via
+   * setVisibleLogicalRange — independent of how many calendar days those bars
+   * span. This is what the "default view shows ~200 of ~500 loaded" requirement
+   * needs: a day-count window can't promise a bar count because trading days
+   * per calendar day vary. When unset, the chart falls back to `visibleDays`.
+   */
+  readonly visibleBars?: number;
 }
 
 // ── Presets ──────────────────────────────────────────────────────────────────
@@ -73,15 +88,43 @@ export interface ChartPeriodPreset {
 // spans back to the most recent trading session; the visible range then snaps
 // to the most recent session only.
 //
-// WHY 366 / 1830 (one extra day): guards the boundary where "now - 365d"
-// lands exactly on the first bar's date and DST/UTC rounding drops it.
+// WHY 1830 (one extra day): guards the boundary where "now - 365d" lands
+// exactly on the first bar's date and DST/UTC rounding drops it.
+//
+// ── WAVE-4 FETCH-WINDOW WIDENING (2026-06-12) ────────────────────────────────
+// The daily-bar periods (1M/3M/1Y) used to fetch only 366 calendar days back
+// (~252 trading days → ~200 daily bars). The redesign goal is "load ~500 bars
+// so panning back has real history, show ~200 in the default view". A 366-day
+// window can NEVER load 500 bars at daily resolution, so the shared daily-bar
+// fetch window is widened to ~730 calendar days (≈ 500 trading days). The S3
+// endpoint serves whatever exists up to that window (273 daily bars in the
+// current dev dataset; ~500 for a fully-backfilled instrument). All three
+// daily periods MUST keep the SAME fetchDaysBack so they share one cache slot
+// (the no-refetch-on-period-switch invariant — chartPeriods.test.ts pins it).
+//
+// WHY 1Y is the DEFAULT now (was 1D): the old default "1D" period maps to
+// 5-minute intraday bars over a 3-day window. The dev intraday store holds
+// only ~71 such bars and `visibleDays: 1` then windowed that down to a single
+// session — the sparse ~10-30 candle band the user reported. The default view
+// should show a meaningful price history with room to pan; daily bars deliver
+// that. The chart's initial selected period is set in OHLCVChart's useState.
+
+/** The period the chart opens on — daily bars, ~200 visible of ~500 loaded. */
+export const DEFAULT_CHART_PERIOD: ChartPeriod = "1Y";
+
+/** Shared fetch window for every daily-bar period (≈ 500 trading days). */
+const DAILY_FETCH_DAYS_BACK = 730;
 
 export const CHART_PERIOD_PRESETS: Record<ChartPeriod, ChartPeriodPreset> = {
   "1D": { timeframe: "5M", fetchDaysBack: 3, visibleDays: 1 },
   "1W": { timeframe: "1H", fetchDaysBack: 8, visibleDays: 7 },
-  "1M": { timeframe: "1D", fetchDaysBack: 366, visibleDays: 31 },
-  "3M": { timeframe: "1D", fetchDaysBack: 366, visibleDays: 92 },
-  "1Y": { timeframe: "1D", fetchDaysBack: 366, visibleDays: 365 },
+  "1M": { timeframe: "1D", fetchDaysBack: DAILY_FETCH_DAYS_BACK, visibleDays: 31 },
+  "3M": { timeframe: "1D", fetchDaysBack: DAILY_FETCH_DAYS_BACK, visibleDays: 92 },
+  // 1Y is the default view: it loads the full ~500-bar daily window but windows
+  // the visible range to the LAST ~200 BARS (not 365 days) so the opening view
+  // is a dense, readable ~200-candle chart with ~300 bars of loaded history to
+  // pan back through. visibleBars (bar-count) overrides visibleDays here.
+  "1Y": { timeframe: "1D", fetchDaysBack: DAILY_FETCH_DAYS_BACK, visibleDays: 365, visibleBars: 200 },
   "5Y": { timeframe: "1W", fetchDaysBack: 1830, visibleDays: 1827 },
 };
 
