@@ -458,6 +458,76 @@ LIMIT :limit
             for r in rows
         ]
 
+    async def list_among_entities(
+        self,
+        entity_ids: list[UUID],
+        *,
+        min_confidence: float = 0.0,
+        semantic_mode: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        """Fetch relations whose BOTH endpoints are within *entity_ids*.
+
+        PLAN-0099 W3 (graph depth fix): CypherNeighborhoodUseCase discovers
+        depth-2/3 neighbor NODES via AGE but previously only returned the
+        center's direct relations (``list_for_entity``) — every multi-hop
+        node arrived edge-less and the S9 orphan filter deleted it, making
+        depth=2 indistinguishable from depth=1. This method supplies the
+        missing lateral/second-hop EDGES among the discovered node set.
+
+        Fully parameterised: ids bind as a single UUID[] array (same
+        ``ANY(CAST(:ids AS uuid[]))`` pattern as claim_repository /
+        relation_summary — no N-parameter expansion, no dynamic SQL).
+        """
+        if not entity_ids:
+            # ANY(ARRAY[]) always evaluates FALSE — short-circuit the no-op.
+            return []
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at
+FROM relations r
+WHERE r.subject_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+  AND r.object_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+  AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
+  AND (CAST(:semantic_mode AS TEXT) IS NULL OR r.semantic_mode = CAST(:semantic_mode AS TEXT))
+ORDER BY r.latest_evidence_at DESC
+LIMIT :limit
+"""),
+            {
+                "entity_ids": [str(eid) for eid in entity_ids],
+                "min_confidence": min_confidence,
+                "semantic_mode": semantic_mode,
+                "limit": limit,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "subject_entity_id": UUID(str(r[1])),
+                "object_entity_id": UUID(str(r[2])),
+                "canonical_type": r[3],
+                "semantic_mode": r[4],
+                "decay_class": r[5],
+                "confidence": float(r[6]) if r[6] is not None else None,
+                "confidence_stale": bool(r[7]),
+                "evidence_count": int(r[8]),
+                "first_evidence_at": r[9],
+                "latest_evidence_at": r[10],
+                "valid_from": r[11],
+                "valid_to": r[12],
+                "relation_period_type": r[13],
+                "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+                "latest_contra_at": r[15],
+            }
+            for r in rows
+        ]
+
     async def count_for_entity(self, entity_id: UUID) -> int:
         """Count relations where the entity is subject or object (PLAN-0099 detail)."""
         result = await self._session.execute(

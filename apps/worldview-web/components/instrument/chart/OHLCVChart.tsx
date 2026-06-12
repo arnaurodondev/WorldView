@@ -276,7 +276,21 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   return (
     // WHY conditional fixed positioning: fullscreen stretches chart to fill
     // the viewport (z-50); exit via toolbar or Escape.
-    <div className={isFullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : ""}>
+    //
+    // WHY `flex h-full flex-col` in the NON-fullscreen branch (Wave-3 black-void
+    // fix, 2026-06-11): QuoteTab gives this component a `flex-1 min-h-0` slot,
+    // but this root div used to be a plain `className=""` block — height:auto.
+    // Per CSS, a child's percentage height resolves to AUTO when the parent's
+    // height is auto, so the chart wrapper's `h-full` below collapsed to its
+    // content. The content's height was the lightweight-charts canvas itself,
+    // which had been initialised from `clientHeight=0 → CHART_HEIGHT (280px)`
+    // — a CIRCULAR measurement the ResizeObserver could never escape (the
+    // container's size WAS the canvas size, so it kept re-applying 280px).
+    // Result at 1440×900: a 280px chart inside a ~600px slot with a giant
+    // black void below the time axis. Making the root a full-height flex
+    // column restores the chain: slot (definite) → root (h-full) → wrapper
+    // (flex-1) → container (h-full) → canvas fills every pixel.
+    <div className={isFullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : "flex h-full flex-col"}>
       <div className="flex items-center h-7 px-2 border-b border-border/30 shrink-0">
         <TimeframeToolbar
           period={period}
@@ -342,21 +356,28 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // WHY containerRef stays mounted: removing it destroys the WebGL
         // context (visible flash + re-init). No left-gutter padding now that
         // the drawing palette is gone.
-        // WHY h-full on wrapper + container (PLAN-0090 Y-axis scaling fix):
-        // QuoteTab nests the chart in a `flex-1 min-h-0` slot; without h-full
-        // the inner divs collapsed to their content (the chart canvas was
-        // sized from clientHeight=0 → fallback 280px, leaving 70% empty).
-        // h-full propagates the flex slot's height down to the lightweight-
-        // charts container ref so chart.height = full slot height.
+        // WHY `flex-1 min-h-0` on the wrapper (Wave-3 black-void fix — was
+        // `h-full`): the root div above is now a `flex h-full flex-col` with a
+        // fixed 28px toolbar row, so `h-full` here would OVERFLOW the slot by
+        // 28px (100% of the root, ignoring the toolbar). `flex-1` claims
+        // exactly the remaining height; `min-h-0` lets it shrink below its
+        // content size (flex items default to min-height:auto, which would
+        // otherwise let the canvas prop the wrapper open and re-create the
+        // circular-measurement bug on downsize).
         // Round-4 hardening (item 2): role="img" + aria-label expose the
         // latest OHLC to screen readers — the canvas itself is opaque pixels.
         <div
-          className="relative w-full h-full"
+          className="relative w-full flex-1 min-h-0"
           data-testid="chart-wrapper"
           role="img"
           aria-label={chartAriaLabel}
         >
-          <div ref={containerRef} className={`w-full h-full ${isFullscreen ? "flex-1" : ""}`} />
+          {/* WHY h-full works HERE (but didn't on the old wrapper): the wrapper
+              is a flex item with a definite flexed height, so the percentage
+              resolves against a real number. The ResizeObserver in
+              useChartSeries reads this div's clientWidth/clientHeight and
+              mirrors them onto the chart canvas — height now tracks the slot. */}
+          <div ref={containerRef} className="h-full w-full" />
           {/* Crosshair legend — O/H/L/C/V of the hovered candle (requirement 2c).
               Rendered as an overlay INSIDE the wrapper so it tracks fullscreen.
               CrosshairLegend returns null when nothing is hovered. */}

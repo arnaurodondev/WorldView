@@ -215,6 +215,46 @@ class CypherNeighborhoodUseCase:
             if row_data is not None:
                 neighbor_rows[str(uid)] = row_data
 
+        # ── Step 3b: SQL — resolve direct-relation endpoints AGE missed ───────
+        # WHY: AGE's DISTINCT ... LIMIT fills arbitrarily — on dense graphs the
+        # discovered set can omit some of the center's own 1-hop SQL neighbours
+        # (and stale AGE edges can spend the LIMIT budget on ghosts). Direct
+        # relation endpoints are renderable by definition, so resolve them too;
+        # without this, lateral edges between two direct neighbours are missed
+        # by Step 2b because one endpoint never made it into the node set.
+        for rel in relation_rows:
+            for key in ("subject_entity_id", "object_entity_id"):
+                eid = rel.get(key)
+                if not isinstance(eid, UUID) or eid == entity_id or str(eid) in neighbor_rows:
+                    continue
+                endpoint_row = await entity_repo.get(eid)
+                if endpoint_row is not None:
+                    neighbor_rows[str(eid)] = endpoint_row
+
+        # ── Step 2b: SQL — lateral / second-hop edges among the node set ──────
+        # PLAN-0099 W3 (graph depth fix): Step 2 only returns the CENTER's
+        # direct relations, so every depth-2/3 node discovered in Step 1
+        # arrived edge-less — the API consumer (S9 orphan filter) then deleted
+        # it, making depth=2 visually identical to depth=1 (live AAPL had 23
+        # real lateral relations among its direct neighbours — none returned).
+        # Fetch the edges whose BOTH endpoints are inside {center + resolved
+        # node set} and merge them (dedup by relation_id — the center's own
+        # edges qualify for the lateral query too).
+        # WHY only resolved neighbours: edges to AGE-only ghosts (stale AGE
+        # sync) would be re-orphaned by the consumer; resolving first keeps
+        # the payload self-consistent (every edge endpoint has an entity).
+        if max_hops > 1 and neighbor_rows:
+            lateral_rows = await relation_repo.list_among_entities(
+                [entity_id, *(_UUID(k) for k in neighbor_rows)],
+                min_confidence=min_confidence,
+                limit=limit,
+            )
+            seen_relation_ids = {r["relation_id"] for r in relation_rows}
+            for lateral_row in lateral_rows:
+                if lateral_row["relation_id"] not in seen_relation_ids:
+                    relation_rows.append(lateral_row)
+                    seen_relation_ids.add(lateral_row["relation_id"])
+
         # ── Step 4 (optional): SQL — temporal events for center entity ────────
         temporal_event_rows: list[dict[str, Any]] = []
         if include_temporal_events and temporal_event_repo is not None:

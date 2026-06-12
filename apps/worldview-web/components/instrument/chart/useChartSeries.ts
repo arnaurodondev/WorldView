@@ -141,6 +141,29 @@ function feedOscillator(handles: OscillatorHandles, bars: FormattedBar[]): void 
 /** The pane-hosted indicator subset of IndicatorId (VWAP is a pane-0 overlay). */
 const OSCILLATOR_IDS: readonly OscillatorId[] = ["RSI", "MACD", "ATR", "STOCHASTIC", "OBV"];
 
+// ── Memoized chart-library import ─────────────────────────────────────────────
+//
+// WHY a module-scope singleton promise (Wave-3 orphan-chart fix, 2026-06-11):
+// React StrictMode mounts effects twice in dev, so chart init issues TWO
+// dynamic `import("lightweight-charts")` calls concurrently. A real browser
+// dedupes those to one module record, but module runners are not obliged to —
+// vitest 2.x's mock interception, for one, returns the REAL module to the
+// second concurrent request (bypassing vi.mock). One shared promise means one
+// request in every environment: deterministic tests, marginally faster
+// remounts, and no double network fetch of the chunk on slow connections.
+let chartLibPromise: Promise<typeof import("lightweight-charts")> | null = null;
+
+function loadChartLib(): Promise<typeof import("lightweight-charts")> {
+  // WHY clear on rejection: a transient chunk-load failure (flaky network)
+  // must not poison every future mount with a cached rejected promise — the
+  // next mount retries the import from scratch.
+  chartLibPromise ??= import("lightweight-charts").catch((err: unknown) => {
+    chartLibPromise = null;
+    throw err;
+  });
+  return chartLibPromise;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useChartSeries({
@@ -189,14 +212,25 @@ export function useChartSeries({
   useEffect(() => {
     if (!containerRef.current) return;
     let chart: IChartApi | null = null;
+    // WHY a disposed flag (Wave-3 orphan-chart fix, 2026-06-11): the cleanup
+    // below can run BEFORE the async import resolves (React StrictMode's
+    // mount→unmount→remount in dev; fast tab switches in prod). The old
+    // `!containerRef.current` guard does NOT catch the StrictMode case —
+    // React re-attaches the ref on remount, so the STALE initChart from the
+    // first mount saw a live container and created a second, orphaned chart
+    // on the same node (an empty canvas stacked above the real one — the
+    // "chart fills the slot but shows no candles" dev symptom). The flag is
+    // scoped per effect instance, so a cancelled init can never attach.
+    let disposed = false;
 
     async function initChart() {
       try {
         const { createChart, CandlestickSeries, LineSeries, HistogramSeries } =
-          await import("lightweight-charts");
+          await loadChartLib();
 
-        // WHY null check after await: component may have unmounted during the import.
-        if (!containerRef.current) return;
+        // WHY both checks after await: `disposed` covers cleanup-before-import
+        // (StrictMode remount); the ref null-check covers a genuine unmount.
+        if (disposed || !containerRef.current) return;
 
         // WHY clientHeight || CHART_HEIGHT: QuoteTab places the chart inside a
         // `flex-1 min-h-0` slot; reading the live container height lets the
@@ -256,6 +290,7 @@ export function useChartSeries({
     observer.observe(containerRef.current);
 
     return () => {
+      disposed = true; // cancel any in-flight initChart (see flag rationale above)
       observer.disconnect();
       // chart.remove() destroys every pane + series — no per-series cleanup needed.
       chart?.remove();

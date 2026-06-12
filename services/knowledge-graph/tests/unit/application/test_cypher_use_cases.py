@@ -512,6 +512,185 @@ class TestCypherNeighborhoodUseCase:
 
         assert result.temporal_event_rows == []
 
+    # ── PLAN-0099 W3: lateral / second-hop edge merge ──────────────────────────
+    #
+    # ROOT CAUSE PINNED: Step 2 only fetched the CENTER's direct relations, so
+    # depth-2 nodes discovered by AGE arrived edge-less and the S9 orphan
+    # filter deleted them — depth=2 was visually identical to depth=1 (live
+    # AAPL: 21 nodes / 22 edges, ALL incident to the root, while neighbors had
+    # 40+ edges of their own). Step 2b must fetch edges among the node set.
+
+    async def test_merges_lateral_edges_among_neighbors_at_depth_2(self) -> None:
+        """max_hops=2 with discovered neighbors → list_among_entities edges merged, deduped."""
+        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+        uc = CypherNeighborhoodUseCase()
+        n1, n2 = uuid4(), uuid4()
+        # AGE returns two neighbor ids (agtype quoted strings).
+        session = _make_session(execute_returns=[(f'"{n1}"',), (f'"{n2}"',)])
+
+        center_row = {
+            "entity_id": _ENT,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "isin": None,
+            "ticker": "AAPL",
+            "exchange": "US",
+            "metadata": {},
+        }
+        entity_repo = _make_entity_repo(exists=True, entity_row=center_row)
+
+        direct_rel_id, lateral_rel_id = uuid4(), uuid4()
+        direct_rel = {"relation_id": direct_rel_id, "subject_entity_id": _ENT, "object_entity_id": n1}
+        lateral_rel = {"relation_id": lateral_rel_id, "subject_entity_id": n1, "object_entity_id": n2}
+
+        relation_repo = AsyncMock()
+        relation_repo.list_for_entity = AsyncMock(return_value=[direct_rel])
+        # list_among_entities returns the lateral edge AND a duplicate of the
+        # direct edge (both its endpoints are in the set) — the dedup must
+        # keep exactly one copy.
+        relation_repo.list_among_entities = AsyncMock(return_value=[dict(direct_rel), lateral_rel])
+
+        result = await uc.execute(
+            session,
+            entity_repo,
+            relation_repo,
+            None,
+            cypher_enabled=True,
+            entity_id=_ENT,
+            max_hops=2,
+            include_temporal_events=False,
+        )
+
+        # The lateral edge made it in; the duplicated direct edge did not.
+        rel_ids = [r["relation_id"] for r in result.relation_rows]
+        assert rel_ids == [direct_rel_id, lateral_rel_id]
+        # The node-set passed includes the center + both resolved neighbors.
+        called_ids = relation_repo.list_among_entities.call_args.args[0]
+        assert set(called_ids) == {_ENT, n1, n2}
+
+    async def test_no_lateral_fetch_at_depth_1(self) -> None:
+        """max_hops=1 → list_among_entities must NOT be called (1-hop is complete via Step 2)."""
+        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+        uc = CypherNeighborhoodUseCase()
+        n1 = uuid4()
+        session = _make_session(execute_returns=[(f'"{n1}"',)])
+
+        center_row = {
+            "entity_id": _ENT,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "isin": None,
+            "ticker": "AAPL",
+            "exchange": "US",
+            "metadata": {},
+        }
+        entity_repo = _make_entity_repo(exists=True, entity_row=center_row)
+        relation_repo = AsyncMock()
+        relation_repo.list_for_entity = AsyncMock(return_value=[])
+        relation_repo.list_among_entities = AsyncMock(return_value=[])
+
+        await uc.execute(
+            session,
+            entity_repo,
+            relation_repo,
+            None,
+            cypher_enabled=True,
+            entity_id=_ENT,
+            max_hops=1,
+            include_temporal_events=False,
+        )
+
+        relation_repo.list_among_entities.assert_not_called()
+
+    async def test_resolves_direct_endpoints_age_missed_into_node_set(self) -> None:
+        """Step 3b: direct-relation endpoints absent from AGE's set still join the
+        entity map + lateral fetch (AGE LIMIT fills arbitrarily / stale-sync ghosts)."""
+        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+        uc = CypherNeighborhoodUseCase()
+        n1 = uuid4()  # direct SQL neighbor that AGE did NOT discover
+        session = _make_session(execute_returns=[])  # AGE returns nothing
+
+        center_row = {
+            "entity_id": _ENT,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "isin": None,
+            "ticker": "AAPL",
+            "exchange": "US",
+            "metadata": {},
+        }
+        n1_row = {"entity_id": n1, "canonical_name": "Microsoft", "entity_type": "financial_instrument"}
+        entity_repo = AsyncMock()
+        entity_repo.exists = AsyncMock(return_value=True)
+        # 1st get = center existence check; 2nd get = Step 3b endpoint resolve.
+        entity_repo.get = AsyncMock(side_effect=[center_row, n1_row])
+
+        direct_rel = {"relation_id": uuid4(), "subject_entity_id": _ENT, "object_entity_id": n1}
+        relation_repo = AsyncMock()
+        relation_repo.list_for_entity = AsyncMock(return_value=[direct_rel])
+        relation_repo.list_among_entities = AsyncMock(return_value=[])
+
+        result = await uc.execute(
+            session,
+            entity_repo,
+            relation_repo,
+            None,
+            cypher_enabled=True,
+            entity_id=_ENT,
+            max_hops=2,
+            include_temporal_events=False,
+        )
+
+        # n1 was resolved into the entity map even though AGE never returned it…
+        assert str(n1) in result.neighbor_rows
+        # …and the lateral fetch covered {center, n1}.
+        called_ids = relation_repo.list_among_entities.call_args.args[0]
+        assert set(called_ids) == {_ENT, n1}
+
+    async def test_no_lateral_fetch_when_no_neighbors_resolved(self) -> None:
+        """Neighbors that fail SQL resolution are excluded → no ghost-edge fetch."""
+        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+        uc = CypherNeighborhoodUseCase()
+        n1 = uuid4()
+        session = _make_session(execute_returns=[(f'"{n1}"',)])
+
+        center_row = {
+            "entity_id": _ENT,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "isin": None,
+            "ticker": "AAPL",
+            "exchange": "US",
+            "metadata": {},
+        }
+        # entity_repo.get returns the center for the existence check, then None
+        # for the neighbor (AGE knows it; SQL does not — e.g. tombstoned).
+        entity_repo = AsyncMock()
+        entity_repo.exists = AsyncMock(return_value=True)
+        entity_repo.get = AsyncMock(side_effect=[center_row, None])
+
+        relation_repo = AsyncMock()
+        relation_repo.list_for_entity = AsyncMock(return_value=[])
+        relation_repo.list_among_entities = AsyncMock(return_value=[])
+
+        result = await uc.execute(
+            session,
+            entity_repo,
+            relation_repo,
+            None,
+            cypher_enabled=True,
+            entity_id=_ENT,
+            max_hops=2,
+            include_temporal_events=False,
+        )
+
+        relation_repo.list_among_entities.assert_not_called()
+        assert result.neighbor_rows == {}
+
 
 # ── Agtype parsing ────────────────────────────────────────────────────────────
 

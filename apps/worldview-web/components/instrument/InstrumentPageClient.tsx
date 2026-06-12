@@ -67,7 +67,13 @@ import { QuoteTab } from "@/components/instrument/quote/QuoteTab";
 // out of the redesigned page (one fewer ambient dependency to mock in tests).
 
 export interface InstrumentPageClientProps {
-  /** Authoritative KG entity_id from the URL segment. */
+  /**
+   * The /instruments/[ticker] URL slug — a TICKER ("AAPL") for all
+   * user-facing navigation (post-F2 the resolver also accepts a UUID).
+   * NOT a KG entity UUID: anything that addresses /v1/entities/{id}
+   * (UUID-typed path param) MUST use bundle.entity_id instead — see the
+   * IntelligenceTab slot below (PLAN-0099 W3 recovery).
+   */
   readonly entityId: string;
 }
 
@@ -272,8 +278,13 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
       />
 
       {/* AI brief banner: returns null when no brief is available, so the
-          banner area disappears cleanly with no reserved space. */}
-      <AiBriefBanner entityId={entityId} />
+          banner area disappears cleanly with no reserved space.
+          W3 FIX: the briefing endpoint types entity_id as a UUID — the URL
+          slug here is a ticker, which 404d ("Invalid entity_id: AAPL") and
+          silently hid the banner. Pass the bundle-resolved UUID instead;
+          "" while the bundle is in flight keeps the brief query disabled
+          (same pattern as IntelligenceTab below). */}
+      <AiBriefBanner entityId={bundle?.entity_id ?? ""} />
 
       {/* Controlled 3-tab nav (Quote / Financials / Intelligence). The
           Q/F/I mnemonic hotkeys live inside InstrumentTabs (T-A-04) — the
@@ -309,10 +320,13 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             for the 7-panel sidebar (CompanySnapshotPanel needs Instrument fields;
             AIBriefPanel needs entityId for the briefing endpoint). Post-F2,
             entityId === instrumentId for all new instruments. */}
+        {/* W3 FIX: AIBriefPanel keys the briefing endpoint on entity_id
+            (UUID) — the URL slug is a ticker and 404s. Use the resolved
+            bundle UUID, same as AiBriefBanner/IntelligenceTab. */}
         {activeTab === "financials" && (
           <FinancialsTab
             instrumentId={bundle?.instrument_id ?? ""}
-            entityId={entityId}
+            entityId={bundle?.entity_id ?? ""}
             instrument={bundle?.overview?.instrument ?? null}
             quote={bundle?.overview?.quote ?? null}
           />
@@ -320,8 +334,20 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
             (NewsColumn | GraphColumn | ContextPanel). All data fetching lives
             inside the children, so this slot only needs the entityId. */}
+        {/* INTELLIGENCE TAB RECOVERY (PLAN-0099 W3, 2026-06-11): the URL
+            segment this page receives as `entityId` is a TICKER ("AAPL") —
+            the /instruments/[ticker] route. Every /v1/entities/{id} gateway
+            route types entity_id as a UUID path param, so passing the raw
+            URL slug made EVERY intelligence fetch 422 (dossier, news,
+            events, graph, contradictions, narrative — uniform failure).
+            The page bundle already resolves ticker → KG entity UUID
+            gateway-side (bundle.entity_id, falls back to instrument_id) —
+            we MUST pass that resolved UUID down, mirroring how FinancialsTab
+            receives bundle.instrument_id. While the bundle is in flight we
+            pass "" — every intelligence query gates on `enabled: !!entityId`
+            so the tab renders loading chrome without firing bad requests. */}
         {activeTab === "intelligence" && (
-          <IntelligenceTab entityId={entityId} />
+          <IntelligenceTab entityId={bundle?.entity_id ?? ""} />
         )}
       </div>
     </div>

@@ -55,8 +55,20 @@ vi.mock("@/components/instrument/header/InstrumentHeader", () => ({
 vi.mock("@/components/instrument/brief/AiBriefBanner", () => ({
   AiBriefBanner: () => null,
 }));
+// WHY the tabs stub exposes a switch button (Intelligence-tab recovery,
+// 2026-06-11): the entity_id plumbing regression below needs to ACTIVATE the
+// intelligence tab — activeTab is internal shell state only reachable through
+// InstrumentTabs' onTabChange callback.
 vi.mock("@/components/instrument/tabs/InstrumentTabs", () => ({
-  InstrumentTabs: () => <div data-testid="stub-tabs" />,
+  InstrumentTabs: ({ onTabChange }: { onTabChange?: (t: string) => void }) => (
+    <div data-testid="stub-tabs">
+      <button
+        type="button"
+        data-testid="stub-tab-switch-intelligence"
+        onClick={() => onTabChange?.("intelligence")}
+      />
+    </div>
+  ),
 }));
 vi.mock("@/components/instrument/quote/QuoteTab", () => ({
   QuoteTab: () => <div data-testid="stub-quote-tab" />,
@@ -64,8 +76,13 @@ vi.mock("@/components/instrument/quote/QuoteTab", () => ({
 vi.mock("@/components/instrument/financials/FinancialsTab", () => ({
   FinancialsTab: () => null,
 }));
+// WHY the stub renders the received entityId (Intelligence-tab recovery):
+// the regression tests below pin WHICH id the shell hands to the tab —
+// bundle.entity_id (KG UUID), never the raw /instruments/[ticker] URL slug.
 vi.mock("@/components/instrument/intelligence/IntelligenceTab", () => ({
-  IntelligenceTab: () => null,
+  IntelligenceTab: ({ entityId }: { entityId: string }) => (
+    <div data-testid="stub-intelligence-tab" data-entity-id={entityId} />
+  ),
 }));
 
 // IMPORTANT: imports AFTER mocks. GatewayError stays REAL (instanceof check).
@@ -149,5 +166,50 @@ describe("InstrumentPageClient error recovery (Round-4 items 1a/1c)", () => {
     expect(screen.getByTestId("stub-quote-tab")).toBeInTheDocument();
     expect(screen.queryByTestId("instrument-not-found")).toBeNull();
     expect(screen.queryByTestId("instrument-page-error")).toBeNull();
+  });
+});
+
+// ── Intelligence tab entity_id plumbing (PLAN-0099 W3 recovery) ──────────────
+//
+// ROOT CAUSE BEING PINNED: the /instruments/[ticker] URL slug ("AAPL") was
+// passed straight into <IntelligenceTab entityId={...}>. Every
+// /v1/entities/{id} gateway route types entity_id as a UUID path param, so
+// each child fetch 422'd — dossier, news, events, graph, contradictions and
+// narrative ALL failed in the live app while the rest of the page worked
+// (the page bundle resolves tickers server-side). The shell must pass the
+// bundle's resolved KG UUID (bundle.entity_id), and "" while it's in flight.
+describe("InstrumentPageClient → IntelligenceTab entity_id plumbing", () => {
+  it("passes bundle.entity_id (KG UUID) to IntelligenceTab, NOT the URL ticker", () => {
+    mockBundleHook.state.data = {
+      instrument_id: "01900000-0000-7000-8000-000000001001",
+      // Resolved KG entity UUID — deliberately different from the URL slug.
+      entity_id: "01900000-0000-7000-8000-000000001001",
+      overview: null,
+      top_news: null,
+    };
+
+    render(<InstrumentPageClient entityId="AAPL" />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId("stub-tab-switch-intelligence"));
+
+    const tab = screen.getByTestId("stub-intelligence-tab");
+    expect(tab).toHaveAttribute(
+      "data-entity-id",
+      "01900000-0000-7000-8000-000000001001",
+    );
+    // The regression: the raw ticker slug must never reach the tab.
+    expect(tab.getAttribute("data-entity-id")).not.toBe("AAPL");
+  });
+
+  it("passes empty string while the bundle is still in flight (queries stay gated)", () => {
+    // data undefined = bundle loading. The tab must receive "" so every
+    // child query's `enabled: !!entityId` guard keeps it idle — never the
+    // ticker (which would fire 422s) and never the literal "undefined".
+    render(<InstrumentPageClient entityId="AAPL" />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByTestId("stub-tab-switch-intelligence"));
+
+    expect(screen.getByTestId("stub-intelligence-tab")).toHaveAttribute(
+      "data-entity-id",
+      "",
+    );
   });
 });
