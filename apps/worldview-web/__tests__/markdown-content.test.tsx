@@ -111,3 +111,64 @@ describe("MarkdownContent", () => {
     expect(bq?.className).toContain("text-muted-foreground");
   });
 });
+
+// ── Wave 3 — dead citation markers (chat hardening) ───────────────────────────
+//
+// LIVE EVIDENCE (2026-06-11 screenshot): the backend emitted inline markers
+// [5][6][8] over a 4-item citations list (a known S8 bug owned by the
+// backend team). The frontend contract: a marker with no matching citation
+// must render as a MUTED dead badge with a "Source not available" tooltip —
+// never as a live primary chip that implies a verifiable source exists.
+
+describe("MarkdownContent — dead citation markers (Wave 3)", () => {
+  it("renders markers within range as live citation sups", () => {
+    render(
+      <MarkdownContent withCitationSups citationCount={4}>
+        {"Apple beat estimates [2]."}
+      </MarkdownContent>,
+    );
+    const sup = screen.getByText("[2]");
+    expect(sup.tagName).toBe("SUP");
+    // Live chip: primary tint + per-citation tooltip.
+    expect(sup.className).toContain("text-primary");
+    expect(sup.getAttribute("title")).toBe("Citation 2");
+  });
+
+  it("renders markers BEYOND the citation list as muted dead badges with tooltip", () => {
+    render(
+      <MarkdownContent withCitationSups citationCount={4}>
+        {"Sales rose 30% [5] and margins improved [8]."}
+      </MarkdownContent>,
+    );
+    for (const marker of ["[5]", "[8]"]) {
+      const sup = screen.getByText(marker);
+      expect(sup.tagName).toBe("SUP");
+      expect(sup.getAttribute("title")).toBe("Source not available");
+      // Muted, struck-through — visually "this reference is broken upstream".
+      expect(sup.className).toContain("line-through");
+      expect(sup.className).not.toContain("text-primary");
+    }
+  });
+
+  it("citationCount=0 turns EVERY marker into a dead badge (no citations delivered)", () => {
+    render(
+      <MarkdownContent withCitationSups citationCount={0}>
+        {"Claim [1] and claim [2]."}
+      </MarkdownContent>,
+    );
+    expect(screen.getAllByTestId("dead-citation-marker")).toHaveLength(2);
+  });
+
+  it("omitting citationCount preserves the legacy behaviour (all markers live)", () => {
+    // Callers that don't know the citation list (AskAiPanel today) keep the
+    // pre-Wave-3 rendering — every marker styled as a live chip.
+    render(
+      <MarkdownContent withCitationSups>
+        {"Far out of range [29]."}
+      </MarkdownContent>,
+    );
+    const sup = screen.getByText("[29]");
+    expect(sup.getAttribute("title")).toBe("Citation 29");
+    expect(sup.className).toContain("text-primary");
+  });
+});
