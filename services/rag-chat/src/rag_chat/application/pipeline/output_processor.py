@@ -54,10 +54,17 @@ _BARE_CITATION_INT_RE = re.compile(
     r"(?<!\.)"  # PLAN-0104 W28-1 / BP-645: not preceded by '.' — guards the
     # post-decimal digits of "$7.14", "0.25%", "1.10x" so we don't strip
     # the "14"/"11" half of a decimal as a phantom bare citation.
+    r"(?<![-–—:])"  # BP-670: not preceded by hyphen/en-dash/em-dash/colon —  # noqa: RUF001
+    # guards the day half of ISO dates ("2026-06-11"), range tails
+    # ("9-13", "9-13" with en dash) and minutes ("10:10") from being stripped.
     r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
     r"(?!\])"  # not followed by ] (not an existing citation)
     r"(?!\d)"  # not followed by digit (not a year)
-    r"(?![%./\w])"  # not followed by unit / word char / decimal point
+    r"(?![%./\w:)–—-])"  # not followed by unit / word char / decimal point /  # noqa: RUF001
+    # BP-670: compound joiners and closing paren — "1-minute", "10:10",
+    # "9-13", en-dash ranges and parenthesised dates "(Jun 9)" are time/date
+    # fragments, never bare citation refs ("(Jun 9)" used to render as
+    # "(Jun )" and "1-minute bar" as "-minute bar" in the final answer).
 )
 
 # Basic PII patterns — email, phone, SSN, credit card

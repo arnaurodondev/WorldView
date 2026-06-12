@@ -96,3 +96,45 @@ def test_citation_meta_match_still_wins_first() -> None:
         citation_meta=_CM(entity_name="TSLA"),
     )
     assert _check_entity_grounding([item], {"tsla"}) is None
+
+
+def test_item_id_carrying_symbol_admits_item_bp668() -> None:
+    """BP-668 ext — the live BTC-USD refusal: symbol only present in item_id.
+
+    ``get_price_history`` items used to carry no citation_meta and the
+    rendered table may omit the symbol — the ONLY place "BTC-USD" appeared
+    was the item id ``tool:price_history:BTC-USD:latest_1m``. The guard must
+    scan the id (':' separators act as word delimiters) so a correct price
+    answer is not replaced by the "different entities" refusal.
+    """
+    item = _FakeItem(
+        text="| time | open | close |\n| 09:35 | 62,800.10 | 62,846.70 |",
+        entity_id=None,
+        citation_meta=None,
+    )
+    item.__dict__["item_id"] = "tool:price_history:BTC-USD:latest_1m"
+
+    refusal = _check_entity_grounding([item], {"btc-usd", "019e0db3-6c19-77b6-86c4-43fa2dd47b49"})
+    assert refusal is None
+
+
+def test_head_word_variant_matches_possessive_title_bp670() -> None:
+    """'apple inc.' question id must ground against a title saying "Apple's"."""
+    item = _FakeItem(
+        text="Apple's AI Push Deepens Alphabet Dependency\n  Source: news",
+        entity_id=None,
+        citation_meta=None,
+    )
+    refusal = _check_entity_grounding([item], {"apple inc.", "01900000-0000-7000-8000-000000001001"})
+    assert refusal is None
+
+
+def test_short_head_word_does_not_over_match_bp670() -> None:
+    """'ON Semiconductor Corp.' must NOT contribute the token 'on'."""
+    item = _FakeItem(
+        text="Markets traded on heavy volume across the board today.",
+        entity_id=None,
+        citation_meta=None,
+    )
+    refusal = _check_entity_grounding([item], {"on semiconductor corp."})
+    assert refusal is not None

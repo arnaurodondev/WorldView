@@ -153,3 +153,44 @@ def test_output_strips_bare_citation_integers(processor: OutputProcessor, bare: 
     # The bare digit should be gone; the bracketed [1] citation survives.
     assert f" {bare} " not in answer
     assert "[1]" in answer
+
+
+# ── BP-670 regression — date/time fragments must survive the bare-int strip ──
+#
+# Live BTC-USD verification (2026-06-11): the final answer rendered as
+# "the most recent -minute bar (2026-06- :)" — the stripper swallowed the
+# "1" of "1-minute", the "11" day of "2026-06-11" and both halves of
+# "10:10". The Apple-news trace showed the same with "(June 9-13)" →
+# "(June -)". Hyphen/colon-adjacent integers are date/time fragments,
+# never bare citation refs.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        ("Trading at $62,836 as of the most recent 1-minute bar [1].", "1-minute"),
+        ("Latest bar timestamp 2026-06-11 10:10 [1].", "2026-06-11 10:10"),
+        ("WWDC runs June 9-13 this year [1].", "9-13"),
+        ("The 5-day window shows gains [1].", "5-day"),
+    ],
+)
+def test_output_preserves_date_time_fragments(processor: OutputProcessor, raw: str, token: str) -> None:
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        ("Apple EU AI delay drew attention *(Jun 9)* [1].", "(Jun 9)"),
+        ("WWDC runs June 9–13, 2026 [1].", "9–13"),  # noqa: RUF001 — en dash
+    ],
+)
+def test_output_preserves_paren_dates_and_endash_ranges(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-670 follow-up: '(Jun 9)' rendered as '(Jun )' in the live Apple run."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"

@@ -89,6 +89,75 @@ _SUFFIX_MULT: dict[str, float] = {
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
+# ── BP-670 — non-claim number shapes (live Apple-news false positives) ───────
+#
+# The validator flagged 9 "unsupported numbers" in a correctly-cited news
+# summary, triggering a 16.5s LLM rewrite that REPLACED a good answer with a
+# hallucinated one. Every flagged value was prose structure, not a financial
+# claim:
+#
+#   * markdown list ordinals       — "1. **Apple Will Run...**"  → 1, 2, ... 5
+#   * month-day date fragments     — "*(Jun 9)*", "(Jun 10)"     → 9, 10
+#   * relative time windows        — "(Last 14 Days)"            → 14
+#
+# The three skip-shapes below remove these from extraction entirely. Each is
+# deliberately narrow: only BARE integers (no "$", "%", magnitude suffix or
+# thousands separator) qualify, so "$14B", "9%" and "1,400" still validate.
+
+# Month token immediately BEFORE the number ("Jun 9", "June 10", "Sept. 5"),
+# optionally with a day-range head in between ("June 9-10", en-dash too —
+# the second day is the range tail; live BP-670 follow-up: "Top Stories
+# (June 9-10, 2026)" flagged the bare "10").
+_MONTH_BEFORE_RE = re.compile(
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s*"
+    r"(?:\d{1,2}\s*[-–—]\s*)?$",  # noqa: RUF001 — en/em dash range joiners
+    re.IGNORECASE,
+)
+
+# Time-unit word immediately AFTER the number ("14 days", "30-day", "2 weeks",
+# "5 trading days"). Hyphen and en-dash joiners both appear in LLM output.
+_TIME_UNIT_AFTER_RE = re.compile(
+    r"^\s*[-–]?\s*(?:trading\s+|calendar\s+)?(?:day|week|month|year|hour|minute|quarter|session)s?\b",  # noqa: RUF001
+    re.IGNORECASE,
+)
+
+# Markdown ordinal: number begins a line (only whitespace before it on the
+# line) and is immediately followed by ". " or ") ".
+_ORDINAL_AFTER_RE = re.compile(r"^[.)]\s")
+
+
+def _is_non_claim_number(cleaned: str, m: re.Match[str]) -> bool:
+    """True when the matched number is prose structure, not a financial claim.
+
+    See the BP-670 block comment above for the three shapes. Only bare
+    integers are eligible — currency, percent, magnitude suffix or
+    thousands separators mark a genuine numeric claim.
+    """
+    full = m.group("full")
+    # The digits group greedily captures a TRAILING comma ("(June 9–10,"  # noqa: RUF003
+    # yields digits "10,") — strip it so list/date integers followed by
+    # punctuation still qualify as bare.
+    digits = (m.group("digits") or "").rstrip(",")
+    if "$" in full or "%" in full or m.group("suffix") or "," in digits or "." in digits:
+        return False
+    before = cleaned[max(0, m.start() - 12) : m.start()]
+    after = cleaned[m.end() : m.end() + 24]
+    # Shape 1: markdown list ordinal at line start ("1. " / "2) ").
+    line_start = cleaned.rfind("\n", 0, m.start()) + 1
+    if cleaned[line_start : m.start()].strip() == "" and _ORDINAL_AFTER_RE.match(after):
+        return True
+    # Shape 2: month-day date fragment ("Jun 9", "June 10"). Day range only.
+    try:
+        int_value = int(digits)
+    except ValueError:
+        return False
+    if 1 <= int_value <= 31 and _MONTH_BEFORE_RE.search(before):
+        return True
+    # Shape 3: relative time window ("14 days", "30-day", "2 weeks").
+    return bool(_TIME_UNIT_AFTER_RE.match(after))
+
+
 # ── PLAN-0107 v2.0 — prose citation patterns (banner-suppression helper) ─────
 #
 # The numeric-grounding validator and the orchestrator banner-suppression
@@ -627,6 +696,10 @@ def _extract_numbers_with_spans(
         # Skip 1-character matches like a bare "$" that captured nothing.
         if not any(ch.isdigit() for ch in digits):
             continue
+        # BP-670: list ordinals, month-day dates and relative time windows
+        # are prose structure, not financial claims — never extract them.
+        if _is_non_claim_number(cleaned, m):
+            continue
         try:
             value = _decode_token(m.group("full"), digits, suffix)
         except ValueError:
@@ -683,19 +756,32 @@ def _entity_tag_for(raw: Any) -> str:
     Resolution order (each step is wrapped in ``getattr`` so duck-typed
     mocks and dicts both work):
 
-      1. ``raw.entity_id`` — first 8 chars of UUID string.
+      1. ``raw.citation_meta.entity_name`` — lower-cased (usually a ticker).
       2. ``raw.item_id`` — strip a leading ``<TICKER>_`` if present.
-      3. ``raw.citation_meta.entity_name`` — lower-cased.
+      3. ``raw.entity_id`` — first 8 chars of UUID string.
       4. ``""`` when nothing matches.
+
+    BP-670 (2026-06-11): the order used to prefer ``entity_id``, but the
+    response-side scope extractor (:func:`_nearest_entity_tag`) only yields
+    TICKER-shaped tokens — a UUID-prefix tag can NEVER match it, so any
+    item carrying both ``entity_id`` and a ticker ``entity_name`` had its
+    candidate pool permanently empty (live failure: "2026" failed YEAR
+    validation against Apple-tagged news items because the items' tag was
+    "01900000", not "aapl"). Ticker-style sources now win.
 
     Returns a lower-cased string so comparisons are case-insensitive.
     """
-    # 1. entity_id (UUID) — preferred when present.
-    entity_id = getattr(raw, "entity_id", None)
-    if entity_id is None and isinstance(raw, dict):
-        entity_id = raw.get("entity_id")
-    if entity_id:
-        return str(entity_id)[:8].lower()
+    # 1. citation_meta.entity_name — ticker-style, matches the response-side
+    #    scope extractor; preferred when present (BP-670).
+    citation_meta = getattr(raw, "citation_meta", None)
+    if citation_meta is None and isinstance(raw, dict):
+        citation_meta = raw.get("citation_meta")
+    if citation_meta is not None:
+        ent_name = getattr(citation_meta, "entity_name", None)
+        if ent_name is None and isinstance(citation_meta, dict):
+            ent_name = citation_meta.get("entity_name")
+        if isinstance(ent_name, str) and ent_name:
+            return ent_name.lower()
     # 2. item_id (often "<TICKER>_<period>").
     item_id = getattr(raw, "item_id", None)
     if item_id is None and isinstance(raw, dict):
@@ -710,16 +796,14 @@ def _entity_tag_for(raw: Any) -> str:
         m = _ITEM_ID_TICKER_RE.match(item_id)
         if m:
             return m.group(1).lower()
-    # 3. citation_meta.entity_name.
-    citation_meta = getattr(raw, "citation_meta", None)
-    if citation_meta is None and isinstance(raw, dict):
-        citation_meta = raw.get("citation_meta")
-    if citation_meta is not None:
-        ent_name = getattr(citation_meta, "entity_name", None)
-        if ent_name is None and isinstance(citation_meta, dict):
-            ent_name = citation_meta.get("entity_name")
-        if isinstance(ent_name, str) and ent_name:
-            return ent_name.lower()
+    # 3. entity_id (UUID) — last resort; UUID tags only help when the
+    #    response side also derives a UUID scope (it currently never does,
+    #    but cross-checking against question ids may use this later).
+    entity_id = getattr(raw, "entity_id", None)
+    if entity_id is None and isinstance(raw, dict):
+        entity_id = raw.get("entity_id")
+    if entity_id:
+        return str(entity_id)[:8].lower()
     return ""
 
 
@@ -852,6 +936,32 @@ _NON_TICKER_TOKENS = frozenset(
         "API",
         "CAGR",
         "VAR",
+        # ── BP-670: prose acronyms misread as entity scopes (2026-06-11) ──
+        # "(likely WWDC or AI-related developments)" preceded "35% Return"
+        # in a live Apple-news answer; _nearest_entity_tag picked "AI" as
+        # the ticker scope → empty candidate pool → guaranteed validation
+        # failure → 13s fabricating rewrite of a correct answer. These are
+        # everyday tech/finance acronyms, not entity scopes. (Accepted
+        # trade-off: C3.ai's literal ticker "AI" loses entity scoping.)
+        "AI",
+        "ML",
+        "AR",
+        "VR",
+        "EU",
+        "US",
+        "UK",
+        "UN",
+        "WWDC",
+        "GPU",
+        "GPUS",
+        "CPU",
+        "CPUS",
+        "LLM",
+        "LLMS",
+        "IOS",
+        "APP",
+        "DMA",
+        "ESG",
     }
 )
 

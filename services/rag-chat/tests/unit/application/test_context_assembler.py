@@ -115,3 +115,23 @@ def test_contradiction_assembler_builds_block(
     assert block.has_contradictions
     assert "revenue_growth" in block.text
     assert len(block.refs) == 1
+
+
+@pytest.mark.unit
+def test_context_assembler_preserves_caller_order_bp669(assembler: ContextAssembler) -> None:
+    """BP-669 ORDER CONTRACT — items are numbered in the EXACT order given.
+
+    The assembler used to re-sort by fusion_score before numbering, while
+    ``OutputProcessor.process`` resolved ``[N]`` markers against the
+    UNSORTED reranked list — every citation pointed at the wrong source
+    whenever rerank order != fusion order (live Apple-news failure:
+    citations carried Tampa Bay / Anthropic articles while the answer cited
+    Morgan Stanley / EU-delay / BofA stories).
+    """
+    # low-score item FIRST, high-score item SECOND — a fusion sort would swap them.
+    low = _item("low", text="LOW-SCORE-ITEM unique text", score=0.10, trust=0.10)
+    high = _item("high", text="HIGH-SCORE-ITEM unique text", score=0.99, trust=0.99)
+    assert high.fusion_score > low.fusion_score
+
+    block = assembler.assemble([low, high])
+    assert block.index("[1] LOW-SCORE-ITEM") < block.index("[2] HIGH-SCORE-ITEM")

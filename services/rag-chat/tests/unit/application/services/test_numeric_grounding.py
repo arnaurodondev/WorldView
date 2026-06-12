@@ -743,3 +743,114 @@ class TestProseCitationRegex:
     def test_non_citations_do_not_match(self, text: str) -> None:
         """Regex stays conservative — bare ``source`` word is not enough."""
         assert self.regex.search(text) is None, f"false positive on: {text!r}"
+
+
+class TestNonClaimNumberShapes:
+    """BP-670 — prose-structure numbers must never be extracted as claims.
+
+    Live failure (2026-06-11 Apple-news turn): the validator flagged 9
+    "unsupported numbers" in a correctly-cited news summary — markdown list
+    ordinals (1.-5.), month-day date fragments "(Jun 9)" / "(Jun 10)", and
+    the relative window "(Last 14 Days)". The resulting 16.5s LLM rewrite
+    REPLACED the good answer with a hallucinated one, which then failed
+    entity grounding and burned a further 15s rewrite-timeout (50s turn).
+    """
+
+    def _unsupported_values(self, response: str) -> list[float]:
+        validator = NumericGroundingValidator()
+        result = validator.validate(response, [_row_with_text("no numbers here")])
+        return [u.value for u in result.unsupported]
+
+    def test_markdown_list_ordinals_are_skipped(self) -> None:
+        response = (
+            "Here are the latest headlines:\n\n"
+            "1. **Apple Will Run Advanced AI Model on Nvidia GPUs**\n"
+            "2. **Morgan Stanley warns on Siri**\n"
+            "3. **EU AI delay draws attention**\n"
+        )
+        assert self._unsupported_values(response) == []
+
+    def test_month_day_date_fragments_are_skipped(self) -> None:
+        response = "**Apple EU AI Delay** *(Jun 9)* — and another *(Jun 10)* item from June 11."
+        assert self._unsupported_values(response) == []
+
+    def test_relative_time_windows_are_skipped(self) -> None:
+        response = "### Apple News (Last 14 Days)\nCoverage over the past 5 trading days and a 30-day window."
+        assert self._unsupported_values(response) == []
+
+    def test_real_financial_claims_still_flagged(self) -> None:
+        """The canonical AMD fabrication ($34.6B) must still fail validation."""
+        validator = NumericGroundingValidator()
+        result = validator.validate(
+            "AMD revenue was $34.6B with EPS of $0.45.",
+            [_row_with_text("AMD revenue: $23.7B | EPS: $0.92")],
+        )
+        assert not result.passed
+        assert any(u.value == pytest.approx(34.6e9) for u in result.unsupported)
+
+    def test_currency_and_percent_near_date_words_still_extracted(self) -> None:
+        """Narrowness guard: '$14B' and '9%' are claims even next to time words."""
+        validator = NumericGroundingValidator()
+        result = validator.validate(
+            "Revenue of $14B over 14 days, with margins at 9% in June.",
+            [_row_with_text("nothing relevant")],
+        )
+        flagged = {u.snippet for u in result.unsupported}
+        assert "$14B" in flagged
+        assert any("9" in s and "%" in s for s in flagged)
+
+
+class TestProseAcronymEntityScope:
+    """BP-670 — prose acronyms must not become entity scopes.
+
+    Live failure: "(likely WWDC or AI-related developments)" preceded
+    "35% Return" → _nearest_entity_tag picked "AI" → empty candidate pool →
+    a verbatim-from-title number failed validation.
+    """
+
+    def test_ai_acronym_does_not_scope_the_candidate_pool(self) -> None:
+        validator = NumericGroundingValidator()
+        response = (
+            "BofA issued a note (likely WWDC or AI-related developments). "
+            "If Apple Stock Stabilizes, This Iron Condor Sets Up A 35% Return In Five Weeks."
+        )
+        tool_text = "If Apple Stock Stabilizes, This Iron Condor Sets Up A 35% Return In Five Weeks\n  Source: news"
+        result = validator.validate(response, [_row_with_text(tool_text)])
+        assert result.passed, [u.snippet for u in result.unsupported]
+
+
+class TestEntityTagTickerPreference:
+    """BP-670 — ticker-style tags must beat UUID tags.
+
+    The response-side scope extractor only yields ticker-shaped tokens; a
+    UUID-prefix tag can never match it, permanently emptying the candidate
+    pool for items that carry both entity_id and a ticker entity_name.
+    """
+
+    def test_entity_name_wins_over_entity_id(self) -> None:
+        from rag_chat.application.services.numeric_grounding import _entity_tag_for
+
+        @dataclass
+        class _CM:
+            entity_name: str
+
+        @dataclass
+        class _Row:
+            entity_id: str
+            item_id: str
+            citation_meta: _CM
+
+        row = _Row(
+            entity_id="01900000-0000-7000-8000-000000001001",
+            item_id="tool:entity_news:019eb4a1",
+            citation_meta=_CM(entity_name="AAPL"),
+        )
+        assert _entity_tag_for(row) == "aapl"
+
+    def test_month_day_range_tail_is_skipped(self) -> None:
+        """'(June 9–10, 2026)' must not flag the bare '10'."""  # noqa: RUF002
+        validator = NumericGroundingValidator()
+        response = "### Top Stories (June 9–10, 2026)\nApple news summary."  # noqa: RUF001
+        tool_text = "Apple article\n  Published: 2026-06-10T12:08:41+00:00"
+        result = validator.validate(response, [_row_with_text(tool_text)])
+        assert result.passed, [u.snippet for u in result.unsupported]

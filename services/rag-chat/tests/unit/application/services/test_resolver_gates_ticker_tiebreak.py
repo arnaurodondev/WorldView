@@ -151,3 +151,184 @@ class TestQueryTickerTiebreak:
         assert len(accepted) == 2
         assert all(a.accepted_reason == "" for a in accepted)
         assert rejected == []
+
+
+class TestBP668CommonWordHijack:
+    """BP-668 regression — lowercase English words must not act as ticker evidence.
+
+    Live failures (2026-06-11):
+      * "What is BTC-USD trading at right **now**?" → NOW → ServiceNow Inc
+      * "What's the latest news **on** Apple Inc.?" → ON  → ON Semiconductor
+    The hijacked resolution then poisoned the BP-605 grounding gate
+    (question_entity_ids = ServiceNow) which REPLACED a correct streamed
+    price answer with the "data returned referenced different entities"
+    refusal, and the suggestions builder advertised the hijacker entity.
+    """
+
+    def _servicenow(self, sim: float = 0.95) -> GatedEntity:
+        return GatedEntity(
+            entity_id="8be3d480-46fd-41a9-9ec0-ea94c84b7022",
+            canonical_name="ServiceNow Inc",
+            similarity=sim,
+            ticker="NOW",
+        )
+
+    def _btc_usd(self, sim: float = 0.90) -> GatedEntity:
+        return GatedEntity(
+            entity_id="019e0db3-6c19-77b6-86c4-43fa2dd47b49",
+            canonical_name="BTC-USD",
+            similarity=sim,
+            ticker="BTC-USD",
+        )
+
+    def test_lowercase_now_does_not_resolve_servicenow(self) -> None:
+        """The exact BTC-USD live failure: 'right now' must not match ticker NOW."""
+        accepted, rejected = filter_resolver_candidates(
+            [self._servicenow(), GatedEntity(entity_id=_APPLE_ID, canonical_name="Bitcoin", similarity=0.92)],
+            config=_CONFIG,
+            query_text="What is something trading at right now?",
+        )
+        # No ticker evidence → legacy ambiguous bail (reject all), NOT a
+        # hijacked ServiceNow resolution.
+        assert accepted == []
+        assert {r.rejection_reason for r in rejected} == {REASON_DELTA_BELOW_THRESHOLD}
+
+    def test_lowercase_on_does_not_resolve_on_semiconductor(self) -> None:
+        """The Apple-news live failure: 'news on Apple' must not match ticker ON."""
+        on_semi = GatedEntity(
+            entity_id="3f9abc7b-4346-4d48-8556-d67d079bfbe9",
+            canonical_name="ON Semiconductor Corp.",
+            similarity=0.95,
+            ticker="ON",
+        )
+        apple = GatedEntity(entity_id=_APPLE_ID, canonical_name="Apple Inc.", similarity=0.90, ticker="AAPL")
+        accepted, _ = filter_resolver_candidates(
+            [on_semi, apple],
+            config=_CONFIG,
+            query_text="What's the latest news on Apple Inc.?",
+        )
+        assert all(a.canonical_name != "ON Semiconductor Corp." for a in accepted)
+
+    def test_uppercase_now_still_resolves_servicenow(self) -> None:
+        """Explicit caps is explicit intent: 'what is NOW trading at?' means the ticker."""
+        other = GatedEntity(entity_id=_APPLE_ID, canonical_name="Now Foods LLC", similarity=0.90)
+        accepted, _ = filter_resolver_candidates(
+            [self._servicenow(), other],
+            config=_CONFIG,
+            query_text="what is NOW trading at?",
+        )
+        assert len(accepted) == 1
+        assert accepted[0].canonical_name == "ServiceNow Inc"
+        assert accepted[0].accepted_reason == ACCEPTED_QUERY_TICKER_MATCH
+
+    def test_hyphenated_crypto_pair_wins_tiebreak(self) -> None:
+        """BTC-USD (name == ticker) must win the tie, not be phantom-penalised.
+
+        Live failure compounded two bugs: (a) lowercase 'now' matched
+        ServiceNow, and (b) the phantom-shape filter penalised the real
+        'BTC-USD' canonical because its NAME embeds its own ticker — for
+        crypto/FX pairs the ticker IS the canonical name.
+        """
+        accepted, _ = filter_resolver_candidates(
+            [self._servicenow(), self._btc_usd()],
+            config=_CONFIG,
+            query_text="What is BTC-USD trading at right now?",
+        )
+        assert len(accepted) == 1
+        assert accepted[0].canonical_name == "BTC-USD"
+        # "BTC-USD" is both the canonical NAME and the ticker; the verbatim
+        # name tiebreak fires first (stronger evidence, same winner).
+        assert accepted[0].accepted_reason in (ACCEPTED_QUERY_TICKER_MATCH, "query_name_exact_match")
+
+    def test_name_equals_ticker_beats_embedding_phantom(self) -> None:
+        """'BTC-USD' (name==ticker) outranks 'BTC-USD Pair' (embeds ticker + noise)."""
+        phantom = GatedEntity(
+            entity_id=_PHANTOM_ID,
+            canonical_name="BTC-USD Pair",
+            similarity=0.95,
+            ticker="BTC-USD",
+        )
+        accepted, _ = filter_resolver_candidates(
+            [phantom, self._btc_usd(sim=0.90)],
+            config=_CONFIG,
+            query_text="price of BTC-USD?",
+        )
+        assert len(accepted) == 1
+        assert accepted[0].canonical_name == "BTC-USD"
+
+    def test_lowercase_non_word_ticker_still_matches(self) -> None:
+        """BP-661 convenience preserved: lowercase 'aapl' is not an English word."""
+        accepted, _ = filter_resolver_candidates(
+            [_phantom(), _apple()],
+            config=_CONFIG,
+            query_text="what is aapl?",
+        )
+        assert len(accepted) == 1
+        assert accepted[0].entity_id == _APPLE_ID
+
+
+class TestQueryNameTiebreak:
+    """BP-668 — verbatim canonical-name tiebreak (the Apple-news anchor loss).
+
+    After the common-word fix, "latest news on Apple Inc.?" no longer
+    hijacked to ON Semiconductor — but the delta gate then rejected BOTH
+    candidates (ON Semi 0.95 vs Apple 0.90, no ticker token in the query)
+    and the turn lost its entity anchor entirely. The query literally names
+    "Apple Inc." — that exact-name evidence must win the tie.
+    """
+
+    def _apple_inc(self) -> GatedEntity:
+        return GatedEntity(entity_id=_APPLE_ID, canonical_name="Apple Inc.", similarity=0.90, ticker="AAPL")
+
+    def _on_semi(self) -> GatedEntity:
+        return GatedEntity(
+            entity_id="3f9abc7b-4346-4d48-8556-d67d079bfbe9",
+            canonical_name="ON Semiconductor Corp.",
+            similarity=0.95,
+            ticker="ON",
+        )
+
+    def test_verbatim_name_wins_over_higher_similarity(self) -> None:
+        from rag_chat.application.services.resolver_gates import ACCEPTED_QUERY_NAME_MATCH
+
+        accepted, rejected = filter_resolver_candidates(
+            [self._on_semi(), self._apple_inc()],
+            config=_CONFIG,
+            query_text="What's the latest news on Apple Inc.?",
+        )
+        assert len(accepted) == 1
+        assert accepted[0].entity_id == _APPLE_ID
+        assert accepted[0].accepted_reason == ACCEPTED_QUERY_NAME_MATCH
+        assert [r.canonical_name for r in rejected] == ["ON Semiconductor Corp."]
+
+    def test_name_match_requires_word_boundaries(self) -> None:
+        """'Applesauce Inc.' in the query must NOT match 'Apple Inc.'."""
+        accepted, _ = filter_resolver_candidates(
+            [self._on_semi(), self._apple_inc()],
+            config=_CONFIG,
+            query_text="latest news about Applesauce Inc. earnings",
+        )
+        assert accepted == []
+
+    def test_two_distinct_names_in_query_is_ambiguous(self) -> None:
+        """Comparison queries naming both candidates fall through to reject."""
+        msft = GatedEntity(
+            entity_id=_PHANTOM_ID, canonical_name="Microsoft Corporation", similarity=0.92, ticker="MSFT"
+        )
+        accepted, _ = filter_resolver_candidates(
+            [msft, self._apple_inc()],
+            config=_CONFIG,
+            query_text="Compare Apple Inc. against Microsoft Corporation on margins",
+        )
+        assert accepted == []
+
+    def test_short_or_common_word_names_never_match(self) -> None:
+        """A hypothetical entity named 'Now' must not re-open the BP-668 hijack."""
+        now_entity = GatedEntity(entity_id=_PHANTOM_ID, canonical_name="Now", similarity=0.95)
+        other = GatedEntity(entity_id=_APPLE_ID, canonical_name="Bitcoin", similarity=0.92)
+        accepted, _ = filter_resolver_candidates(
+            [now_entity, other],
+            config=_CONFIG,
+            query_text="what is trading well right now?",
+        )
+        assert all(a.canonical_name != "Now" for a in accepted)

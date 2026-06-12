@@ -150,6 +150,21 @@ _STOP_NOUNS: frozenset[str] = frozenset(
         "October",
         "November",
         "December",
+        # BP-670: month ABBREVIATIONS — live failure: the single candidate
+        # "Jun" (from "*(Jun 10)*" date stamps) cost an 11.7s rewrite of a
+        # correct Apple-news answer.
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Sept",
+        "Oct",
+        "Nov",
+        "Dec",
         # ── Countries (most common in financial prose) ───────────
         "United States",
         "United Kingdom",
@@ -234,6 +249,15 @@ _STOP_NOUNS: frozenset[str] = frozenset(
         "AI",
         "ML",
         "LLM",
+        # BP-670: tech acronyms observed as live false positives — flagged
+        # as TICKER/COMPANY in the Apple-news turn ("LLMs", "WWDC") and
+        # adjacent hardware acronyms of the same shape.
+        "LLMs",
+        "WWDC",
+        "GPU",
+        "GPUs",
+        "CPU",
+        "CPUs",
         "EV",
         "IT",
         "IP",
@@ -299,6 +323,46 @@ _STOP_NOUNS: frozenset[str] = frozenset(
         "Recently",
         "Previously",
         "Currently",
+        # ── BP-670: sentence-start prose words observed live (2026-06-11)
+        # "Multiple analyst notes..." and "Would you like me to..." were
+        # extracted as COMPANY candidates and triggered a 12s fabricating
+        # rewrite of a correct Apple-news answer. Modals / quantifiers /
+        # discourse openers have no business being company references.
+        "Would",
+        "Could",
+        "Should",
+        "Multiple",
+        "Several",
+        "Many",
+        "Some",
+        "Both",
+        "Each",
+        "Every",
+        "While",
+        "Although",
+        "Despite",
+        "Whether",
+        "Also",
+        "Please",
+        "Note",
+        "Given",
+        "Following",
+        "Regarding",
+        "Looking",
+        "Key",
+        "Top",
+        "Summary",
+        # Finance prose nouns that open sentences ("Options-market
+        # commentary...", "Shares rallied...", "Analysts expect...").
+        "Options",
+        "Shares",
+        "Stocks",
+        "Markets",
+        "Investors",
+        "Analysts",
+        "Traders",
+        "Sources",
+        "Reports",
         # ── Financial nouns that are commonly Title-Cased ────────
         "Revenue",
         "Earnings",
@@ -373,6 +437,20 @@ _COMPANY_RE = re.compile(r"\b(?:[A-Z][a-zA-Z0-9&'\-]+)(?:\s+(?:[A-Z][a-zA-Z0-9&'
 # Citation markers ``[N7]`` — strip BEFORE extraction so the bracketed
 # token isn't misread as a company name.
 _CITATION_RE = re.compile(r"\[N\d+\]")
+
+# BP-670: markdown section headings — ``### Recent News`` and standalone
+# bold-only lines (``**Recent Headlines & Developments**`` / ``**Key
+# Catalysts to Watch:**``). These are structural prose, not entity claims,
+# yet their Title-Case phrasing matches _COMPANY_RE and produced live false
+# positives ("Recent Headlines", "Developments", "Siri Overhaul", "Product
+# Launches" all flagged as ungrounded COMPANYs → 15s rewrite timeout).
+# Stripped line-wise BEFORE candidate extraction. Inline bold spans inside
+# normal sentences are NOT touched (the line must contain nothing but the
+# heading).
+_HEADING_LINE_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t].*|\*\*[^*\n]+\*\*:?[ \t]*)$",
+    re.MULTILINE,
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -510,6 +588,8 @@ def _extract_candidates(text: str) -> list[tuple[str, NameKind]]:
 
     Pipeline:
       1. Strip citation markers ``[N\\d+]`` so they don't pollute.
+      1b. Strip markdown heading / standalone-bold lines (BP-670) — section
+          titles are structural prose, not entity claims.
       2. Walk ticker regex → each match yields a (token, TICKER) row.
       3. Walk company regex → each match yields a (token, COMPANY) row.
       4. Drop any candidate whose normalised form is in the stop-noun
@@ -520,6 +600,7 @@ def _extract_candidates(text: str) -> list[tuple[str, NameKind]]:
     bullet list reads top-to-bottom.
     """
     cleaned = _CITATION_RE.sub("", text)
+    cleaned = _HEADING_LINE_RE.sub("", cleaned)
     seen: set[str] = set()
     out: list[tuple[str, NameKind]] = []
 
@@ -604,6 +685,7 @@ class EntityNameGroundingValidator:
         response: str,
         grounded_entity_names: set[str],
         tool_result_entity_refs: set[str] | None = None,
+        tool_text: str | None = None,
     ) -> EntityGroundingResult:
         """Return an :class:`EntityGroundingResult` for *response*.
 
@@ -617,11 +699,21 @@ class EntityNameGroundingValidator:
              check membership. Misses → UngroundedName entry.
           5. Soft kinds (PERSON / PLACE / UNKNOWN by default) are
              counted in ``per_kind_counts`` but never block.
+
+        BP-670 — ``tool_text``: optional raw retrieval payload (tool result
+        bodies joined). A candidate whose normalised form appears verbatim
+        (case-insensitive) inside the retrieved text IS grounded — the LLM
+        copied it from retrieval, it did not invent it. Without this, every
+        mixed-case proper noun that only exists in an article title/body
+        ("Morgan Stanley", "Siri", "Google Cloud") was flagged because the
+        structured grounded set carries only entity names / item ids /
+        UPPERCASE ticker tokens.
         """
         candidates = _extract_candidates(response)
         normalized_grounded = _build_normalized_grounded_set(
             list(grounded_entity_names) + list(tool_result_entity_refs or set())
         )
+        tool_text_lower = tool_text.lower() if tool_text else ""
 
         unsupported: list[UngroundedName] = []
         per_kind_counts: dict[NameKind, int] = {}
@@ -637,6 +729,13 @@ class EntityNameGroundingValidator:
             # alias of the former. This is the loosest acceptable check
             # before the fail-closed branch.
             if any(norm in g or g in norm for g in normalized_grounded if g):
+                continue
+            # BP-670: verbatim retrieval-payload grounding — see docstring.
+            # Substring (not whole-word) on purpose: the candidate is a
+            # multi-char normalised phrase; an accidental hit requires the
+            # exact phrase to appear in retrieved data, in which case the
+            # LLM legitimately read it there.
+            if tool_text_lower and norm and norm in tool_text_lower:
                 continue
             if kind not in self._strict_kinds:
                 continue

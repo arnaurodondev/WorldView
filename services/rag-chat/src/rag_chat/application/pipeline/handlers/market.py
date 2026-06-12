@@ -384,6 +384,17 @@ class MarketHandler(ToolHandler):
             text=table[:_TOOL_RESULT_MAX_CHARS],
             score=0.88 if explicit_window else 0.84,
             trust_weight=0.90,
+            # BP-670: bind the requested symbol so the BP-605 grounding gate
+            # and the entity-name validator see WHICH entity this price data
+            # belongs to (the live BTC-USD refusal had entity_name=None and
+            # the symbol appeared only inside the item_id).
+            citation_meta=CitationMeta(
+                title=f"{ticker.upper()} price history ({interval})",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name=ticker.upper(),
+            ),
         )
 
     async def _handle_get_fundamentals_history(

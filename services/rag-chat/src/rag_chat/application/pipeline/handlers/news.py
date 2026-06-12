@@ -357,6 +357,13 @@ class NewsHandler(ToolHandler):
             return []
 
         cutoff = datetime.now(tz=UTC) - timedelta(days=capped_days)
+        # BP-670: bind the requested entity onto every item's citation_meta.
+        # The BP-605 grounding gate and the entity-name validator both read
+        # ``citation_meta.entity_name``; leaving it None forced them onto
+        # text-scan fallbacks (article titles frequently lead with OTHER
+        # companies — "AI Boom Sends TSMC Sales Soaring..." is a valid
+        # Apple-tagged article whose title never says Apple).
+        _entity_label = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
         items: list[RetrievedItem] = []
         for a in raw_articles:
             if not isinstance(a, dict):
@@ -394,6 +401,14 @@ class NewsHandler(ToolHandler):
                 RetrievedItem.create(
                     item_id=f"tool:entity_news:{article_id}",
                     item_type=ItemType.chunk,
+                    # BP-670: stamp the REQUESTED entity UUID on every item.
+                    # The briefing-articles endpoint is entity-anchored by
+                    # construction; when the LLM calls this tool with
+                    # entity_id=<question entity> the BP-605 gate matches
+                    # item.entity_id against the question id set directly —
+                    # article titles often never name the company verbatim
+                    # ("Apple's AI Push..." does not contain "apple inc").
+                    entity_id=resolved_id,
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     # Use display_score directly so the orchestrator's
                     # downstream ranking sees the same number the brief uses.
@@ -409,7 +424,7 @@ class NewsHandler(ToolHandler):
                         url=url,
                         source_name=source_name,
                         published_at=published_at,
-                        entity_name=None,
+                        entity_name=_entity_label,
                     ),
                 )
             )

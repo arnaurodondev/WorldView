@@ -46,6 +46,7 @@ import re
 import time
 from collections import Counter as _Counter
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -287,6 +288,58 @@ def _scrub_orphan_citations(text: str, max_index: int) -> tuple[str, int]:
         return ""
 
     return _CITATION_MARKER_RE.sub(_replace_orphan, text), count
+
+
+# BP-669: plain [N] markers in the PROCESSED answer (OutputProcessor has
+# already normalised the [N6]-style prefix forms to [6]). Bounded to 1-2
+# digits so bracketed years ("[2026]") or issue numbers are never mistaken
+# for citation markers — context enumerations are capped well below 100.
+_PLAIN_MARKER_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+def _renumber_citations_dense(text: str, citations: list[Any]) -> tuple[str, list[Any]]:
+    """BP-669: renumber citation markers + citations densely to [1..K].
+
+    The LLM cites a sparse subset of the [1..N] context enumeration (e.g.
+    [5], [6], [8] out of 10 items). The frontend renders the citation list
+    positionally — pill k is labelled "[k]" — so sparse body markers point
+    past the visible source list. This helper:
+
+      1. Maps each cited ref (sorted ascending) to its dense position 1..K.
+      2. Rewrites every plain ``[N]`` marker in the text accordingly.
+      3. REMOVES markers that have no matching citation (the legacy orphan
+         scrub only matched the ``[N7]`` prefix form, which
+         ``OutputProcessor`` normalises away before the scrub runs — so
+         out-of-range plain markers used to survive to the user).
+      4. Rewrites each citation's ``ref`` to its dense position (order
+         preserved: ascending by original ref).
+
+    Returns ``(new_text, new_citations)``. No-op fast path when the refs
+    are already dense starting at 1 and every marker is mapped.
+    """
+    mapping: dict[int, int] = {}
+    for i, old_ref in enumerate(sorted({int(c.ref) for c in citations})):
+        mapping[old_ref] = i + 1
+
+    orphans = 0
+
+    def _rewrite(m: re.Match) -> str:  # type: ignore[type-arg]
+        nonlocal orphans
+        old = int(m.group(1))
+        new = mapping.get(old)
+        if new is None:
+            orphans += 1
+            return ""
+        return f"[{new}]"
+
+    new_text = _PLAIN_MARKER_RE.sub(_rewrite, text)
+    if orphans:
+        log.warning("citation_marker_orphan_scrubbed", count=orphans, cited=len(mapping))  # type: ignore[no-any-return]
+    new_citations = sorted(
+        (_dc_replace(c, ref=mapping.get(int(c.ref), int(c.ref))) for c in citations),
+        key=lambda c: int(c.ref),
+    )
+    return new_text, new_citations
 
 
 def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
@@ -893,6 +946,16 @@ def _check_entity_grounding(
     # GOOGL) and lowercased canonical names (tesla, apple inc.) survive this
     # cutoff comfortably.
     text_match_tokens = {tok for tok in question_entity_ids if len(tok) >= 2 and tok.isascii()}
+    # BP-670: head-word variants of multi-word canonical names. News titles
+    # rarely contain the full registered name — "Apple's AI Push Deepens..."
+    # never matches the token "apple inc." but DOES whole-word match
+    # "apple". Only heads >= 4 chars qualify so "ON Semiconductor Corp."
+    # cannot contribute the promiscuous token "on".
+    for _qid in list(text_match_tokens):
+        if " " in _qid:
+            _head = _qid.split()[0].strip(".,")
+            if len(_head) >= 4:
+                text_match_tokens.add(_head)
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
@@ -914,7 +977,18 @@ def _check_entity_grounding(
         # PLAN-0103 W26 / BP-644: text-token fallback for items whose
         # citation_meta was not populated by the handler. Cheap: lowercase +
         # whole-word check against the first 2000 chars.
+        #
+        # BP-668 ext (2026-06-11): prepend the item_id to the scanned text.
+        # Tool items such as ``tool:price_history:BTC-USD:latest_1m`` carry
+        # the requested symbol ONLY in their id (no citation_meta.entity_name,
+        # symbol may be absent from the rendered table text) — the live
+        # BTC-USD failure refused a CORRECT price answer because none of the
+        # three fallbacks could see "BTC-USD" anywhere. The ':' separators in
+        # the id act as word delimiters for the whole-word walk below.
         item_text = getattr(item, "text", None)
+        _id_for_scan = getattr(item, "item_id", None)
+        _scan_parts = [p for p in (_id_for_scan, item_text) if isinstance(p, str) and p]
+        item_text = " ".join(_scan_parts) if _scan_parts else None
         snippet: str | None = None
         if isinstance(item_text, str) and item_text:
             snippet = item_text[:2000].lower()
@@ -2570,6 +2644,13 @@ class ChatOrchestratorUseCase:
         # already short-circuited — the refusal text has no numbers to
         # validate and the validator would either no-op or false-positive.
         grounding_passed = True
+        # BP-670: track whether the numeric pass spent an LLM rewrite. The
+        # live 50s Apple-news turn burned 16.5s on a numeric rewrite AND a
+        # further 15s on an entity-grounding rewrite that timed out — two
+        # sequential LLM repair calls on one answer. We cap the turn at ONE
+        # repair rewrite: if the numeric pass already rewrote, the entity
+        # pass below runs validate-only (banner on failure, no second call).
+        _pre_numeric_text = full_text
         if had_tool_calls and full_text.strip() and grounded:
             async with phase("grounding_validation", phases):
                 full_text, grounding_passed = await self._run_grounding_validation(
@@ -2601,21 +2682,29 @@ class ChatOrchestratorUseCase:
         # company name in the response would fail closed, flooding false
         # positives. Mirrors the BP-605 gating on _question_entity_ids.
         if had_tool_calls and full_text.strip() and grounded and entities:
-            full_text, entity_grounding_passed = await self._run_entity_grounding_validation(
-                p=p,
-                response=full_text,
-                resolved_entities=list(entities),
-                tool_items=non_none_items,
-                messages=messages,
-                budget=budget,
-                # PLAN-0104 W42: forward the same prior-tool-call list the
-                # W37 ``_check_entity_grounding`` fallback uses so the
-                # second-pass entity-NAME validator also accepts the LLM's
-                # tool-call ticker bridge (Round 6 TSLA double-refusal fix).
-                prior_tool_calls=_prior_tool_calls,
-                # PLAN-0107 follow-up: forward eval-mode seed.
-                seed=request.seed,
-            )
+            # BP-670: phase-tracked (the 15s entity-rewrite timeout was
+            # previously INVISIBLE in chat_phase_timings_ms — the largest
+            # single contributor to the live 50s turn had no phase entry).
+            async with phase("entity_grounding_validation", phases):
+                full_text, entity_grounding_passed = await self._run_entity_grounding_validation(
+                    p=p,
+                    response=full_text,
+                    resolved_entities=list(entities),
+                    tool_items=non_none_items,
+                    messages=messages,
+                    budget=budget,
+                    # PLAN-0104 W42: forward the same prior-tool-call list the
+                    # W37 ``_check_entity_grounding`` fallback uses so the
+                    # second-pass entity-NAME validator also accepts the LLM's
+                    # tool-call ticker bridge (Round 6 TSLA double-refusal fix).
+                    prior_tool_calls=_prior_tool_calls,
+                    # PLAN-0107 follow-up: forward eval-mode seed.
+                    seed=request.seed,
+                    # BP-670: one repair rewrite per turn — when the numeric
+                    # pass already replaced the answer, this pass may only
+                    # validate + banner (no second sequential LLM call).
+                    allow_rewrite=full_text == _pre_numeric_text,
+                )
             # If entity grounding failed and even the rewrite + banner
             # produced text, we treat the answer as un-cacheable for the
             # same reason as numeric grounding (poison the 24h cache).
@@ -2631,16 +2720,35 @@ class ChatOrchestratorUseCase:
             rag_citations_scrubbed_total.inc(scrub_count)
 
         # ── Step 9: Output processing + citations ────────────────────────────────
-        answer, citations = p.process_output(full_text, reranked)
+        # BP-669: ``prompt_items`` MUST be the same list (same order) that
+        # ``build_prompt`` enumerated as [1..N] in the context block — the
+        # LLM's citation markers index into THAT enumeration. The prompt
+        # builder receives ``reranked or non_none_items`` (rerank may fail
+        # and return []), so the citation resolver must use the identical
+        # fallback or every marker resolves against the wrong list.
+        prompt_items = reranked or non_none_items
+        answer, citations = p.process_output(full_text, prompt_items)
 
         # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
         # point past the retrieved-item count. The LLM occasionally emits
         # e.g. "[N7]" when only 3 items were retrieved — those markers must
         # not surface to users (F-RAG-006).
-        if reranked:
-            answer, _orphans = _scrub_orphan_citations(answer, max_index=len(reranked))
+        if prompt_items:
+            answer, _orphans = _scrub_orphan_citations(answer, max_index=len(prompt_items))
             if _orphans:
-                log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
+                log.warning("citation_marker_orphan", count=_orphans, retrieved=len(prompt_items))  # type: ignore[no-any-return]
+
+        # BP-669 (2026-06-11): renumber surviving markers densely to [1..K].
+        # The LLM cites a SUBSET of the enumerated items (e.g. [5], [6], [8]
+        # out of 10) but the frontend renders the citation list positionally
+        # ([1], [2], [3]) — sparse refs made body markers point "past" the
+        # visible source list. After the orphan scrub every remaining marker
+        # has a matching citation, so a dense renumber preserves the 1:1
+        # marker↔citation mapping while making both sides agree on labels.
+        # Gated on prompt_items (mirrors process_output's marker discipline:
+        # with no retrieved items every [N] was already stripped above).
+        if prompt_items:
+            answer, citations = _renumber_citations_dense(answer, citations)
 
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
@@ -2971,6 +3079,26 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True
 
+        # BP-670: degradation guard — keep the ORIGINAL when the rewrite is
+        # numerically WORSE. Live Apple-news run: the draft had ONE
+        # unsupported number (a "35%" quoted verbatim from an article
+        # title) but the rewrite regenerated the whole answer from
+        # parametric memory — a fabricated news table with many unsupported
+        # figures ("$28.5B", "52% share") — and the legacy "rewrite is
+        # usually strictly better" policy shipped it. More unsupported
+        # numbers than the original = the rewrite invented content; the
+        # original + banner is strictly safer. (Checked BEFORE the
+        # full-citation-coverage suppression below, which previously let a
+        # fully-cited fabrication through as "grounded".)
+        if len(second_result.unsupported) > len(first_result.unsupported):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_worse_than_original",
+                original_unsupported=len(first_result.unsupported),
+                rewrite_unsupported=len(second_result.unsupported),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
         # Both passes failed — append the banner. We return the
         # REWRITE text (not the original) because the rewrite at least
         # had the LLM attempt to fix the numbers; usually it's strictly
@@ -3035,8 +3163,14 @@ class ChatOrchestratorUseCase:
         budget: AgentBudget,
         prior_tool_calls: list[Any] | None = None,
         seed: int | None = None,
+        allow_rewrite: bool = True,
     ) -> tuple[str, bool]:
         """F-LIVE-NEW-002 — entity-name grounding pass.
+
+        BP-670: ``allow_rewrite=False`` makes the pass validate-only — on
+        failure it appends the banner WITHOUT spending a second sequential
+        LLM rewrite. The orchestrator sets this when the numeric pass
+        already rewrote the answer this turn (one repair rewrite per turn).
 
         Sibling of :meth:`_run_grounding_validation` but for *names* rather
         than *numbers*. Builds the grounded set from resolved entities +
@@ -3140,8 +3274,24 @@ class ChatOrchestratorUseCase:
                         if ident:
                             tool_refs.add(ident)
 
+        # BP-670: verbatim-text grounding. A name the LLM copied straight out
+        # of a retrieved article title/body ("Morgan Stanley says...", "Siri")
+        # IS grounded in retrieval — but the previous grounded set only
+        # carried structured refs (entity_name / item_id / UPPERCASE tokens),
+        # so every mixed-case proper noun from a tool TEXT was flagged as a
+        # hallucination. The live Apple-news turn flagged 19 such names and
+        # burned a 15s rewrite-timeout repairing a correctly-cited answer.
+        # We hand the validator the raw tool text so substring membership
+        # against the actual retrieval payload counts as grounding.
+        _tool_text_parts: list[str] = []
+        for item in tool_items:
+            _t = getattr(item, "text", None)
+            if isinstance(_t, str) and _t:
+                _tool_text_parts.append(_t[:4000])
+        tool_text_blob = "\n".join(_tool_text_parts)
+
         validator = EntityNameGroundingValidator()
-        first_result = validator.validate(response, grounded_names, tool_refs)
+        first_result = validator.validate(response, grounded_names, tool_refs, tool_text=tool_text_blob)
         if first_result.passed:
             return response, True
 
@@ -3154,6 +3304,21 @@ class ChatOrchestratorUseCase:
             grounded_count=len(grounded_names),
             tool_ref_count=len(tool_refs),
         )
+
+        # BP-670: one repair rewrite per turn — when the numeric-grounding
+        # pass already replaced the answer, do NOT spend a second sequential
+        # LLM call (the live failure stacked 16.5s numeric rewrite + 15s
+        # entity rewrite timeout). Banner the validate-only failure instead.
+        if not allow_rewrite:
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_skipped_budget",
+                reason="numeric_rewrite_already_used",
+                unsupported_count=len(first_result.unsupported),
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
 
         # PLAN-0104 W47: rewrite prompt now uses a STRUCTURED JSON array of
         # candidate names instead of a free-text bulleted list. Round 7 v2
@@ -3267,8 +3432,51 @@ class ChatOrchestratorUseCase:
                 False,
             )
 
+        # BP-670: rewrite sanity guard — a repair rewrite that is tool-call
+        # XML (the model trying to re-fetch data instead of writing prose;
+        # observed live: ``<function_calls><invoke name="get_entity_news">``
+        # shipped VERBATIM as the final answer because XML contains no
+        # entities or numbers to validate) or that collapses to a fraction
+        # of the original length is not a repair. Keep the original + banner.
+        _rw_lower = rewritten.lstrip().lower()
+        _looks_like_tool_xml = _rw_lower.startswith(("<function_calls", "<invoke", "<tool_call")) or (
+            "<function_calls" in _rw_lower or "<tool_call" in _rw_lower
+        )
+        if _looks_like_tool_xml or len(rewritten) < max(80, int(0.3 * len(response))):
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_rejected_malformed",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+                tool_xml=_looks_like_tool_xml,
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
+
+        # BP-670: anti-fabrication guard. The entity rewrite regenerates the
+        # WHOLE answer from history; live evidence (2026-06-11 Apple-news
+        # turn) shows it can invent new "facts" with fresh numbers ("52%
+        # smartwatch share", "iPhone Pro supply chain ramp") that the tool
+        # corpus never produced. The numeric-grounding pass ran BEFORE this
+        # method and accepted ``response`` — so if the rewrite now FAILS
+        # numeric grounding, the rewrite fabricated numbers the original
+        # never had. Keep the original (numeric-clean) text + banner.
+        from rag_chat.application.services.numeric_grounding import NumericGroundingValidator
+
+        if not NumericGroundingValidator().validate(rewritten, tool_items).passed:
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_rejected_fabricated_numbers",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
+
         # Re-validate the rewrite.
-        second_result = validator.validate(rewritten, grounded_names, tool_refs)
+        second_result = validator.validate(rewritten, grounded_names, tool_refs, tool_text=tool_text_blob)
         if second_result.passed:
             return rewritten, True
 

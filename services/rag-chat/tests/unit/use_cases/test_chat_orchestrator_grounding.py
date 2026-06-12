@@ -984,3 +984,232 @@ class TestEntityGroundingRewriteTimeout:
         assert passed is False, "Timeout path must mark grounding as failed"
         assert "validator timeout" in text, "Timeout banner must be appended to original response"
         assert text.startswith(response), "Original response text must be preserved verbatim"
+
+
+class TestEntityGroundingRewriteBudget:
+    """BP-670 — at most ONE repair rewrite per turn.
+
+    The live 50s Apple-news turn stacked a 16.5s numeric-grounding rewrite
+    AND a 15s entity-grounding rewrite timeout. When the orchestrator passes
+    ``allow_rewrite=False`` (numeric pass already rewrote), the entity pass
+    must validate-only: banner on failure, ZERO additional LLM calls.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_allow_rewrite_false_banners_without_llm_call(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple's revenue grew 8% year-on-year per the filing."
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text="should never be used")
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+                allow_rewrite=False,
+            )
+        )
+
+        assert passed is False
+        assert pipeline._rewrite_call_count["n"] == 0, "validate-only mode must not call the LLM"
+        assert text.startswith(response)
+        assert "could not be verified" in text
+
+    def test_allow_rewrite_default_still_rewrites(self) -> None:
+        """Default behaviour unchanged: failure triggers exactly one rewrite."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple's revenue grew 8% year-on-year per the filing."
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text="Revenue figures [unverified].")
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert pipeline._rewrite_call_count["n"] == 1
+
+
+class TestEntityGroundingRewriteFabricationGuard:
+    """BP-670 — a rewrite that invents numerically-unsupported content is discarded.
+
+    Live Apple-news verification run (2026-06-11, request 01KTV3BD1B...):
+    two junk candidates ("Multiple", "Would") tripped the entity validator
+    and the repair rewrite REPLACED a correct cited news summary with a
+    fabricated one ("52% smartwatch share", "iPhone Pro supply chain
+    ramp"). The numeric pass had ALREADY accepted the original — so a
+    rewrite that now fails numeric grounding has fabricated numbers and
+    must be rejected in favour of the original + banner.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_fabricating_rewrite_is_discarded_for_original(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        # Original fails entity grounding ("Apple" ungrounded) but carries
+        # no numbers — the numeric pass upstream accepted it.
+        response = "Apple announced a partnership per the filing."
+        # The rewrite invents a number no tool result supports.
+        pipeline = self._make_pipeline_for_entity(
+            rewrite_text="Microsoft Watch held 52% of the smartwatch market last quarter."
+        )
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Microsoft news"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert passed is False
+        assert text.startswith(response), "fabricating rewrite must be discarded for the original"
+        assert "52%" not in text
+        assert "could not be verified" in text
+
+
+class TestNumericRewriteDegradationGuard:
+    """BP-670 — a numerically WORSE rewrite must be discarded for the original.
+
+    Live Apple-news run: draft had ONE unsupported number; the rewrite was a
+    fabricated news table with many. The legacy "rewrite is usually strictly
+    better" policy (and the full-citation-coverage suppression) shipped the
+    fabrication as the final answer.
+    """
+
+    def test_worse_rewrite_discarded_for_original_plus_banner(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        # Original: one unsupported number (42%). Tools carry none of these.
+        response = "Options desk flags a 42% setup on the stock."
+        # Rewrite: fabricates MORE unsupported numbers.
+        rewrite = "Revenue hit $28.5B with 52% share and 31% growth across 17 regions."
+
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+
+        async def _stream_chat(messages: list, **_: Any):
+            yield rewrite
+
+        pipeline.llm_chain.stream_chat = _stream_chat
+
+        item = MagicMock()
+        item.text = "Article headline with no numbers\n  Source: news"
+        item.citation_meta = None
+        item.item_id = "tool:entity_news:abc"
+
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        text, passed = asyncio.run(
+            orch._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[item],
+                messages=[{"role": "user", "content": "news?"}],
+                budget=AgentBudget(),
+            )
+        )
+
+        assert passed is False
+        assert text.startswith(response), "worse rewrite must be discarded for the original"
+        assert "$28.5B" not in text
+        assert "could not be verified" in text
+
+
+class TestEntityGroundingRewriteToolXmlGuard:
+    """BP-670 — a rewrite that is tool-call XML must never ship as the answer.
+
+    Live run (2026-06-11, request 01KTV4JA...): the repair rewrite emitted
+    ``<function_calls><invoke name="get_entity_news">...`` (the model tried
+    to re-fetch data instead of writing prose). XML contains no entity or
+    numeric candidates, so BOTH validators passed it and the user received
+    raw XML as the final answer.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_tool_xml_rewrite_discarded_for_original(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple announced a partnership per the filing, with broad analyst coverage following."
+        xml = (
+            '<function_calls>\n<invoke name="get_entity_news">\n'
+            '<parameter name="ticker">AAPL</parameter>\n</invoke>\n</function_calls>'
+        )
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text=xml)
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Microsoft news"}],
+                budget=AgentBudget(),
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert passed is False
+        assert "<function_calls" not in text
+        assert text.startswith(response)
+        assert "could not be verified" in text

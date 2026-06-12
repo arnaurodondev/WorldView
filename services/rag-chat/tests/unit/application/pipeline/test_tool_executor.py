@@ -508,3 +508,45 @@ class TestExecutorExceptionClassification:
         # Must NOT be misclassified as the arg-shape variant.
         assert "tool_argument_error" not in all_messages
         assert "RuntimeError" in all_messages
+
+
+class TestPriceHistoryCitationEntityBinding:
+    """BP-670 — price-history items must bind the requested symbol.
+
+    The live BTC-USD turn streamed a CORRECT price answer, then the BP-605
+    grounding gate replaced it with the "different entities" refusal: the
+    item carried no ``citation_meta`` and the symbol appeared only inside
+    the item_id. The handler now binds ``entity_name=<TICKER>`` so both the
+    grounding gate and the entity-name validator see whose data this is.
+    """
+
+    @pytest.mark.asyncio
+    async def test_price_history_item_binds_entity_name(self) -> None:
+        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+
+        bars = [
+            {
+                "ts": "2026-06-11T09:35:00Z",
+                "open": 62800.10,
+                "high": 62900.00,
+                "low": 62750.00,
+                "close": 62846.70,
+                "volume": 12,
+            }
+        ]
+        s3 = _make_s3_port()
+        s3.get_ohlcv_range = AsyncMock(return_value=bars)
+        executor = ToolExecutor(registry=_make_registry_with_tools(), s3=s3)
+        tc = _make_tool_use_block(
+            "get_price_history",
+            ticker="BTC-USD",
+            interval="1m",
+            last_n_bars=1,
+        )
+
+        result = await executor.execute(tc)
+
+        assert result is not None
+        assert result.citation_meta is not None
+        assert result.citation_meta.entity_name == "BTC-USD"
+        assert result.citation_meta.source_name == "market_data"
