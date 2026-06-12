@@ -106,6 +106,53 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
+# Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
+# ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
+# the screener may return for that metric (synonyms tolerated so a backend rename
+# does not silently drop the column). The render order is: filtered metrics first
+# (most relevant to the question), then this CORE set, de-duplicated.
+_SCREEN_METRIC_RENDER: dict[str, tuple[str, tuple[str, ...]]] = {
+    "market_capitalization": ("MCap", ("market_cap", "market_capitalization", "market_cap_usd")),
+    "pe_ratio": ("P/E", ("pe_ratio", "pe", "trailing_pe")),
+    "forward_pe": ("Fwd P/E", ("forward_pe",)),
+    "quarterly_revenue_growth_yoy": ("Rev growth YoY", ("revenue_growth_yoy", "quarterly_revenue_growth_yoy")),
+    "revenue_growth_yoy": ("Rev growth YoY", ("revenue_growth_yoy", "quarterly_revenue_growth_yoy")),
+    "revenue": ("Revenue", ("revenue", "revenue_ttm")),
+    "gross_margin": ("Gross margin", ("gross_margin",)),
+    "operating_margin": ("Op margin", ("operating_margin",)),
+    "roe": ("ROE", ("roe",)),
+    "dividend_yield": ("Div yield", ("dividend_yield",)),
+    "eps_ttm": ("EPS (TTM)", ("eps_ttm", "eps")),
+}
+
+# Always-rendered core columns (in addition to any filtered metric). These are
+# the high-signal fundamentals an analyst expects in a screen result table.
+_SCREEN_CORE_METRICS: tuple[str, ...] = ("market_capitalization", "pe_ratio", "quarterly_revenue_growth_yoy", "revenue")
+
+
+def _screen_metric_columns(filter_metric_names: list[str]) -> list[tuple[str, tuple[str, ...]]]:
+    """Return ``[(label, row_keys), …]`` columns to render for a screener result.
+
+    Filtered metrics come first (the columns the user actually keyed the screen
+    on), then the core set — de-duplicated by display label so a metric that is
+    both filtered AND core appears once. Unknown filter metric names are skipped
+    (no render mapping) rather than guessed.
+    """
+    columns: list[tuple[str, tuple[str, ...]]] = []
+    seen_labels: set[str] = set()
+    for metric in (*filter_metric_names, *_SCREEN_CORE_METRICS):
+        spec = _SCREEN_METRIC_RENDER.get(metric)
+        if spec is None:
+            continue
+        label, row_keys = spec
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        columns.append((label, row_keys))
+    return columns
+
+
 # ── compare_entities period selection helpers (FQA-04 carry / PLAN-0103 W14) ──
 # WHY at module level: pure helpers, no MarketHandler state required, easier
 # to unit-test in isolation than instance methods.
@@ -276,7 +323,10 @@ class MarketHandler(ToolHandler):
         ticker: str,
         from_date: str | None = None,
         to_date: str | None = None,
-        interval: str = "week",
+        # Chat-eval #5 root cause A (2026-06-12): default to "day" (was "week").
+        # The backend /ohlcv/bars endpoint does not support week/month
+        # aggregation, and those values were removed from the tool enum.
+        interval: str = "day",
         last_n_bars: int | None = None,
         lookback_days: int | None = None,
     ) -> RetrievedItem | None:
@@ -1223,7 +1273,30 @@ class MarketHandler(ToolHandler):
         if region:
             log.info("tool_arg_dropped", tool="screen_universe", arg="region", value=region)
 
-        payload: dict[str, Any] = {"filters": filter_list, "limit": clamped_limit}
+        # Chat-eval #4 / #5 (2026-06-12): pass an explicit ``sort_by``/``sort_dir``
+        # so the rendered top-N is the TRUE top-N. The screener used to return
+        # rows in arbitrary order and truncate at ``limit`` — so "top 5 tech by
+        # market cap" got whatever 5 rows came back first (CRM/IBM instead of
+        # GOOGL/AVGO/META). We default the sort to the PRIMARY filter metric
+        # descending (the column the question actually filtered on). A separate
+        # market-data agent is adding backend ``sort_by`` support; until then the
+        # field is forward-compatible (ignored if unsupported upstream).
+        #
+        # ``_PRIMARY_SORT_METRIC`` is the first filter's metric — that is the
+        # metric the user keyed the screen on (market_capitalization, pe_ratio,
+        # quarterly_revenue_growth_yoy, …). "max-only" filters (e.g. pe_ratio_max
+        # for "cheapest") sort ascending; "min-only"/range filters sort
+        # descending (largest/highest first), which matches "top N by X" intent.
+        sort_by = filter_list[0]["metric"] if filter_list else "market_capitalization"
+        _first = filter_list[0] if filter_list else {}
+        sort_dir = "asc" if (_first.get("max_value") is not None and _first.get("min_value") is None) else "desc"
+
+        payload: dict[str, Any] = {
+            "filters": filter_list,
+            "limit": clamped_limit,
+            "sort_by": sort_by,
+            "sort_dir": sort_dir,
+        }
 
         t0 = time.monotonic()
         try:
@@ -1243,30 +1316,43 @@ class MarketHandler(ToolHandler):
         if not instruments:
             text = "No instruments matched the screening criteria."
         else:
-            lines = [f"## Screener Results ({len(instruments)} instruments)\n"]
+            # Chat-eval #4 (2026-06-12): render the metric columns the user
+            # FILTERED on (plus a small core set), not just ticker/name/MCap/PE.
+            # Previously the formatter dropped ``revenue_growth_yoy`` / ``revenue``
+            # / ``roe`` etc., so the LLM could not ground "YoY revenue growth",
+            # re-fetched fundamentals, hand-computed ratios, and those LLM-derived
+            # numbers failed NumericGroundingValidator (unsupported_count=39 on
+            # ``ru_ai_semi_screener``). We surface the raw values directly so the
+            # answer can cite them with no extra tool round-trip.
+            #
+            # ``_screen_metric_columns`` maps the DB metric names used in the
+            # filter list to the response-row keys the screener returns. The
+            # filtered metrics come first (most relevant to the question), then a
+            # core set, de-duplicated and order-preserving.
+            _filter_metric_names = [f["metric"] for f in filter_list]
+            metric_cols = _screen_metric_columns(_filter_metric_names)
+
+            lines = [f"## Screener Results ({len(instruments)} instruments, sorted by {sort_by} {sort_dir})\n"]
             for inst in instruments[:50]:
                 ticker = inst.get("ticker") or inst.get("symbol") or "?"
                 name = inst.get("name") or ""
-                mc = inst.get("market_cap")
-                pe = inst.get("pe_ratio")
                 row = f"  {ticker}"
                 if name:
                     row += f" — {name}"
-                if mc is not None and mc != "":
-                    # FIX-LIVE-DD: render BOTH raw and formatted. The raw
-                    # integer is kept for the numeric-grounding validator
-                    # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
-                    # the ``MCap`` (formatted) label is what the LLM
-                    # actually copies into its answer.
-                    formatted = _format_market_cap_value(mc)
-                    if formatted is not None:
-                        row += f" | MCap: {formatted} (raw: {mc})"
+                for col_label, row_keys in metric_cols:
+                    val = next((inst.get(k) for k in row_keys if inst.get(k) not in (None, "")), None)
+                    if val is None:
+                        continue
+                    if col_label == "MCap":
+                        # FIX-LIVE-DD: render BOTH raw and formatted. The raw
+                        # integer is kept for the numeric-grounding validator
+                        # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
+                        # the formatted label is what the LLM copies into its
+                        # answer.
+                        formatted = _format_market_cap_value(val)
+                        row += f" | MCap: {formatted} (raw: {val})" if formatted is not None else f" | MCap: {val}"
                     else:
-                        # Legacy/string path: upstream already gave a
-                        # display-ready label like ``"3T"`` — keep it.
-                        row += f" | MCap: {mc}"
-                if pe:
-                    row += f" | P/E: {pe}"
+                        row += f" | {col_label}: {val}"
                 lines.append(row)
             text = "\n".join(lines)
 

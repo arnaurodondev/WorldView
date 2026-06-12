@@ -245,6 +245,21 @@ class TestProductionRegistryToolDefinitions:
             assert params["properties"] == {}
             assert params["required"] == []
 
+    def test_get_price_history_interval_enum_excludes_week_and_month(self) -> None:
+        """Chat-eval #5 root cause A: backend /ohlcv/bars has no week/month grain.
+
+        Advertising them made the LLM pick week/month for "YTD high/low" and
+        "P/E vs history" questions and burn iterations retrying on error. The
+        enum the LLM sees must only carry supported grains.
+        """
+        registry = build_default_registry()
+        defs = registry.to_tool_definitions()
+        gph = next(d for d in defs if d["function"]["name"] == "get_price_history")
+        interval_enum = gph["function"]["parameters"]["properties"]["interval"]["enum"]
+        assert set(interval_enum) == {"1m", "hour", "day"}
+        assert "week" not in interval_enum
+        assert "month" not in interval_enum
+
     def test_get_price_history_date_params_have_format_date(self) -> None:
         """The orchestrator relies on the LLM emitting YYYY-MM-DD; format=date hints that."""
         registry = build_default_registry()

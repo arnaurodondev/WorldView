@@ -8,9 +8,14 @@ Each test pins one regex's behaviour and the clean-input no-op case.
 from __future__ import annotations
 
 import pytest
-from rag_chat.application.use_cases.chat_orchestrator import _strip_tool_narration
+from rag_chat.application.use_cases.chat_orchestrator import (
+    _is_tool_call_stub,
+    _strip_tool_narration,
+)
 
 pytestmark = pytest.mark.unit
+
+_REGISTRY = frozenset({"get_fundamentals_history", "get_price_history", "search_documents"})
 
 
 def test_strip_leading_will_fetch_sentence() -> None:
@@ -119,3 +124,52 @@ def test_full_live_bug_reproduction() -> None:
     assert "<function_calls>" not in out
     assert "<invoke" not in out
     assert "<parameter" not in out
+
+
+# ── Chat-eval #3 (2026-06-12): {"<tool_name>": {…}} single-key leak shape ─────
+# The ``ru_nvda_amd_compare_qtr`` degenerate answer was raw tool-call JSON:
+#   {"get_fundamentals_history": {"ticker": "NVDA", "periods": }}
+# The BP-675 ``{"name":…, "arguments":…}`` detector does NOT match this; the
+# scrubber must take the live registry tool names to strip it.
+
+
+def test_named_single_key_tool_call_stub_stripped_with_registry() -> None:
+    """{"<tool_name>": {…}} is stripped when the key is a known tool name."""
+    text = '{"get_fundamentals_history": {"ticker": "NVDA", "periods": }}'
+    out = _strip_tool_narration(text, _REGISTRY)
+    assert out == ""
+
+
+def test_named_single_key_stub_left_when_no_registry() -> None:
+    """Without registry names the named shape is NOT stripped (legacy no-op)."""
+    text = '{"get_fundamentals_history": {"ticker": "NVDA"}}'
+    out = _strip_tool_narration(text)  # no tool_names passed
+    assert out == text
+
+
+def test_named_single_key_unknown_key_is_preserved() -> None:
+    """A legitimate single-key JSON answer (non-tool key) is never stripped."""
+    text = '{"revenue": {"q1": 24700000000}}'
+    out = _strip_tool_narration(text, _REGISTRY)
+    assert out == text
+
+
+def test_fenced_named_tool_call_stub_stripped() -> None:
+    """A fenced ```json {"<tool_name>": {…}}``` block is stripped too."""
+    text = '```json\n{"search_documents": {"query": "AAPL competitors"}}\n```'
+    out = _strip_tool_narration(text, _REGISTRY)
+    assert out.strip() == ""
+
+
+def test_is_tool_call_stub_detects_named_shape() -> None:
+    """The degenerate named-shape answer is flagged as a stub (for fall-through)."""
+    text = '{"get_fundamentals_history": {"ticker": "NVDA", "periods": }}'
+    assert _is_tool_call_stub(text, _REGISTRY) is True
+    # Without the registry it is NOT detectable as the named shape.
+    assert _is_tool_call_stub(text) is False
+
+
+def test_is_tool_call_stub_clean_answer_not_flagged() -> None:
+    """A real prose answer that merely quotes JSON is not a stub."""
+    text = 'NVDA reported revenue of $26.0B. The raw row was {"revenue": 26000000000}.'
+    assert _is_tool_call_stub(text, _REGISTRY) is False

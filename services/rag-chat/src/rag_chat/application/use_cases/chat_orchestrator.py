@@ -229,6 +229,44 @@ def _is_json_tool_call_object(blob: str) -> bool:
     return bool(_TOOL_CALL_JSON_KEYS_RE.search(blob) and _TOOL_CALL_JSON_ARGS_RE.search(blob))
 
 
+# Chat-eval traceback root cause #3 (2026-06-12), the ``ru_nvda_amd_compare_qtr``
+# leak shape: ``{"get_fundamentals_history": {"ticker": "NVDA", "periods": }}`` —
+# a single top-level key that IS a known tool name, mapping to an (often
+# malformed) arguments object. The BP-675 ``{"name":…, "arguments":…}`` detector
+# does NOT match this shape, so we add a registry-aware detector. We require the
+# key to be a KNOWN tool name (passed in by the orchestrator from the live
+# registry) so a legitimate JSON answer like ``{"revenue": {...}}`` is never
+# stripped.
+_SINGLE_KEY_JSON_RE = re.compile(r'^\s*\{\s*"(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"\s*:\s*\{', re.DOTALL)
+
+
+def _is_named_tool_call_object(blob: str, tool_names: frozenset[str]) -> bool:
+    """True when *blob* is a ``{"<known_tool_name>": {…}}`` single-key tool-call stub."""
+    if not tool_names:
+        return False
+    m = _SINGLE_KEY_JSON_RE.match(blob)
+    return bool(m and m.group("key") in tool_names)
+
+
+def _strip_named_tool_call_json(text: str, tool_names: frozenset[str]) -> str:
+    """Strip fenced/bare ``{"<tool_name>": {…}}`` single-key tool-call objects.
+
+    Companion to :func:`_strip_tool_call_json` (which targets the
+    ``{"name":…, "arguments":…}`` BP-675 shape). Only objects whose single
+    top-level key is a registered tool name are removed; ordinary JSON in a
+    real answer is left untouched.
+    """
+    if not tool_names:
+        return text
+
+    def _repl(m: re.Match[str]) -> str:
+        return "" if _is_named_tool_call_object(m.group(1), tool_names) else m.group(0)
+
+    text = _FENCED_JSON_BLOCK_RE.sub(_repl, text)
+    text = _BARE_JSON_OBJECT_RE.sub(_repl, text)
+    return text
+
+
 def _strip_tool_call_json(text: str) -> str:
     """Remove fenced/bare JSON tool-call OBJECTS (``{"name":…, "arguments":…}``).
 
@@ -245,10 +283,10 @@ def _strip_tool_call_json(text: str) -> str:
     return text
 
 
-def _strip_tool_narration(text: str) -> str:
+def _strip_tool_narration(text: str, tool_names: frozenset[str] | None = None) -> str:
     """Last-resort scrub of tool-call narration leaks from synthesis output.
 
-    Four independent passes, each safe to run on a clean answer (no-op when
+    Five independent passes, each safe to run on a clean answer (no-op when
     the pattern is absent):
 
     1. Strip a single leading "I will fetch ..." sentence if the answer opens
@@ -262,6 +300,10 @@ def _strip_tool_narration(text: str) -> str:
     4. BP-675: strip a fenced/bare JSON tool-call object
        (``{"name": …, "arguments": …}``) — the third leaked-stub shape after
        the XML and ``**Tool calls:**`` markdown forms.
+    5. Chat-eval #3 (2026-06-12): strip a fenced/bare ``{"<tool_name>": {…}}``
+       single-key tool-call object when ``tool_names`` is supplied — the
+       ``ru_nvda_amd_compare_qtr`` leak shape. No-op when ``tool_names`` is
+       None/empty (legacy callers keep identical behaviour).
 
     See module-level comment block above for streaming-chunk caveat.
     """
@@ -273,6 +315,9 @@ def _strip_tool_narration(text: str) -> str:
     text = _TOOL_XML_RE.sub("", text)
     # 4. Strip fenced/bare JSON tool-call objects (BP-675).
     text = _strip_tool_call_json(text)
+    # 5. Strip {"<tool_name>": {…}} single-key tool-call objects (chat-eval #3).
+    if tool_names:
+        text = _strip_named_tool_call_json(text, tool_names)
     return text.strip()
 
 
@@ -314,34 +359,40 @@ _GROUNDING_BANNER_RE = re.compile(
 )
 
 
-def _is_tool_call_stub(text: str) -> bool:
+def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> bool:
     """Return True when *text* is predominantly a leaked tool-call / planning stub.
 
     A genuine answer survives ``_strip_tool_narration`` largely intact; a
     planning/tool-call stub collapses to (almost) nothing once the narration
-    sentence, ``**Tool calls:**`` block, ``<function_calls>``/``<invoke>`` XML
-    and (BP-675) a fenced/bare ``{"name":…, "arguments":…}`` JSON object are
-    removed. We flag the text when the scrubbed remainder is empty OR shrank to
-    a small fraction of the original AND the original carried a tool-call signal.
-    The signal gate prevents false positives on a short-but-clean prose answer
-    that merely happens to be brief OR that quotes a small inline JSON snippet.
+    sentence, ``**Tool calls:**`` block, ``<function_calls>``/``<invoke>`` XML,
+    (BP-675) a fenced/bare ``{"name":…, "arguments":…}`` JSON object, and
+    (chat-eval #3) a ``{"<tool_name>": {…}}`` single-key object are removed. We
+    flag the text when the scrubbed remainder is empty OR shrank to a small
+    fraction of the original AND the original carried a tool-call signal. The
+    signal gate prevents false positives on a short-but-clean prose answer that
+    merely happens to be brief OR that quotes a small inline JSON snippet.
+
+    ``tool_names`` (the live registry tool names) enables the single-key
+    ``{"<tool_name>": {…}}`` detection; None/empty keeps legacy behaviour.
     """
     if not text or not text.strip():
         return False
     # A tool-call signal must be present: XML tag, ``**Tool calls:**`` header,
-    # "I will fetch…" lead, OR a fenced/bare JSON object that is a tool-call
-    # invocation (both ``"name"`` and ``"arguments"`` keys). The JSON gate is
-    # tight: an inline ``{"foo": 1}`` or a config block without both keys does
-    # NOT qualify, so a prose/table answer that merely quotes JSON is untouched.
-    has_json_tool_call = any(
-        _is_json_tool_call_object(m.group(1))
-        for m in (*_FENCED_JSON_BLOCK_RE.finditer(text), *_BARE_JSON_OBJECT_RE.finditer(text))
-    )
+    # "I will fetch…" lead, a fenced/bare JSON object that is a tool-call
+    # invocation (both ``"name"`` and ``"arguments"`` keys), OR a single-key
+    # ``{"<tool_name>": {…}}`` object. The JSON gates are tight: an inline
+    # ``{"foo": 1}`` or a config block does NOT qualify, so a prose/table
+    # answer that merely quotes JSON is untouched.
+    _json_blobs = [m.group(1) for m in (*_FENCED_JSON_BLOCK_RE.finditer(text), *_BARE_JSON_OBJECT_RE.finditer(text))]
+    has_json_tool_call = any(_is_json_tool_call_object(b) for b in _json_blobs)
+    _names = tool_names or frozenset()
+    has_named_tool_call = bool(_names) and any(_is_named_tool_call_object(b, _names) for b in _json_blobs)
     has_tool_signal = bool(
         _TOOL_XML_RE.search(text)
         or _TOOL_PLAN_BLOCK_RE.search(text)
         or _TOOL_NARRATION_LEAD_RE.search(text)
         or has_json_tool_call
+        or has_named_tool_call
     )
     if not has_tool_signal:
         return False
@@ -351,7 +402,7 @@ def _is_tool_call_stub(text: str) -> bool:
     if not base:
         # Nothing but a banner around the stub → pure stub.
         return True
-    scrubbed = _GROUNDING_BANNER_RE.sub("", _strip_tool_narration(text)).strip()
+    scrubbed = _GROUNDING_BANNER_RE.sub("", _strip_tool_narration(text, tool_names)).strip()
     # Empty after scrub → pure stub. Otherwise flag when the scrub removed the
     # large majority of the content (the remainder is leftover argument
     # fragments, not a real answer).
@@ -764,6 +815,15 @@ _FALLBACK_MAP: dict[str, list[str]] = {
     # "should have data somewhere" macro queries; it also satisfies the
     # min_distinct_tools=2 grading rule on Q5.
     "get_economic_calendar": ["search_documents"],
+    # Chat-eval #1 (2026-06-12): the live Cypher PATH query for hub entities
+    # (Microsoft, Apple) exceeds the AGE 5 s statement_timeout → 504 →
+    # traverse_graph returns [] (the handler degrades on error). A 504 then
+    # dead-ended the whole answer with no alt tried. Fall back to the
+    # pre-computed S9→S7 ``/paths`` endpoint (``get_entity_paths``), which is a
+    # cheap materialised lookup that does not run the expensive variable-length
+    # match. (A separate KG agent is raising the backend timeout; this is the
+    # rag-chat-side graceful degradation.)
+    "traverse_graph": ["get_entity_paths"],
 }
 
 
@@ -874,6 +934,28 @@ def _project_economic_calendar_to_search_documents(
     return out
 
 
+def _project_traverse_graph_to_entity_paths(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """traverse_graph → get_entity_paths: paths anchored on the start entity.
+
+    Chat-eval #1 (2026-06-12): when the Cypher path query 504s, fall back to the
+    pre-computed ``/paths`` endpoint for the START entity. ``get_entity_paths``
+    takes a single ``entity_id`` (which the NarrativeHandler resolves tool-side
+    from a ticker / company name / UUID via BP-661), so we forward the
+    ``start_entity`` name verbatim. We prefer the LLM's ``start_entity`` and fall
+    back to the EntityContext name/ticker so the fallback still has an anchor
+    when the LLM omitted it. Returns None when no anchor is available.
+    """
+    anchor = failed_args.get("start_entity") or failed_args.get("entity_name") or failed_args.get("entity_id")
+    if not anchor and ctx is not None:
+        anchor = getattr(ctx, "name", None) or getattr(ctx, "ticker", None)
+    if not anchor:
+        return None
+    return {"entity_id": str(anchor), "top_n": 5}
+
+
 # Keyed by (failed_tool, alt_tool).  Default behaviour (when a pair is absent)
 # is to copy args verbatim — this preserves backward compatibility with any
 # alt tool whose signature happens to match the failed tool's.
@@ -883,6 +965,8 @@ _FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
     ("search_documents", "get_entity_intelligence"): _project_search_documents_to_entity_intelligence,
     # FIX-LIVE-S: empty economic-calendar → macro-news search_documents.
     ("get_economic_calendar", "search_documents"): _project_economic_calendar_to_search_documents,
+    # Chat-eval #1: traverse_graph 504 → pre-computed /paths for the start node.
+    ("traverse_graph", "get_entity_paths"): _project_traverse_graph_to_entity_paths,
 }
 
 
@@ -921,6 +1005,24 @@ _ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
 # "tsla" ↔ "tesla" → false refusal. Pulling "TSLA" from the prior tool call
 # bridges the gap without weakening BP-604.
 _TICKER_LIKE_FIELDS: frozenset[str] = frozenset({"ticker", "tickers", "symbol", "symbols"})
+
+# Chat-eval pack-10 (2026-06-12): tools that answer UNIVERSE / AGGREGATE /
+# SCREENER questions — by construction they are NOT scoped to a single anchor
+# entity ("Which S&P 500 names report earnings next week?", "biggest losers this
+# week", "screen for AI semis"). For these the BP-605 entity-grounding guard has
+# no single anchor to ground against; S6 mis-resolves the question to garbage
+# (``question_ids=["41c379f9…", "p", "pandora"]``) and the calendar/screener/
+# movers items carry ``entity_name=None`` → ZERO overlap → a FALSE refusal that
+# replaces a perfectly valid answer. We skip the guard when ANY executed tool is
+# in this set. (Single-entity intelligence/search tools keep the guard.)
+_UNIVERSE_AGGREGATE_TOOLS: frozenset[str] = frozenset(
+    {
+        "screen_universe",
+        "get_market_movers",
+        "get_economic_calendar",
+        "get_earnings_calendar",
+    }
+)
 
 # F-NEW-015 Option A — extract ticker-like tokens from tool result text bodies.
 # Targets the screener row format ``  NVDA — NVIDIA Corp | MCap: ...`` and the
@@ -1459,6 +1561,16 @@ class ChatOrchestratorUseCase:
                 entity_id=_primary.entity_id,
                 ticker=_primary.ticker or "",
                 name=_primary.canonical_name,
+                # BP-661 P/E→Pandora (2026-06-12): this scope is INFERRED from
+                # the first S6-resolved question entity, NOT a pinned
+                # entity-context surface. ``pinned=False`` lets the
+                # NarrativeHandler keep a valid LLM-supplied entity_id instead
+                # of blindly overriding it with ``entities[0]`` (which mis-ranked
+                # Alexandria Real Estate for "Apple's competitors" and Pandora
+                # for "AAPL's P/E"). The pinned ``/chat/entity-context``
+                # endpoints construct their own scope with the default
+                # ``pinned=True``.
+                pinned=False,
             )
             if _primary is not None
             else None
@@ -1485,6 +1597,20 @@ class ChatOrchestratorUseCase:
         tool_defs = None
         if hasattr(tool_executor._registry, "to_tool_definitions"):
             tool_defs = tool_executor._registry.to_tool_definitions()
+
+        # Chat-eval #3 (2026-06-12): the live registry tool names — used to
+        # detect the ``{"<tool_name>": {…}}`` single-key tool-call leak shape on
+        # the direct-text path (and any other scrub site). Best-effort: an
+        # unusual registry without ``all_specs`` degrades to an empty set, which
+        # only disables the registry-aware named-shape scrub (the BP-675
+        # ``{"name":…}`` + XML + markdown scrubs still run).
+        _registry_tool_names: frozenset[str] = frozenset()
+        _all_specs = getattr(tool_executor._registry, "all_specs", None)
+        if callable(_all_specs):
+            try:
+                _registry_tool_names = frozenset(s.name for s in _all_specs())
+            except Exception:  # pragma: no cover - defensive
+                _registry_tool_names = frozenset()
 
         from common.time import utc_now  # type: ignore[import-untyped]
 
@@ -1718,6 +1844,51 @@ class ChatOrchestratorUseCase:
                 # TPS reflects real per-frame cadence. Wire-compatible (still
                 # ``event: token``) — frontends and the harness need no changes.
                 direct_text = getattr(llm_response, "text", "") or ""
+                # ── Chat-eval #3 (2026-06-12): scrub tool-call stubs on the
+                # direct-text path BEFORE streaming. ───────────────────────────
+                # The streaming SECOND-turn branch runs ``_strip_tool_narration``
+                # (line ~2900), but this direct-text branch streamed
+                # ``chat_with_tools``'s ``text`` verbatim and set
+                # ``_skip_final_stream=True``, so a leaked tool-call stub
+                # (XML / ``**Tool calls:**`` / ``{"name":…}`` / the
+                # ``{"<tool_name>": {…}}`` ``ru_nvda_amd_compare_qtr`` shape)
+                # shipped unscrubbed (~1-in-6, stochastic). We now scrub here
+                # too, passing the live registry names so the single-key shape
+                # is covered. If the scrub leaves a DEGENERATE stub (the whole
+                # "answer" was a tool-call), we do NOT ship it — we re-prompt
+                # the LLM (continue the agent loop) instead of dead-ending on a
+                # stub, unless this is the last iteration (then the scrubbed
+                # remainder, even if empty, flows to the empty/all-failed path).
+                if direct_text:
+                    _scrubbed_direct = _strip_tool_narration(direct_text, _registry_tool_names)
+                    if _is_tool_call_stub(direct_text, _registry_tool_names) or not _scrubbed_direct.strip():
+                        log.warning(  # type: ignore[no-any-return]
+                            "direct_text_tool_call_stub_scrubbed",
+                            iteration=iteration,
+                            pre_len=len(direct_text),
+                            post_len=len(_scrubbed_direct.strip()),
+                            provider=provider_name,
+                        )
+                        # Re-prompt unless we are out of iterations: nudge the
+                        # LLM to emit a prose answer (or call a tool) instead of
+                        # echoing a tool-call stub as the answer.
+                        if iteration < budget.max_iterations - 1:
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "Your previous reply was a tool-call stub, not an answer. "
+                                        "Either call the tool properly or write the final answer in "
+                                        "plain prose. Do NOT output tool-call JSON or XML as the answer."
+                                    ),
+                                }
+                            )
+                            continue
+                        # Last iteration — keep only the scrubbed remainder
+                        # (may be empty → downstream empty/all-failed handling).
+                        direct_text = _scrubbed_direct.strip()
+                    else:
+                        direct_text = _scrubbed_direct
                 if direct_text:
                     # PLAN-0102 W4 T-W4-B (BP-621): record the LLM-generation
                     # wall-clock as ``llm_direct_text_generation`` so the
@@ -2828,7 +2999,9 @@ class ChatOrchestratorUseCase:
         # read the scrubbed text.
         if full_text:
             _pre_scrub_len = len(full_text)
-            full_text = _strip_tool_narration(full_text)
+            # Chat-eval #3: pass registry names so the {"<tool_name>": {…}}
+            # single-key leak shape is scrubbed on the synthesis path too.
+            full_text = _strip_tool_narration(full_text, _registry_tool_names)
             if len(full_text) != _pre_scrub_len:
                 log.warning(  # type: ignore[no-any-return]
                     "synthesis_narration_scrubbed",
@@ -2855,7 +3028,19 @@ class ChatOrchestratorUseCase:
         # citation passes see a coherent message; ``grounded=False`` is
         # captured in structured logs for ops visibility.
         grounded = True
-        if had_tool_calls and non_none_items and _question_entity_ids:
+        # Chat-eval pack-10 (2026-06-12): skip the guard for universe/aggregate/
+        # screener questions — they have no single anchor entity, S6 mis-resolves
+        # the question to garbage, and the calendar/screener/movers items carry
+        # entity_name=None, so the guard would FALSE-refuse a valid answer
+        # (``tc_earnings_next_week_universe``). The guard is meant for
+        # single-entity intelligence/search questions only.
+        _is_universe_question = any(name in _UNIVERSE_AGGREGATE_TOOLS for name in _executed_tool_names)
+        if _is_universe_question:
+            log.info(  # type: ignore[no-any-return]
+                "entity_grounding_skipped_universe_intent",
+                executed_tools=sorted(set(_executed_tool_names)),
+            )
+        if had_tool_calls and non_none_items and _question_entity_ids and not _is_universe_question:
             _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids, _prior_tool_calls)
             if _grounding_refusal is not None:
                 # PLAN-0104 W29: log the actual ids so we can diagnose
@@ -2973,7 +3158,7 @@ class ChatOrchestratorUseCase:
         # and a no-op on a clean answer.
         if full_text:
             _pre = full_text
-            full_text = _strip_tool_narration(full_text)
+            full_text = _strip_tool_narration(full_text, _registry_tool_names)
             if len(full_text) != len(_pre):
                 log.warning(  # type: ignore[no-any-return]
                     "post_grounding_narration_scrubbed",

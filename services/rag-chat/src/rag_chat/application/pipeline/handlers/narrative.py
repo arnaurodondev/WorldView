@@ -89,9 +89,21 @@ class NarrativeHandler(ToolHandler):
     async def _resolve_intel_entity_id(self, tool_name: str, llm_entity_id: str | None) -> UUID | None:
         """Resolve entity_id, enforcing EntityContext scope (M-1).
 
-        When the executor is bound to an entity scope, all intelligence tools MUST
-        use that entity_id regardless of what the LLM passes. Prevents cross-entity
-        data leakage in entity-first queries.
+        PINNED scope (``entity_context.pinned is True`` — the
+        ``/chat/entity-context`` surfaces): all intelligence tools MUST use the
+        scoped entity_id regardless of what the LLM passes. Prevents
+        cross-entity data leakage in entity-first queries.
+
+        INFERRED scope (``entity_context.pinned is False`` — the regular
+        ``/chat`` path, where the scope is just ``entities[0]`` from the S6
+        resolve): BP-661 P/E→Pandora (2026-06-12). S6's ``entities[0]`` ranking
+        is fragile for relationship/comparison questions — it ranked Alexandria
+        Real Estate #1 for "Apple's competitors" and Pandora #1 for "AAPL's
+        P/E". The old code blindly returned the scoped id, DISCARDING the LLM's
+        correct ``entity_id: "AAPL"`` and loading the wrong company's bundle.
+        For inferred scope we now PREFER a VALID, resolvable LLM-supplied
+        ``entity_id`` and only fall back to the scoped id when the LLM arg is
+        missing or unresolvable.
 
         BP-661 (the "what is AAPL?" empty-answer bug): the LLM frequently
         passes a TICKER or a COMPANY NAME in ``entity_id`` when no entity map
@@ -108,18 +120,27 @@ class NarrativeHandler(ToolHandler):
              via the sibling IntelligenceHandler (stop-words + similarity
              floor + delta gate + tiebreakers).
         """
-        if self._entity_context is not None:
-            if llm_entity_id is not None and llm_entity_id != str(self._entity_context.entity_id):
+        _ctx = self._entity_context
+        _ctx_pinned = bool(getattr(_ctx, "pinned", True)) if _ctx is not None else False
+
+        if _ctx is not None and _ctx_pinned:
+            # Pinned entity-context surface — hard override is intentional.
+            if llm_entity_id is not None and llm_entity_id != str(_ctx.entity_id):
                 log.warning(
                     "entity_context_override",
                     tool=tool_name,
                     llm_entity_id=llm_entity_id,
-                    scoped_entity_id=str(self._entity_context.entity_id),
+                    scoped_entity_id=str(_ctx.entity_id),
                 )
-            return self._entity_context.entity_id
+            return _ctx.entity_id
+
         if llm_entity_id is None:
+            # No LLM id — fall back to the inferred scope when present.
+            if _ctx is not None:
+                return _ctx.entity_id
             log.warning("tool_no_entity_id", tool=tool_name)
             return None
+
         try:
             return UUID(llm_entity_id)
         except ValueError:
@@ -150,6 +171,19 @@ class NarrativeHandler(ToolHandler):
             resolved = await self._name_resolver.resolve_name(tool_name, identifier)
             if resolved is not None:
                 return resolved
+
+        # The LLM id was non-empty but unresolvable. For an INFERRED scope fall
+        # back to the question-level entity so the user still gets an answer
+        # about the entity they most likely meant (BP-661 P/E→Pandora: better
+        # to answer about the inferred entity than to drop to []).
+        if _ctx is not None:
+            log.info(
+                "tool_entity_id_fallback_to_context",
+                tool=tool_name,
+                llm_entity_id=llm_entity_id,
+                scoped_entity_id=str(_ctx.entity_id),
+            )
+            return _ctx.entity_id
 
         log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=llm_entity_id)
         return None

@@ -139,9 +139,15 @@ def build_default_registry() -> ToolRegistry:
                 ParameterSpec(
                     name="interval",
                     type="string",
-                    description="Bar granularity: 1m/hour/day/week/month. Default 'week'.",
+                    # Chat-eval #5 NEW root cause A (2026-06-12): the backend
+                    # ``/ohlcv/bars`` endpoint does NOT aggregate ``week``/
+                    # ``month`` bars, so advertising them made the LLM pick them
+                    # for "YTD high/low" and "P/E vs history" questions and burn
+                    # iterations retrying on error. Drop them from the enum so the
+                    # model only ever selects supported grains (intraday + day).
+                    description="Bar granularity: 1m/hour/day. Default 'day'.",
                     required=False,
-                    enum=["1m", "hour", "day", "week", "month"],
+                    enum=["1m", "hour", "day"],
                 ),
             ],
             source_type="ohlcv",

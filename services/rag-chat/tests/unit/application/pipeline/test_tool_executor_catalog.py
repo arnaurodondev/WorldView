@@ -503,8 +503,9 @@ class TestScreenUniverse:
             limit=25,
         )
         payload = s3_brief.screen_instruments.call_args[0][0]
-        # Only the documented body-level keys.
-        assert set(payload.keys()) == {"filters", "limit"}
+        # Documented body-level keys + chat-eval #4/#5 sort fields. ``sort_by``/
+        # ``sort_dir`` are forward-compatible — ignored by older market-data.
+        assert set(payload.keys()) == {"filters", "limit", "sort_by", "sort_dir"}
         assert payload["limit"] == 25
         # Per-filter keys must come from ScreenFilterRequest only.
         allowed_keys = {"metric", "min_value", "max_value", "sector", "industry", "period_type"}
@@ -592,7 +593,60 @@ class TestScreenUniverse:
         handler = _make_market_handler(s3_brief=s3_brief)
         await handler._handle_screen_universe()
         payload = s3_brief.screen_instruments.call_args[0][0]
-        assert payload == {"filters": [], "limit": 20}
+        # No filters → default sort to market_capitalization desc (chat-eval #5).
+        assert payload == {
+            "filters": [],
+            "limit": 20,
+            "sort_by": "market_capitalization",
+            "sort_dir": "desc",
+        }
+
+    @pytest.mark.asyncio
+    async def test_filtered_metric_is_rendered_in_rows(self) -> None:
+        """Chat-eval #4: the metric the user FILTERED on appears in the rendered table.
+
+        ``ru_ai_semi_screener`` filtered on YoY revenue growth but the formatter
+        rendered only ticker/name/MCap/PE, so the LLM hand-computed YoY and the
+        numbers failed numeric grounding. The raw value must now be in the text.
+        """
+        s3_brief = _make_s3_brief_port(
+            screen_result={
+                "instruments": [
+                    {
+                        "ticker": "NVDA",
+                        "name": "NVIDIA Corp",
+                        "market_cap": 3_400_000_000_000,
+                        "pe_ratio": 55.0,
+                        "revenue_growth_yoy": 0.852,
+                        "roe": 0.91,
+                    },
+                ]
+            }
+        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe(
+            sector="Technology",
+            revenue_growth_yoy_min=0.20,
+        )
+        assert len(result) == 1
+        text = result[0].text
+        # Filtered metric (revenue growth) AND its raw value are present.
+        assert "Rev growth YoY" in text
+        assert "0.852" in text
+        # Core columns still rendered.
+        assert "MCap" in text
+        # sort_by surfaced to the user-visible header for transparency.
+        assert "sorted by" in text
+
+    @pytest.mark.asyncio
+    async def test_sort_dir_ascending_for_max_only_filter(self) -> None:
+        """A max-only filter (e.g. cheapest by P/E) sorts ascending."""
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(pe_ratio_max=15.0)
+        payload = s3_brief.screen_instruments.call_args[0][0]
+        assert payload["sort_by"] == "pe_ratio"
+        assert payload["sort_dir"] == "asc"
 
 
 # ── get_market_movers tests ───────────────────────────────────────────────────

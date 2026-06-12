@@ -164,6 +164,78 @@ class TestLegacyBehaviourPreserved:
         s6.resolve_entity_by_ticker.assert_not_awaited()
 
 
+class TestInferredVsPinnedEntityContext:
+    """BP-661 P/E→Pandora (2026-06-12): inferred scope must not override a valid LLM id.
+
+    The regular /chat path builds an INFERRED EntityContext from
+    ``entities[0]`` of the S6 resolve (``pinned=False``). That ranking is
+    fragile — it ranked Pandora #1 for "AAPL's P/E" and Alexandria Real
+    Estate #1 for "Apple's competitors". When the LLM supplies a concrete,
+    valid ``entity_id`` (e.g. "AAPL"), the handler must keep the LLM's id, not
+    silently swap in the inferred scope. The pinned ``/chat/entity-context``
+    surface (``pinned=True``) keeps the hard override.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inferred_scope_does_not_override_valid_llm_ticker(self) -> None:
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        # Inferred scope = the wrong company S6 ranked first (Pandora).
+        ctx = EntityContext(entity_id=_SCOPED_ID, ticker="P", name="Pandora", pinned=False)
+        s6 = MagicMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=_APPLE_ID)
+        handler = _make_handler(s6=s6, entity_context=ctx)
+
+        resolved = await handler._resolve_intel_entity_id("get_entity_intelligence", "AAPL")
+
+        # The LLM's correct AAPL wins over the inferred Pandora scope.
+        assert resolved == _APPLE_ID
+        s6.resolve_entity_by_ticker.assert_awaited_once_with("AAPL")
+
+    @pytest.mark.asyncio
+    async def test_pinned_scope_overrides_valid_llm_ticker(self) -> None:
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        # Pinned entity-context surface — scope wins regardless of LLM id.
+        ctx = EntityContext(entity_id=_SCOPED_ID, ticker="MSFT", name="Microsoft", pinned=True)
+        s6 = MagicMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=_APPLE_ID)
+        handler = _make_handler(s6=s6, entity_context=ctx)
+
+        resolved = await handler._resolve_intel_entity_id("get_entity_intelligence", "AAPL")
+
+        assert resolved == _SCOPED_ID
+        s6.resolve_entity_by_ticker.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inferred_scope_used_when_llm_id_missing(self) -> None:
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        ctx = EntityContext(entity_id=_SCOPED_ID, ticker="AAPL", name="Apple", pinned=False)
+        handler = _make_handler(entity_context=ctx)
+
+        resolved = await handler._resolve_intel_entity_id("get_entity_intelligence", None)
+
+        # No LLM id → fall back to the inferred scope.
+        assert resolved == _SCOPED_ID
+
+    @pytest.mark.asyncio
+    async def test_inferred_scope_used_when_llm_id_unresolvable(self) -> None:
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        ctx = EntityContext(entity_id=_SCOPED_ID, ticker="AAPL", name="Apple", pinned=False)
+        s6 = MagicMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=None)
+        name_resolver = MagicMock()
+        name_resolver.resolve_name = AsyncMock(return_value=None)
+        handler = _make_handler(s6=s6, name_resolver=name_resolver, entity_context=ctx)
+
+        resolved = await handler._resolve_intel_entity_id("get_entity_intelligence", "ZZZQQQ")
+
+        # LLM id non-empty but unresolvable → degrade to the inferred scope.
+        assert resolved == _SCOPED_ID
+
+
 class TestEndToEndToolPath:
     @pytest.mark.asyncio
     async def test_get_entity_intelligence_with_ticker_returns_bundle(self) -> None:

@@ -256,6 +256,68 @@ class TestBP668CommonWordHijack:
         assert len(accepted) == 1
         assert accepted[0].canonical_name == "BTC-USD"
 
+
+class TestFinancialAcronymFragmentsNotTickers:
+    """BP-661 P/E→Pandora (2026-06-12) — ratio fragments must not match tickers.
+
+    Live failure (``da_aapl_pe_dec2024``): "What was AAPL's P/E ratio as of
+    December 31, 2024?" tokenised "P/E" into "P" (uppercase, ticker-shaped),
+    which exactly matched ticker "P" → Pandora. Pandora was ranked #1 and
+    overrode the LLM's correct AAPL. The gate must reject single-letter
+    fragments and financial-ratio acronyms (P/E, EPS, ROE, …) as ticker
+    evidence regardless of case.
+    """
+
+    def _pandora(self) -> GatedEntity:
+        return GatedEntity(
+            entity_id="f5d35022-0000-7000-8000-000000000abc",
+            canonical_name="Pandora A/S",
+            similarity=0.95,
+            ticker="P",
+        )
+
+    def _apple(self) -> GatedEntity:
+        return GatedEntity(entity_id=_APPLE_ID, canonical_name="Apple Inc.", similarity=0.90, ticker="AAPL")
+
+    def test_pe_fragment_does_not_resolve_pandora(self) -> None:
+        """The exact live failure: 'P/E' must not match ticker P (Pandora).
+
+        The Pandora candidate must never win the tiebreak. With the "P"
+        fragment excluded the pair is delta-ambiguous with no ticker evidence,
+        so the gate bails (reject all) — the orchestrator then proceeds with no
+        wrong entity and the LLM's AAPL is honoured tool-side.
+        """
+        accepted, _ = filter_resolver_candidates(
+            [self._pandora(), self._apple()],
+            config=_CONFIG,
+            query_text="What was the P/E ratio of AAPL as of December 31, 2024?",
+        )
+        # AAPL still resolves (real ticker token present); Pandora never does.
+        assert all(a.canonical_name != "Pandora A/S" for a in accepted)
+        assert [a.entity_id for a in accepted] == [_APPLE_ID]
+
+    def test_query_ticker_tokens_excludes_pe_fragments_and_acronyms(self) -> None:
+        from rag_chat.application.services.resolver_gates import _query_ticker_tokens
+
+        tokens = _query_ticker_tokens("What is the P/E, EPS, ROE and P/B of AAPL versus MSFT?")
+        # Real tickers survive; ratio fragments/acronyms do not.
+        assert "aapl" in tokens
+        assert "msft" in tokens
+        for fragment in ("p", "e", "b", "pe", "eps", "roe", "pb"):
+            assert fragment not in tokens
+
+    def test_single_letter_uppercase_token_is_not_ticker_evidence(self) -> None:
+        """A bare single uppercase letter is too ambiguous to win a tiebreak."""
+        from rag_chat.application.services.resolver_gates import _query_ticker_tokens
+
+        assert _query_ticker_tokens("Compare F and T performance") == set()
+
+    def test_real_two_letter_ticker_still_matches(self) -> None:
+        """Guard rails: a genuine 2+ letter uppercase ticker still counts (GE)."""
+        from rag_chat.application.services.resolver_gates import _query_ticker_tokens
+
+        assert "ge" in _query_ticker_tokens("How is GE doing this quarter?")
+
     def test_lowercase_non_word_ticker_still_matches(self) -> None:
         """BP-661 convenience preserved: lowercase 'aapl' is not an English word."""
         accepted, _ = filter_resolver_candidates(

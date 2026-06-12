@@ -186,6 +186,40 @@ class TestFallbackArgProjection:
         # No ctx → no entity_tickers anchor.
         assert "entity_tickers" not in out
 
+    def test_traverse_graph_registered_as_fallback_to_entity_paths(self) -> None:
+        """Chat-eval #1: a traverse_graph 504 must degrade to get_entity_paths."""
+        from rag_chat.application.use_cases.chat_orchestrator import _FALLBACK_MAP
+
+        assert _FALLBACK_MAP.get("traverse_graph") == ["get_entity_paths"]
+
+    def test_traverse_graph_to_entity_paths_uses_start_entity(self) -> None:
+        """traverse_graph(start_entity='Microsoft') → get_entity_paths(entity_id='Microsoft')."""
+        from rag_chat.application.use_cases.chat_orchestrator import _build_fallback_args
+
+        out = _build_fallback_args(
+            "traverse_graph",
+            "get_entity_paths",
+            {"start_entity": "Microsoft", "target_entity": "OpenAI"},
+            ctx=None,
+        )
+        assert out == {"entity_id": "Microsoft", "top_n": 5}
+
+    def test_traverse_graph_to_entity_paths_falls_back_to_ctx_anchor(self) -> None:
+        """No start_entity in args → use the EntityContext name as the anchor."""
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+        from rag_chat.application.use_cases.chat_orchestrator import _build_fallback_args
+
+        ctx = EntityContext(entity_id=UUID(_ENTITY_UUID), ticker="MSFT", name="Microsoft", pinned=False)
+        out = _build_fallback_args("traverse_graph", "get_entity_paths", {}, ctx)
+        assert out == {"entity_id": "Microsoft", "top_n": 5}
+
+    def test_traverse_graph_to_entity_paths_none_without_anchor(self) -> None:
+        """No start_entity and no ctx → cannot build args (None → skip alt)."""
+        from rag_chat.application.use_cases.chat_orchestrator import _build_fallback_args
+
+        out = _build_fallback_args("traverse_graph", "get_entity_paths", {}, ctx=None)
+        assert out is None
+
 
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_chat_orchestrator_tool_loop.py for consistency)

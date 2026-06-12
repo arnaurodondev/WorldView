@@ -195,6 +195,39 @@ _COMMON_WORD_TICKER_BLOCKLIST: frozenset[str] = frozenset(
 )  # fmt: skip
 
 
+# BP-661 P/E→Pandora fix (2026-06-12): financial-ratio acronyms + their
+# single-letter fragments that the LLM and users write in UPPERCASE inside a
+# question ("AAPL's P/E ratio", "EPS", "ROE"). Unlike the lowercase
+# ``_COMMON_WORD_TICKER_BLOCKLIST``, these must be excluded EVEN WHEN
+# UPPERCASE because that is how they are conventionally written — and the
+# uppercase acceptance tier (tier 1 below) would otherwise treat the bare "P"
+# split out of "P/E" as an exact ticker match for Pandora (ticker "P"),
+# overriding the LLM's correct entity. Live failure: ``da_aapl_pe_dec2024``
+# ("What was AAPL's P/E ratio as of December 31, 2024?") resolved to
+# "Pandora (ticker: P)". The set covers the common ratio acronyms and the
+# bare letters that "P/E", "P/B", "P/S", "D/E" decompose into after the
+# slash split.
+_FINANCIAL_ACRONYM_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        # bare single-letter fragments of slash ratios (P/E, P/B, P/S, D/E, …)
+        "p", "e", "b", "s", "d",
+        # whole financial-ratio acronyms
+        "pe", "peg", "pb", "ps", "eps", "roe", "roa", "roi", "roic", "ebit",
+        "ebitda", "fcf", "wacc", "capex", "opex", "ttm", "yoy", "qoq", "mom",
+        "de", "ev",
+    }
+)  # fmt: skip
+
+# A standalone single UPPERCASE letter is almost never strong ticker evidence
+# in prose ("AAPL's P/E", "earnings per share, or E"). Real single-letter
+# tickers (Ford "F", AT&T "T", Sprint "S") DO exist but a one-letter token in
+# a sentence is too ambiguous to win a tiebreak — the user who means the
+# ticker can disambiguate with the company name, whereas the false-positive
+# (P/E → Pandora) silently misroutes the whole answer. We therefore drop
+# bare single-letter tokens from ticker evidence entirely.
+_MIN_TICKER_EVIDENCE_LEN = 2
+
+
 def _query_ticker_tokens(query_text: str) -> set[str]:
     """Extract ticker-evidence tokens from the user's query.
 
@@ -206,16 +239,23 @@ def _query_ticker_tokens(query_text: str) -> set[str]:
       * "What's the latest news **on** Apple Inc.?"  → ON   → ON Semiconductor
       * "...how does **it** compare?"                → IT   → Gartner Inc
 
+    BP-661 P/E→Pandora (2026-06-12): financial-ratio fragments written in
+    UPPERCASE ("P/E", "EPS", "ROE") used to slip through the uppercase tier
+    and steal the resolution ("P" → Pandora). We now (a) drop bare
+    single-letter tokens entirely and (b) reject known financial-acronym
+    fragments REGARDLESS of case via ``_FINANCIAL_ACRONYM_BLOCKLIST``.
+
     Two acceptance tiers (per token, edge punctuation stripped):
 
-      1. UPPERCASE ticker-shaped tokens (``TICKER_SHAPE_RE``) always count —
-         explicit caps is explicit intent ("what is NOW trading at?" means
-         the ticker NOW).
+      1. UPPERCASE ticker-shaped tokens (``TICKER_SHAPE_RE``) count — explicit
+         caps is explicit intent ("what is NOW trading at?" means the ticker
+         NOW) — UNLESS the token is a single letter or a financial-acronym
+         fragment (P/E, EPS, ROE, …).
       2. lowercase/mixed-case tokens whose UPPERCASED form is ticker-shaped
          count ONLY when the lowercased token is not a common English word
-         (``_COMMON_WORD_TICKER_BLOCKLIST``). This preserves the lowercase
-         convenience match ("what is aapl?") without letting prose words
-         steal the resolution.
+         (``_COMMON_WORD_TICKER_BLOCKLIST``) nor a financial acronym. This
+         preserves the lowercase convenience match ("what is aapl?") without
+         letting prose words steal the resolution.
 
     Returns matching tokens lowercased (candidate tickers are compared
     lowercase downstream).
@@ -226,10 +266,15 @@ def _query_ticker_tokens(query_text: str) -> set[str]:
         tok = raw.strip(".,!?:;'\"()[]")
         if not tok:
             continue
-        if TICKER_SHAPE_RE.fullmatch(tok):
-            tokens.add(tok.lower())
-            continue
         lowered = tok.lower()
+        # BP-661 P/E→Pandora: drop single-letter fragments + financial acronyms
+        # before EITHER acceptance tier, so even an UPPERCASE "P" (split out of
+        # "P/E") never counts as ticker evidence.
+        if len(tok) < _MIN_TICKER_EVIDENCE_LEN or lowered in _FINANCIAL_ACRONYM_BLOCKLIST:
+            continue
+        if TICKER_SHAPE_RE.fullmatch(tok):
+            tokens.add(lowered)
+            continue
         if lowered not in _COMMON_WORD_TICKER_BLOCKLIST and TICKER_SHAPE_RE.fullmatch(tok.upper()):
             tokens.add(lowered)
     return tokens

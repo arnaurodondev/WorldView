@@ -70,11 +70,32 @@ class ToolUseBlock:
 
 @dataclass
 class EntityContext:
-    """Entity scope injected at request time (PLAN-0067 §0 M-1)."""
+    """Entity scope injected at request time (PLAN-0067 §0 M-1).
+
+    ``pinned`` (BP-661 P/E→Pandora follow-up, 2026-06-12) distinguishes two
+    very different sources of this scope:
+
+      * ``pinned=True``  — the user is on a PINNED entity surface (the
+        ``/chat/entity-context`` endpoints) where every tool MUST be scoped to
+        this entity regardless of what the LLM passes. The hard override in
+        ``NarrativeHandler._resolve_intel_entity_id`` is correct here.
+      * ``pinned=False`` — the scope was merely INFERRED from the first
+        S6-resolved question entity (the regular ``/chat`` path). S6's
+        ``entities[0]`` ranking is fragile for relationship/comparison
+        questions ("Apple's competitors" once ranked Alexandria Real Estate
+        #1; "AAPL's P/E" once ranked Pandora #1). When the LLM supplies a
+        concrete, VALID ``entity_id`` we must trust it over this inferred
+        guess instead of blindly discarding it.
+
+    Defaults to ``True`` so any existing caller that constructs an
+    ``EntityContext`` without the flag keeps the historical hard-override
+    behaviour; the orchestrator's inferred path opts out explicitly.
+    """
 
     entity_id: UUID
     ticker: str
     name: str
+    pinned: bool = True
 
 
 @dataclass

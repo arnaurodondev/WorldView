@@ -1538,3 +1538,78 @@ class TestEntityGroundingRewriteToolXmlGuard:
         assert "<function_calls" not in text
         assert text.startswith(response)
         assert "could not be verified" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat-eval pack-10 (2026-06-12) — universe/aggregate questions must NOT be
+# refused by the entity-grounding guard.
+#
+# ``tc_earnings_next_week_universe`` ("Which S&P 500 names report earnings next
+# week?") refused with "I cannot find information about the entities…" even
+# though ``get_earnings_calendar`` returned a valid calendar: the universe
+# question has no anchor entity, S6 mis-resolved it to garbage, and the calendar
+# items carry ``entity_name=None`` → zero overlap → false refusal. The guard
+# must be skipped when a universe/aggregate/screener tool ran.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestUniverseQuestionSkipsEntityGroundingGuard:
+    def _build_universe(self, *, tool_name: str, stream_chunks: list[str]) -> tuple[Any, MagicMock]:
+        from uuid import UUID
+
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+        from rag_chat.domain.entities.chat import ResolvedEntity
+
+        pipeline, _captured = _make_pipeline(stream_chunks=stream_chunks)
+        # Garbage resolved entity (the S6 mis-resolution) → non-empty
+        # _question_entity_ids, which would otherwise arm the guard.
+        garbage = ResolvedEntity(
+            entity_id=UUID("41c379f9-0000-7000-8000-000000000000"),
+            canonical_name="Pandora",
+            entity_type="company",
+            confidence=0.6,
+            matched_text="P",
+            ticker="P",
+        )
+        pipeline.resolve_entities = AsyncMock(return_value=[garbage])
+
+        # A universe tool result whose items reference NONE of the question
+        # entities (calendar rows carry entity_name=None).
+        item = _make_grounding_item(
+            text="Earnings next week: AAPL (Thu), MSFT (Wed), GOOGL (Tue).",
+            entity_name=None,
+        )
+        block = _make_tool_use_block(name=tool_name, inp={"from_date": "2026-06-15", "to_date": "2026-06-22"})
+        executor = _make_executor([item])
+        factory = _make_factory(executor)
+
+        ct = {"i": 0}
+
+        async def _two_call(messages, tools=None, **_):
+            ct["i"] += 1
+            if ct["i"] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="", tool_calls=[])
+
+        pipeline.llm_chain.chat_with_tools = _two_call
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        return orch, pipeline
+
+    def test_earnings_calendar_universe_question_not_refused(self) -> None:
+        orch, pipeline = self._build_universe(
+            tool_name="get_earnings_calendar",
+            stream_chunks=["Next week: AAPL on Thursday, MSFT on Wednesday, GOOGL on Tuesday."],
+        )
+        _, answer = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert "cannot find information about the entities" not in answer
+        assert "AAPL" in answer
+
+    def test_single_entity_tool_still_refused_on_drift(self) -> None:
+        """Control: a non-universe tool with drifted entities still refuses."""
+        orch, pipeline = self._build_universe(
+            tool_name="get_entity_intelligence",
+            stream_chunks=["Pandora is a jewellery company."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # The single-entity path keeps the guard: the persisted answer is the
+        # refusal (item text mentions only AAPL/MSFT/GOOGL, question = Pandora).
+        assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
+        assert "cannot find information about the entities" in assistant_response.content
