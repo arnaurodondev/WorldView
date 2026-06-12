@@ -69,6 +69,7 @@ terraform.tfvars
 results/eval_*.json
 results/eval_*.csv
 results/boost_sweep_*.json
+results/routing_dataset/
 
 # Claude Code local state
 .claude/projects/
