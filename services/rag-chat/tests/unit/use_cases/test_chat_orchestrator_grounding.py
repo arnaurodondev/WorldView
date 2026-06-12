@@ -311,6 +311,58 @@ class TestOrchestratorGroundingHook:
             "W44 — banner suppression must not hide real fabrication; " f"got: {assistant_response.content!r}"
         )
 
+    def test_divergent_resynthesis_rewrite_keeps_grounded_original(self) -> None:
+        """BP-671 — a rewrite that FREE-GENERATES a new answer (re-synthesis)
+        instead of correcting the draft must be rejected; the grounded
+        original is kept.
+
+        Reproduces the live MSTR-news run
+        (run_20260609T175104Z/q_ru_mstr_news_run2.json): the streamed draft
+        was grounded (real Peter Schiff headline + real price table) but had a
+        single unsupported figure that tripped the validator. The rewrite then
+        regenerated a completely different, fabricated answer (invented BTC
+        holdings, market cap, revenue). The divergence guard detects the rewrite
+        shares <50% of the original's content anchors and keeps the original.
+        """
+        # A grounded draft rich in anchors (proper nouns + price-table numbers);
+        # one figure ("$28.4B treasury") is unsupported and trips the validator.
+        grounded_draft = (
+            "Here's what's happening with MicroStrategy (MSTR). The most prominent "
+            "recent article is a critical piece from Peter Schiff arguing the debt "
+            "buyback torched 60% of the safety net. Price action over the last two "
+            "weeks: May 26 close $165.38, May 27 $159.63, May 28 $149.70, Jun 2 "
+            "$135.90, Jun 3 $135.69 — a drop of roughly 18%. The treasury is worth "
+            "about $28.4B in Bitcoin and remains the key driver of the stock."
+        )
+        # A long, fabricated re-synthesis: different numbers, different structure,
+        # almost none of the original's grounded anchors survive.
+        fabricated_rewrite = (
+            "Here are the latest developments on MicroStrategy (MSTR). The company "
+            "recently purchased an additional 8,095 BTC for approximately $271.47 "
+            "million, bringing total holdings to roughly 271,474 BTC. Market "
+            "capitalization is around $28.0 billion with enterprise value near "
+            "$30.0 billion. Revenue stands at $509.0 million and net income at "
+            "$135.9 million. Short interest is about 17.0% of float and the "
+            "put/call ratio is 0.6, suggesting bearish options positioning across "
+            "the most recent sessions in this period of elevated trading volume."
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_draft],
+            rewrite_chunks=[fabricated_rewrite],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Both turns ran: the validator failed the draft and tried a rewrite.
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The GROUNDED original is kept — its real anchors survive …
+        assert "Peter Schiff" in content, f"grounded original was dropped: {content!r}"
+        assert "$165.38" in content
+        # … and the fabricated re-synthesis anchors are NOT shipped.
+        assert "271,474 BTC" not in content, f"fabricated re-synthesis shipped: {content!r}"
+        assert "$509.0 million" not in content
+        # The user is still warned about the one figure that tripped the pass.
+        assert "could not be verified" in content
+
     def test_completion_cache_written_when_grounding_passes(self) -> None:
         """Sanity check — passing grounding still writes to the cache.
 

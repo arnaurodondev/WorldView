@@ -194,3 +194,55 @@ def test_output_preserves_paren_dates_and_endash_ranges(processor: OutputProcess
     items = [_item()]
     answer, _ = processor.process(raw, items)
     assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+# ── BP-672 regression — leading-digit deletion adjacent to bold / commas / ────
+#    units / multipliers / month-day dates.
+#
+# Live MSTR-news run (run_20260609T175104Z/q_ru_mstr_news_run2.json): the
+# bare-citation stripper ate the leading digit of legitimate quantities,
+# yielding artifacts such as:
+#   "**8,095 BTC**"           -> "**,095 BTC**"   (comma-grouped number)
+#   "last 4 quarters"         -> "last  quarters" (count + unit noun)
+#   "nearly 2x the revenue"   -> "nearly x the ..." (multiplier sign U+00D7/x)
+#   "Direct Partnership (1 hop)" -> "( hop)"       (graph-hop count)
+#   "| May 26 | $165.38 |"    -> "| May  | …"      (month-day date in a table)
+# Each shape is now guarded by _BARE_CITATION_INT_RE so the digit survives.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        # Comma-grouped number — leading group must survive.
+        ("It purchased an additional **8,095 BTC** at auction [1].", "8,095"),
+        ("Total holdings reached 26,500 BTC this year [1].", "26,500"),
+        # Count + unit noun.
+        ("Revenue rose over the last 4 quarters [1].", "4 quarters"),
+        ("The path is just 1 hop away [1].", "1 hop"),
+        ("Volume hit 4 million shares [1].", "4 million"),
+        ("Shares fell over 2 weeks [1].", "2 weeks"),
+        # Multiplier sign (U+00D7 and ASCII x).
+        ("It traded at nearly 2× the revenue [1].", "2×"),  # noqa: RUF001 — U+00D7 multiplication sign
+        ("Roughly 3x the prior level [1].", "3x"),
+        # Month-day calendar dates (full + abbreviated month names).
+        ("Closed on May 26 at the high [1].", "May 26"),
+        ("Reported Jun 1 results [1].", "Jun 1"),
+        ("Scheduled for September 9 [1].", "September 9"),
+    ],
+)
+def test_output_preserves_leading_digit_of_quantities(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-672: leading digits of bold/comma/unit/multiplier/date numbers survive."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+def test_output_bug_a_mstr_btc_acquisition_line(processor: OutputProcessor) -> None:
+    """BP-672 end-to-end: the exact MSTR sentence no longer loses the '8'."""
+    items = [_item()]
+    raw = "The company recently purchased an additional **8,095 BTC** for " "approximately **$271.47 million** [1]."
+    answer, _ = processor.process(raw, items)
+    assert "**,095 BTC**" not in answer, f"Leading digit lost: {answer!r}"
+    assert "**8,095 BTC**" in answer

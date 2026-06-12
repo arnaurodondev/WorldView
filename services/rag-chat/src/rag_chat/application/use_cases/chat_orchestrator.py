@@ -471,6 +471,116 @@ def _answer_has_full_citation_coverage(text: str) -> bool:
     return True
 
 
+# ── BP-671 — re-synthesis divergence guard ───────────────────────────────────
+#
+# WHY: the numeric-grounding rewrite turn (``_run_grounding_validation``) does
+# NOT re-show the LLM its own grounded draft (it strips prose assistant turns to
+# avoid apology-preamble leaks). With only "these numbers are unsupported" as
+# input the model frequently FREE-GENERATES a brand-new answer from parametric
+# memory instead of CORRECTING the draft. Live MSTR-news run
+# (run_20260609T175104Z/q_ru_mstr_news_run2.json): the streamed draft was
+# grounded (real "Peter Schiff" headline, real $165.38→$135.69 price table,
+# "~$15B BTC treasury"), but the rewrite shipped as ``final_answer`` invented
+# "271,474 BTC", "$28.0 billion market cap", "$509.0M revenue" — none of which
+# appeared in the single news item the tools returned. The legacy
+# unsupported-count guard (BP-670) did NOT catch it because the fabrication used
+# round numbers the validator could not disprove. This helper detects that the
+# rewrite has DIVERGED from the original (a different answer, not a correction)
+# so the caller can keep the grounded original instead.
+#
+# A genuine CORRECTION keeps most of the original's "content anchors" — the
+# proper nouns and number tokens that make the answer substantive — and only
+# swaps the handful of bad figures. A re-SYNTHESIS drops most of them and
+# introduces new ones. We measure the fraction of the original's content
+# anchors that survive into the rewrite; below a threshold the rewrite is a
+# divergent re-synthesis.
+
+# Content anchors: capitalised multi-letter words (proper nouns / headlines)
+# plus numeric tokens. Lower-case function words are ignored — they overlap
+# trivially between ANY two English texts and would mask real divergence.
+_ANCHOR_PROPER_NOUN_RE = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
+_ANCHOR_NUMBER_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?")
+# Common headline / boilerplate capitalised words that appear in almost any
+# answer; excluding them keeps the overlap metric focused on the substantive
+# anchors (entity names, person names, source names) rather than scaffolding.
+_ANCHOR_STOPWORDS = frozenset(
+    {
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "Here",
+        "There",
+        "What",
+        "When",
+        "Would",
+        "Bottom",
+        "Key",
+        "Latest",
+        "Recent",
+        "Most",
+        "Over",
+        "Year",
+        "Market",
+        "Stock",
+        "Price",
+        "Date",
+        "Close",
+        "Value",
+        "Metric",
+        "Note",
+    }
+)
+
+
+def _content_anchors(text: str) -> set[str]:
+    """Extract substantive content anchors (proper nouns + numbers) from text."""
+    nouns = {m for m in _ANCHOR_PROPER_NOUN_RE.findall(text) if m not in _ANCHOR_STOPWORDS}
+    numbers = set(_ANCHOR_NUMBER_RE.findall(text))
+    return nouns | numbers
+
+
+# A re-synthesis is a full alternative answer — substantial prose, not a short
+# refusal or a focused one-line correction. We require the rewrite to be at
+# least this long AND to carry several content anchors of its own before the
+# divergence guard considers rejecting it; this keeps honest refusals ("Forward
+# P/E is not currently available …") and tight corrections out of scope (those
+# are handled by the existing refusal / defeatist guards).
+_RESYNTHESIS_MIN_REWRITE_CHARS = 600
+_RESYNTHESIS_MIN_ORIG_ANCHORS = 8
+
+
+def _rewrite_is_divergent_resynthesis(original: str, rewritten: str, *, min_retained: float = 0.5) -> bool:
+    """Return True when *rewritten* is a fresh re-synthesis, not a correction.
+
+    Computes the fraction of *original*'s content anchors (proper nouns +
+    numeric tokens, minus boilerplate) that also appear in *rewritten*. A
+    faithful correction retains most anchors (only the bad numbers change); a
+    divergent re-synthesis retains few. Below ``min_retained`` the rewrite is
+    flagged as divergent so the caller keeps the grounded original.
+
+    Conservative by construction (every gate must pass before we flag):
+      * the original must carry enough anchors to make the ratio meaningful —
+        a 1-2 anchor original (short factual reply) is never flagged because a
+        single swapped number would already trip a 50% threshold.
+      * the rewrite must itself be a SUBSTANTIAL alternative answer
+        (``>= _RESYNTHESIS_MIN_REWRITE_CHARS``). Short rewrites are honest
+        refusals or focused corrections — handled by the refusal / defeatist
+        guards, never by this one.
+      * an empty original (no anchors) is never flagged — defer to the numeric
+        guards.
+    """
+    orig_anchors = _content_anchors(original)
+    if len(orig_anchors) < _RESYNTHESIS_MIN_ORIG_ANCHORS:
+        return False
+    if len(rewritten) < _RESYNTHESIS_MIN_REWRITE_CHARS:
+        return False
+    rewrite_anchors = _content_anchors(rewritten)
+    retained = len(orig_anchors & rewrite_anchors) / len(orig_anchors)
+    return retained < min_retained
+
+
 def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
     """Extract model_id from the active provider in the chain (Bug 4 Fix pattern).
 
@@ -3069,6 +3179,30 @@ class ChatOrchestratorUseCase:
                 "numeric_grounding_rewrite_rejected_defeatist",
                 rewrite_len=len(rewritten),
                 response_len=len(response),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+        # BP-671: re-synthesis divergence guard — keep the ORIGINAL grounded
+        # draft when the rewrite is a fresh re-synthesis rather than a
+        # correction. The numeric grounding rewrite turn never re-shows the LLM
+        # its own draft, so it frequently free-generates a brand-new answer from
+        # parametric memory (live MSTR-news run: streamed "Peter Schiff" +
+        # real price table was replaced by fabricated "271,474 BTC / $28.0B
+        # market cap / $509M revenue"). The legacy BP-670 unsupported-count
+        # guard misses this because the fabrication uses round numbers the
+        # validator cannot disprove. When the rewrite retains <50% of the
+        # original's content anchors (proper nouns + numbers) it has diverged —
+        # the grounded original is strictly safer than an unverifiable
+        # re-synthesis, so we keep it and append the banner so the user is
+        # still warned about the one bad figure that triggered the pass.
+        # Checked BEFORE re-validation so it fires even when the fabrication
+        # happens to pass the numeric validator.
+        if _rewrite_is_divergent_resynthesis(response, rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_divergent_resynthesis",
+                original_len=len(response),
+                rewrite_len=len(rewritten),
             )
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False

@@ -57,14 +57,45 @@ _BARE_CITATION_INT_RE = re.compile(
     r"(?<![-–—:])"  # BP-670: not preceded by hyphen/en-dash/em-dash/colon —  # noqa: RUF001
     # guards the day half of ISO dates ("2026-06-11"), range tails
     # ("9-13", "9-13" with en dash) and minutes ("10:10") from being stripped.
+    r"(?<![*_])"  # BP-672: not preceded by markdown bold/italic delimiter — the
+    # leading digit of a bolded number ("**8,095 BTC**", "**4** quarters") sits
+    # directly after the ``**``/``*``/``_`` run; without this guard the "8" of
+    # "**8,095**" rendered as "**,095**" in the live MSTR-news answer.
+    # BP-672: not preceded by a month name (+ single space) — "May 26",
+    # "Jun 1", "September 9" are calendar days, never citation refs. The live
+    # MSTR price table rendered "| May 26 |" as "| May  |" because the day was
+    # stripped. ``(?i:...)`` scopes case-insensitivity to the lookbehind only
+    # (the global pattern stays case-sensitive); covers full + 3-letter forms.
+    r"(?<!(?i:jan) )(?<!(?i:feb) )(?<!(?i:mar) )(?<!(?i:apr) )(?<!(?i:may) )"
+    r"(?<!(?i:jun) )(?<!(?i:jul) )(?<!(?i:aug) )(?<!(?i:sep) )(?<!(?i:oct) )"
+    r"(?<!(?i:nov) )(?<!(?i:dec) )(?<!(?i:january) )(?<!(?i:february) )"
+    r"(?<!(?i:march) )(?<!(?i:april) )(?<!(?i:june) )(?<!(?i:july) )"
+    r"(?<!(?i:august) )(?<!(?i:september) )(?<!(?i:october) )"
+    r"(?<!(?i:november) )(?<!(?i:december) )"
     r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
     r"(?!\])"  # not followed by ] (not an existing citation)
     r"(?!\d)"  # not followed by digit (not a year)
+    r"(?!,\d)"  # BP-672: not followed by ",digit" — the leading group of a
+    # comma-grouped number ("8,095", "26,500"). Without this the "8" of
+    # "8,095 BTC" was stripped, yielding the live "**,095 BTC**" artifact.
+    r"(?![×xX])"  # noqa: RUF001 — BP-672: not followed by a multiplier sign (U+00D7 or
+    # ASCII x) — "2x" / "2 times" is a multiple ("nearly 2x the revenue"),
+    # never a citation. The live answer dropped the "2" leaving "nearly the
+    # revenue" with a stray multiplier sign.
     r"(?![%./\w:)–—-])"  # not followed by unit / word char / decimal point /  # noqa: RUF001
     # BP-670: compound joiners and closing paren — "1-minute", "10:10",
     # "9-13", en-dash ranges and parenthesised dates "(Jun 9)" are time/date
     # fragments, never bare citation refs ("(Jun 9)" used to render as
     # "(Jun )" and "1-minute bar" as "-minute bar" in the final answer).
+    r"(?!\s+(?:hop|hops|quarter|quarters|million|billion|trillion|thousand|"  # BP-672:
+    r"shares|days?|weeks?|months?|years?|hours?|minutes?|times?|x\b|bps|"
+    # not a bare citation when immediately followed by a unit / quantity noun.
+    # The live MSTR answer dropped the count digit from "4 quarters", "1 hop",
+    # "26 close" and "nearly 2x the revenue" because the stripper treated the
+    # quantity as a citation ref. A genuine bare citation ref is never followed
+    # by a counting noun. Kept as an explicit allow-list (not a generic
+    # ``\s+\w`` guard) so we still strip the legacy "grew strongly 12 [1]" form.
+    r"bn|mn|k\b|BTC|ETH|USD|EUR|GBP|%|percent))"
 )
 
 # Basic PII patterns — email, phone, SSN, credit card
