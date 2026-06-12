@@ -1,122 +1,128 @@
 /**
- * components/dashboard/AiSignalsWidget.tsx — AI news-event signal feed
+ * components/dashboard/AiSignalsWidget.tsx — NEWS MOMENTUM feed
  *
- * WHY THIS EXISTS: S6 extracts financial events (earnings, M&A, guidance cuts,
- * product launches, …) from every ingested article. This widget surfaces the
- * latest of those signals so a trader scanning the dashboard sees WHICH
- * entities have news-flow, WHAT kind of event fired, in WHICH direction, and
- * WHEN — without leaving the morning-routine screen.
+ * WHY THIS EXISTS: this dashboard widget answers "what's moving in the news
+ * right now?" — the most relevant RECENT stories across everything the platform
+ * ingests, so a user scanning the morning-routine screen sees the live news
+ * flow without leaving the dashboard.
  *
- * 2026-06-10 OVERHAUL — the previous version showed "9ECB ——— 95%" rows:
- *  - UUID prefixes leaked when ticker resolution failed (fixed server-side:
- *    S9 routes/signals.py now resolves entity NAME too and drops entities the
- *    KG doesn't know);
- *  - duplicate tickers repeated 3x with no differentiation (fixed: S9 dedups
- *    per article, and this widget groups remaining signals per ENTITY with an
- *    expandable "×N" cluster toggle);
- *  - the bare % and the 4px bar implied a price-move prediction. The number
- *    is the LLM's EXTRACTION CONFIDENCE — and since live values are pinned at
- *    0.90–0.95 the bar was visually constant decoration. It is replaced by a
- *    direction glyph + signal-type chip, with a tooltip that defines the %.
+ * 2026-06-12 WAVE-4 PIVOT — the previous version showed extraction-confidence
+ * "AI signals" (e.g. "NA · NEWS EVENT · 95% · 11m"):
+ *  - the 95% was the LLM's EXTRACTION CONFIDENCE (pinned at 0.90/0.95) — a
+ *    constant decoration that READ like a price prediction;
+ *  - the "NEWS EVENT / CORP ACTION / EARNINGS" labels were opaque pipeline
+ *    enums, not user-relevant;
+ *  - the feed surfaced internal pipeline state, not information a user acts on.
+ *  The user's verdict: pivot to "occurrences in news over the last X time, or
+ *  something more relevant". This rewrite does exactly that — each row is a real
+ *  recent article with an HONEST relevance score, a sentiment direction, a
+ *  source, and a click-through to read it. A window selector (24h / 3D / 1W)
+ *  lets the user widen or tighten "right now".
  *
- * WHY 2-minute refetch: signals are generated as articles arrive (continuous).
- * A 2-minute window catches new signals promptly without hammering S9/S6 —
- * faster than fundamentals (5min), slower than quotes (1min).
+ * WHY 2-minute refetch: news arrives continuously as articles are processed.
+ * 2 min is fast enough to feel live without hammering S9/S6.
  *
- * WHO USES IT: app/(app)/dashboard/page.tsx (Row 2, col-span-3)
- * DATA SOURCE: S9 GET /v1/signals/ai via createGateway().getAiSignals(limit)
- *   (services/api-gateway routes/signals.py — enriched + deduplicated feed)
- * DESIGN REFERENCE: PLAN-0043 Wave A-5, PRD-0020 Signal Scoring,
- *   components/dashboard/ai-signals/* (group row, types, grouping logic)
+ * WHO USES IT: app/(app)/dashboard/page.tsx (Row 2, col-span-3) — no props.
+ * DATA SOURCE: S9 GET /v1/signals/ai?limit&hours via createGateway().getAiSignals
+ *   (services/api-gateway routes/signals.py — proxies S6 /api/v1/news/top)
+ * DESIGN REFERENCE: components/dashboard/ai-signals/* (row, meta, types)
  */
 
 "use client";
-// WHY "use client": uses useQuery (TanStack), useAuth (React context), and useRouter
-// for row-click navigation. None of these work in Next.js server components.
+// WHY "use client": uses useQuery (TanStack), useAuth (React context) and
+// useState for the window selector — none work in Next.js server components.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-// Round 3 (item 4): panel-level empty/error states migrate to the shared
-// EmptyState primitive (DESIGN_SYSTEM §15.12) with named dashboard.* copy
-// keys; InlineEmptyState remains the tool for in-list messages only.
 import { EmptyState } from "@/components/primitives/EmptyState";
-// Round 4 (item 1): error state gains a Retry action wired to refetch() —
-// Round 3 named the state but offered no recovery path.
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+import { cn } from "@/lib/utils";
 import { Radar } from "lucide-react";
-// Grouping + row rendering live in the ai-signals/ subdir so each piece is
-// independently testable (pure grouping fn, router-free row component).
-import { groupSignalsByEntity } from "@/components/dashboard/ai-signals/group-signals";
-import { SignalGroupRow } from "@/components/dashboard/ai-signals/SignalGroupRow";
-import type { EnrichedAiSignal } from "@/components/dashboard/ai-signals/types";
+import { NewsMomentumRow } from "@/components/dashboard/ai-signals/NewsMomentumRow";
+import type { NewsMomentumItem } from "@/components/dashboard/ai-signals/types";
+
+// ── Window selector ───────────────────────────────────────────────────────────
+// The three windows the feed supports (matches the S9 _ALLOWED_WINDOWS set).
+// 3D (72h) is the default: 24h is frequently too sparse to fill the widget,
+// a full week dilutes "right now". Each option carries the API hours value and
+// the compact label shown in the header toggle.
+const WINDOWS = [
+  { hours: 24, label: "24H" },
+  { hours: 72, label: "3D" },
+  { hours: 168, label: "1W" },
+] as const;
+const DEFAULT_WINDOW_HOURS = 72;
+
+// How many rows to request — generous so the scroll area is full; the row
+// height (22px) keeps even 20 rows cheap to render.
+const ROW_LIMIT = 20;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
- * AiSignalsWidget — grouped feed of AI-extracted news-event signals.
+ * AiSignalsWidget — NEWS MOMENTUM feed (kept name for the dashboard slot).
  *
- * Renders one 22px row per ENTITY (newest first), each showing:
- *  - direction glyph + color (▲ bullish / ▼ bearish / ▪ neutral)
- *  - ticker in mono — falls back to the entity NAME, never a UUID prefix
- *  - signal-type chip ("Earnings", "M&A", "Product launch", …)
- *  - "×N" toggle when several signals cluster on one entity (expands to the
- *    per-signal evidence rows with the triggering headline)
- *  - extraction-confidence % with a tooltip defining the metric
- *  - relative time of the latest signal
- *
- * Rows navigate to /instruments/{ticker} (entity_id fallback when unlisted).
+ * Renders one 22px row per recent news story (most relevant first), each with a
+ * sentiment dot, headline (links to the article), source, honest relevance %,
+ * and relative time. A header toggle switches the look-back window.
  */
 export function AiSignalsWidget() {
   const { accessToken } = useAuth();
-  const router = useRouter();
 
-  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  // Selected look-back window. Local state (not URL) — it's throwaway view
+  // state scoped to this widget, lost on reload, which is fine.
+  const [windowHours, setWindowHours] = useState<number>(DEFAULT_WINDOW_HOURS);
+
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ["dashboard-ai-signals"],
-    queryFn: () => createGateway(accessToken).getAiSignals(20),
+    // Window is part of the key so switching windows refetches (and caches each
+    // window independently — flipping back is instant).
+    queryKey: ["dashboard-ai-signals", windowHours],
+    queryFn: () => createGateway(accessToken).getAiSignals(ROW_LIMIT, windowHours),
     enabled: !!accessToken,
-    // WHY 120_000 (2 min): signals arrive continuously as articles are processed.
-    // 2 min is fast enough to feel live without generating excessive S9 → S6 traffic.
+    // WHY 120_000 (2 min): news arrives continuously; 2 min feels live without
+    // excessive S9 → S6 traffic.
     staleTime: 120_000,
     refetchInterval: 120_000,
   });
 
-  // Cast is safe: EnrichedAiSignal only ADDS optional fields to AiSignal, so
-  // both the new enriched payload and a legacy payload satisfy it. See
-  // ai-signals/types.ts for why the extension lives there, not types/api.ts.
-  const signals: EnrichedAiSignal[] = useMemo(() => data?.signals ?? [], [data]);
+  // Cast via unknown is safe: the shared AiSignalsResponse type in types/api.ts
+  // still describes the LEGACY signal shape (a different shared workstream owns
+  // it), but the wire payload is now NewsMomentumItem[]. NewsMomentumItem reads
+  // every field defensively, so a legacy payload also degrades gracefully
+  // (forward-compat, same principle as Avro schema evolution).
+  const items: NewsMomentumItem[] = useMemo(
+    () => (data?.signals as unknown as NewsMomentumItem[] | undefined) ?? [],
+    [data],
+  );
 
-  // Group per entity — MUST be called before any early return (Rules of
-  // Hooks: every render must call the same hooks in the same order, so no
-  // hook may sit below a conditional `return`). useMemo keeps the grouping
-  // from re-running on unrelated re-renders (e.g. parent state changes).
-  const groups = useMemo(() => groupSignalsByEntity(signals), [signals]);
+  // Shared header — the window selector must be present in EVERY state (loading,
+  // error, empty, data) so the user can switch windows even when one is empty.
+  const header = (
+    <WidgetHeader
+      windowHours={windowHours}
+      onWindowChange={setWindowHours}
+      count={items.length}
+      // Don't let the user spam window switches mid-fetch.
+      disabled={isFetching}
+    />
+  );
 
   // ── Loading state ───────────────────────────────────────────────────────────
-  // Round 4 (item 2): every return branch carries the same role="region" +
-  // aria-label so the landmark exists from first paint (SR users can target
-  // the panel even while it loads).
   if (isLoading) {
     return (
-      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
-        <div className="flex h-5 shrink-0 items-center border-b border-border px-2">
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-            AI SIGNALS
-          </span>
-        </div>
-        {/* WHY 6 skeleton rows: matches the max signal count so the layout
-            doesn't reflow when data arrives — no "skeleton collapse" jump. */}
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
+        {header}
+        {/* WHY 6 skeleton rows: roughly fills the panel so the layout doesn't
+            reflow when data arrives — no "skeleton collapse" jump. */}
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex h-[22px] items-center gap-1.5 px-2">
-              <Skeleton className="h-3 w-[36px]" style={{ animationDelay: `${i * 40}ms` }} />
-              <Skeleton className="h-[4px] flex-1" style={{ animationDelay: `${i * 40 + 20}ms` }} />
-              {/* w-[30px] mirrors the loaded score column (Round 3: 10px floor). */}
-              <Skeleton className="h-3 w-[30px]" style={{ animationDelay: `${i * 40 + 40}ms` }} />
+              <Skeleton className="h-2 w-2 rounded-full" style={{ animationDelay: `${i * 40}ms` }} />
+              <Skeleton className="h-3 flex-1" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+              <Skeleton className="h-3 w-[26px]" style={{ animationDelay: `${i * 40 + 40}ms` }} />
             </div>
           ))}
         </div>
@@ -125,15 +131,10 @@ export function AiSignalsWidget() {
   }
 
   // ── Error state ─────────────────────────────────────────────────────────────
-  // Round 3 (item 4): shared EmptyState primitive replaces InlineEmptyState —
-  // a failed feed is a PANEL-level condition (the whole widget has no data),
-  // not an in-list message. Copy lives in lib/copy/empty-states.ts.
   if (isError) {
     return (
-      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
-        <WidgetHeader />
-        {/* Round 4 (item 1): WidgetErrorState = same named copy key + icon as
-            the Round-3 EmptyState, plus the Retry → refetch() recovery path. */}
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
+        {header}
         <WidgetErrorState
           copyKey="dashboard.signals-error"
           icon={Radar}
@@ -145,18 +146,14 @@ export function AiSignalsWidget() {
   }
 
   // ── Empty state ─────────────────────────────────────────────────────────────
-  // Named empty state (Round 3 item 4) — Radar icon gives the "scanning for
-  // signals" category cue; copy key dashboard.no-signals.
-  if (signals.length === 0) {
+  // The window selector stays visible so the user can widen the window — the
+  // copy ("Try a wider window") points them at the fix.
+  if (items.length === 0) {
     return (
-      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
-        <WidgetHeader />
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
+        {header}
         <div className="flex flex-1 items-center justify-center">
-          <EmptyState
-            condition="empty-no-data"
-            copyKey="dashboard.no-signals"
-            icon={Radar}
-          />
+          <EmptyState condition="empty-no-data" copyKey="dashboard.no-signals" icon={Radar} />
         </div>
       </div>
     );
@@ -164,26 +161,14 @@ export function AiSignalsWidget() {
 
   // ── Data state ──────────────────────────────────────────────────────────────
   return (
-    // WHY bg-background (not bg-card): consistent with all other dashboard widgets.
-    // All cells sit on the same surface level; bg-card creates an unwanted "raised"
-    // appearance against the gap-px grid background.
-    <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
-      <WidgetHeader signalCount={signals.length} />
-
-      {/* Entity rows — one 22px row per ENTITY (§0 terminal rule). Grouping
-          turned the old "BAC, BAC, BAC" repetition into a single "BAC ×3"
-          row that expands into its per-signal evidence lines. */}
+    // WHY bg-background (not bg-card): consistent with all other dashboard
+    // widgets — every cell sits on the same surface level.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
+      {header}
       <div className="flex-1 divide-y divide-border/30 overflow-auto">
-        {groups.map((group) => (
-          <SignalGroupRow
-            key={group.key}
-            group={group}
-            // PRD-0089 F2 step 11 (§6.6): ticker-first URL — falls back to
-            // the KG entity_id when the entity is not a listed instrument.
-            onNavigate={() =>
-              router.push(`/instruments/${group.ticker || group.entityId}`)
-            }
-          />
+        {items.map((item, i) => (
+          // article_id is the stable key; index fallback for the rare null id.
+          <NewsMomentumRow key={item.article_id ?? `row-${i}`} item={item} />
         ))}
       </div>
     </div>
@@ -193,22 +178,56 @@ export function AiSignalsWidget() {
 // ── WidgetHeader ─────────────────────────────────────────────────────────────
 
 /**
- * WidgetHeader — the fixed 20px header bar for the AI Signals widget.
- * WHY h-5 (not h-6): Row 2 headers use h-5 to fit within the 130px cap (A-2).
- * Row 3 headers also use h-5 for visual consistency across all dashboard cells.
+ * WidgetHeader — the fixed 20px header: title + window selector + count.
+ * WHY h-5: Row 2 headers use h-5 to fit within the 130px cap; Row 3 headers
+ * also use h-5 for visual consistency across all dashboard cells.
  */
-function WidgetHeader({ signalCount }: { signalCount?: number }) {
+function WidgetHeader({
+  windowHours,
+  onWindowChange,
+  count,
+  disabled,
+}: {
+  windowHours: number;
+  onWindowChange: (hours: number) => void;
+  count: number;
+  disabled: boolean;
+}) {
   return (
     <div className="flex h-5 shrink-0 items-center justify-between border-b border-border px-2">
-      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-        AI SIGNALS
-      </span>
-      {/* WHY show count only when data is present: avoids "0 signals" flash during load */}
-      {signalCount != null && signalCount > 0 && (
-        <span className="font-mono text-[10px] text-muted-foreground/60">
-          {signalCount}
-        </span>
-      )}
+      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">NEWS MOMENTUM</span>
+
+      <div className="flex items-center gap-1.5">
+        {/* Window selector — three tiny toggle buttons (24H / 3D / 1W).
+            role=group + aria-label gives SR users the control's purpose; each
+            button reports aria-pressed so the active window is announced. */}
+        <div className="flex items-center gap-0.5" role="group" aria-label="News look-back window">
+          {WINDOWS.map((w) => {
+            const active = w.hours === windowHours;
+            return (
+              <button
+                key={w.hours}
+                type="button"
+                disabled={disabled}
+                onClick={() => onWindowChange(w.hours)}
+                aria-pressed={active}
+                className={cn(
+                  "rounded-[2px] px-1 font-mono text-[9px] tabular-nums transition-colors disabled:text-[hsl(var(--disabled-foreground))]",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  active
+                    ? "bg-muted/60 text-foreground"
+                    : "text-muted-foreground/60 hover:bg-muted/30 hover:text-foreground",
+                )}
+              >
+                {w.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Row count — only when present, avoids a "0" flash during load. */}
+        {count > 0 && <span className="font-mono text-[10px] text-muted-foreground/60">{count}</span>}
+      </div>
     </div>
   );
 }

@@ -14,7 +14,7 @@
  *   so the buckets are deep enough to support filtering without going empty.
  *
  * WHY ALL FILTERING IS CLIENT-SIDE:
- *   The widget already fetches 20 articles in one round-trip. Re-fetching on
+ *   The widget already fetches the candidate articles up front. Re-fetching on
  *   every filter change would multiply the network load without any data
  *   benefit — the user is just slicing what's already loaded. Client-side
  *   filtering also gives instant feedback (zero latency).
@@ -23,17 +23,37 @@
  * a glance how significant the S6 pipeline ranked the article — no need to
  * parse a score number.
  *
+ * ── W4 FIX (user report 2026-06-12): PORTFOLIO-SCOPED NEWS ──────────────────
+ * The widget previously fetched the GLOBAL `GET /v1/news/top` feed and only
+ * filtered to the portfolio when the user manually picked a ticker — so its
+ * DEFAULT view showed generic market headlines (Hugo Boss, random IPOs) that
+ * had nothing to do with the user's holdings. That defeats the widget's whole
+ * purpose ("Portfolio News").
+ *
+ * There is NO single portfolio-scoped news endpoint in S9 (checked
+ * docs/services/api-gateway.md — `/v1/news/top` is global; `/v1/news/entity/
+ * {id}` is per-entity). So we now fan out ONE `/v1/news/entity/{entity_id}`
+ * call PER HOLDING (via TanStack `useQueries`) and AGGREGATE the results into a
+ * single de-duplicated, impact-ranked feed. Every article shown is therefore
+ * tied to a name the user actually owns (AAPL/JPM/MSFT/META/AMZN/…). The
+ * per-entity calls share TanStack's cache with the Instrument-page News tab, so
+ * revisiting an instrument is free.
+ *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 4, col-span-3)
- * DATA SOURCE: S9 GET /v1/news/top via createGateway().getTopNews({ limit: 20 })
- *              S9 GET /v1/portfolios → first portfolio's holdings (for ticker filter)
+ * DATA SOURCE: S9 GET /v1/portfolios → resolved portfolio's holdings →
+ *              S9 GET /v1/news/entity/{entity_id} per holding (aggregated)
  * DESIGN REFERENCE: PRD-0031 §10 Dashboard Wave 7 + PLAN-0053 T-D-4-01
+ *                   + W4 portfolio-scoping fix (2026-06-12)
  */
 
 "use client";
 // WHY "use client": uses useQuery, useState, useMemo, click handlers.
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+// W4 fix: useQueries fans out one /v1/news/entity/{id} call per holding in a
+// single hook call (hooks can't be called inside a .map()), returning an
+// aligned array of results we aggregate below.
+import { useQuery, useQueries } from "@tanstack/react-query";
 // Round 4 (item 3b): central query-key factory — the portfolios list query
 // below shares qk.portfolios.list() with PortfolioSummary / the hydrator.
 import { qk } from "@/lib/query/keys";
@@ -82,26 +102,7 @@ export function PortfolioNewsWidget() {
   // include/exclude check O(1).
   const [activeTiers, setActiveTiers] = useState<Set<Tier>>(new Set());
 
-  // ── 1. Top news ─────────────────────────────────────────────────────────
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-portfolio-news"],
-    // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
-    // candidate pool deep enough that a tier or ticker filter doesn't
-    // empty the widget on most days.
-    // WHY hours=72: extend lookback to 72h so a brief ingestion hiccup
-    // (S4→S5 stalls observed in QA-7) doesn't blank the widget. The
-    // ranking layer still surfaces the freshest items first; older items
-    // only appear if recent ones are sparse.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, hours: 72 }),
-    enabled: !!accessToken && aboveFoldReady,
-    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
-    // requests are already fast. 5min frontend staleTime avoids polling
-    // the cache more than once per session, reducing server load.
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-  });
-
-  // ── 2. Holdings — populates the ticker filter dropdown ─────────────────
+  // ── 1. Holdings — drive BOTH the ticker filter AND the per-entity news ──
   // We only need ticker strings, so we don't refetch this often. WHY pull
   // from holdings vs watchlists: this widget is "Portfolio News" — the
   // filter universe should match the portfolio universe.
@@ -146,10 +147,88 @@ export function PortfolioNewsWidget() {
     return Array.from(set).sort();
   }, [holdingsResp]);
 
-  // ── 3. Filter + sort articles ──────────────────────────────────────────
+  // ── 2. Per-holding entity list (drives the news fan-out) ────────────────
+  // We pair each holding's entity_id with its ticker so that, after we fetch
+  // each entity's news, we can stamp the article with the OWNING ticker for
+  // the per-ticker dropdown filter (the per-entity feed doesn't carry a
+  // primary_entity_symbol the way the global feed does).
+  const holdingEntities = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { entityId: string; ticker: string }[] = [];
+    for (const h of holdingsResp?.holdings ?? []) {
+      // Skip holdings with no resolved entity_id (brokerage imports awaiting
+      // enrichment) — we have no entity feed to call for them.
+      if (!h.entity_id || seen.has(h.entity_id)) continue;
+      seen.add(h.entity_id);
+      out.push({ entityId: h.entity_id, ticker: h.ticker ?? "" });
+    }
+    return out;
+  }, [holdingsResp]);
+
+  // ── 3. Fan out one /v1/news/entity/{id} call per holding ────────────────
+  // WHY useQueries (not N useQuery): hooks must be called at the top of the
+  // component, never inside a loop/map. useQueries fans out the calls in a
+  // single hook and returns an aligned results array.
+  // WHY hours-equivalent via limit only: the entity-news endpoint ranks by
+  // relevance/recency server-side; we ask for 8 per holding so a 10-name
+  // portfolio yields ~80 candidates before de-dup — deep enough that a tier
+  // filter rarely empties the widget, without hammering S9.
+  const PER_ENTITY_LIMIT = 8;
+  const entityNewsQueries = useQueries({
+    queries: holdingEntities.map(({ entityId }) => ({
+      // Cache key shared with the Instrument-page News tab: revisiting an
+      // instrument the user owns reads this entry for free.
+      queryKey: ["entity-news", entityId, PER_ENTITY_LIMIT],
+      queryFn: () =>
+        createGateway(accessToken).getEntityNews(entityId, {
+          limit: PER_ENTITY_LIMIT,
+        }),
+      enabled: !!accessToken && aboveFoldReady,
+      staleTime: 5 * 60_000,
+      refetchInterval: 5 * 60_000,
+    })),
+  });
+
+  // Aggregate state across the fan-out:
+  //   - isLoading: TRUE only while NOTHING has resolved yet (so we don't flash
+  //     the skeleton once the first holding's news is in).
+  //   - isError: TRUE only when EVERY query failed (partial failure still
+  //     shows the holdings whose feeds DID load — R9 safe degradation).
+  const isLoading =
+    holdingEntities.length > 0 &&
+    entityNewsQueries.length > 0 &&
+    entityNewsQueries.every((q) => q.isLoading);
+  const isError =
+    entityNewsQueries.length > 0 && entityNewsQueries.every((q) => q.isError);
+  // refetch() retries every per-entity query (used by the error-state button).
+  const refetch = () => {
+    for (const q of entityNewsQueries) void q.refetch();
+  };
+
+  // Build the aggregated, de-duplicated candidate pool. Each article is tagged
+  // with the owning ticker so the ticker dropdown can filter precisely.
+  const aggregatedArticles = useMemo(() => {
+    // Map keyed by article_id so the SAME story surfacing under two holdings
+    // (e.g. an "Apple sues Meta" article tied to both AAPL and META) appears
+    // once. We keep the FIRST owning ticker we see for the dropdown filter.
+    const byId = new Map<
+      string,
+      RankedArticle & { __ownerTicker: string }
+    >();
+    entityNewsQueries.forEach((q, idx) => {
+      const ownerTicker = holdingEntities[idx]?.ticker ?? "";
+      for (const a of q.data?.articles ?? []) {
+        if (!a.article_id || byId.has(a.article_id)) continue;
+        byId.set(a.article_id, { ...a, __ownerTicker: ownerTicker });
+      }
+    });
+    return Array.from(byId.values());
+  }, [entityNewsQueries, holdingEntities]);
+
+  // ── 4. Filter + sort articles ──────────────────────────────────────────
   const articles = useMemo(() => {
-    const all = data?.articles ?? [];
-    let filtered = all;
+    let filtered: (RankedArticle & { __ownerTicker: string })[] =
+      aggregatedArticles;
 
     // Tier filter — empty set means "all".
     if (activeTiers.size > 0) {
@@ -159,15 +238,14 @@ export function PortfolioNewsWidget() {
       });
     }
 
-    // Ticker filter — match against the article's primary entity symbol.
-    // WHY primary_entity_symbol vs scanning the full entity list: the field
-    // is what the global feed exposes today — backend doesn't surface a
-    // per-article entity array on the news/top route. Good enough for the
-    // common case (mega-cap news where the primary entity IS the
-    // article's subject).
+    // Ticker filter — match against the OWNING holding ticker we stamped during
+    // aggregation (every article already belongs to a held entity; this narrows
+    // to a single name). Falls back to primary_entity_symbol for safety.
     if (tickerFilter !== ALL_TICKERS) {
       filtered = filtered.filter(
-        (a) => a.primary_entity_symbol === tickerFilter,
+        (a) =>
+          a.__ownerTicker === tickerFilter ||
+          a.primary_entity_symbol === tickerFilter,
       );
     }
 
@@ -190,7 +268,7 @@ export function PortfolioNewsWidget() {
     // Hard cap. PLAN-0050 / PLAN-0053: defence vs a backend bug returning
     // thousands of articles.
     return sorted.slice(0, 20);
-  }, [data, activeTiers, tickerFilter, sortMode, sortDesc]);
+  }, [aggregatedArticles, activeTiers, tickerFilter, sortMode, sortDesc]);
 
   // Toggle helper for sort buttons. WHY a closure here: identical logic for
   // both buttons, but they each toggle a different sortMode. Inlining once
@@ -312,15 +390,18 @@ export function PortfolioNewsWidget() {
 
       {!isLoading && !isError && articles.length === 0 && (
         <div className="flex flex-1 items-center justify-center">
-          {/* Round 3 (item 4): filtered-to-zero vs genuinely-empty get
-              DIFFERENT named copy keys — the first tells the user to clear
-              filters, the second that the pipeline hasn't produced news. */}
+          {/* Three distinct empty cases (W4): (1) the portfolio has no holdings
+              with a resolved entity to scope news to, (2) the user's filters
+              excluded everything, (3) the holdings simply have no recent news.
+              Each gets its own named copy key so the message matches the cause. */}
           <EmptyState
             condition="empty-no-data"
             copyKey={
-              activeTiers.size > 0 || tickerFilter !== ALL_TICKERS
-                ? "dashboard.news-filter-no-match"
-                : "dashboard.no-news"
+              holdingEntities.length === 0
+                ? "dashboard.news-no-holdings"
+                : activeTiers.size > 0 || tickerFilter !== ALL_TICKERS
+                  ? "dashboard.news-filter-no-match"
+                  : "dashboard.no-news"
             }
             icon={Newspaper}
           />

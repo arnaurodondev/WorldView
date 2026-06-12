@@ -247,12 +247,15 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
   // agents (see header) and the empty-copy-dictionary arch test requires
   // every literal copyKey to resolve here.
   "dashboard.no-signals": {
-    title: "No signals yet",
-    body: "AI price-impact signals appear here as new articles are processed.",
+    // Title intentionally distinct from dashboard.no-news ("No recent news",
+    // used by PortfolioNewsWidget) so getByText() stays unambiguous when both
+    // widgets render their empty state on the same dashboard.
+    title: "No news momentum yet",
+    body: "Top news stories appear here as articles are ingested. Try a wider window.",
   },
   "dashboard.signals-error": {
-    title: "Signals unavailable",
-    body: "The signals feed failed to load — check the connection.",
+    title: "News feed unavailable",
+    body: "The news momentum feed failed to load — check the connection.",
   },
   "dashboard.no-sector-data": {
     title: "No sector data available",
@@ -261,6 +264,18 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
   "dashboard.sector-error": {
     title: "Sector data unavailable",
     body: "The heatmap failed to load — check the connection.",
+  },
+  "dashboard.no-breadth-data": {
+    title: "No breadth data",
+    body: "Advancers/decliners appear once sector market data is ingested.",
+  },
+  "dashboard.breadth-error": {
+    title: "Breadth unavailable",
+    body: "The sector feed failed to load — check the connection.",
+  },
+  "dashboard.news-no-holdings": {
+    title: "No holdings to track",
+    body: "Add positions to your portfolio to see news for the names you hold.",
   },
   "dashboard.no-portfolio": {
     title: "No portfolio yet",

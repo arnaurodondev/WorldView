@@ -55,6 +55,11 @@ import { MarketSnapshotWidget } from "@/components/dashboard/MarketSnapshotWidge
 // beside the Market Snapshot index strip so the session context sits next to
 // the quotes it qualifies ("are these prices live or last close?").
 import { MarketClockWidget } from "@/components/dashboard/MarketClockWidget";
+// W4 task 3 (user report 2026-06-12): the slimmed Market Clock now shares its
+// column with a second mini — Market Breadth — stacked directly beneath it.
+// Breadth derives advancers/decliners from the SAME cached sector-heatmap data
+// (no extra endpoint), so adding it costs zero network requests.
+import { MarketBreadthMini } from "@/components/dashboard/MarketBreadthMini";
 // Round 2 enhancement: WatchlistQuickViewWidget — top-5 positions by value
 // with live price, day P&L $ and a 5-day sparkline. Complements
 // PortfolioSummary (totals) with a per-position "what moved today" scan.
@@ -139,8 +144,19 @@ export default function DashboardPage() {
         // them. Tailwind can't conditionally set inline styles, so we keep
         // the fixed template only at lg via CSS variable + media query? Easier:
         // omit the constraint here and rely on per-cell h-full/min-h-0 at lg.
+        // W4 task 2 (user report 2026-06-12 — "row 1 has too much vertical
+        // space"): Row 2 (the macro band: Clock+Breadth · Snapshot · Sector ·
+        // AI Signals) was `minmax(130px, max-content)`. The `max-content`
+        // stretched the row to the TALLEST cell — the old Sector heatmap that
+        // filled ~300px. Now that the Sector widget is a compact fixed 7+6 grid
+        // (~76px) and the Clock column is a fixed two-mini stack, we pin Row 2
+        // to a FIXED 124px. Widgets taller than that (Market Snapshot's 11
+        // ticker rows, AI Signals) scroll internally rather than dragging the
+        // whole row tall (their cells are overflow-hidden + the widgets own an
+        // overflow-y-auto list). 124px comfortably fits the Clock+Breadth stack
+        // (2×~50px + 12px gap) and ~4 snapshot rows before scroll.
         gridTemplateRows:
-          "var(--dashboard-grid-rows, auto minmax(130px, max-content) minmax(220px, 1fr) minmax(200px, 1fr))",
+          "var(--dashboard-grid-rows, auto 124px minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
       {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack
@@ -189,8 +205,24 @@ export default function DashboardPage() {
           OWN border because the border COLOR is the session indicator
           (positive=open, warning=extended hours, muted=closed) and is only
           known client-side after mount — the server-rendered cell can't pick it. */}
-      <div className="col-span-1 md:col-span-2 lg:col-span-2 h-full min-w-0">
-        <MarketClockWidget />
+      {/* W4 task 3: the col-2 column is now a VERTICAL STACK of two minis —
+          the slimmed Market Clock (top) and the new Market Breadth gauge
+          (bottom). Both fit the reduced Row-2 height: the clock is ~2 short
+          lines, the breadth mini is a headline % + a bar + counts.
+          WHY flex-col gap-3 + min-h-0: gap-3 matches the grid's gap-3 so the
+          two minis read as separate panels (consistent with the cell seams
+          elsewhere); min-h-0 lets each mini's `h-full`/flex-1 internals respect
+          the bounded half-column height instead of overflowing.
+          WHY each mini gets flex-1 basis-0: an even 50/50 split of the column
+          height so neither mini dominates — the clock and breadth are equal-
+          weight glance signals. */}
+      <div className="col-span-1 md:col-span-2 lg:col-span-2 flex h-full min-h-0 min-w-0 flex-col gap-3">
+        <div className="min-h-0 flex-1 basis-0">
+          <MarketClockWidget />
+        </div>
+        <div className="min-h-0 flex-1 basis-0">
+          <MarketBreadthMini />
+        </div>
       </div>
       <div className="col-span-1 md:col-span-4 lg:col-span-3 h-full min-w-0 border border-border/40">
         <MarketSnapshotWidget />

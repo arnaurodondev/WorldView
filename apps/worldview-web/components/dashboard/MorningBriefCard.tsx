@@ -295,7 +295,32 @@ export function MorningBriefCard() {
       .trim();
   }
 
-  const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
+  // W4 fix (user report 2026-06-12): the live v4.2 morning brief returns its
+  // whole body in `narrative` as markdown — `summary`/`summary_paragraph` and
+  // the structured `sections[]` are all empty (the backend's citation-aware
+  // parser only structures briefs that carry a `---` divider + [cN] markers,
+  // which the v4.2 prompt no longer emits). So the card was falling back to the
+  // raw narrative and showing literal "## Details" / "**Market Snapshot**"
+  // chrome. We strip the redundant top-level "## Details" wrapper heading here
+  // (the card already labels itself "Morning Briefing"; the wrapper just adds a
+  // noisy "Details" line) BEFORE any rendering. The inner "**Market Snapshot**"
+  // etc. section headings are KEPT — they render as clean uppercase sub-heads
+  // via the prose overrides below, which is exactly the structured look we want.
+  function stripDetailsWrapper(text: string): string {
+    // Remove a standalone "## Details" / "# Details" / "### Details" heading
+    // line (case-insensitive, optional trailing colon) anywhere in the first
+    // few lines — it's the v4.2 prompt's wrapper around the 6 real sections.
+    return text
+      .replace(/^\s*#{1,3}\s*details\s*:?\s*$/gim, "")
+      // Collapse the blank line the removal leaves at the top so the first real
+      // section heading sits flush.
+      .replace(/^\s*\n/, "")
+      .trim();
+  }
+
+  const safeNarrative = stripDetailsWrapper(
+    stripStaleMetadata(brief?.narrative?.trim() ?? ""),
+  );
   const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
   const safeSummaryParagraph = stripStaleMetadata(
     brief?.summary_paragraph?.trim() ?? "",

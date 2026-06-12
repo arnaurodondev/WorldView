@@ -1,14 +1,14 @@
-"""Tests for routes/signals.py — the enriched GET /v1/signals/ai feed.
+"""Tests for routes/signals.py — the NEWS MOMENTUM GET /v1/signals/ai feed.
 
-Covers the 2026-06-10 AI-Signals overhaul:
-- dedup per (entity_id, doc_id) keeping the most informative claim
-- nil-UUID entity rows dropped
-- polarity-first label resolution (Avro polarity beats signal_type heuristic)
-- KG enrichment carries ticker AND canonical_name
-- KG-unknown entities dropped (no more UUID-prefix "9ECB" labels)
-- KG outage degrades gracefully (rows kept, ticker/name None)
-- signal_type humanization + market_impact_score passthrough
-- limit trimming + over-fetch from S6
+Covers the 2026-06-12 Wave-4 pivot from extraction-confidence "AI signals" to a
+``/news/top``-backed news-momentum feed:
+- pure helpers: sentiment normalisation, publisher-from-URL derivation, item map
+- happy path: S6 /news/top articles → momentum rows with honest relevance
+- window selector: allowed windows pass through, out-of-set snaps to 72h default
+- rows missing title/url are dropped
+- limit trimming
+- upstream S6 failure → status passthrough (never a fabricated 200)
+- auth required
 - route precedence: signals.py supersedes the legacy market.py handler
 """
 
@@ -21,16 +21,16 @@ import httpx
 import jwt
 import pytest
 from api_gateway.routes.signals import (
-    _dedup_signals,
-    _humanize_signal_type,
-    _resolve_label,
+    _DEFAULT_WINDOW_HOURS,
+    _normalise_sentiment,
+    _source_from_url,
+    _to_momentum_item,
 )
 from httpx import ASGITransport, AsyncClient
 
 pytestmark = pytest.mark.unit
 
 _JWT_SECRET = "test-secret"  # noqa: S105
-_NIL = "00000000-0000-0000-0000-000000000000"
 
 
 def _make_jwt() -> str:
@@ -46,24 +46,32 @@ def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
     return resp
 
 
-def _s6_item(**overrides: object) -> dict[str, object]:
+def _article(**overrides: object) -> dict[str, object]:
+    """One S6 /news/top article (the upstream shape this route consumes)."""
     base: dict[str, object] = {
-        "signal_id": "sig-1",
-        "doc_id": "doc-1",
-        "entity_id": "ent-1",
-        "signal_type": "EARNINGS_RELEASE",
-        "confidence": 0.95,
-        "evidence_text": "claim-uuid",
-        "detected_at": "2026-06-10T12:00:00Z",
-        "market_impact_score": 0.0,
-        "polarity": "neutral",
+        "article_id": "art-1",
+        "title": "Nvidia Breaks Below $200",
+        "url": "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
+        "published_at": "2026-06-11T15:44:29Z",
+        "source_name": None,
+        "source_type": "eodhd_ticker_news",
+        "routing_tier": "deep",
+        "routing_score": 0.73,
+        "market_impact_score": None,
+        "llm_relevance_score": 0.9,
+        "display_relevance_score": 0.83,
+        "primary_entity_id": None,
+        "primary_entity_symbol": None,
+        "impact_windows": None,
+        "sentiment": "negative",
+        "impact_score": None,
     }
     base.update(overrides)
     return base
 
 
-def _s6_payload(items: list[dict[str, object]]) -> bytes:
-    return json.dumps({"items": items, "total": len(items), "limit": 50, "offset": 0}).encode()
+def _news_payload(articles: list[dict[str, object]]) -> bytes:
+    return json.dumps({"articles": articles, "total": len(articles)}).encode()
 
 
 async def _call(authed_app, params: str = "") -> httpx.Response:
@@ -78,51 +86,41 @@ async def _call(authed_app, params: str = "") -> httpx.Response:
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
 
-def test_resolve_label_prefers_decisive_polarity() -> None:
-    """A non-neutral Avro polarity beats the signal_type heuristic."""
-    # EARNINGS_RELEASE maps NEUTRAL by type, but the claim was judged negative.
-    assert _resolve_label("negative", "EARNINGS_RELEASE") == "NEGATIVE"
-    assert _resolve_label("positive", "EARNINGS_RELEASE") == "POSITIVE"
+def test_normalise_sentiment_maps_known_values() -> None:
+    assert _normalise_sentiment("positive") == "positive"
+    assert _normalise_sentiment("NEGATIVE") == "negative"
+    assert _normalise_sentiment("neutral") == "neutral"
 
 
-def test_resolve_label_falls_back_to_type_map_when_neutral() -> None:
-    """Neutral/legacy polarity defers to the type→direction mapping."""
-    assert _resolve_label("neutral", "M_AND_A") == "POSITIVE"
-    assert _resolve_label("", "GUIDANCE_CUT") == "NEGATIVE"
-    assert _resolve_label("neutral", "EARNINGS_RELEASE") == "NEUTRAL"
+def test_normalise_sentiment_collapses_mixed_and_unknown_to_neutral() -> None:
+    """mixed / null / unrecognised → neutral so the direction dot is always defined."""
+    assert _normalise_sentiment("mixed") == "neutral"
+    assert _normalise_sentiment(None) == "neutral"
+    assert _normalise_sentiment("") == "neutral"
+    assert _normalise_sentiment("bullish-ish") == "neutral"
 
 
-def test_humanize_signal_type_known_and_fallback() -> None:
-    assert _humanize_signal_type("M_AND_A") == "M&A"
-    assert _humanize_signal_type("EARNINGS_RELEASE") == "Earnings"
-    # Unknown enum members degrade to readable words, never SNAKE_CASE.
-    assert _humanize_signal_type("SUPPLY_CHAIN_DISRUPTION") == "Supply chain disruption"
-    assert _humanize_signal_type("") == "News event"
+def test_source_from_url_strips_noise_prefixes_and_tld() -> None:
+    assert _source_from_url("https://finance.yahoo.com/x", None) == "yahoo"
+    assert _source_from_url("https://uk.finance.yahoo.com/x", None) == "yahoo"
+    assert _source_from_url("https://www.fxstreet.com/news/abc", None) == "fxstreet"
 
 
-def test_dedup_keeps_directional_claim_over_neutral() -> None:
-    """GILD pattern: same article emits NEUTRAL 0.95 + POSITIVE 0.90 → keep POSITIVE."""
-    neutral = _s6_item(signal_id="a", polarity="neutral", confidence=0.95)
-    positive = _s6_item(signal_id="b", polarity="positive", confidence=0.90)
-    survivors = _dedup_signals([neutral, positive])
-    assert len(survivors) == 1
-    assert survivors[0]["signal_id"] == "b"
+def test_source_from_url_falls_back_when_no_url() -> None:
+    """No URL → fall back to the (usually-null) source_name, else None."""
+    assert _source_from_url(None, "Reuters") == "Reuters"
+    assert _source_from_url(None, None) is None
+    assert _source_from_url("not-a-url", "Reuters") == "Reuters"
 
 
-def test_dedup_keeps_higher_confidence_within_same_directionality() -> None:
-    low = _s6_item(signal_id="a", polarity="positive", confidence=0.80)
-    high = _s6_item(signal_id="b", polarity="positive", confidence=0.95)
-    survivors = _dedup_signals([low, high])
-    assert len(survivors) == 1
-    assert survivors[0]["signal_id"] == "b"
-
-
-def test_dedup_preserves_distinct_entity_or_doc() -> None:
-    """Different articles (or entities) are NOT collapsed — only true dupes are."""
-    a = _s6_item(signal_id="a", doc_id="doc-1")
-    b = _s6_item(signal_id="b", doc_id="doc-2")
-    c = _s6_item(signal_id="c", doc_id="doc-1", entity_id="ent-2")
-    assert len(_dedup_signals([a, b, c])) == 3
+def test_to_momentum_item_uses_real_relevance_not_confidence() -> None:
+    """The headline number is display_relevance_score — never a fake confidence."""
+    item = _to_momentum_item(_article(display_relevance_score=0.83, sentiment="negative"))
+    assert item["relevance"] == 0.83
+    assert item["sentiment"] == "negative"
+    assert item["source"] == "yahoo"
+    assert item["title"] == "Nvidia Breaks Below $200"
+    assert item["url"].startswith("https://")
 
 
 # ── Route behaviour ───────────────────────────────────────────────────────────
@@ -137,138 +135,94 @@ async def test_ai_signals_requires_auth(app, mock_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enriched_payload_shape(authed_app, authed_mock_clients) -> None:
-    """Happy path: KG + content-store both resolve → full enriched signal."""
+async def test_momentum_payload_shape(authed_app, authed_mock_clients) -> None:
+    """Happy path: S6 /news/top articles → enriched news-momentum rows."""
     authed_mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(
             200,
-            _s6_payload([_s6_item(polarity="negative", signal_type="EARNINGS_GUIDANCE", market_impact_score=0.12)]),
-        ),
-    )
-    authed_mock_clients.knowledge_graph.post = AsyncMock(
-        return_value=_mock_response(
-            200,
-            json.dumps(
-                {"entities": [{"entity_id": "ent-1", "ticker": "LULU", "canonical_name": "Lululemon Athletica"}]},
-            ).encode(),
-        ),
-    )
-    authed_mock_clients.content_store.post = AsyncMock(
-        return_value=_mock_response(
-            200,
-            json.dumps(
-                {
-                    "documents": [
-                        {
-                            "doc_id": "doc-1",
-                            "title": "Lululemon Cuts Outlook",
-                            "url": "https://example.com/lulu",
-                            "source_name": "Yahoo Finance",
-                            "published_at": "2026-06-10T11:00:00Z",
-                        },
-                    ],
-                },
-            ).encode(),
+            _news_payload(
+                [
+                    _article(article_id="art-1", display_relevance_score=0.83, sentiment="negative"),
+                    _article(
+                        article_id="art-2",
+                        title="Frasers launches £1.7bn bid for Hugo Boss",
+                        url="https://uk.finance.yahoo.com/news/frasers.html",
+                        sentiment="positive",
+                        display_relevance_score=0.80,
+                    ),
+                ],
+            ),
         ),
     )
 
     resp = await _call(authed_app)
     assert resp.status_code == 200
-    sig = resp.json()["signals"][0]
-    assert sig["ticker"] == "LULU"
-    assert sig["entity_name"] == "Lululemon Athletica"
-    # Polarity (negative) overrides the directionless EARNINGS_GUIDANCE type.
-    assert sig["label"] == "NEGATIVE"
-    assert sig["polarity"] == "negative"
-    assert sig["signal_type"] == "EARNINGS_GUIDANCE"
-    assert sig["signal_type_label"] == "Guidance"
-    assert sig["score"] == 0.95
-    assert sig["market_impact_score"] == 0.12
-    assert sig["article_title"] == "Lululemon Cuts Outlook"
-    assert sig["article_url"] == "https://example.com/lulu"
-    assert sig["source_name"] == "Yahoo Finance"
-    assert sig["published_at"] == "2026-06-10T11:00:00Z"
-    assert sig["created_at"] == "2026-06-10T12:00:00Z"
+    body = resp.json()
+    assert body["window_hours"] == _DEFAULT_WINDOW_HOURS
+    sigs = body["signals"]
+    assert len(sigs) == 2
+    assert sigs[0]["title"] == "Nvidia Breaks Below $200"
+    assert sigs[0]["relevance"] == 0.83
+    assert sigs[0]["sentiment"] == "negative"
+    assert sigs[0]["source"] == "yahoo"
+    assert sigs[1]["sentiment"] == "positive"
+    assert sigs[1]["source"] == "yahoo"
 
 
 @pytest.mark.asyncio
-async def test_kg_unknown_entities_are_dropped(authed_app, authed_mock_clients) -> None:
-    """KG answered but does not know ent-2 → that row is dropped, never a UUID stub."""
+async def test_window_selector_allowed_values_pass_through(authed_app, authed_mock_clients) -> None:
+    """?hours=24 / 168 reach S6 verbatim and are echoed in window_hours."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload([_article()])))
+
+    for hours in (24, 72, 168):
+        resp = await _call(authed_app, f"?hours={hours}")
+        assert resp.json()["window_hours"] == hours
+        call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
+        assert call_kwargs["params"]["hours"] == hours
+
+
+@pytest.mark.asyncio
+async def test_window_selector_out_of_set_snaps_to_default(authed_app, authed_mock_clients) -> None:
+    """An arbitrary ?hours=5 degrades to the safe 72h default, not passed through."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload([_article()])))
+
+    resp = await _call(authed_app, "?hours=5")
+    assert resp.json()["window_hours"] == _DEFAULT_WINDOW_HOURS
+    call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
+    assert call_kwargs["params"]["hours"] == _DEFAULT_WINDOW_HOURS
+
+
+@pytest.mark.asyncio
+async def test_rows_missing_title_or_url_are_dropped(authed_app, authed_mock_clients) -> None:
+    """A row the user can neither read nor open carries no momentum → dropped."""
     authed_mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(
             200,
-            _s6_payload(
+            _news_payload(
                 [
-                    _s6_item(signal_id="a", entity_id="ent-1"),
-                    _s6_item(signal_id="b", entity_id="ent-2", doc_id="doc-2"),
+                    _article(article_id="ok", title="Real headline", url="https://x.com/a"),
+                    _article(article_id="no-title", title=None),
+                    _article(article_id="no-url", url=None),
                 ],
             ),
         ),
     )
-    authed_mock_clients.knowledge_graph.post = AsyncMock(
-        return_value=_mock_response(
-            200,
-            json.dumps(
-                {"entities": [{"entity_id": "ent-1", "ticker": "AAPL", "canonical_name": "Apple Inc."}]},
-            ).encode(),
-        ),
-    )
-    authed_mock_clients.content_store.post = AsyncMock(return_value=_mock_response(200, b'{"documents": []}'))
 
     resp = await _call(authed_app)
-    signals = resp.json()["signals"]
-    assert [s["signal_id"] for s in signals] == ["a"]
+    sigs = resp.json()["signals"]
+    assert [s["article_id"] for s in sigs] == ["ok"]
 
 
 @pytest.mark.asyncio
-async def test_kg_outage_keeps_rows_unenriched(authed_app, authed_mock_clients) -> None:
-    """KG 500 → kg_ok False → rows survive with ticker/name None (graceful degradation)."""
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(
-        return_value=_mock_response(200, _s6_payload([_s6_item()])),
-    )
-    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=_mock_response(500, b"{}"))
-    authed_mock_clients.content_store.post = AsyncMock(return_value=_mock_response(200, b'{"documents": []}'))
-
-    resp = await _call(authed_app)
-    signals = resp.json()["signals"]
-    assert len(signals) == 1
-    assert signals[0]["ticker"] is None
-    assert signals[0]["entity_name"] is None
-
-
-@pytest.mark.asyncio
-async def test_nil_uuid_entities_are_dropped(authed_app, authed_mock_clients) -> None:
-    """Rows with the nil-UUID placeholder entity carry no information → dropped."""
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(
-        return_value=_mock_response(
-            200,
-            _s6_payload(
-                [
-                    _s6_item(signal_id="a", entity_id=_NIL),
-                    _s6_item(signal_id="b", entity_id="ent-1"),
-                ],
-            ),
-        ),
-    )
-    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=_mock_response(500, b"{}"))
-    authed_mock_clients.content_store.post = AsyncMock(return_value=_mock_response(200, b'{"documents": []}'))
-
-    resp = await _call(authed_app)
-    assert [s["signal_id"] for s in resp.json()["signals"]] == ["b"]
-
-
-@pytest.mark.asyncio
-async def test_limit_trims_and_overfetches(authed_app, authed_mock_clients) -> None:
-    """?limit=2 → returns 2 signals but asks S6 for 4x the budget (dedup headroom)."""
-    items = [_s6_item(signal_id=f"s{i}", doc_id=f"doc-{i}", entity_id=f"ent-{i}") for i in range(6)]
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _s6_payload(items)))
-    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=_mock_response(500, b"{}"))
-    authed_mock_clients.content_store.post = AsyncMock(return_value=_mock_response(200, b'{"documents": []}'))
+async def test_limit_trims_and_is_forwarded(authed_app, authed_mock_clients) -> None:
+    """?limit=2 → returns 2 rows and asks S6 for 2."""
+    articles = [_article(article_id=f"a{i}", url=f"https://x.com/{i}") for i in range(6)]
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload(articles)))
 
     resp = await _call(authed_app, "?limit=2")
     assert len(resp.json()["signals"]) == 2
     call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
-    assert call_kwargs["params"]["limit"] == 8  # 2 * 4 over-fetch
+    assert call_kwargs["params"]["limit"] == 2
 
 
 @pytest.mark.asyncio

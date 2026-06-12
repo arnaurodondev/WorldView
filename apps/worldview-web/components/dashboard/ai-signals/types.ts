@@ -1,83 +1,79 @@
 /**
- * components/dashboard/ai-signals/types.ts — enriched AI-signal types
+ * components/dashboard/ai-signals/types.ts — NEWS MOMENTUM feed types
  *
- * WHY THIS EXISTS: the 2026-06-10 AI-Signals overhaul added fields to the S9
- * GET /v1/signals/ai payload (entity_name, signal_type, polarity, article_url,
- * market_impact_score, …) but the shared `AiSignal` interface in types/api.ts
- * still describes the legacy shape. We extend it HERE (instead of editing
- * types/api.ts) because:
+ * WHY THIS EXISTS: the 2026-06-12 Wave-4 pivot changed the S9 GET /v1/signals/ai
+ * payload from extraction-confidence "signals" to a NEWS MOMENTUM feed (recent,
+ * relevant, clickable articles). The shared ``AiSignalsResponse`` interface in
+ * types/api.ts still describes the LEGACY signal shape. We model the NEW item
+ * shape HERE (instead of editing types/api.ts) because:
  *   1. types/api.ts is a shared file touched by several concurrent
- *      workstreams — an additive local extension avoids merge conflicts;
- *   2. every new field is OPTIONAL, so this widget keeps working against an
- *      older S9 that only returns the legacy fields (forward compatibility,
- *      same principle as Avro schema evolution on the backend).
+ *      workstreams — a local type avoids merge conflicts;
+ *   2. every field on the wire item is read defensively, so this widget keeps
+ *      working against an older S9 that still returns the legacy fields
+ *      (forward compatibility, same principle as Avro schema evolution).
  *
- * WHO USES IT: AiSignalsWidget.tsx, group-signals.ts, SignalGroupRow.tsx
+ * WHO USES IT: AiSignalsWidget.tsx, NewsMomentumRow.tsx, news-meta.ts
  * BACKEND CONTRACT: services/api-gateway routes/signals.py (ai_signals docstring)
  */
 
-import type { AiSignal } from "@/types/api";
+/**
+ * Sentiment direction rendered as a colored dot. The server normalises S6's
+ * noisier enum ("mixed" → "neutral", null → "neutral") so the UI only ever
+ * sees these three values — but we keep the field optional for forward-compat.
+ */
+export type NewsSentiment = "positive" | "negative" | "neutral";
 
 /**
- * EnrichedAiSignal — one deduplicated signal row from S9.
+ * NewsMomentumItem — one row in the NEWS MOMENTUM feed.
  *
- * FIELD SEMANTICS (these matter — the old widget showed numbers without
- * meaning, which is exactly what we are fixing):
- *  - `score`              = LLM *extraction confidence* (0–1): how certain the
- *                           model is that the event was actually stated in the
- *                           article. It is NOT a prediction of price movement.
- *  - `market_impact_score`= observed abnormal day-0 price move (0–1) from the
- *                           impact-labelling pipeline; 0.0 means "not labelled
- *                           yet" (the pipeline needs 25h+ of OHLCV after
- *                           publication), which is the common case today.
- *  - `label`              = direction: claim polarity from the extraction LLM
- *                           when decisive, else a signal-type heuristic.
- *  - `signal_type_label`  = human-readable event category ("Earnings", "M&A",
- *                           "Product launch", …) — humanized server-side so
- *                           the enum→copy table lives in ONE place.
+ * FIELD SEMANTICS (these matter — the OLD widget showed a meaningless 95%
+ * extraction confidence; every field here is something the user can read or
+ * act on):
+ *  - `title`     = the actual news headline — the event itself.
+ *  - `url`       = link to the source article (opens the publisher, not us).
+ *  - `source`    = short publisher label derived from the URL host ("yahoo").
+ *  - `relevance` = HONEST display_relevance_score (0–1): a real composite of
+ *                  market impact + LLM relevance + routing (PRD-0026 §6.5).
+ *                  This REPLACES the fake 0.90/0.95 extraction confidence.
+ *  - `sentiment` = direction of the news for the dot (positive/negative/neutral).
+ *  - `published_at` = when the article was published → drives recency.
+ *  - `market_impact_score` = observed day-0 abnormal price move (0–1) when the
+ *                  article has been impact-labelled; null otherwise (common —
+ *                  labelling needs 25h+ of post-publication OHLCV).
+ *
+ * Every field is OPTIONAL so a stale S9 (legacy signal payload) degrades to an
+ * empty/partial row rather than throwing.
  */
-export interface EnrichedAiSignal extends AiSignal {
-  /** Canonical entity name from the knowledge graph ("Lululemon Athletica"). */
-  entity_name?: string | null;
-  /** Raw S6 signal_type enum value (e.g. "EARNINGS_RELEASE"). */
-  signal_type?: string | null;
-  /** Human-readable signal type for the chip (e.g. "Earnings"). */
-  signal_type_label?: string | null;
-  /** Raw extraction polarity: "positive" | "negative" | "neutral". */
-  polarity?: string | null;
-  /** Observed day-0 abnormal price move 0–1; 0 = not labelled yet. */
-  market_impact_score?: number | null;
-  /** Link to the triggering article (opens the source, not our app). */
-  article_url?: string | null;
-  /** Publisher name ("Yahoo Finance"). */
-  source_name?: string | null;
-  /** Article publication time (ISO) — distinct from signal detection time. */
+export interface NewsMomentumItem {
+  /** Stable id for the React key + dedup (S6 article_id). */
+  article_id?: string | null;
+  /** The news headline. */
+  title?: string | null;
+  /** Link to the source article. */
+  url?: string | null;
+  /** Short publisher label ("yahoo", "fxstreet") derived server-side. */
+  source?: string | null;
+  /** ISO publication time — drives the relative-time column. */
   published_at?: string | null;
+  /** News direction for the dot. */
+  sentiment?: NewsSentiment | string | null;
+  /** Honest composite relevance 0–1 (display_relevance_score). */
+  relevance?: number | null;
+  /** Effective routing tier ("light" | "medium" | "deep"). */
+  routing_tier?: string | null;
+  /** Observed day-0 abnormal price move 0–1; null = not labelled yet. */
+  market_impact_score?: number | null;
 }
 
 /**
- * SignalGroup — all signals for ONE entity, newest first.
+ * NewsMomentumResponse — the S9 /v1/signals/ai body after the Wave-4 pivot.
  *
- * WHY GROUPING EXISTS: the screenshot that triggered this overhaul showed
- * "BSX ×3, BAC ×3, DOW ×2 …" as undifferentiated repeated rows. Grouping by
- * entity turns repetition into INFORMATION: "BAC · 3 signals" says news flow
- * is clustering on that name — and the group expands to show each event.
+ * Top-level key is still ``signals`` (preserves the widget prop contract and
+ * the dashboard slot); ``window_hours`` echoes the resolved look-back window so
+ * the selector can confirm which window the server actually served.
  */
-export interface SignalGroup {
-  /** Stable grouping key — entity_id (ticker can be null, entity_id never). */
-  key: string;
-  /** Exchange ticker when the entity is a listed instrument; null otherwise. */
-  ticker: string | null;
-  /** Human-readable entity name — the fallback display when ticker is null. */
-  name: string | null;
-  /** Entity id used for /instruments/[id] navigation fallback. */
-  entityId: string;
-  /** All signals for this entity, newest first. */
-  signals: EnrichedAiSignal[];
-  /**
-   * Representative signal shown on the collapsed row: the newest DIRECTIONAL
-   * (non-NEUTRAL) signal when one exists, else simply the newest. Direction
-   * is the most valuable bit on a dashboard — surface it when we have it.
-   */
-  top: EnrichedAiSignal;
+export interface NewsMomentumResponse {
+  signals: NewsMomentumItem[];
+  /** Resolved look-back window (24 | 72 | 168). Optional for forward-compat. */
+  window_hours?: number;
 }

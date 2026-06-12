@@ -138,23 +138,32 @@ export function MarketClockWidget() {
       {/* ── Body — centered column: clock, state, countdown ─────────────────
           WHY justify-center: the widget is fixed at Row 2's 130px; with only
           3 lines of content, top-anchoring would leave a dead bottom band. */}
-      <div className="flex flex-1 flex-col justify-center gap-0.5 px-2">
-        {/* Eastern wall-clock readout. ADR-F-15: numerics font-mono +
-            tabular-nums so the digits don't jitter horizontally each second. */}
-        <span className="font-mono text-[18px] font-semibold tabular-nums text-foreground">
-          {/* Deterministic SSR/first-render placeholder — see header WHY. */}
-          {now ? formatNyClock(now) : "--:--:-- ET"}
-        </span>
+      {/* W4 task 3 (user report 2026-06-12): slimmed to the TOP HALF of the
+          column so a second mini (MarketBreadthMini) can stack beneath it in
+          the same column (see page.tsx). The clock + session state now share
+          ONE row (time left, state right) instead of three stacked lines, and
+          py-1 keeps the whole body to ~2 short lines. */}
+      <div className="flex flex-1 flex-col justify-center gap-0.5 px-2 py-1">
+        {/* Top row: wall-clock (left) + session state (right) on one line.
+            ADR-F-15: clock is font-mono + tabular-nums so digits don't jitter
+            horizontally each second. 15px (was 18px) is the compact size that
+            still reads as the primary value without dominating the half-column. */}
+        <div className="flex items-baseline justify-between gap-1">
+          <span className="font-mono text-[15px] font-semibold tabular-nums text-foreground">
+            {/* Deterministic SSR/first-render placeholder — see header WHY. */}
+            {now ? formatNyClock(now) : "--:--:-- ET"}
+          </span>
 
-        {/* Session state label — the color IS the signal (matches border). */}
-        <span
-          className={cn(
-            "text-[11px] font-medium uppercase tracking-[0.08em]",
-            session ? TEXT_BY_STATE[state] : "text-muted-foreground",
-          )}
-        >
-          {session ? SESSION_LABEL[state] : "—"}
-        </span>
+          {/* Session state label — the color IS the signal (matches border). */}
+          <span
+            className={cn(
+              "shrink-0 text-[10px] font-medium uppercase tracking-[0.06em]",
+              session ? TEXT_BY_STATE[state] : "text-muted-foreground",
+            )}
+          >
+            {session ? SESSION_LABEL[state] : "—"}
+          </span>
+        </div>
 
         {/* Countdown to next transition + closed-reason caption.
             Example lines: "closes in 1h 28m" · "pre-market opens in 9h 12m

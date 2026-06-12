@@ -70,10 +70,29 @@ type SectorPeriod = "1D" | "1W" | "1M";
 const MIN_WEIGHT = 0.05;
 
 /**
- * TILE_HEIGHT_PX — fixed tile height. 40px keeps tiles compact while still
- * fitting both label and % change on two lines at 10px/9px font sizes.
+ * TILE_HEIGHT_PX — fixed tile height.
+ *
+ * W4 COMPACT (user report 2026-06-12 — "row 1 has too much vertical space"):
+ * shrunk 40px → 26px. The whole Sector widget previously STRETCHED to fill the
+ * row's `max-content` height (it was the tallest cell, so it dragged the entire
+ * macro band tall). By pinning the tile height small AND laying the 13 tiles
+ * out as a FIXED 2-row grid (7 + 6) we make this widget short on purpose, which
+ * in turn lets the dashboard row collapse to a compact height. 26px still fits
+ * the 2-line label + % at 10px/9px without clipping (tested in jsdom layout).
  */
-const TILE_HEIGHT_PX = 40;
+const TILE_HEIGHT_PX = 26;
+
+/**
+ * ROW_1_TILES / ROW_2_TILES — fixed split of the 13 GICS sectors into two
+ * rows (W4 task 2a). The user's "13 sectors" label maps to a 7-over-6 grid:
+ * the first 7 (largest-magnitude after the API's default ordering) sit on top,
+ * the remaining 6 below. We use an explicit two-row CSS grid (NOT auto-fit
+ * wrapping) so the layout is deterministic at every width — auto-fit would
+ * reflow to 1/2/3 rows depending on the cell width and re-introduce the
+ * height variance we're trying to kill.
+ */
+const ROW_1_TILES = 7;
+const ROW_2_TILES = 6;
 
 // NOTE (Round 3): the old GAP_PX flex-basis constant was removed — both the
 // loaded treemap (FR-1.7) and the loading skeleton now use the same CSS-grid
@@ -315,23 +334,27 @@ export function SectorHeatmapWidget() {
           some widths, producing a visible re-layout when tiles arrived.
           11 placeholders ≈ the typical GICS sector count (matches 2 rows). */}
       {isHeatmapLoading && (
-        // Dead-space fix (2026-06-10): same flex-1 + stretchy auto-rows as the
-        // loaded treemap below — the skeleton must occupy the same height the
-        // tiles will, or data arrival visibly re-layouts the panel.
-        <div
-          className="grid flex-1 gap-0.5 px-0.5 py-0"
-          style={{
-            gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))",
-            gridAutoRows: `minmax(${TILE_HEIGHT_PX}px, 1fr)`,
-          }}
-        >
-          {Array.from({ length: 11 }).map((_, i) => (
-            <Skeleton
-              key={i}
-              // h-full: fill the stretched grid row (min 40px via auto-rows).
-              className="h-full min-h-[40px]"
-              style={{ animationDelay: `${i * 40}ms` }}
-            />
+        // W4 task 2a: skeleton mirrors the new FIXED 7+6 two-row grid so the
+        // panel height is identical before and after the tiles arrive (no
+        // data-arrival re-layout). Two rows of fixed-height (26px) placeholder
+        // tiles — 7 then 6 — exactly matching the loaded layout below.
+        <div className="flex shrink-0 flex-col gap-0.5 px-0.5 py-0.5">
+          {[ROW_1_TILES, ROW_2_TILES].map((count, rowIdx) => (
+            <div
+              key={rowIdx}
+              className="grid gap-0.5"
+              style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
+            >
+              {Array.from({ length: count }).map((_, i) => (
+                <Skeleton
+                  key={i}
+                  style={{
+                    height: `${TILE_HEIGHT_PX}px`,
+                    animationDelay: `${(rowIdx * ROW_1_TILES + i) * 40}ms`,
+                  }}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -364,44 +387,65 @@ export function SectorHeatmapWidget() {
         </div>
       )}
 
-      {/* ── Treemap tile container ───────────────────────────────────────── */}
+      {/* ── Treemap tile container — FIXED 2-row (7 + 6) grid ─────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
-        // `auto-fit` + `minmax(48px, 1fr)`: at ~344px widget width, this fits
-        // ~7 tiles per row → 2 rows for 13 sectors. Previously 120px forced
-        // 2 tiles/row → 7 rows → widget height expanded to 312px.
-        // WHY gap-0.5 (2px): tight enough for the Bloomberg dense-grid look.
+        // W4 task 2a (user report 2026-06-12 — "row 1 has too much vertical
+        // space"). The widget previously used `flex-1` + `gridAutoRows:
+        // minmax(40px, 1fr)`, which STRETCHED the tiles to fill whatever
+        // height the row gave it. Because this was the tallest cell in the
+        // macro band, it dragged the entire row tall. The new layout is the
+        // opposite: a DETERMINISTIC fixed-height grid that makes the widget
+        // SHORT, so the row can collapse around it.
         //
-        // DEAD-SPACE FIX (user report 2026-06-10): the dashboard's Row 2 is
-        // `minmax(130px, max-content)` — it stretches to the TALLEST cell in
-        // the row (MarketSnapshot's 11 rows ≈ 300px). This container was
-        // previously `content-start` with FIXED 40px tile rows, so ~85px of
-        // tiles floated at the top of a ~300px panel with a huge empty band
-        // below. Fix: `flex-1` makes the grid consume the panel's full height
-        // budget and `gridAutoRows: minmax(40px, 1fr)` stretches the tile
-        // rows evenly into it (Finviz-map behaviour — tiles grow taller when
-        // the panel is taller, never leaving dead space). At exactly 130px
-        // the 1fr floor degrades gracefully back to ~40px rows, so nothing
-        // changes at the minimum row height. Works at every ≥1280px width
-        // because auto-fit recomputes columns independently of row height.
+        // We render up to TWO rows: the first ROW_1_TILES (7) sectors on the
+        // top row, the remaining ROW_2_TILES (6) on the bottom row. Each row
+        // is its own CSS grid so the column count is fixed per row (7 and 6
+        // equal columns) rather than auto-fit wrapping — that guarantees the
+        // exact "7 over 6" shape the user asked for at every width ≥1024px.
+        //
+        // NOTE: `shrink-0` (not flex-1) + the explicit row template means the
+        // widget's total height is now ~ header(20) + 2×26 + gaps ≈ 76px,
+        // far shorter than the old ~300px stretch.
         <div
-          className="grid flex-1 gap-0.5 px-0.5 py-0"
+          className="flex shrink-0 flex-col gap-0.5 px-0.5 py-0.5"
           data-testid="sector-heatmap-grid"
-          style={{
-            gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))",
-            gridAutoRows: `minmax(${TILE_HEIGHT_PX}px, 1fr)`,
-          }}
         >
-          {sectorTiles.map(({ sector, weight }) => (
-            <SectorTile
-              key={sector.name}
-              sector={sector}
-              weight={weight}
-              relatedMovers={moversBySector.get(sector.name) ?? []}
-              // Round 1: the payload-wide max |change| drives the proportional
-              // color scale — every tile normalises against the same range.
-              maxAbsChange={maxAbsChange}
-            />
-          ))}
+          {/* Split the tiles into the two fixed rows. We compute the slices
+              defensively: if the API ever returns <13 sectors, row 1 takes up
+              to 7 and row 2 takes the rest — no blank tiles, no crash. */}
+          {[
+            sectorTiles.slice(0, ROW_1_TILES),
+            sectorTiles.slice(ROW_1_TILES, ROW_1_TILES + ROW_2_TILES),
+          ].map((rowTiles, rowIdx) =>
+            // Skip an empty second row entirely (e.g. exactly 7 sectors).
+            rowTiles.length === 0 ? null : (
+              <div
+                key={rowIdx}
+                data-testid={`sector-heatmap-row-${rowIdx + 1}`}
+                className="grid gap-0.5"
+                style={{
+                  // Equal-width columns: row 1 → 7 cols, row 2 → 6 cols. We use
+                  // the per-row tile COUNT (not a constant) so a short final
+                  // row still fills the width edge-to-edge instead of leaving a
+                  // gap on the right.
+                  gridTemplateColumns: `repeat(${rowTiles.length}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowTiles.map(({ sector, weight }) => (
+                  <SectorTile
+                    key={sector.name}
+                    sector={sector}
+                    weight={weight}
+                    relatedMovers={moversBySector.get(sector.name) ?? []}
+                    // Round 1: the payload-wide max |change| drives the
+                    // proportional color scale — every tile normalises against
+                    // the same range.
+                    maxAbsChange={maxAbsChange}
+                  />
+                ))}
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
@@ -481,10 +525,18 @@ function SectorTile({
           // Round 1: hover tooltip — sector name, % change, top mover ticker
           // (when the client-side sector join has resolved; see WHY above).
           title={tooltip}
+          // W4 task 2a: explicit fixed tile height. The parent grid no longer
+          // stretches rows, so the tile must declare its own height here —
+          // inline style (not a Tailwind class) because TILE_HEIGHT_PX is a
+          // shared JS constant the skeleton reuses, keeping the two in lockstep.
+          style={{ height: `${TILE_HEIGHT_PX}px` }}
           className={cn(
-            // Base layout: vertical stack, centred horizontally and
-            // vertically; h-full fills the stretched grid row (see above).
-            "flex h-full min-h-[40px] flex-col items-center justify-center gap-0 px-1",
+            // W4 task 2a: fixed compact height (26px) instead of the old
+            // `h-full min-h-[40px]` stretch. The parent is no longer a
+            // height-stretching grid, so each tile owns its own small height —
+            // this is what makes the whole widget short. 26px still fits the
+            // 2-line abbreviation + % at the 10px/9px font sizes below.
+            "flex flex-col items-center justify-center gap-0 px-1",
             // Color encoding: bg-positive/N or bg-negative/N at 4 PROPORTIONAL
             // steps normalised against the payload's max |change| (Round 1).
             colorClassFor(changePct, maxAbsChange),

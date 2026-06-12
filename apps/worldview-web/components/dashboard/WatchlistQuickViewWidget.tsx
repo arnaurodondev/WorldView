@@ -38,7 +38,9 @@
 "use client";
 // WHY "use client": useQuery hooks, useAuth, useRouter for row navigation.
 
-import { useMemo } from "react";
+// W4 task 5: useState (page window) + useRef/useEffect (IntersectionObserver
+// sentinel) added for client-side infinite scroll over ALL holdings.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -63,8 +65,19 @@ import type { Holding, Quote } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Top-N positions shown. 5 rows × 24px + header fits any Row-3 cell height. */
-const TOP_N = 5;
+/**
+ * PAGE_SIZE — how many positions are revealed initially AND appended each time
+ * the infinite-scroll sentinel comes into view (W4 task 5).
+ *
+ * WHY 5 (was the hard `TOP_N = 5` cap): 5 rows fit the Row-3 cell at rest, so
+ * the widget looks identical on first paint. The difference is the list is no
+ * longer CAPPED at 5 — scrolling the panel reveals the next 5, then the next,
+ * until every holding is shown. Reuses the same pattern as
+ * PredictionMarketsWidget (IntersectionObserver sentinel) but windows a
+ * client-side array instead of a server `useInfiniteQuery`, because the
+ * holdings come back in ONE `/v1/holdings/{id}` response (no server paging).
+ */
+const PAGE_SIZE = 5;
 
 /** Sparkline window — 5 trading days, same convention as TopMovers Round 1. */
 const SPARKLINE_DAYS = 5;
@@ -160,9 +173,12 @@ export function WatchlistQuickViewWidget() {
     staleTime: 300_000, // ticker/name are effectively immutable
   });
 
-  // ── Derive top-5 by market value ───────────────────────────────────────────
+  // ── Sort ALL holdings by market value (W4 task 5: no longer capped at 5) ───
   const quotes = useMemo(() => quotesData?.quotes ?? {}, [quotesData]);
-  const topHoldings = useMemo(() => {
+  // The FULL list, sorted by value desc. Windowing happens below via
+  // `visibleCount`; the sort itself runs over every holding so deeper rows
+  // (revealed by scroll) stay in correct value order.
+  const sortedHoldings = useMemo(() => {
     const valueOf = (h: Holding) => {
       const q = quotes[h.instrument_id];
       // price>0 guard (B-2 pattern): batch quotes return price:0 for closed/
@@ -171,13 +187,57 @@ export function WatchlistQuickViewWidget() {
         q?.price && q.price > 0 ? q.price : h.current_price ?? h.average_cost;
       return price * h.quantity;
     };
-    return [...holdings].sort((a, b) => valueOf(b) - valueOf(a)).slice(0, TOP_N);
+    return [...holdings].sort((a, b) => valueOf(b) - valueOf(a));
   }, [holdings, quotes]);
+
+  // ── Infinite-scroll window state ────────────────────────────────────────────
+  // visibleCount grows by PAGE_SIZE each time the sentinel scrolls into view.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // Whether more rows remain to reveal — drives the sentinel + the "showing
+  // N of M" footer.
+  const hasMore = visibleCount < sortedHoldings.length;
+
+  // WHY reset on the holdings list changing: switching portfolio (via the
+  // PortfolioSwitcher chip) loads a different holdings set — we must rewind the
+  // window to the first page so the user doesn't land mid-scroll in a list
+  // they haven't seen. Keyed on the length + first id (cheap identity proxy).
+  const holdingsIdentity =
+    sortedHoldings.length + ":" + (sortedHoldings[0]?.holding_id ?? "");
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [holdingsIdentity]);
+
+  // The windowed slice actually rendered.
+  const topHoldings = useMemo(
+    () => sortedHoldings.slice(0, visibleCount),
+    [sortedHoldings, visibleCount],
+  );
 
   const topIds = useMemo(
     () => topHoldings.map((h) => h.instrument_id),
     [topHoldings],
   );
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ─────────────────────────
+  // Same pattern as PredictionMarketsWidget: a 1px div after the last row;
+  // when it becomes half-visible inside the widget's overflow-auto list we
+  // reveal the next PAGE_SIZE rows. No network call — purely client-side
+  // windowing of the already-fetched holdings array.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore) {
+          setVisibleCount((c) => c + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore]);
 
   // ── Query 5: 5-day sparkline series (one batch request, widget-private) ───
   // WHY retry:1 — sparklines are decorative trend context; on failure rows
@@ -244,7 +304,7 @@ export function WatchlistQuickViewWidget() {
             day-P&L 64) so data arrival swaps content without any column
             shift. Previously the sparkline slot was missing entirely. */}
         <div className="divide-y divide-border/30">
-          {Array.from({ length: TOP_N }).map((_, i) => (
+          {Array.from({ length: PAGE_SIZE }).map((_, i) => (
             <div key={i} className="flex h-[24px] items-center gap-2 px-2">
               <Skeleton className="h-3 w-[44px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
               <Skeleton className="h-[14px] w-[48px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
@@ -293,7 +353,7 @@ export function WatchlistQuickViewWidget() {
       {/* WHY overflow-y-auto: Row-3 cells are overflow-hidden with a bounded
           minmax height — the row list scrolls independently if the cell ever
           shrinks below 5 rows (e.g. md breakpoint with auto row heights). */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-testid="top-positions-scroll">
         <div className="divide-y divide-border/30">
           {topHoldings.map((h) => (
             <QuickViewRow
@@ -308,6 +368,36 @@ export function WatchlistQuickViewWidget() {
             />
           ))}
         </div>
+
+        {/* ── Infinite-scroll sentinel + footer (W4 task 5) ─────────────────
+            The 1px sentinel sits after the last visible row inside the SAME
+            overflow-y-auto container, so scrolling toward the bottom reveals
+            the next PAGE_SIZE rows. The footer caption tells the user how many
+            of their total holdings are currently shown (mono numerics). When
+            everything is revealed the sentinel is gone and the footer reads
+            "all N positions". */}
+        {hasMore ? (
+          <div
+            ref={sentinelRef}
+            data-testid="top-positions-sentinel"
+            // h-px keeps the sentinel invisible but observable; the caption
+            // above it gives the user a visible "more below" affordance.
+            className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim"
+            aria-hidden
+          >
+            <span className="font-mono tabular-nums">
+              {topHoldings.length} of {sortedHoldings.length} · scroll for more
+            </span>
+          </div>
+        ) : (
+          sortedHoldings.length > PAGE_SIZE && (
+            <div className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
+              <span className="font-mono tabular-nums">
+                all {sortedHoldings.length} positions
+              </span>
+            </div>
+          )
+        )}
       </div>
     </div>
   );

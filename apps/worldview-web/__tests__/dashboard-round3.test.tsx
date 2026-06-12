@@ -63,6 +63,10 @@ const gatewayMocks = {
   getEconomicCalendar: vi.fn().mockResolvedValue({ events: [], total: 0 }),
   getEarningsCalendar: vi.fn().mockResolvedValue({ events: [], total: 0 }),
   getTopNews: vi.fn().mockResolvedValue({ articles: [], total: 0 }),
+  // W4 fix: PortfolioNewsWidget fans out per-holding entity news. Default empty
+  // articles; the no-news test overrides holdings/portfolio per-test so its
+  // empty-state reads "no news" (holding present) not "no positions".
+  getEntityNews: vi.fn().mockResolvedValue({ articles: [], total: 0 }),
   getPendingAlerts: vi.fn().mockResolvedValue({ alerts: [], total: 0, offset: 0, limit: 10 }),
   getPortfolios: vi.fn().mockResolvedValue([]),
   getHoldings: vi.fn().mockResolvedValue({ portfolio_id: "p1", holdings: [] }),
@@ -125,13 +129,14 @@ afterEach(() => {
 
 describe("Round 3 — named empty states via shared EmptyState primitive", () => {
   it("AiSignalsWidget renders the dashboard.no-signals copy with role=status", async () => {
+    // 2026-06-12 Wave-4 pivot: the widget is now a NEWS MOMENTUM feed, so the
+    // dashboard.no-signals copy was retargeted (title/body) — still rendered
+    // through the shared EmptyState primitive with role=status.
     render(<AiSignalsWidget />, { wrapper });
     await waitFor(() => {
-      expect(screen.getByText("No signals yet")).toBeInTheDocument();
+      expect(screen.getByText("No news momentum yet")).toBeInTheDocument();
     });
-    expect(
-      screen.getByText(/AI price-impact signals appear here/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Top news stories appear here/i)).toBeInTheDocument();
     // The shared primitive announces itself for assistive tech.
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
@@ -159,10 +164,50 @@ describe("Round 3 — named empty states via shared EmptyState primitive", () =>
   });
 
   it("PortfolioNewsWidget renders dashboard.no-news when the feed is empty", async () => {
+    // W4 fix: the widget now scopes news per-holding. "No recent news" is the
+    // empty state when the user HAS holdings but those holdings have no news —
+    // distinct from "no positions". So this test overrides the portfolio +
+    // holdings (a single NVDA holding) while keeping getEntityNews empty.
+    // afterEach restores the empty defaults (so the no-portfolio test below
+    // still sees []), and we restore them here too for belt-and-braces.
+    gatewayMocks.getPortfolios.mockResolvedValue([
+      {
+        portfolio_id: "p1",
+        name: "Test",
+        currency: "USD",
+        owner_id: "u1",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    gatewayMocks.getHoldings.mockResolvedValue({
+      portfolio_id: "p1",
+      holdings: [
+        {
+          holding_id: "h-nvda",
+          portfolio_id: "p1",
+          instrument_id: "ins-nvda",
+          entity_id: "ent-nvda",
+          ticker: "NVDA",
+          name: "NVIDIA Corp",
+          quantity: 10,
+          average_cost: 700,
+          current_price: 800,
+          currency: "USD",
+          asset_class: "equity",
+        },
+      ],
+    });
+    gatewayMocks.getEntityNews.mockResolvedValue({ articles: [], total: 0 });
+
     render(<PortfolioNewsWidget />, { wrapper });
     await waitFor(() => {
       expect(screen.getByText("No recent news")).toBeInTheDocument();
     });
+
+    // Restore empty defaults so later tests (no-portfolio) aren't polluted.
+    gatewayMocks.getPortfolios.mockResolvedValue([]);
+    gatewayMocks.getHoldings.mockResolvedValue({ portfolio_id: "p1", holdings: [] });
   });
 
   it("PortfolioSummary renders dashboard.no-portfolio with a create-CTA link", async () => {
@@ -263,32 +308,33 @@ describe("Round 3 — keyboard focus rings on interactive elements", () => {
 
 // ── 4. Semantic color tokens (item 2) ─────────────────────────────────────────
 
-describe("Round 3 — §15.11 semantic token consumption in AI signals", () => {
-  it("POSITIVE signal renders text-positive / bg-positive utilities (not hsl-var arbitrary classes)", async () => {
+describe("Round 3 — §15.11 semantic token consumption in news momentum", () => {
+  it("positive news renders the text-positive sentiment dot (not hsl-var arbitrary classes)", async () => {
+    // 2026-06-12 Wave-4 pivot: the widget now renders a NEWS MOMENTUM feed, so
+    // the semantic-token check moves from the old score bar to the sentiment dot.
     gatewayMocks.getAiSignals.mockResolvedValue({
       signals: [
         {
-          signal_id: "sig-1",
-          entity_id: "0190aaaa-bbbb-cccc-dddd-eeeeffff0001",
-          ticker: "NVDA",
-          label: "POSITIVE",
-          score: 0.87,
-          article_title: "NVDA beats",
-          created_at: new Date().toISOString(),
+          article_id: "art-1",
+          title: "NVDA beats",
+          url: "https://example.com/nvda",
+          source: "example",
+          sentiment: "positive",
+          relevance: 0.87,
+          published_at: new Date().toISOString(),
         },
       ],
+      window_hours: 72,
     });
     const { container } = render(<AiSignalsWidget />, { wrapper });
     await waitFor(() => {
-      expect(screen.getByText("NVDA")).toBeInTheDocument();
+      expect(screen.getByText("NVDA beats")).toBeInTheDocument();
     });
-    // Score text uses the semantic utility…
-    expect(screen.getByText("87%").className).toContain("text-positive");
+    // The sentiment dot uses the semantic utility…
+    expect(container.querySelector(".text-positive")).not.toBeNull();
     // …and never the arbitrary-value spelling §15.11 reserves for canvas/SVG.
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");
     expect(container.innerHTML).not.toContain("bg-[hsl(var(--positive))]");
-    // The proportional score bar uses the semantic bg utility.
-    expect(container.querySelector(".bg-positive")).not.toBeNull();
   });
 });
 

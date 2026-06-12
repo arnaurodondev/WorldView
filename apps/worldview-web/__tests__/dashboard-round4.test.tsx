@@ -70,6 +70,8 @@ const gatewayMocks = {
   getEconomicCalendar: vi.fn().mockResolvedValue({ events: [], total: 0 }),
   getEarningsCalendar: vi.fn().mockResolvedValue({ events: [], total: 0 }),
   getTopNews: vi.fn().mockResolvedValue({ articles: [], total: 0 }),
+  // W4 fix: PortfolioNewsWidget fans out per-holding entity news.
+  getEntityNews: vi.fn().mockResolvedValue({ articles: [], total: 0 }),
   getPendingAlerts: vi.fn().mockResolvedValue({ alerts: [], total: 0, offset: 0, limit: 10 }),
   getPortfolios: vi.fn().mockResolvedValue([]),
   getHoldings: vi.fn().mockResolvedValue({ portfolio_id: "p1", holdings: [] }),
@@ -147,31 +149,35 @@ afterEach(() => {
 // ── 1. Error recovery — named error state + Retry → refetch() ─────────────────
 
 describe("Round 4 — error states carry a working Retry action", () => {
-  it("AiSignalsWidget: error → Retry click → refetch recovers the signal list", async () => {
+  it("AiSignalsWidget: error → Retry click → refetch recovers the news feed", async () => {
+    // 2026-06-12 Wave-4 pivot: widget is now a NEWS MOMENTUM feed — payload and
+    // error copy updated accordingly (dashboard.signals-error → "News feed
+    // unavailable"); the error+Retry recovery contract is unchanged.
     gatewayMocks.getAiSignals
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({
         signals: [
           {
-            signal_id: "sig-1",
-            entity_id: "0190aaaa-bbbb-cccc-dddd-eeeeffff0001",
-            ticker: "NVDA",
-            label: "POSITIVE",
-            score: 0.87,
-            article_title: "NVDA beats",
-            created_at: new Date().toISOString(),
+            article_id: "art-1",
+            title: "NVDA beats",
+            url: "https://example.com/nvda",
+            source: "example",
+            sentiment: "positive",
+            relevance: 0.87,
+            published_at: new Date().toISOString(),
           },
         ],
+        window_hours: 72,
       });
 
     render(<AiSignalsWidget />, { wrapper });
 
     // Named error state (dashboard.signals-error) — not a blank pane.
-    expect(await screen.findByText("Signals unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("News feed unavailable")).toBeInTheDocument();
 
     // Retry → second getAiSignals call → data renders.
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("NVDA")).toBeInTheDocument();
+    expect(await screen.findByText("NVDA beats")).toBeInTheDocument();
     expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(2);
   });
 
@@ -426,7 +432,14 @@ describe("Round 4 — shared query keys do not duplicate fetches", () => {
     // Wait for BOTH widgets to settle (news widget defers one paint via
     // useAboveFoldReady, then reads the already-cached portfolios entry).
     expect(await screen.findByText("No portfolio yet")).toBeInTheDocument();
-    expect(await screen.findByText("No recent news")).toBeInTheDocument();
+    // W4 fix: with no portfolio resolved, PortfolioNewsWidget has no holdings to
+    // scope news to, so its empty state is now the "no holdings to track" copy
+    // (was "No recent news" when it fetched the GLOBAL feed). The point of THIS
+    // test — that both widgets share qk.portfolios.list() so getPortfolios fires
+    // exactly ONCE — is unchanged and asserted below.
+    expect(
+      await screen.findByText("No holdings to track"),
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(gatewayMocks.getPortfolios).toHaveBeenCalledTimes(1);

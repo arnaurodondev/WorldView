@@ -163,35 +163,78 @@ describe("SectorHeatmapWidget — overflow guard at trader viewports (B-2-03)", 
   });
 });
 
-// ── Dead-space fix (user report 2026-06-10) ──────────────────────────────────
-// The dashboard's Row 2 stretches to its tallest cell (MarketSnapshot ≈
-// 300px). The heatmap's tile grid used to be `content-start` with fixed 40px
-// tiles → ~85px of tiles floating above ~200px of empty panel. The fix makes
-// the grid consume the panel height (flex-1) and stretch tile rows into it
-// (gridAutoRows: minmax(40px, 1fr)). jsdom computes no layout, so we pin the
-// structural contract — the exact classes/styles that produce the behaviour.
-describe("SectorHeatmapWidget — height budget sharing (dead-space fix)", () => {
+// ── W4 COMPACT 7+6 grid (user report 2026-06-12) ──────────────────────────────
+// SUPERSEDES the prior "dead-space fix (2026-06-10)" block. That fix made the
+// heatmap STRETCH to fill the row's height (flex-1 + gridAutoRows minmax(40px,
+// 1fr)) — but because the heatmap was the tallest cell, it DRAGGED THE WHOLE
+// ROW TALL, which is the exact "row 1 has too much vertical space" the user
+// reported on 2026-06-12. The new contract is the OPPOSITE: a DETERMINISTIC
+// short, fixed two-row (7 + 6) grid that makes the widget compact so the row
+// can collapse around it. These assertions pin that new shape.
+describe("SectorHeatmapWidget — compact fixed 7+6 grid (W4 task 2a)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("tile grid is flex-1 with stretchy auto-rows (no content-start dead band)", async () => {
+  it("renders exactly two fixed rows (7 tiles then 6) — not a stretchy auto-fit grid", async () => {
     const { getByTestId, findAllByLabelText } = render(
       <SectorHeatmapWidget />,
       { wrapper: ({ children }) => wrap(children) },
     );
     await findAllByLabelText(/ sector,/i);
 
+    // The grid container is now a SHORT flex-col (shrink-0), NOT flex-1 — it
+    // must not stretch to fill the row's height anymore.
     const grid = getByTestId("sector-heatmap-grid");
-    // flex-1: the grid claims the panel's full height inside the flex column.
-    expect(grid.className).toMatch(/\bflex-1\b/);
-    // content-start was the dead-space culprit — rows packed at the top.
-    expect(grid.className).not.toMatch(/\bcontent-start\b/);
-    // Stretchy rows with the 40px readability floor.
-    expect(grid.style.gridAutoRows).toBe("minmax(40px, 1fr)");
+    expect(grid.className).toMatch(/\bshrink-0\b/);
+    expect(grid.className).not.toMatch(/\bflex-1\b/);
+
+    // Two explicit rows: row 1 has 7 equal columns, row 2 has 6. The fixture
+    // has 11 sectors → row 1 gets 7, row 2 gets the remaining 4 (the slice is
+    // defensive for <13 sectors), but BOTH rows exist and use repeat(N,…).
+    const row1 = getByTestId("sector-heatmap-row-1");
+    const row2 = getByTestId("sector-heatmap-row-2");
+    expect(row1).not.toBeNull();
+    expect(row2).not.toBeNull();
+    // Row 1 always lays out 7 columns (the first ROW_1_TILES slice).
+    expect(row1.style.gridTemplateColumns).toBe("repeat(7, minmax(0, 1fr))");
   });
 
-  it("tiles fill their stretched grid row (h-full, no fixed inline height)", async () => {
+  it("splits 13 sectors as 7 over 6 when the full GICS set is present", async () => {
+    // A 13-sector fixture (the production reality: heatmap returns 13 sectors)
+    // must produce row 1 = 7 tiles, row 2 = 6 tiles — the user's "13 sectors"
+    // contract. We probe each row's direct tile children.
+    const thirteen: MarketHeatmapResponse = {
+      sectors: Array.from({ length: 13 }, (_, i) => ({
+        name: `Sector ${i + 1}`,
+        change_pct: (i % 2 === 0 ? 1 : -1) * (i + 1) * 0.1,
+        instrument_count: 10 + i,
+      })),
+    };
+    const { createGateway } = await import("@/lib/gateway");
+    (createGateway as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      getMarketHeatmap: vi.fn().mockResolvedValue(thirteen),
+      getTopMovers: vi.fn().mockResolvedValue({ movers: [], type: "gainers" }),
+      getCompanyOverview: vi.fn().mockResolvedValue({ instrument: { gics_sector: null } }),
+      getCompanyOverviewsBatch: vi.fn().mockResolvedValue({}),
+    });
+
+    const { getByTestId, findAllByLabelText } = render(
+      <SectorHeatmapWidget />,
+      { wrapper: ({ children }) => wrap(children) },
+    );
+    await findAllByLabelText(/ sector,/i);
+
+    const row1 = getByTestId("sector-heatmap-row-1");
+    const row2 = getByTestId("sector-heatmap-row-2");
+    // Each row's tiles are <button> elements with a "sector," aria-label.
+    const row1Tiles = row1.querySelectorAll('[aria-label*="sector,"]');
+    const row2Tiles = row2.querySelectorAll('[aria-label*="sector,"]');
+    expect(row1Tiles.length).toBe(7);
+    expect(row2Tiles.length).toBe(6);
+  });
+
+  it("each tile has a fixed compact inline height (not h-full stretch)", async () => {
     const { findAllByLabelText } = render(
       <SectorHeatmapWidget />,
       { wrapper: ({ children }) => wrap(children) },
@@ -200,11 +243,11 @@ describe("SectorHeatmapWidget — height budget sharing (dead-space fix)", () =>
 
     for (const tile of tiles) {
       const el = tile as HTMLElement;
-      // h-full lets the tile track its (stretched) grid row height …
-      expect(el.className).toMatch(/\bh-full\b/);
-      // … and the old fixed inline `height: 40px` must be gone, or the tile
-      // would re-create the dead band INSIDE each stretched row.
-      expect(el.style.height).toBe("");
+      // The tile now declares an EXPLICIT fixed height (the compact 26px) so
+      // the widget is short — the old `h-full` stretch (which dragged the row
+      // tall) must be gone.
+      expect(el.className).not.toMatch(/\bh-full\b/);
+      expect(el.style.height).toBe("26px");
     }
   });
 });

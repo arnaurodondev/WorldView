@@ -1,17 +1,18 @@
 /**
- * ai-signals-widget.test.tsx — rendering tests for the overhauled AI Signals
- * widget (2026-06-10).
+ * ai-signals-widget.test.tsx — rendering tests for the NEWS MOMENTUM widget
+ * (2026-06-12 Wave-4 pivot).
  *
- * Pins the value-delivering behaviours the overhaul introduced:
- *  1. NO UUID prefixes — unlisted entities render their NAME, never "9ECB";
- *  2. per-entity grouping with an expandable "×N" cluster toggle;
- *  3. signal-type chip + direction glyph + honest confidence tooltip;
- *  4. row click navigates ticker-first (entity_id fallback);
- *  5. expanded evidence rows link to the triggering article.
+ * Pins the value-delivering behaviours the pivot introduced:
+ *  1. rows render the real HEADLINE, source, honest relevance % and time;
+ *  2. each row links OUT to the source article (target=_blank);
+ *  3. the sentiment dot is color-coded semantically (positive/negative);
+ *  4. the relevance tooltip explains the metric honestly (NOT a prediction);
+ *  5. the window selector (24H / 3D / 1W) refetches with the right `hours`;
+ *  6. empty + error states still render (with the selector present).
  *
- * Loading / empty / error states are already pinned by
+ * Loading / empty / error panel states are ALSO pinned by
  * __tests__/dashboard-round3.test.tsx and dashboard-round4.test.tsx (R19 —
- * those tests are untouched and keep passing against this redesign).
+ * those tests use getAiSignals → { signals: [] } which stays valid here).
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -20,17 +21,9 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AiSignalsWidget } from "@/components/dashboard/AiSignalsWidget";
-import type { EnrichedAiSignal } from "@/components/dashboard/ai-signals/types";
+import type { NewsMomentumItem } from "@/components/dashboard/ai-signals/types";
 
-// ── Next.js router mock — capture push() so navigation can be asserted ───────
-const pushMock = vi.fn();
-vi.mock("next/navigation", () => ({
-  useRouter: vi.fn(() => ({ push: pushMock, replace: vi.fn(), prefetch: vi.fn() })),
-  usePathname: vi.fn(() => "/dashboard"),
-  useSearchParams: vi.fn(() => new URLSearchParams()),
-}));
-
-// ── Gateway mock — per-test data via getAiSignals ─────────────────────────────
+// ── Gateway mock — per-test data via getAiSignals(limit, hours) ───────────────
 const gatewayMocks = {
   getAiSignals: vi.fn().mockResolvedValue({ signals: [] }),
 };
@@ -49,156 +42,121 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 afterEach(() => {
-  pushMock.mockClear();
   gatewayMocks.getAiSignals.mockClear();
   gatewayMocks.getAiSignals.mockResolvedValue({ signals: [] });
 });
 
-/** Enriched-signal factory mirroring the live S9 payload shape. */
-function sig(overrides: Partial<EnrichedAiSignal>): EnrichedAiSignal {
+/** News-momentum item factory mirroring the live S9 payload shape. */
+function item(overrides: Partial<NewsMomentumItem>): NewsMomentumItem {
   return {
-    signal_id: `sig-${Math.random().toString(36).slice(2)}`,
-    entity_id: "0190aaaa-bbbb-cccc-dddd-eeeeffff0001",
-    ticker: "LULU",
-    entity_name: "Lululemon Athletica",
-    label: "NEGATIVE",
-    polarity: "negative",
-    signal_type: "EARNINGS_GUIDANCE",
-    signal_type_label: "Guidance",
-    score: 0.95,
-    market_impact_score: 0,
-    article_title: "Lululemon Cuts Outlook as Growth Struggles Continue",
-    article_url: "https://example.com/lulu",
-    source_name: "Yahoo Finance",
-    published_at: "2026-06-10T11:00:00Z",
-    created_at: new Date().toISOString(),
+    article_id: `art-${Math.random().toString(36).slice(2)}`,
+    title: "Nvidia Breaks Below $200, Approaches Bear Market Territory",
+    url: "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
+    source: "yahoo",
+    published_at: new Date().toISOString(),
+    sentiment: "negative",
+    relevance: 0.83,
+    routing_tier: "deep",
+    market_impact_score: null,
     ...overrides,
   };
 }
 
-describe("AiSignalsWidget — enriched rows", () => {
-  it("renders ticker, entity name, signal-type chip and direction-colored confidence", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [sig({})] });
+describe("AiSignalsWidget — news momentum rows", () => {
+  it("renders the headline, source, honest relevance % and links to the article", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
     render(<AiSignalsWidget />, { wrapper });
 
-    expect(await screen.findByText("LULU")).toBeInTheDocument();
-    // Entity name sits beside the ticker — the user learns WHO without hover.
-    expect(screen.getByText("Lululemon Athletica")).toBeInTheDocument();
-    // Signal-type chip — the user learns WHAT fired.
-    expect(screen.getByText("Guidance")).toBeInTheDocument();
-    // Confidence is direction-colored (negative claim → text-negative).
-    expect(screen.getByText("95%").className).toContain("text-negative");
+    // The headline is the row's primary content — the event itself.
+    const link = await screen.findByRole("link", {
+      name: /Nvidia Breaks Below \$200/i,
+    });
+    // Row links OUT to the source publisher (new tab).
+    expect(link).toHaveAttribute("href", "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html");
+    expect(link).toHaveAttribute("target", "_blank");
+    // Source label + honest relevance % both present.
+    expect(screen.getByText("yahoo")).toBeInTheDocument();
+    expect(screen.getByText("83%")).toBeInTheDocument();
   });
 
-  it("explains the confidence metric in a tooltip (title attribute)", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [sig({})] });
+  it("explains the relevance metric honestly in a tooltip (title attribute)", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
     render(<AiSignalsWidget />, { wrapper });
 
-    const score = await screen.findByText("95%");
-    // The % must be DEFINED for the user — including what it is NOT.
-    expect(score.getAttribute("title")).toMatch(/extraction confidence/i);
-    expect(score.getAttribute("title")).toMatch(/not a prediction of price movement/i);
+    const pct = await screen.findByText("83%");
+    expect(pct.getAttribute("title")).toMatch(/relevance/i);
+    // Crucially: it must say what the number is NOT (the old 95% bug).
+    expect(pct.getAttribute("title")).toMatch(/not a prediction of price movement/i);
   });
 
-  it("never renders a UUID prefix — unlisted entities show their name instead", async () => {
+  it("color-codes the sentiment dot semantically (positive vs negative)", async () => {
     gatewayMocks.getAiSignals.mockResolvedValue({
       signals: [
-        sig({
-          ticker: null,
-          entity_id: "9ecb1234-0000-0000-0000-000000000000",
-          entity_name: "Strait of Hormuz",
-          label: "NEUTRAL",
-          signal_type_label: "Macro",
-        }),
+        item({ title: "Up story", sentiment: "positive", url: "https://x.com/up" }),
+        item({ title: "Down story", sentiment: "negative", url: "https://x.com/down" }),
       ],
-    });
-    render(<AiSignalsWidget />, { wrapper });
-
-    // The name takes the primary slot…
-    expect(await screen.findByText("Strait of Hormuz")).toBeInTheDocument();
-    // …and the old `entity_id.slice(0,4).toUpperCase()` stub must be gone.
-    expect(screen.queryByText("9ECB")).not.toBeInTheDocument();
-  });
-
-  it("groups multiple signals per entity into one row with an ×N toggle", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [
-        sig({ signal_id: "a", ticker: "BAC", entity_id: "e-bac", entity_name: "Bank of America" }),
-        sig({ signal_id: "b", ticker: "BAC", entity_id: "e-bac", entity_name: "Bank of America" }),
-        sig({ signal_id: "c", ticker: "BAC", entity_id: "e-bac", entity_name: "Bank of America" }),
-      ],
-    });
-    render(<AiSignalsWidget />, { wrapper });
-
-    // ONE row for BAC (the old widget rendered three undifferentiated rows).
-    await waitFor(() => {
-      expect(screen.getAllByText("BAC")).toHaveLength(1);
-    });
-    expect(screen.getByRole("button", { name: /3 signals for BAC/i })).toBeInTheDocument();
-  });
-
-  it("expands a cluster to its evidence rows with article links", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [
-        sig({
-          signal_id: "a",
-          ticker: "GILD",
-          entity_id: "e-gild",
-          article_title: "Gilead announces new results",
-          article_url: "https://example.com/gild-1",
-        }),
-        sig({
-          signal_id: "b",
-          ticker: "GILD",
-          entity_id: "e-gild",
-          article_title: "Gilead gains attention",
-          article_url: "https://example.com/gild-2",
-        }),
-      ],
-    });
-    render(<AiSignalsWidget />, { wrapper });
-
-    const toggle = await screen.findByRole("button", { name: /2 signals for GILD/i });
-    // Collapsed: evidence rows hidden.
-    expect(screen.queryByText("Gilead announces new results")).not.toBeInTheDocument();
-
-    await userEvent.click(toggle);
-
-    // Expanded: each signal shows its triggering headline as an outbound link.
-    const link = screen.getByRole("link", { name: "Gilead announces new results" });
-    expect(link).toHaveAttribute("href", "https://example.com/gild-1");
-    expect(screen.getByRole("link", { name: "Gilead gains attention" })).toBeInTheDocument();
-    // Expanding must NOT navigate the row (stopPropagation on the toggle).
-    expect(pushMock).not.toHaveBeenCalled();
-  });
-
-  it("navigates ticker-first on row click, entity_id fallback when unlisted", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [
-        sig({ ticker: "TSLA", entity_id: "e-tsla", entity_name: "Tesla Inc" }),
-        sig({ ticker: null, entity_id: "e-cloud", entity_name: "Google Cloud" }),
-      ],
-    });
-    render(<AiSignalsWidget />, { wrapper });
-
-    await userEvent.click(await screen.findByRole("button", { name: /^TSLA/ }));
-    expect(pushMock).toHaveBeenCalledWith("/instruments/TSLA");
-
-    await userEvent.click(screen.getByRole("button", { name: /^Google Cloud/ }));
-    expect(pushMock).toHaveBeenCalledWith("/instruments/e-cloud");
-  });
-
-  it("renders the direction glyph color semantically for positive signals", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [sig({ label: "POSITIVE", polarity: "positive", score: 0.87 })],
+      window_hours: 72,
     });
     const { container } = render(<AiSignalsWidget />, { wrapper });
 
-    await screen.findByText("87%");
-    // Direction is encoded with the semantic tokens (§15.11) — both the text
-    // utility on the confidence and the literal bg token on the row tick.
-    expect(screen.getByText("87%").className).toContain("text-positive");
-    expect(container.querySelector(".bg-positive")).not.toBeNull();
+    await screen.findByRole("link", { name: /Up story/i });
+    // Semantic tokens (§15.11) — never the hsl(var()) JSX spelling.
+    expect(container.querySelector(".text-positive")).not.toBeNull();
+    expect(container.querySelector(".text-negative")).not.toBeNull();
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");
+  });
+
+  it("defaults to the 3D (72h) window and requests it from the gateway", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByRole("link", { name: /Nvidia/i });
+    // Default call: limit=20, hours=72.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 72);
+    // The 3D toggle is the active (pressed) window.
+    expect(screen.getByRole("button", { name: "3D" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("switching the window selector refetches with the new hours", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByRole("link", { name: /Nvidia/i });
+
+    // Click 1W → refetch with hours=168.
+    await userEvent.click(screen.getByRole("button", { name: "1W" }));
+    await waitFor(() => {
+      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 168);
+    });
+
+    // Click 24H → refetch with hours=24.
+    await userEvent.click(screen.getByRole("button", { name: "24H" }));
+    await waitFor(() => {
+      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 24);
+    });
+  });
+
+  it("renders a non-link row (still showing the headline) when the article has no URL", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({
+      signals: [item({ title: "Headline without a link", url: null })],
+      window_hours: 72,
+    });
+    render(<AiSignalsWidget />, { wrapper });
+
+    expect(await screen.findByText("Headline without a link")).toBeInTheDocument();
+    // No anchor for a URL-less row.
+    expect(screen.queryByRole("link", { name: /Headline without a link/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the empty state (and keeps the window selector) when there is no news", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [], window_hours: 24 });
+    render(<AiSignalsWidget />, { wrapper });
+
+    // Empty copy hints at widening the window. Title is intentionally distinct
+    // from PortfolioNewsWidget's "No recent news" (dashboard.no-news) to keep
+    // getByText unambiguous when both empty states render together.
+    expect(await screen.findByText(/No news momentum yet/i)).toBeInTheDocument();
+    // Selector is still operable so the user can recover.
+    expect(screen.getByRole("button", { name: "1W" })).toBeInTheDocument();
   });
 });

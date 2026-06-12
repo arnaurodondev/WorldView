@@ -393,10 +393,24 @@ export function createDashboardApi(t: string | undefined) {
     },
 
     /**
-     * getAiSignals — S6 price-impact signal scores (PRD-0020)
+     * getAiSignals — NEWS MOMENTUM feed for the dashboard "AI SIGNALS" widget.
+     *
+     * 2026-06-12 Wave-4 pivot: this endpoint no longer returns extraction-
+     * confidence "signals" (internal pipeline state). It now returns the most
+     * relevant RECENT NEWS in a time window — real, clickable articles with an
+     * honest ``relevance`` score and a ``sentiment`` direction. See
+     * services/api-gateway routes/signals.py for the full rationale + payload.
+     *
+     * @param limit  max rows to return (default 8).
+     * @param hours  look-back window — one of 24 | 72 | 168. Optional and
+     *               additive so legacy callers (getAiSignals(8)) keep working;
+     *               the server snaps any out-of-set value to its 72h default.
      */
-    getAiSignals(limit = 8): Promise<AiSignalsResponse> {
-      return apiFetch<AiSignalsResponse>(`/v1/signals/ai?limit=${limit}`, {
+    getAiSignals(limit = 8, hours?: number): Promise<AiSignalsResponse> {
+      // Only append &hours= when the caller passed one — keeps the URL (and the
+      // server-side cache key) identical to the legacy call when it's omitted.
+      const hoursParam = hours != null ? `&hours=${hours}` : "";
+      return apiFetch<AiSignalsResponse>(`/v1/signals/ai?limit=${limit}${hoursParam}`, {
         token: t,
       });
     },
