@@ -41,7 +41,11 @@ async def test_execute_returns_records_for_section() -> None:
     uc = GetFundamentalsSectionUseCase(uow)
     result = await uc.execute("instr-001", FundamentalsSection.INCOME_STATEMENT)
     assert result == records
-    uow.fundamentals_read.find_by_section.assert_awaited_once_with("instr-001", FundamentalsSection.INCOME_STATEMENT)
+    # Backend-gaps wave 3 (2026-06-11): execute() now forwards an optional
+    # period_type (default None) so statement endpoints can select ANNUAL rows.
+    uow.fundamentals_read.find_by_section.assert_awaited_once_with(
+        "instr-001", FundamentalsSection.INCOME_STATEMENT, None
+    )
 
 
 @pytest.mark.asyncio

@@ -265,6 +265,67 @@ async def get_news_entity(entity_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Article metadata resolution (backend-gaps wave 3, 2026-06-11) ───────────
+
+
+@router.get("/articles/{document_id}")
+async def get_article_metadata(document_id: UUID, request: Request) -> Any:
+    """Resolve a PIPELINE document id to its article metadata via content-store.
+
+    WHY this route exists: relation evidence rows (S7 ``relation_evidence``)
+    carry ``doc_id`` values that live in content-store (S5) — they are
+    pipeline-ingested news articles, NOT tenant uploads. The pre-existing
+    ``GET /v1/documents/{doc_id}`` route proxies S4 (content-ingestion), which
+    only knows tenant-uploaded documents, so every evidence doc_id 500'd and
+    the Intelligence tab could not render article titles/urls for evidence
+    chunks. This route queries the system of record directly.
+
+    Implementation: content-store has no single-document GET, but its internal
+    ``POST /api/v1/documents/batch`` (used by signals/news enrichment) accepts
+    1-50 doc_ids and returns {title, url, published_at, source_name, ...}.
+    We send a single-element batch and unwrap the result.
+
+    Returns 404 when content-store does not know the doc_id (genuinely missing
+    or tombstoned), mirroring resource-GET semantics.
+
+    Requires authentication — same posture as the other /articles/* routes.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.content_store.post(
+        "/api/v1/documents/batch",
+        json={"doc_ids": [str(document_id)]},
+        headers=headers,
+    )
+    if resp.status_code != 200:
+        # Pass through downstream failures (401/503/...) unchanged — the
+        # frontend treats non-200 as "metadata unavailable" and keeps the
+        # bare doc_id chip, never a hard error.
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    try:
+        documents = json.loads(resp.content).get("documents", [])
+    except (ValueError, AttributeError):
+        documents = []
+    if not documents:
+        # Batch contract: missing doc_ids are silently omitted → empty list
+        # means "not found" for our single-element request.
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
+    doc = documents[0]
+    # Reshape to the frontend-facing article metadata contract. ``source``
+    # aliases source_name for consistency with the news/top article shape.
+    return {
+        "document_id": doc.get("doc_id", str(document_id)),
+        "title": doc.get("title"),
+        "url": doc.get("url"),
+        "source": doc.get("source_name"),
+        "source_type": doc.get("source_type"),
+        "published_at": doc.get("published_at"),
+        "word_count": doc.get("word_count"),
+    }
+
+
 # ── Article Impact History (PLAN-0091 Wave A-2, T-A-2-01) ───────────────────
 
 

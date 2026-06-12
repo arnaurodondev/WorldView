@@ -234,3 +234,63 @@ def test_map_price_snapshot_to_quote_bid_ask_null_when_absent() -> None:
     quote = _map_price_snapshot_to_quote(snap, _INSTRUMENT_UUID)
     assert quote["bid"] is None
     assert quote["ask"] is None
+
+
+# ── Backend-gaps wave 3 (2026-06-11): previous_close in the quote shape ──────
+
+
+def test_map_price_snapshot_to_quote_includes_previous_close() -> None:
+    """previous_close = price - change (exact inverse of S3's formula)."""
+    from api_gateway.routes.market import _map_price_snapshot_to_quote
+
+    snap = {
+        "instrument_id": _INSTRUMENT_UUID,
+        "symbol": "AAPL",
+        "price": "291.58",
+        "price_change": "1.03",
+        "price_change_pct": "0.3545",
+        "timestamp": "2026-06-10T21:00:00+00:00",
+        "source": "daily_close",
+        "freshness_status": "live",
+    }
+    quote = _map_price_snapshot_to_quote(snap, _INSTRUMENT_UUID)
+    assert quote["previous_close"] == pytest.approx(290.55)
+
+
+def test_map_price_snapshot_to_quote_previous_close_null_when_change_unknown() -> None:
+    """No price_change (single-session instrument) → previous_close=None, not price."""
+    from api_gateway.routes.market import _map_price_snapshot_to_quote
+
+    snap = {
+        "instrument_id": _INSTRUMENT_UUID,
+        "symbol": "NEWIPO",
+        "price": "42.00",
+        "price_change": None,
+        "price_change_pct": None,
+        "timestamp": "2026-06-10T14:00:00+00:00",
+        "source": "fresh_quote",
+        "freshness_status": "live",
+    }
+    quote = _map_price_snapshot_to_quote(snap, _INSTRUMENT_UUID)
+    assert quote["previous_close"] is None
+    # change/change_pct retain their legacy 0.0 coercion for old consumers.
+    assert quote["change"] == 0.0
+
+
+@pytest.mark.parametrize("section", ["income-statement", "balance-sheet", "cash-flow"])
+@pytest.mark.asyncio
+async def test_statement_proxies_forward_period_type_param(authed_app, authed_mock_clients, section) -> None:
+    """Backend-gaps wave 3: ?period_type=annual must reach S3 (was dropped)."""
+    s3_body = json.dumps({"security_id": _INSTRUMENT_UUID, "records": []}).encode()
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_http_response(200, s3_body))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/fundamentals/{_INSTRUMENT_UUID}/{section}?period_type=annual",
+            headers=_auth_headers(),
+        )
+
+    assert resp.status_code == 200
+    call_kwargs = authed_mock_clients.market_data.get.call_args.kwargs
+    assert call_kwargs.get("params") == {"period_type": "annual"}

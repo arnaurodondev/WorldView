@@ -35,9 +35,9 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/quotes/{instrument_id}` | Latest quote — cache-aside | Valkey 5 s |
 | POST | `/api/v1/quotes/batch` | Batch quotes via POST body | Valkey 5 s |
 | GET | `/api/v1/fundamentals/{instrument_id}` | Full fundamentals (all 18 sections) — `{instrument_id}` is instrument UUID | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/income-statement` | Income statement | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/balance-sheet` | Balance sheet | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/cash-flow` | Cash flow | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/income-statement` | Income statement. `?period_type=quarterly\|annual` selects one periodicity (2026-06-11); omitted = all rows mixed (back-compat) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/balance-sheet` | Balance sheet. `?period_type=quarterly\|annual` (2026-06-11); omitted = QUARTERLY (BP-546 repo default) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/cash-flow` | Cash flow. `?period_type=quarterly\|annual` (2026-06-11); omitted = QUARTERLY (BP-546 repo default) | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/highlights` | Highlights (TTM metrics) | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/valuation` | Valuation ratios | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/analyst-consensus` | Analyst estimates | — |
@@ -278,6 +278,7 @@ SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_ex
 | Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
 | Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
+| Insider Transactions Consumer | Materialize per-transaction insider feed (`dataset_type == "insider_transactions"`) into `insider_transactions` — feeds the 6-hourly `insider_net_buy_90d` rollup. Existed in code since PLAN-0089 L-4b but only added to docker-compose on 2026-06-11 (backend-gaps wave 3) — the table was empty until then |
 
 ---
 

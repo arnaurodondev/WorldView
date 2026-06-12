@@ -375,10 +375,29 @@ def derive_fundamentals_snapshot(
     institutional_ownership_pct: float | None = inst_raw / 100.0 if inst_raw is not None else None
 
     # ── L-4a: short percent ───────────────────────────────────────────────────
-    # SharesStats.ShortPercentOfFloat is ALREADY a decimal fraction in EODHD
+    # The short-of-float value is ALREADY a decimal fraction in EODHD
     # (e.g. 0.034 means 3.4% of float is shorted). We pass it through unchanged
     # so the storage convention matches institutional_ownership_pct above.
-    short_percent = _try_keys(ss, "ShortPercentOfFloat", "shortPercentOfFloat", "short_percent_of_float")
+    #
+    # 2026-06-11 (backend-gaps wave 3): the LIVE EODHD SharesStats payload uses
+    # the key ``ShortPercentFloat`` (verified against
+    # /api/fundamentals/AAPL.US?filter=SharesStats → {"ShortPercentFloat":
+    # 0.0106, "ShortPercentOutstanding": null, ...}). The original probe list
+    # only tried ``ShortPercentOfFloat`` variants which NEVER matched, leaving
+    # short_percent NULL for all 649 snapshot rows. The real keys are probed
+    # FIRST; the legacy spellings are kept as fallbacks in case older cached
+    # payloads (object-store replays) carry them. ``ShortPercentOutstanding``
+    # is the last resort — same unit (fraction), slightly different
+    # denominator (shares outstanding vs float).
+    short_percent = _try_keys(
+        ss,
+        "ShortPercentFloat",
+        "shortPercentFloat",
+        "ShortPercentOfFloat",
+        "shortPercentOfFloat",
+        "short_percent_of_float",
+        "ShortPercentOutstanding",
+    )
 
     # ── Next Dividend Date (Wave L-5c) ────────────────────────────────────────
     # EODHD ``SplitsDividends`` carries two relevant fields:

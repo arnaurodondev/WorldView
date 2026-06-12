@@ -132,6 +132,40 @@ def test_short_percent_passthrough_as_fraction() -> None:
     assert snap["short_percent"] == pytest.approx(0.034)
 
 
+def test_short_percent_live_eodhd_key_short_percent_float() -> None:
+    """Regression (backend-gaps wave 3, 2026-06-11): the LIVE EODHD payload key.
+
+    The real SharesStats section uses ``ShortPercentFloat`` (verified against
+    /api/fundamentals/AAPL.US?filter=SharesStats). The original probe list only
+    tried ``ShortPercentOfFloat`` variants, so short_percent stayed NULL for
+    every snapshot row (649/649 NULL in the dev DB).
+    """
+    snap = derive_fundamentals_snapshot(
+        highlights={},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={},
+        analyst_consensus=None,
+        share_statistics={"ShortPercentFloat": 0.0106, "ShortPercentOutstanding": None},
+    )
+    assert snap["short_percent"] == pytest.approx(0.0106)
+
+
+def test_short_percent_falls_back_to_outstanding_when_float_missing() -> None:
+    """ShortPercentOutstanding is the last-resort key (same fraction unit)."""
+    snap = derive_fundamentals_snapshot(
+        highlights={},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={},
+        analyst_consensus=None,
+        share_statistics={"ShortPercentOutstanding": 0.009},
+    )
+    assert snap["short_percent"] == pytest.approx(0.009)
+
+
 # ---------------------------------------------------------------------------
 # Missing / null source fields → column stays None
 # ---------------------------------------------------------------------------

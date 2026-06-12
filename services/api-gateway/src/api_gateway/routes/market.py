@@ -1035,8 +1035,11 @@ async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params so the new S3
+    # ``period_type`` filter (quarterly|annual) reaches the section endpoint.
     resp = await clients.market_data.get(
         f"/api/v1/fundamentals/{instrument_id}/income-statement",
+        params=dict(request.query_params),
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -1055,8 +1058,11 @@ async def get_balance_sheet(instrument_id: UUID, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params — ``period_type=annual``
+    # unlocks the ANNUAL statement rows (previously pinned to QUARTERLY by BP-546).
     resp = await clients.market_data.get(
         f"/api/v1/fundamentals/{instrument_id}/balance-sheet",
+        params=dict(request.query_params),
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -1073,8 +1079,10 @@ async def get_cash_flow(instrument_id: UUID, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params (see balance-sheet note).
     resp = await clients.market_data.get(
         f"/api/v1/fundamentals/{instrument_id}/cash-flow",
+        params=dict(request.query_params),
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -1517,6 +1525,18 @@ def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> di
     except (ValueError, TypeError):
         change_pct = 0.0
 
+    # 2026-06-11 (backend-gaps wave 3): expose previous_close explicitly.
+    # S3 computes price_change = price - prev_close in PriceSnapshotResolver,
+    # so prev_close is recoverable exactly as price - change — deriving it
+    # here avoids widening the canonical PriceSnapshot contract for a value
+    # that is a pure linear combination of two fields it already carries.
+    # None when price_change is unknown (single-session instruments) so the
+    # frontend can distinguish "unknown" from a real value — mirrors the
+    # price_change=None semantics rather than fabricating prev_close=price.
+    previous_close: float | None = None
+    if change_str is not None and price > 0:
+        previous_close = price - change
+
     # bid/ask (B-Q plumbing, 2026-06-10): S3 serialises Decimal → str; coerce
     # to float for the frontend Quote shape. None whenever the snapshot was not
     # quote-sourced (bars carry no order-book context) or the value is missing.
@@ -1532,6 +1552,9 @@ def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> di
         "price": price,
         "change": change,
         "change_pct": change_pct,
+        # 2026-06-11 (backend-gaps wave 3): previous session close — see the
+        # derivation comment above. Nullable: None means "unknown".
+        "previous_close": previous_close,
         "timestamp": snap.get("timestamp", ""),
         "volume": None,  # PriceSnapshot does not carry volume — that's in OHLCV
         "bid": _opt_float(snap.get("bid")),

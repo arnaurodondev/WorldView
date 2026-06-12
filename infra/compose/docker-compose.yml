@@ -935,6 +935,37 @@ services:
       retries: 3
       start_period: 30s
 
+  # 2026-06-11 (backend-gaps wave 3): the insider-transactions consumer existed
+  # in code since PLAN-0089 Wave L-4b (insider_transactions_consumer_main) but
+  # was NEVER deployed — only the S7 knowledge-graph twin was. Result: the S3
+  # ``insider_transactions`` table stayed empty, the 6-hourly rollup had no
+  # input, and the screener's ``insider_net_buy_90d`` column was NULL for all
+  # instruments despite being filterable. Mirrors the fundamentals-consumer
+  # definition exactly (same image, env, healthcheck).
+  market-data-insider-transactions-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.insider_transactions_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   market-data-prediction-market-consumer:
     build:
       context: ../..
