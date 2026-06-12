@@ -210,6 +210,16 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_DEEPINFRA_MAX_KEEPALIVE
     deepinfra_max_keepalive: int = 32
 
+    # Per-message processing budget (watchdog) for the article consumer.  A handler
+    # that exceeds this is cancelled and the message is dead-lettered.  Deep-tier
+    # extraction (Qwen3-235B-A22B) has a bursty latency tail; at a 300s budget paired
+    # with a 90s extraction wall-clock cap, ~216 docs/hr dead-lettered.  Raised to 450s
+    # (paired with the 150s extraction cap) so a legitimate slow extraction plus the
+    # surrounding pipeline work (embedding, NER, resolution, writes) fits comfortably
+    # without dead-lettering, while still bounding a truly-stuck handler.
+    # NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S
+    message_processing_timeout_s: int = 450
+
     # Dispatcher
     dispatcher_poll_interval_secs: float = 1.0
     dispatcher_batch_size: int = 50

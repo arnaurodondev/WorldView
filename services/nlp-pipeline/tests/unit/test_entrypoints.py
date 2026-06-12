@@ -55,6 +55,10 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.embedding_model_id = "nomic-embed-text"
     s.extraction_model_id = "mistral:7b"
     s.embedding_max_concurrent = 4
+    # Task #14: per-replica article concurrency (sizes the extraction semaphore).
+    s.article_consumer_concurrency = 16
+    s.deepinfra_max_connections = 64
+    s.deepinfra_max_keepalive = 32
     s.gliner_base_url = ""  # empty → local adapter
     s.ner_model_id = "gliner-base"
     s.max_ollama_queue_depth = 20
@@ -394,6 +398,60 @@ async def test_relevance_scoring_worker_entrypoint_importable() -> None:
     from nlp_pipeline.workers.article_relevance_scoring_worker import main
 
     assert callable(main)
+
+
+# ---------------------------------------------------------------------------
+# Settings completeness — BP-590 regression guard
+# ---------------------------------------------------------------------------
+#
+# entity_refresh_consumer_main reads ``settings.kafka_entity_refresh_consumer_group``
+# and ``settings.topic_entity_refresh``.  Both fields were silently removed from
+# the real ``Settings`` class in a config.py merge resolution, crash-looping the
+# entity-refresh consumer on ``AttributeError`` at startup.  The mock-based
+# entrypoint tests above could not catch this because a ``MagicMock`` settings
+# fabricates any attribute on access.  This test instantiates the REAL Settings
+# class so a future merge that drops these fields fails here instead of in prod.
+
+
+def test_entity_refresh_consumer_settings_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real Settings class exposes the fields entity_refresh_consumer_main reads."""
+    # Only database_url + intelligence_database_url have no defaults (DEF-027);
+    # supply them so Settings() validates, then assert the consumer fields exist.
+    monkeypatch.setenv("NLP_PIPELINE_DATABASE_URL", "postgresql+asyncpg://u:p@localhost/nlp_db")
+    monkeypatch.setenv(
+        "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL",
+        "postgresql+asyncpg://u:p@localhost/intelligence_db",
+    )
+
+    from nlp_pipeline.config import Settings
+
+    settings = Settings()  # type: ignore[call-arg]
+
+    assert settings.kafka_entity_refresh_consumer_group == "nlp-entity-refresh-group"
+    assert settings.topic_entity_refresh == "entity.refresh.v1"
+
+
+def test_message_processing_timeout_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-message watchdog defaults to 450s and is env-overridable.
+
+    Raised from 300 -> 450 (paired with the 150s extraction wall-clock cap) to stop
+    the deep-extraction dead-letter bleed (~216 docs/hr at 300s/90s).
+    """
+    monkeypatch.setenv("NLP_PIPELINE_DATABASE_URL", "postgresql+asyncpg://u:p@localhost/nlp_db")
+    monkeypatch.setenv(
+        "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL",
+        "postgresql+asyncpg://u:p@localhost/intelligence_db",
+    )
+    # Defend against env leakage from sibling tests sharing the os.environ (the full
+    # suite runs in one process): ensure the override is unset before the default check.
+    monkeypatch.delenv("NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S", raising=False)
+
+    from nlp_pipeline.config import Settings
+
+    assert Settings().message_processing_timeout_s == 450  # type: ignore[call-arg]
+
+    monkeypatch.setenv("NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S", "600")
+    assert Settings().message_processing_timeout_s == 600  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio

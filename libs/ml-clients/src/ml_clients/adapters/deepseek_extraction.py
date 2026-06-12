@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from typing import TYPE_CHECKING
@@ -21,13 +22,19 @@ logger = structlog.get_logger()
 _DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
 _DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
-# Extraction prompts for 8B-class models on DeepInfra typically return in 30-90s.
-# The openai SDK default of 600s means a stalled request hangs the article consumer
-# for up to 10 minutes before the docker restart policy triggers (BP-235 variant).
-# 90s wall-clock cap via asyncio.wait_for prevents DLQ storms when DeepInfra is
-# under queue pressure (root cause of 93 DLQ timeouts seen 2026-05-10..21).
-# The httpx read=90s provides a secondary per-chunk guard.
-_EXTRACTION_TIMEOUT_S = 90.0
+# Deep-tier extraction (Qwen3-235B-A22B on DeepInfra) has a bursty latency tail:
+# p50 ~16.5s but p95/p99 pin at the wall-clock cap under queue pressure.  At a
+# 90s cap, ~49 docs/hr hit the wall-clock timeout (TimeoutError -> RetryableError)
+# and ~216 docs/hr dead-letter at the consumer's per-message budget.  Raising the
+# cap to 150s captures the legitimate tail (p50 is only 16.5s, so 150s is generous)
+# without masking genuinely-stalled requests.  The openai SDK default of 600s means
+# a stalled request would otherwise hang the article consumer for up to 10 minutes
+# before the docker restart policy triggers (BP-235 variant); asyncio.wait_for caps
+# the wall clock.  The httpx read timeout is wired to the SAME timeout_s value
+# (see __init__) so it never fires before the wait_for guard.
+# Env-overridable so the cap can be tuned without a code change while a model swap
+# is evaluated separately: ML_CLIENTS_EXTRACTION_TIMEOUT_S.
+_EXTRACTION_TIMEOUT_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_TIMEOUT_S", "150.0"))
 
 
 class DeepSeekExtractionAdapter:
@@ -118,7 +125,7 @@ class DeepSeekExtractionAdapter:
                     #   tokens are billed after the initial cache-miss call.
                     # asyncio.wait_for enforces a wall-clock total timeout so
                     # a stalled DeepInfra request (high TTFT under queue pressure)
-                    # cannot consume the article consumer's 300s watchdog budget.
+                    # cannot consume the article consumer's 450s watchdog budget.
                     response = await asyncio.wait_for(
                         self._client.chat.completions.create(
                             model=self._model_id,

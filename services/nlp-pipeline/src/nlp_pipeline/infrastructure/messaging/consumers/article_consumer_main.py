@@ -205,11 +205,12 @@ async def main() -> None:
         # bge-large CPU inference can take 2-5s per article; increase poll interval
         # to 30 minutes to prevent consumer from leaving the group mid-batch.
         max_poll_interval_ms=1_800_000,
-        # DeepInfra extraction (deepseek-ai/DeepSeek-V4-Flash) can take 60-180s
-        # per article under normal load. The default 45s watchdog fires before the
-        # 120s httpx read timeout, causing a dead-letter loop.  300s gives enough
-        # headroom for the full extraction window (BP-324).
-        message_processing_timeout_s=300,
+        # DeepInfra deep-tier extraction (Qwen3-235B-A22B) has a bursty latency
+        # tail; the default 45s watchdog fires before the extraction wall-clock cap,
+        # causing a dead-letter loop (BP-324).  Sourced from config (default 450s,
+        # paired with the 150s extraction cap) and env-overridable via
+        # NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S to stop dead-letter bleed.
+        message_processing_timeout_s=settings.message_processing_timeout_s,
     )
     # Optional: configure MinIO storage (article downloads + chunk text upload)
     _object_storage = None

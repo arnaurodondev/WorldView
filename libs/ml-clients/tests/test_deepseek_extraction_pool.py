@@ -63,3 +63,20 @@ def test_read_timeout_preserved() -> None:
     adapter = _make_adapter(timeout_s=120.0)
     httpx_client = adapter._client._client  # type: ignore[attr-defined]
     assert httpx_client.timeout.read == pytest.approx(120.0)
+
+
+def test_default_extraction_timeout_is_150s() -> None:
+    """Default wall-clock cap is 150s (raised from 90s to stop dead-letter bleed).
+
+    p50 deep-extraction latency is ~16.5s, so 150s captures the bursty tail without
+    masking genuinely-stalled requests.  The httpx read timeout is wired to the same
+    value so it never fires before the asyncio.wait_for guard.
+    """
+    from ml_clients.adapters.deepseek_extraction import _EXTRACTION_TIMEOUT_S
+
+    assert _EXTRACTION_TIMEOUT_S == pytest.approx(150.0)
+
+    # Default constructor (no explicit timeout_s) propagates 150s to the http client.
+    adapter = _make_adapter()
+    httpx_client = adapter._client._client  # type: ignore[attr-defined]
+    assert httpx_client.timeout.read == pytest.approx(150.0)
