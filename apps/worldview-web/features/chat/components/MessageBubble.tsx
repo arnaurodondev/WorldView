@@ -158,7 +158,20 @@ export function MessageBubble({ message }: { message: Message }) {
                * matching the AskAiPanel pattern and letting analysts verify claims
                * without leaving the thread.
                */}
-              <LazyMarkdownContent size="compact" withCitationSups>{message.content}</LazyMarkdownContent>
+              {/*
+               * Wave 3 (dead-marker hardening): citationCount tells the
+               * renderer how many citations actually exist for this message,
+               * so an inline [N] marker beyond the list (backend bug —
+               * observed live: [5][6][8] over a 4-item list) renders as a
+               * muted "Source not available" badge instead of a live chip.
+               */}
+              <LazyMarkdownContent
+                size="compact"
+                withCitationSups
+                citationCount={message.citations?.length ?? 0}
+              >
+                {message.content}
+              </LazyMarkdownContent>
             </div>
           )}
 

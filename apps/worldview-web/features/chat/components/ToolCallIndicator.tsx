@@ -27,6 +27,7 @@
 // already a client component. The directive is added defensively so this file
 // can never be accidentally imported by a Server Component boundary.
 
+import { useEffect, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
 
 /**
@@ -44,6 +45,13 @@ export interface ToolCallState {
   label: string;
   /** Running = currently executing; ok/empty/error = completed. */
   status: "running" | "ok" | "empty" | "error";
+  /**
+   * Wall-clock (Date.now()) when the tool_call event was received (Wave 3 —
+   * 40s-wait feedback). Drives the live "Ns" elapsed chip on running rows so
+   * the user can SEE that a long-running tool is still making progress.
+   * Optional: legacy callers (and tests) that omit it simply get no chip.
+   */
+  startedAt?: number;
 }
 
 interface ToolCallIndicatorProps {
@@ -64,6 +72,27 @@ interface ToolCallIndicatorProps {
  * as tools complete sequentially during a multi-tool response.
  */
 export function ToolCallIndicator({ tools }: ToolCallIndicatorProps) {
+  // ── Wave 3: live elapsed ticker for running tools ─────────────────────────
+  // WHY a 1s ticking `now`: agentic research answers can hold a tool in the
+  // "running" state for tens of seconds (live-measured: 9.5s of tool planning,
+  // 28s reasoning gaps). A static spinner gives no evidence of forward motion
+  // — the elapsed chip ("7s") is the cheapest possible proof the wait is
+  // progressing rather than hung. The interval only runs while at least one
+  // tool is running, so settled indicators (and non-tool answers) cost zero
+  // timers.
+  const hasRunning = tools.some((t) => t.status === "running");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasRunning) return;
+    // Re-sync immediately on (re)arm so a tool that just appeared doesn't
+    // show a stale value for up to a full second.
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    // Cleanup on unmount AND when the last running tool completes — a leaked
+    // interval would keep re-rendering the settled indicator forever.
+    return () => clearInterval(id);
+  }, [hasRunning]);
+
   // Guard: don't add whitespace when there are no active tools.
   // WHY null (not empty div): an empty div still contributes margin/padding
   // to the flex column in StreamingBubble, which creates a visible gap when
@@ -100,6 +129,19 @@ export function ToolCallIndicator({ tools }: ToolCallIndicatorProps) {
               ("search_documents") is the precise identifier an analyst can
               quote in a bug report. Muted + smaller so it reads as metadata. */}
           <span className="text-[9px] text-muted-foreground/60">{t.name}</span>
+          {/* Wave 3: elapsed-seconds chip — live progress feedback for long
+              tool waits. Math.max(0, …) guards a clock skew where `now` was
+              captured before this tool's startedAt landed; tabular-nums keeps
+              the chip from re-flowing as 9→10s ticks past. Only rendered when
+              the hook supplied startedAt (legacy callers omit it). */}
+          {t.startedAt !== undefined && (
+            <span
+              data-testid="tool-elapsed"
+              className="ml-auto shrink-0 rounded-[2px] bg-muted/40 px-1 py-0 text-[9px] tabular-nums text-muted-foreground"
+            >
+              {Math.max(0, Math.floor((now - t.startedAt) / 1000))}s
+            </span>
+          )}
         </div>
       ))}
 

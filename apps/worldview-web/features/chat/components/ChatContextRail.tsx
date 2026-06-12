@@ -39,12 +39,20 @@
  *
  * DATA FLOW:
  *   Entity card    — TanStack Query via getCompanyOverview (entityId param).
- *   Mini-cards     — TanStack Query via getCompanyOverviewByTicker (1 req).
+ *   Mini-cards     — rail-level useQueries batch via getCompanyOverviewByTicker
+ *                    (1 req/ticker; Wave 3 lifted resolution out of the cards
+ *                    so the section count always equals the rendered cards).
  *   Sources        — pure derivation from `messages` (conversation-derive.ts).
  *   Tools used     — pure derivation from `toolUsage` (conversation-derive.ts);
  *                    samples accumulated by useChatStream across turns.
  *   Contradictions — pure derivation from `messages.content` regex scan.
- *   Related tickers — shared `extractTickers` lib.
+ *   Related tickers — shared `extractTickers` lib; Wave 3: chips show only
+ *                    DETECTED-BUT-UNRESOLVED tickers (resolved ones are cards).
+ *
+ * WAVE-3 SECTION ORDER (organisation pass — value-first):
+ *   Entity (primary) → Entity Overview → Conversation Sources →
+ *   Contradictions → Related Tickers (unresolved) → Tools Used.
+ *   Empty sections collapse entirely — no headers over zero content.
  *
  * WHO USES IT: app/(app)/chat/page.tsx
  * DESIGN REFERENCE: frontend-rework Wave-2 task spec §2 (context rail value)
@@ -55,7 +63,7 @@
 // callback to the parent. All require a browser execution context.
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { X, AlertTriangle, PanelRight } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
@@ -64,6 +72,7 @@ import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatMarketCap, formatRatio } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { CompanyOverview } from "@/types/api";
 // Wave 2: shared trend-tinted mini-chart — same primitive the watchlist /
 // holdings / top-movers rows use, so the rail's sparklines read identically
 // to every other 5-day trend on the platform.
@@ -341,25 +350,28 @@ function EntityCard({ entityId }: EntityCardProps) {
 // 5-day sparkline. Keeping them separate avoids entangling the "primary
 // entity" display semantics with the "ambient context" semantics.
 //
-// WAVE-2 FETCH REWORK — single request per ticker:
-// The old implementation chained searchInstruments(ticker, 1) →
-// getCompanyOverview(instrument_id): TWO round-trips per card, and the
-// search step could mis-resolve ("AAPL" → best fuzzy match). The Wave-1
-// backend added GET /v1/companies/by-ticker/{ticker}/overview which resolves
-// the ticker server-side (S3 + KG alias fallback) and returns the composed
-// overview in ONE call; 404 (unknown ticker) maps to null at the API
-// boundary so unresolved tickers still cost no card and no error chrome.
+// WAVE-3 RESOLUTION LIFT — the card is now PRESENTATIONAL:
+// The per-ticker by-ticker overview query moved UP into ChatContextRail
+// (a useQueries batch over every detected ticker). WHY: the ENTITY OVERVIEW
+// section header showed the count of raw DETECTIONS while the cards rendered
+// only RESOLVED tickers — a live conversation that detected "WWDC" + "TSMC"
+// showed count "2" over ZERO cards (neither resolved). The rail can only
+// reconcile header count with rendered cards when IT owns the resolution
+// results; the card just renders what it is given.
 //
 // WHY the sparkline is "free": the overview response already embeds the
 // last ~60 1D ohlcv bars (the instrument page's mini chart uses them). We
 // slice the last 5 closes — no second request, no batch endpoint needed.
-//
-// WHY staleTime 5min: price data is best-effort ambient context in the
-// sidebar; we don't need sub-minute freshness here.
 
 interface EntityMiniCardProps {
   /** Uppercase ticker string, e.g. "NVDA". Not a UUID. */
   ticker: string;
+  /**
+   * Resolved company overview from the rail-level useQueries batch.
+   * Null/undefined would mean "unresolved" — the rail never renders this
+   * card for those tickers (they appear as RELATED TICKERS chips instead).
+   */
+  overview: CompanyOverview;
   /**
    * Round 2: card click → instrument page pivot. Receives the RESOLVED
    * ticker (canonical symbol from the overview, not the raw detected token)
@@ -372,37 +384,8 @@ interface EntityMiniCardProps {
 /** How many trailing daily closes feed the mini-card sparkline. */
 const SPARKLINE_DAYS = 5;
 
-function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
-  const { accessToken } = useAuth();
-
-  const { data, isLoading } = useQuery({
-    // WHY keep qk.chat.tickerMini: the key identifies "overview for this
-    // ticker in chat context" — the fetch mechanism changing underneath
-    // (two-step → by-ticker) doesn't change the cache identity.
-    queryKey: qk.chat.tickerMini(ticker),
-    // Wave 2: ONE request. Returns null on 404 (unresolvable ticker) so the
-    // card silently doesn't render — same contract as the old search-miss.
-    queryFn: () => createGateway(accessToken).getCompanyOverviewByTicker(ticker),
-    enabled: !!accessToken && !!ticker,
-    staleTime: 5 * 60_000,
-  });
-
-  if (isLoading) {
-    // WHY compact skeleton: the mini card is inside a tight flex grid; a
-    // full-height block skeleton would cause layout shift. Two small lines
-    // match the text layout of the populated state.
-    return (
-      <div className="space-y-1 rounded-[2px] border border-border/20 bg-card px-2 py-1.5">
-        <Skeleton className="h-2.5 w-16 rounded-[2px]" />
-        <Skeleton className="h-2 w-24 rounded-[2px]" />
-      </div>
-    );
-  }
-
-  // Null result means the ticker resolved to nothing — skip silently.
-  if (!data) return null;
-
-  const { instrument, quote, fundamentals, ohlcv } = data;
+function EntityMiniCard({ ticker, overview, onClick }: EntityMiniCardProps) {
+  const { instrument, quote, fundamentals, ohlcv } = overview;
   const displayTicker = instrument?.ticker ?? ticker;
   const name = instrument?.name ?? "";
   const price = quote?.price ?? null;
@@ -514,6 +497,10 @@ export function ChatContextRail({
   isDebug = false,
   debugHref,
 }: ChatContextRailProps) {
+  // Wave 3: auth lifted to the rail level — the per-ticker overview queries
+  // now run HERE (useQueries batch below) instead of inside each mini-card.
+  const { accessToken } = useAuth();
+
   // ── Derived: conversation sources (Wave 2) ───────────────────────────────
   //
   // Citations aggregated across ALL assistant turns, deduped by source
@@ -536,7 +523,7 @@ export function ChatContextRail({
     [messages],
   );
 
-  // ── Derived: related tickers via the shared extractor (Round 2) ─────────
+  // ── Derived: detected tickers via the shared extractor (Round 2) ────────
   //
   // WHY recompute on every `messages` identity change: tickers must
   // appear/update AS the conversation evolves — a follow-up question that
@@ -544,10 +531,61 @@ export function ChatContextRail({
   //
   // `tickers` is deduped, most-recent-first, capped at 8; `overflow` is how
   // many additional distinct tickers were detected beyond the cap.
-  const { tickers: relatedTickers, overflow: tickerOverflow } = useMemo(
+  const { tickers: detectedTickers, overflow: tickerOverflow } = useMemo(
     () => extractTickers(messages),
     [messages],
   );
+
+  // ── Wave 3: per-ticker resolution lifted to the rail ─────────────────────
+  //
+  // WHY useQueries HERE (was a useQuery inside each EntityMiniCard): the
+  // ENTITY OVERVIEW header badge previously showed the count of raw
+  // DETECTIONS while each card decided for itself whether to render (null
+  // overview → null card). A live conversation detecting "WWDC" + "TSMC"
+  // showed count "2" over an EMPTY section — a lying header. Lifting the
+  // queries lets the rail split detections into three buckets and keep the
+  // header count equal to the cards actually on screen:
+  //
+  //   resolved   → data non-null     → EntityMiniCard (ENTITY OVERVIEW)
+  //   unresolved → settled, no data  → RELATED TICKERS chip (detected-but-
+  //                                     unresolved; chip still appends
+  //                                     $TICKER to the composer)
+  //   loading    → in flight         → skeleton card (excluded from count)
+  //
+  // Cache identity is unchanged (qk.chat.tickerMini) so this is the same
+  // cache entry the old per-card queries used — TanStack dedupes across the
+  // app, no extra requests.
+  const overviewQueries = useQueries({
+    queries: detectedTickers.map((ticker) => ({
+      queryKey: qk.chat.tickerMini(ticker),
+      // Wave 2: ONE request. Returns null on 404 (unresolvable ticker) —
+      // the resolve-before-render safety net for bare-token false positives.
+      queryFn: () => createGateway(accessToken).getCompanyOverviewByTicker(ticker),
+      enabled: !!accessToken && !!ticker,
+      // WHY staleTime 5min: price data is best-effort ambient context in the
+      // sidebar; we don't need sub-minute freshness here.
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  // Zip detections with their query results. Index alignment is guaranteed:
+  // useQueries returns results in the order of the queries array, which is
+  // built from detectedTickers in order.
+  const resolvedCards: Array<{ ticker: string; overview: CompanyOverview }> = [];
+  const loadingTickers: string[] = [];
+  const unresolvedTickers: string[] = [];
+  detectedTickers.forEach((ticker, i) => {
+    const q = overviewQueries[i];
+    if (q?.isLoading) {
+      loadingTickers.push(ticker);
+    } else if (q?.data) {
+      resolvedCards.push({ ticker, overview: q.data });
+    } else {
+      // Settled with null (404 → unknown ticker), undefined (error state),
+      // or disabled (no auth) — all degrade to "detected but unresolved".
+      unresolvedTickers.push(ticker);
+    }
+  });
 
   // Wave 2: cold state — nothing to derive context FROM yet. Entity context
   // via ?entity_id= still counts as content (the primary card renders).
@@ -603,19 +641,71 @@ export function ChatContextRail({
               </>
             )}
 
-            {/* ── Conversation sources (Wave 2) ─────────────────────────── */}
-            {/* WHY always render the section header even with 0 sources: the
-                rail looks confusing without labels mid-conversation. When no
-                citations exist yet we show a muted named line. */}
-            <SectionHeader
-              label="Conversation Sources"
-              count={conversationSources.length || undefined}
-            />
-            {visibleSources.length === 0 ? (
-              <p className="px-3 py-2 font-mono text-[9px] text-muted-foreground/60">
-                No sources cited yet.
-              </p>
-            ) : (
+            {/* ── Entity overview mini-cards (Wave 3: FIRST data section) ── */}
+            {/*
+             * One card per RESOLVED ticker (the rail-level useQueries batch
+             * above). Wave-3 reorganisation:
+             *   - Section order: Entity Overview leads — resolved entity
+             *     cards (live quote + sparkline) are the rail's highest-value
+             *     content, so they go above the bibliography (sources),
+             *     warnings, and tool stats.
+             *   - Header count = RENDERED cards (resolvedCards.length), never
+             *     raw detections — the count-2-zero-cards lie is structurally
+             *     impossible now.
+             *   - Loading tickers show a card-shaped skeleton but do NOT
+             *     count (they may yet resolve to nothing).
+             *   - The whole section collapses when nothing resolved and
+             *     nothing is loading (no header over empty space).
+             */}
+            {(resolvedCards.length > 0 || loadingTickers.length > 0) && (
+              <>
+                <SectionHeader
+                  label="Entity Overview"
+                  count={resolvedCards.length}
+                />
+                <div className="flex flex-col gap-1.5 px-3 py-1.5">
+                  {resolvedCards.map(({ ticker, overview }) => (
+                    <EntityMiniCard
+                      key={ticker}
+                      ticker={ticker}
+                      overview={overview}
+                      onClick={onCardClick}
+                    />
+                  ))}
+                  {/* WHY compact two-line skeletons: the mini card is inside a
+                      tight flex column; a full-height block skeleton would
+                      cause layout shift. Two small lines match the populated
+                      card's text layout. */}
+                  {loadingTickers.map((ticker) => (
+                    <div
+                      key={ticker}
+                      data-testid="mini-card-skeleton"
+                      className="space-y-1 rounded-[2px] border border-border/20 bg-card px-2 py-1.5"
+                    >
+                      <Skeleton className="h-2.5 w-16 rounded-[2px]" />
+                      <Skeleton className="h-2 w-24 rounded-[2px]" />
+                    </div>
+                  ))}
+                  {tickerOverflow > 0 && (
+                    <p className="px-1 font-mono text-[9px] text-muted-foreground/60">
+                      +{tickerOverflow} more mentioned
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* ── Conversation sources (Wave 2; Wave 3: collapses when empty) */}
+            {/* WHY render only when sources exist (Wave-3 organisation pass):
+                a header over "No sources cited yet." is scaffolding noise —
+                empty sections now collapse entirely so the rail only shows
+                sections that carry content. */}
+            {conversationSources.length > 0 && (
+              <>
+                <SectionHeader
+                  label="Conversation Sources"
+                  count={conversationSources.length}
+                />
               <div className="space-y-0 px-3 py-1">
                 {visibleSources.map((src, idx) => {
                   const badge = sourceBadge(src.source);
@@ -678,28 +768,39 @@ export function ChatContextRail({
                   </p>
                 )}
               </div>
+              </>
             )}
 
-            {/* ── Contradictions section ───────────────────────────────── */}
+            {/* ── Contradictions section (Wave 3: compact warning rows) ── */}
             {/* WHY only render when count > 0: contradictions are
-                high-signal — present them only when relevant. */}
+                high-signal — present them only when relevant.
+                WHY compact rows (was bordered warning BOXES): two boxed
+                multi-line warnings dominated the 320px rail (screenshot
+                evidence). A single-line row per contradiction — icon +
+                truncated snippet, full text in the title tooltip — keeps the
+                signal without the bulk. */}
             {contradictions.length > 0 && (
               <>
                 <SectionHeader
                   label="Contradictions"
                   count={contradictions.length}
                 />
-                <div className="space-y-1 px-3 py-1">
+                <div className="space-y-0.5 px-3 py-1">
                   {contradictions.map((snippet, idx) => (
                     <div
                       key={idx}
-                      className="flex items-start gap-1.5 rounded-[2px] border border-warning/20 bg-warning/5 px-2 py-1"
+                      data-testid="contradiction-row"
+                      // WHY title: the row truncates to one line; hovering
+                      // reveals the full contradiction text without spending
+                      // rail height on it.
+                      title={snippet}
+                      className="flex items-center gap-1.5 py-0.5"
                     >
                       <AlertTriangle
-                        className="mt-0.5 h-2.5 w-2.5 shrink-0 text-warning"
+                        className="h-2.5 w-2.5 shrink-0 text-warning"
                         strokeWidth={1.5}
                       />
-                      <p className="font-mono text-[10px] leading-snug text-foreground">
+                      <p className="min-w-0 flex-1 truncate font-mono text-[10px] leading-snug text-foreground">
                         {snippet}
                       </p>
                     </div>
@@ -708,16 +809,29 @@ export function ChatContextRail({
               </>
             )}
 
-            {/* ── Related tickers section ──────────────────────────────── */}
-            {relatedTickers.length > 0 && (
+            {/* ── Related tickers (Wave 3: detected-but-UNRESOLVED only) ── */}
+            {/*
+             * Wave-3 differentiation: this section previously listed EVERY
+             * detected ticker — duplicating the Entity Overview cards above
+             * it. The two surfaces now have distinct jobs:
+             *   ENTITY OVERVIEW — tickers that RESOLVED to a listed
+             *     instrument → full data cards.
+             *   RELATED TICKERS — tickers that were detected in the
+             *     conversation but did NOT resolve (foreign listings like
+             *     "TSMC", OTC symbols, blocklist escapes). They still get a
+             *     quick-action chip (click appends $TICKER to the composer so
+             *     the analyst can ask about them), but no phantom card and no
+             *     contribution to the overview count.
+             */}
+            {unresolvedTickers.length > 0 && (
               <>
                 <SectionHeader
                   label="Related Tickers"
-                  count={relatedTickers.length}
+                  count={unresolvedTickers.length}
                 />
                 {/* WHY flex-wrap: some threads mention 10+ tickers. */}
                 <div className="flex flex-wrap gap-1 px-3 py-2">
-                  {relatedTickers.map((ticker) => (
+                  {unresolvedTickers.map((ticker) => (
                     <button
                       key={ticker}
                       type="button"
@@ -734,40 +848,11 @@ export function ChatContextRail({
                     </button>
                   ))}
                 </div>
-              </>
-            )}
-
-            {/* ── Entity overview mini-cards ───────────────────────────── */}
-            {/*
-             * One card per detected ticker (8 most recent, extractor-capped),
-             * each a SINGLE by-ticker overview request (Wave 2). Tickers that
-             * fail to resolve (404 → null) render nothing — bare-token false
-             * positives cost a request, never a phantom card.
-             *
-             * WHY AFTER Related Tickers: the chips are a quick-action surface
-             * (one click → composer); the cards are a data surface. Quick
-             * actions first, data below — Bloomberg's RELATED/DETAILS order.
-             */}
-            {relatedTickers.length > 0 && (
-              <>
-                <SectionHeader
-                  label="Entity Overview"
-                  count={relatedTickers.length}
-                />
-                <div className="flex flex-col gap-1.5 px-3 py-1.5">
-                  {relatedTickers.map((ticker) => (
-                    <EntityMiniCard
-                      key={ticker}
-                      ticker={ticker}
-                      onClick={onCardClick}
-                    />
-                  ))}
-                  {tickerOverflow > 0 && (
-                    <p className="px-1 font-mono text-[9px] text-muted-foreground/60">
-                      +{tickerOverflow} more mentioned
-                    </p>
-                  )}
-                </div>
+                {/* One-line differentiator so the chips don't read as a
+                    duplicate of the overview cards above. */}
+                <p className="px-3 pb-1 font-mono text-[9px] text-muted-foreground/60">
+                  Detected in conversation; not resolved to a listed instrument.
+                </p>
               </>
             )}
 

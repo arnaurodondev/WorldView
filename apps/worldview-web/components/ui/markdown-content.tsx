@@ -65,6 +65,23 @@ export interface MarkdownContentProps {
    * and short-circuit to a `<sup>` element without risk of collisions.
    */
   withCitationSups?: boolean;
+  /**
+   * Wave 3 (chat hardening): how many citations actually exist for this
+   * message. When provided alongside `withCitationSups`, any `[N]` marker
+   * with N > citationCount renders as a MUTED "dead" badge with a
+   * "Source not available" tooltip instead of the primary-tinted live chip.
+   *
+   * WHY: the backend can emit inline markers ([5], [8]) that exceed the
+   * citations array it delivered (observed live: markers up to [11] over a
+   * 4-item list — a known S8 bug owned by the backend). The frontend must
+   * degrade gracefully: a marker with no matching source must never look
+   * like a clickable/trustworthy reference.
+   *
+   * WHY optional: callers that don't know the citation list (or render
+   * non-chat content) omit it and get the legacy behaviour — every marker
+   * styled as a live chip.
+   */
+  citationCount?: number;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -116,6 +133,7 @@ export function MarkdownContent({
   size = "comfortable",
   className,
   withCitationSups = false,
+  citationCount,
 }: MarkdownContentProps): ReactNode {
   // P2C-5: pre-process [N] markers → sentinel inline-code when opt-in.
   // WHY before the component body (not inside ReactMarkdown children): the
@@ -232,6 +250,27 @@ export function MarkdownContent({
               const text = typeof c === "string" ? c : "";
               if (text.startsWith(CITE_SENTINEL)) {
                 const citNum = text.slice(CITE_SENTINEL.length);
+                // Wave 3 (dead-marker hardening): when the caller told us how
+                // many citations exist, markers beyond that range have NO
+                // matching source — render a muted dead badge instead of the
+                // live primary chip. line-through + muted colour + an explicit
+                // tooltip make "this reference is broken upstream" legible
+                // without pretending the marker is a usable link. (The marker
+                // index itself is preserved so the prose still reads.)
+                const isDead =
+                  citationCount !== undefined &&
+                  parseInt(citNum, 10) > citationCount;
+                if (isDead) {
+                  return (
+                    <sup
+                      className="cursor-default rounded-[2px] bg-muted/40 px-0.5 text-[8px] font-mono text-muted-foreground/60 line-through"
+                      title="Source not available"
+                      data-testid="dead-citation-marker"
+                    >
+                      [{citNum}]
+                    </sup>
+                  );
+                }
                 return (
                   // WHY these classes match AskAiPanel renderWithCitations:
                   // consistent citation styling across both the mini-panel and

@@ -1554,3 +1554,245 @@ describe("useChatStream — Wave 2 stream additions", () => {
     expect(assistant.latency_ms).toBe(9526);
   });
 });
+
+// ── Wave 3 — false-interrupt regression (live SSE event order) ───────────────
+//
+// USER-REPORTED BUG (2026-06-11 screenshot): a fully delivered answer —
+// complete text, meta strip, citations, suggestions — rendered with a
+// "Response interrupted before any content arrived" banner underneath it.
+// Live traces pinned the REAL event order the backend emits:
+//
+//   tool_call → tool_result → agent_iteration → token… → final_answer →
+//   citations → contradictions → suggestions → metadata → done
+//
+// The Round-4 detector fired whenever the reader exhausted without having
+// PROCESSED a done frame — but the done frame can be (a) sitting in the
+// undelivered tail buffer when the final chunk has no trailing newline, or
+// (b) genuinely lost when a proxy closes the connection right after
+// metadata. These tests pin the Wave-3 contract: the banner NEVER fires when
+// the answer completed.
+
+describe("useChatStream — Wave 3 false-interrupt hardening", () => {
+  /** The full event order observed live (2026-06-11 SSE traces). */
+  const LIVE_ORDER_FRAMES = [
+    "event: tool_call\n" +
+      'data: {"type":"tool_call","tool":"get_entity_news","label":"get_entity_news...","input":{"ticker":"AAPL"},"status":"running"}\n\n',
+    "event: tool_result\n" +
+      'data: {"type":"tool_result","tool":"get_entity_news","status":"ok","item_count":10,"duration_ms":310}\n\n',
+    'event: token\ndata: {"text":"Apple is "}\n\n',
+    'event: token\ndata: {"text":"doing fine."}\n\n',
+    "event: final_answer\n" + 'data: {"text":"Apple is doing fine."}\n\n',
+    "event: citations\n" +
+      'data: [{"article_id":"a1","title":"Apple news","url":"https://example.com/a1","source":"news","relevance_score":0.9}]\n\n',
+    "event: contradictions\ndata: []\n\n",
+    'event: suggestions\ndata: ["What about TSMC?"]\n\n',
+    "event: metadata\n" +
+      'data: {"intent":"GENERAL","provider":"deepinfra","model":"r1","latency_ms":1234}\n\n',
+  ];
+
+  function mockFetchWithFrames(frames: string[]) {
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("real observed event order ending in done → finalized, NO banner, meta+citations attached", async () => {
+    mockFetchWithFrames([
+      ...LIVE_ORDER_FRAMES,
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Latest on Apple?");
+    });
+
+    // The core regression assertion: a complete answer NEVER shows the banner.
+    expect(result.current.chatError).toBeNull();
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+      citations: Array<{ article_id: string }>;
+      intent?: string | null;
+      latency_ms?: number | null;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("Apple is doing fine.");
+    expect(assistant.citations).toHaveLength(1);
+    // metadata event fields land on the optimistic message (meta strip).
+    expect(assistant.intent).toBe("GENERAL");
+    expect(assistant.latency_ms).toBe(1234);
+    // suggestions event populated the chips source.
+    expect(result.current.serverSuggestions).toEqual(["What about TSMC?"]);
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("reader exhaustion right AFTER metadata (done frame lost) → clean finalize, NO banner", async () => {
+    // Same live order but the stream dies before the done frame — the shape
+    // a proxy produces when it closes the upstream connection eagerly.
+    mockFetchWithFrames(LIVE_ORDER_FRAMES);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Latest on Apple?");
+    });
+
+    // NEVER the banner when terminal events (suggestions/metadata) arrived.
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as {
+      content: string;
+      intent?: string | null;
+    };
+    expect(assistant.content).toBe("Apple is doing fine.");
+    expect(assistant.intent).toBe("GENERAL");
+    // Stream chrome fully reset — no orphaned spinners next to the answer.
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("done frame in the FINAL chunk without a trailing newline → finalized, NO banner", async () => {
+    // Chunk boundaries are arbitrary: the closing frames can arrive in one
+    // last chunk that ends mid-line (no trailing \n). Pre-Wave-3, the done
+    // data line stayed in `buffer` unprocessed and the banner fired under a
+    // complete answer.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Full answer."}\n\n',
+      // Final chunk: done event line + data line, NO trailing newline.
+      'event: done\ndata: {"type":"done"}',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Full answer.");
+  });
+
+  it("zero-token stream: final_answer text becomes the assistant message (cache-hit shape)", async () => {
+    // Some backend paths (cache hits, guardrails) emit NO token frames —
+    // only final_answer. Pre-Wave-3 the optimistic message settled EMPTY and
+    // the text only appeared after a thread refetch.
+    mockFetchWithFrames([
+      "event: final_answer\n" +
+        'data: {"text":"Cached: Apple reported record revenue."}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Cached: Apple reported record revenue.");
+  });
+
+  it("tokens still WIN over final_answer when both are present (refusal-text divergence)", async () => {
+    // Live trace 2026-06-11: the token stream carried the real answer while
+    // final_answer carried an unrelated refusal string. The fallback must
+    // never override genuinely streamed text.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Real streamed answer."}\n\n',
+      "event: final_answer\n" +
+        'data: {"text":"I cannot find information about the entities."}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Real streamed answer.");
+  });
+
+  it("a GENUINE early interruption (no terminal events) still surfaces the banner", async () => {
+    // Guard the guard: Wave 3 must not have neutered the detector. Tokens
+    // flow, then the stream dies with no citations/suggestions/metadata/done
+    // — that IS an interruption and the user must see it.
+    mockFetchWithFrames(['event: token\ndata: {"text":"Partial ans"}\n\n']);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toMatch(/interrupted/i);
+    // Partial content preserved verbatim as its own message.
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Partial ans");
+  });
+
+  it("tool_call events stamp startedAt onto activeTools (elapsed-chip data source)", async () => {
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("Q?");
+    });
+
+    const before = Date.now();
+    await act(async () => {
+      ar.pushChunk(
+        "event: tool_call\n" +
+          'data: {"type":"tool_call","tool":"search_documents","label":"Searching...","status":"running"}\n\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+    });
+    const tool = result.current.activeTools[0];
+    // startedAt is a wall-clock stamp taken at event receipt — bounded by
+    // the test's own before/after reads.
+    expect(tool.startedAt).toBeGreaterThanOrEqual(before);
+    expect(tool.startedAt).toBeLessThanOrEqual(Date.now());
+
+    await act(async () => {
+      ar.finish();
+      await sendPromise;
+    });
+  });
+});

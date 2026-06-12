@@ -114,6 +114,15 @@ const NOISE_TOKENS: readonly string[] = [
   "LLM", "LLMS", "NLP", "OS", "PC", "TV", "UI", "UX", "ID", "OEM", "B2B",
   "B2C", "KPI", "OKR", "MVP", "POC", "GA", "EOL", "FAQ", "FYI", "ASAP",
   "IMO", "TLDR", "TBD", "ETA", "EST", "PST", "GMT", "UTC", "CET",
+  // ── Conferences / tech & finance events (Wave 3 — live false positive) ──
+  // "WWDC" was detected as a ticker in a live conversation about Apple's
+  // developer conference, producing a phantom ENTITY OVERVIEW entry (count
+  // said 2, zero cards rendered). Conference acronyms are pervasive in
+  // finance/tech news prose and none of them are primary-listing tickers
+  // the platform tracks. As ever, `$WWDC` would still bypass the list.
+  // (NASDAQ-style 6+ letter events — COMPUTEX, KEYNOTE — are unmatchable
+  // by the 2–5 letter pattern and are deliberately not listed.)
+  "WWDC", "CES", "MWC", "GTC", "SXSW", "IFA", "NAB", "EXPO", "DAVOS",
   // ── Quarters / periods (digits make these unmatchable; kept as intent docs) ──
   "Q1", "Q2", "Q3", "Q4", "H1", "H2",
   // ── Common English words analysts type in caps for emphasis ──

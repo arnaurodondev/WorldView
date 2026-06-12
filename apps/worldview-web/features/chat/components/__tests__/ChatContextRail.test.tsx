@@ -29,9 +29,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 // ── Mock TanStack Query ───────────────────────────────────────────────────────
-// WHY top-level mock: the EntityCard inside ChatContextRail calls useQuery.
-// Without a provider or mock, the hook throws. We mock the module so useQuery
-// returns an idle (no-data, not-loading) state for all calls in this suite.
+// WHY top-level mock: the EntityCard inside ChatContextRail calls useQuery,
+// and (Wave 3) the rail itself calls useQueries for per-ticker resolution.
+// Without a provider or mock, the hooks throw. We mock the module so both
+// return idle (no-data, not-loading) states by default; individual tests
+// re-arm them with resolved overview data.
+//
+// WHY useQueries DEFAULTS to a per-query mapper (not a static array): the
+// rail builds one query per detected ticker — the mock must return an array
+// of the same length or the zip in the component would misalign. Tests that
+// need resolved data override the implementation with their own mapper.
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
     "@tanstack/react-query",
@@ -39,6 +46,10 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+    useQueries: vi.fn(
+      ({ queries }: { queries: unknown[] }) =>
+        queries.map(() => ({ data: undefined, isLoading: false })),
+    ),
   };
 });
 
@@ -61,10 +72,36 @@ vi.mock("@/lib/gateway", () => ({
 
 import { ChatContextRail } from "../ChatContextRail";
 import type { Message } from "@/types/api";
-// WHY import useQuery here: the module is mocked above; importing the mocked
-// binding lets the Round-2 mini-card tests override its return value with
-// resolved overview data (vi.mocked(useQuery).mockReturnValue(...)).
-import { useQuery } from "@tanstack/react-query";
+// WHY import useQuery/useQueries here: the module is mocked above; importing
+// the mocked bindings lets the Round-2 mini-card tests override their return
+// values with resolved overview data (vi.mocked(useQueries).mockImplementation).
+import { useQuery, useQueries } from "@tanstack/react-query";
+
+/**
+ * armTickerResolution — point the rail-level useQueries batch at a fixed
+ * per-ticker result. The mapper receives each query's key (["chat",
+ * "ticker-mini", TICKER]) and must return the TanStack result slice the rail
+ * reads ({ data, isLoading }).
+ *
+ * WHY a helper: Wave 3 moved ticker resolution from per-card useQuery into a
+ * rail-level useQueries batch — every test that previously armed useQuery for
+ * mini-cards now arms this instead, with per-ticker control (the count tests
+ * need SOME tickers resolved and others not).
+ */
+function armTickerResolution(
+  resolver: (ticker: string) => { data?: unknown; isLoading?: boolean },
+) {
+  vi.mocked(useQueries).mockImplementation((({
+    queries,
+  }: {
+    queries: Array<{ queryKey?: unknown[] }>;
+  }) =>
+    queries.map((q) => {
+      const ticker = String(q.queryKey?.[2] ?? "");
+      const { data, isLoading = false } = resolver(ticker);
+      return { data, isLoading };
+    })) as unknown as typeof useQueries);
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +131,14 @@ const DEFAULT_PROPS = {
 describe("ChatContextRail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Re-arm the defaults explicitly: clearAllMocks() does NOT restore
+    // implementations, so a later describe block arming resolved data must
+    // not leak backwards/forwards into these baseline tests.
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
   });
 
   // ── Render shell ──────────────────────────────────────────────────────────
@@ -126,7 +171,11 @@ describe("ChatContextRail", () => {
       />,
     );
     expect(screen.queryByTestId("rail-cold-state")).not.toBeInTheDocument();
-    expect(screen.getByText("Conversation Sources")).toBeInTheDocument();
+    // Wave 3: a message with no citations no longer renders the (empty)
+    // Conversation Sources section — empty sections collapse entirely. The
+    // panel header is the remaining stable anchor for "rail is alive".
+    expect(screen.getByText("Context")).toBeInTheDocument();
+    expect(screen.queryByText("Conversation Sources")).not.toBeInTheDocument();
   });
 
   it("fires onClose when × is clicked", () => {
@@ -164,12 +213,17 @@ describe("ChatContextRail", () => {
 
   // ── Citations ─────────────────────────────────────────────────────────────
 
-  it("shows 'No sources cited yet.' when messages have no citations", () => {
+  it("collapses the Conversation Sources section entirely when no citations exist (Wave 3)", () => {
+    // Ported from "shows 'No sources cited yet.'": the Wave-3 organisation
+    // pass removed empty-section scaffolding — a header over a "nothing yet"
+    // placeholder line is noise. The section now renders ONLY when at least
+    // one source exists.
     const messages = [
       makeMessage({ content: "Hello world", citations: [] }),
     ];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
-    expect(screen.getByText(/no sources cited yet/i)).toBeInTheDocument();
+    expect(screen.queryByText("Conversation Sources")).not.toBeInTheDocument();
+    expect(screen.queryByText(/no sources cited yet/i)).not.toBeInTheDocument();
   });
 
   it("deduplicates citations of the same source doc and shows the reference count", () => {
@@ -537,13 +591,15 @@ const MOCK_OVERVIEW = {
 describe("ChatContextRail — Entity Overview mini-cards (Round 2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // All useQuery calls in this block resolve to the same overview — fine
-    // for assertions on card STRUCTURE (count, fields, click) where per-card
-    // identity is irrelevant.
+    // Primary entity card query (useQuery) stays idle; the per-ticker
+    // resolution batch (Wave 3: useQueries at the rail level) resolves every
+    // detected ticker to the same overview — fine for assertions on card
+    // STRUCTURE (count, fields, click) where per-card identity is irrelevant.
     vi.mocked(useQuery).mockReturnValue({
-      data: MOCK_OVERVIEW,
+      data: undefined,
       isLoading: false,
     } as unknown as ReturnType<typeof useQuery>);
+    armTickerResolution(() => ({ data: MOCK_OVERVIEW, isLoading: false }));
   });
 
   it("renders a mini-card with ticker, name, price, %chg and P/E from overview data", () => {
@@ -607,19 +663,21 @@ describe("ChatContextRail — Entity Overview mini-cards (Round 2)", () => {
   });
 
   it("does NOT render a card for tickers that fail to resolve", () => {
-    // Simulate the search-miss path: queryFn resolved to null (no instrument).
-    vi.mocked(useQuery).mockReturnValue({
-      data: null,
-      isLoading: false,
-    } as unknown as ReturnType<typeof useQuery>);
+    // Simulate the resolve-miss path: queryFn resolved to null (404 → no
+    // instrument). Wave 3: the resolution lives in the rail's useQueries.
+    armTickerResolution(() => ({ data: null, isLoading: false }));
     const messages = [
       makeMessage({ content: "Look at $ZZZZZ", citations: [] }),
     ];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
-    // The chip still shows (detection happened) …
+    // The chip still shows — Wave 3: in RELATED TICKERS, which now hosts
+    // exactly the detected-but-unresolved tokens …
     expect(screen.getByText("$ZZZZZ")).toBeInTheDocument();
-    // … but no card renders — validation against the search endpoint failed.
+    // … but no card renders — resolution against the by-ticker endpoint failed.
     expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
+    // Wave 3: and the ENTITY OVERVIEW section collapses entirely (no header
+    // with a lying count over zero cards — the user-reported bug).
+    expect(screen.queryByText(/entity overview/i)).not.toBeInTheDocument();
   });
 });
 
@@ -628,6 +686,10 @@ describe("ChatContextRail — Entity Overview mini-cards (Round 2)", () => {
 describe("ChatContextRail — loading skeletons (Round 3)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Wave 3: re-arm the ticker batch default — implementations are NOT
+    // restored by clearAllMocks, so the previous block's resolved-data
+    // mapper would otherwise leak into these tests.
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
   });
 
   it("renders a card-SHAPED skeleton for the primary entity card while the overview loads", () => {
@@ -656,6 +718,7 @@ describe("ChatContextRail — loading skeletons (Round 3)", () => {
 describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
   });
 
   it("a failed primary entity-card query renders NO card and NO error UI", () => {
@@ -675,18 +738,16 @@ describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => 
     // …and no error copy / alert role anywhere in the rail.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/error|failed|retry/i)).not.toBeInTheDocument();
-    // The rest of the rail keeps rendering normally (section labels intact —
-    // Wave 2: "Recent Citations" became "Conversation Sources").
-    expect(screen.getByText("Conversation Sources")).toBeInTheDocument();
+    // The rest of the rail keeps rendering normally — Wave 3: with zero
+    // citations the sources section collapses, so the panel header is the
+    // stable "rail still alive" anchor.
+    expect(screen.getByText("Context")).toBeInTheDocument();
   });
 
   it("a failed mini-card lookup renders NO card and NO error UI (chip survives)", () => {
-    vi.mocked(useQuery).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-      error: new Error("search 500"),
-    } as unknown as ReturnType<typeof useQuery>);
+    // Wave 3: mini-card resolution lives in the rail's useQueries batch —
+    // arm the error shape there (data undefined, settled).
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
 
     const messages = [makeMessage({ content: "Look at $NVDA", citations: [] })];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
@@ -705,37 +766,41 @@ describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => 
 describe("ChatContextRail — by-ticker mini-card fetch (Wave 2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
   });
 
   it("mini-card queryFn resolves via getCompanyOverviewByTicker in ONE call (no search step)", async () => {
-    // useQuery is module-mocked, so the queryFn never runs in render — we
-    // CAPTURE the options the mini-card passes and invoke the queryFn
-    // directly against the gateway spies. This pins the Wave-2 contract:
-    // one by-ticker request, zero searchInstruments round-trips.
-    vi.mocked(useQuery).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-    } as unknown as ReturnType<typeof useQuery>);
-
+    // useQueries is module-mocked, so the queryFn never runs in render — we
+    // CAPTURE the query options the rail passes into the batch and invoke
+    // the queryFn directly against the gateway spies. This pins the Wave-2
+    // contract: one by-ticker request, zero searchInstruments round-trips.
+    // (Wave 3 moved this query from the mini-card's useQuery into the rail's
+    // useQueries — the cache key and fetch contract are unchanged.)
     const messages = [makeMessage({ content: "Look at $NVDA", citations: [] })];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
 
-    // Find the mini-card's query options by its cache key shape
+    // Find the per-ticker query options by their cache key shape
     // (["chat", "ticker-mini", "NVDA"] — qk.chat.tickerMini).
-    const call = vi
-      .mocked(useQuery)
-      .mock.calls.map((c) => c[0] as { queryKey?: unknown; queryFn?: () => unknown })
+    const batchCall = vi
+      .mocked(useQueries)
+      .mock.calls.map(
+        (c) =>
+          c[0] as {
+            queries: Array<{ queryKey?: unknown; queryFn?: () => unknown }>;
+          },
+      )
+      .flatMap((opts) => opts.queries)
       .find(
-        (opts) =>
-          Array.isArray(opts.queryKey) && opts.queryKey[1] === "ticker-mini",
+        (q) => Array.isArray(q.queryKey) && q.queryKey[1] === "ticker-mini",
       );
-    expect(call).toBeDefined();
-    expect(Array.isArray(call!.queryKey) && (call!.queryKey as string[])[2]).toBe(
-      "NVDA",
-    );
+    expect(batchCall).toBeDefined();
+    expect(
+      Array.isArray(batchCall!.queryKey) &&
+        (batchCall!.queryKey as string[])[2],
+    ).toBe("NVDA");
 
     mockGetCompanyOverviewByTicker.mockResolvedValue(MOCK_OVERVIEW);
-    await call!.queryFn!();
+    await batchCall!.queryFn!();
 
     expect(mockGetCompanyOverviewByTicker).toHaveBeenCalledWith("NVDA");
     // The old two-step dance is GONE — no instrument search round-trip.
@@ -743,7 +808,7 @@ describe("ChatContextRail — by-ticker mini-card fetch (Wave 2)", () => {
   });
 
   it("renders a 5-day sparkline from the ohlcv bars the overview already carries", () => {
-    vi.mocked(useQuery).mockReturnValue({
+    armTickerResolution(() => ({
       data: {
         ...MOCK_OVERVIEW,
         ohlcv: {
@@ -760,7 +825,7 @@ describe("ChatContextRail — by-ticker mini-card fetch (Wave 2)", () => {
         },
       },
       isLoading: false,
-    } as unknown as ReturnType<typeof useQuery>);
+    }));
 
     const messages = [makeMessage({ content: "Look at $AAPL", citations: [] })];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
@@ -771,10 +836,10 @@ describe("ChatContextRail — by-ticker mini-card fetch (Wave 2)", () => {
   });
 
   it("renders NO sparkline when the overview has fewer than 2 bars", () => {
-    vi.mocked(useQuery).mockReturnValue({
+    armTickerResolution(() => ({
       data: { ...MOCK_OVERVIEW, ohlcv: { bars: [] } },
       isLoading: false,
-    } as unknown as ReturnType<typeof useQuery>);
+    }));
 
     const messages = [makeMessage({ content: "Look at $AAPL", citations: [] })];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
@@ -792,6 +857,7 @@ describe("ChatContextRail — Tools Used (Wave 2)", () => {
       data: undefined,
       isLoading: false,
     } as unknown as ReturnType<typeof useQuery>);
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
   });
 
   const SAMPLES = [
@@ -855,5 +921,182 @@ describe("ChatContextRail — Tools Used (Wave 2)", () => {
     );
     expect(screen.queryByTestId("tools-debug-link")).not.toBeInTheDocument();
     expect(screen.getByText(/⌘D opens the per-call trace/)).toBeInTheDocument();
+  });
+});
+
+// ── Wave 3 — rail organisation: honest counts, resolved/unresolved split ─────
+//
+// Live evidence (2026-06-11 screenshot): a conversation that detected "WWDC"
+// (Apple's conference — a false positive) and "TSMC" (not a US-listed primary
+// ticker; the listed symbol is TSM) rendered ENTITY OVERVIEW with count "2"
+// and ZERO cards. These tests pin the Wave-3 contract:
+//   1. The section count equals the RENDERED cards, never raw detections.
+//   2. Detected-but-unresolved tickers appear ONLY as RELATED TICKERS chips.
+//   3. Conference tokens (WWDC, CES, …) never get detected at all (blocklist).
+//   4. Contradictions render as compact single-line rows with a full-text
+//      tooltip (was: bulky bordered boxes).
+
+describe("ChatContextRail — Wave 3 organisation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+    armTickerResolution(() => ({ data: undefined, isLoading: false }));
+  });
+
+  it("ENTITY OVERVIEW count equals RENDERED cards when only some detections resolve", () => {
+    // AAPL resolves; TSMC does not (404 → null). The regression: count said
+    // "2" (raw detections) over a single — or zero — card(s).
+    armTickerResolution((ticker) =>
+      ticker === "AAPL"
+        ? { data: MOCK_OVERVIEW, isLoading: false }
+        : { data: null, isLoading: false },
+    );
+    const messages = [
+      makeMessage({ content: "Compare $AAPL with $TSMC supply chains" }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // Exactly ONE card renders…
+    expect(screen.getAllByTestId("entity-mini-card")).toHaveLength(1);
+    // …and the section header badge says 1 (badge is the mono count chip
+    // next to the "Entity Overview" label — assert via its row container).
+    const header = screen.getByText(/entity overview/i).closest("div");
+    expect(header?.textContent).toContain("1");
+    expect(header?.textContent).not.toContain("2");
+  });
+
+  it("collapses ENTITY OVERVIEW entirely when nothing resolves (count-2-zero-cards regression)", () => {
+    armTickerResolution(() => ({ data: null, isLoading: false }));
+    const messages = [
+      makeMessage({ content: "Thoughts on $TSMC and $ASMLF today?" }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // No header, no count badge, no cards — the section is GONE.
+    expect(screen.queryByText(/entity overview/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
+    // Both unresolved detections live in RELATED TICKERS instead.
+    expect(screen.getByText(/related tickers/i)).toBeInTheDocument();
+    expect(screen.getByText("$TSMC")).toBeInTheDocument();
+    expect(screen.getByText("$ASMLF")).toBeInTheDocument();
+  });
+
+  it("RELATED TICKERS hosts ONLY unresolved detections (resolved ones are cards, not chips)", () => {
+    armTickerResolution((ticker) =>
+      ticker === "AAPL"
+        ? { data: MOCK_OVERVIEW, isLoading: false }
+        : { data: null, isLoading: false },
+    );
+    const messages = [
+      makeMessage({ content: "Compare $AAPL with $TSMC supply chains" }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // AAPL resolved → card, NO chip.
+    expect(screen.getAllByTestId("entity-mini-card")).toHaveLength(1);
+    expect(screen.queryByText("$AAPL")).not.toBeInTheDocument();
+    // TSMC unresolved → chip only, with the differentiator hint line.
+    expect(screen.getByText("$TSMC")).toBeInTheDocument();
+    expect(
+      screen.getByText(/not resolved to a listed instrument/i),
+    ).toBeInTheDocument();
+  });
+
+  it("in-flight ticker resolutions render a skeleton card but do NOT count", () => {
+    armTickerResolution((ticker) =>
+      ticker === "AAPL"
+        ? { data: MOCK_OVERVIEW, isLoading: false }
+        : { data: undefined, isLoading: true },
+    );
+    const messages = [
+      makeMessage({ content: "Compare $AAPL and $NVDA margins" }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // One resolved card + one loading skeleton…
+    expect(screen.getAllByTestId("entity-mini-card")).toHaveLength(1);
+    expect(screen.getAllByTestId("mini-card-skeleton")).toHaveLength(1);
+    // …but the count badge only reports the SETTLED card.
+    const header = screen.getByText(/entity overview/i).closest("div");
+    expect(header?.textContent).toContain("1");
+    // The loading ticker is NOT shown as an unresolved chip yet — it may
+    // still resolve to a card; chips are for SETTLED misses only.
+    expect(screen.queryByText("$NVDA")).not.toBeInTheDocument();
+  });
+
+  it("never detects conference tokens like WWDC (live false positive, blocklisted)", () => {
+    // Resolve EVERYTHING the rail asks for — if WWDC slipped the blocklist it
+    // would render a card and the test would catch it.
+    armTickerResolution(() => ({ data: MOCK_OVERVIEW, isLoading: false }));
+    const messages = [
+      makeMessage({
+        role: "assistant",
+        content: "Apple previewed new AI features at WWDC this week.",
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // No detection at all: no card, no chip, no section headers.
+    expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
+    expect(screen.queryByText("$WWDC")).not.toBeInTheDocument();
+    expect(screen.queryByText(/entity overview/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/related tickers/i)).not.toBeInTheDocument();
+  });
+
+  it("renders contradictions as compact single-line rows with a full-text tooltip", () => {
+    const snippet =
+      "FX impact reported as 60bp in Q1 vs 80-120bp range in Q2 guidance";
+    const messages = [makeMessage({ content: `⚠ ${snippet}` })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    const row = screen.getByTestId("contradiction-row");
+    // Full text available on hover (the visible line truncates via CSS).
+    expect(row).toHaveAttribute("title", snippet);
+    // Compact row: no bordered warning-box chrome (the Wave-3 de-bulking).
+    expect(row.className).not.toContain("border-warning");
+  });
+
+  it("orders sections value-first: Entity Overview above Sources above Contradictions above Tools", () => {
+    armTickerResolution(() => ({ data: MOCK_OVERVIEW, isLoading: false }));
+    const messages = [
+      makeMessage({
+        content: "⚠ guidance conflict between filings — see $AAPL",
+        citations: [
+          {
+            article_id: "a1",
+            title: "Apple 10-Q",
+            url: "https://sec.gov/aapl",
+            source: "sec",
+            relevance_score: 0.9,
+          },
+        ],
+      }),
+    ];
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        toolUsage={[{ tool: "search_documents", latencyMs: 120 }]}
+      />,
+    );
+
+    const labels = [
+      "Entity Overview",
+      "Conversation Sources",
+      "Contradictions",
+      "Tools Used",
+    ].map((label) => screen.getByText(label));
+    // compareDocumentPosition: FOLLOWING bit set when the argument comes
+    // AFTER the receiver in document order — assert each label precedes the
+    // next one.
+    for (let i = 0; i < labels.length - 1; i++) {
+      expect(
+        labels[i].compareDocumentPosition(labels[i + 1]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
   });
 });

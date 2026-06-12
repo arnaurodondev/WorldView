@@ -584,6 +584,24 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // thread refetch (the server persists the same fields; this just
         // closes the gap for the optimistic local message).
         let pendingMeta: AssistantTurnMeta | null = null;
+        // Wave 3 (false-interrupt fix): TRUE once a post-answer terminal event
+        // (`suggestions` or `metadata`) has been observed. Both are emitted by
+        // S8 strictly AFTER the complete answer (verified live: token… →
+        // citations → suggestions → metadata → done). If the reader then
+        // exhausts WITHOUT the final `done` frame (e.g. the connection closes
+        // right after metadata, or the done frame is lost in the last network
+        // chunk), the answer still COMPLETED — the interruption detector must
+        // finalize cleanly instead of slapping a false "Response interrupted"
+        // banner under a fully-delivered answer (the user-reported bug).
+        let sawAnswerComplete = false;
+        // Wave 3: text from the `final_answer` SSE event. S8 emits the full
+        // answer as ONE final_answer frame in addition to the token frames.
+        // Normally tokens win (finalContent is non-empty), but some backend
+        // paths (cache hits, guardrail responses) emit NO token frames at all
+        // — previously those settled as an EMPTY optimistic message and the
+        // answer only appeared after a thread refetch. final_answer is the
+        // fallback content source for exactly that shape.
+        let finalAnswerText = "";
 
         // Helper: finalise a CLEAN stream end (done event / [DONE] sentinel)
         // and promote the bubble to a message. Interrupted ends (reader
@@ -592,7 +610,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // never masquerade as a complete answer.
         const finalize = () => {
           setStreaming(null);
-          if (finalContent || pendingCitations.length > 0) {
+          // Wave 3: tokens are the primary content source; final_answer is
+          // the fallback for zero-token streams (see finalAnswerText above).
+          const content = finalContent || finalAnswerText;
+          if (content || pendingCitations.length > 0) {
             // Wave 2: MessageWithMeta — spread the metadata-event fields onto
             // the optimistic message so MessageBubble's meta strip shows
             // intent/provider/latency immediately (the server-persisted copy
@@ -601,7 +622,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               message_id: crypto.randomUUID(),
               thread_id: threadId,
               role: "assistant",
-              content: finalContent,
+              content,
               created_at: new Date().toISOString(),
               citations: pendingCitations,
               ...(pendingMeta ?? {}),
@@ -615,10 +636,415 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           refetchThreads();
         };
 
+        // ── Per-line demultiplexer ────────────────────────────────────────
+        // Wave 3 (false-interrupt fix): the demux used to live inline in the
+        // read loop, which made it impossible to re-run on the LEFTOVER
+        // buffer after the reader exhausted. If the final network chunk
+        // arrived without a trailing newline (arbitrary chunk boundaries are
+        // legal — proxies re-frame freely), the closing `done` frame sat
+        // unprocessed in `buffer` and the interruption detector fired under
+        // a fully-delivered answer. Extracting the demux into a closure lets
+        // the read loop AND the post-loop tail flush share one code path.
+        //
+        // Return contract (the closure cannot `return` out of send() itself):
+        //   "ok"        — line consumed, keep reading
+        //   "finalized" — clean end-of-stream handled (done/[DONE]); caller
+        //                 must stop reading and exit send()
+        //   "errored"   — server-emitted error handled; caller must exit
+        const handleLine = (line: string): "ok" | "finalized" | "errored" => {
+          // FR-5.6 (MED-013): use parseSSELine for field extraction — single
+          // canonical parser (lib/sse-parser.ts) instead of inline slicing.
+          // The stateful pendingEventName accumulation stays here because it
+          // is tightly coupled to the streaming state machine.
+          const parsed = parseSSELine(line);
+          if (!parsed) return "ok";
+
+          // event: line — update pending event name and move to next line.
+          if (parsed.type !== "message") {
+            pendingEventName = parsed.type;
+            return "ok";
+          }
+
+          // data: line — extract payload and consume the pending event name.
+          const payload = parsed.data;
+
+          // Consume and reset the pending event name for this data line.
+          const eventName = pendingEventName;
+          pendingEventName = "";
+
+          // `done` event: backend signals clean end-of-stream.
+          // WHY clear activeTools here: tools should not linger in the UI
+          // after the answer is fully rendered. The `finalize()` call sets
+          // streaming=null; clearning tools at the same time keeps the two
+          // states in sync (both reset together at stream end).
+          if (eventName === "done") {
+            setActiveTools([]);
+            // PLAN-0099 W4: clear the iteration strip on clean stream end.
+            // The streaming bubble is being promoted to a final MessageBubble;
+            // the progress strip MUST disappear at the same time or it would
+            // hover next to a settled answer (misleading "still working" cue).
+            setIterationEvent(null);
+            finalize();
+            return "finalized";
+          }
+
+          // Legacy [DONE] sentinel — backward compat with older backends.
+          if (payload === "[DONE]") {
+            // WHY clear here too: same reason as the `done` event handler above.
+            // Both end-of-stream paths must reset tool indicators.
+            setActiveTools([]);
+            // PLAN-0099 W4: same reasoning — clear the iteration strip on
+            // legacy [DONE] sentinel so both end-of-stream paths agree.
+            setIterationEvent(null);
+            finalize();
+            return "finalized";
+          }
+
+          try {
+            const data = JSON.parse(payload) as Record<string, unknown>;
+
+            // ── Tool-use events (PLAN-0067 W11-5) ────────────────────────
+            // These three event types are emitted by SSEEmitter during the
+            // tool-use phase (before any token chunks arrive). They drive
+            // ToolCallIndicator in the streaming bubble.
+
+            if (eventName === "agent_iteration") {
+              // PLAN-0099 W4: agent loop transition event. Fired by S8 at
+              // every loop boundary (planning → reasoning → synthesis) so
+              // the frontend can render a progress strip that NEVER goes
+              // blank between tool batches.
+              //
+              // Wire shape (frozen with Agent A's backend contract):
+              //   { iteration: number, max_iterations: number,
+              //     stage: "planning_tools"|"reasoning_over_results"|"synthesizing",
+              //     tools_completed_total: number, elapsed_ms: number }
+              //
+              // WHY a minimal type-narrowing block (not zod): the wire schema
+              // is owned by S8 and exercised by integration tests there. A
+              // shape mismatch here surfaces as a missing strip (graceful
+              // degradation) rather than a thrown error — we deliberately do
+              // not bring down the entire stream over a malformed iter event.
+              const ie = data as {
+                iteration?: number;
+                max_iterations?: number;
+                stage?: AgentIterationEvent["stage"];
+                tools_completed_total?: number;
+                elapsed_ms?: number;
+              };
+              if (
+                typeof ie.iteration === "number" &&
+                typeof ie.max_iterations === "number" &&
+                (ie.stage === "planning_tools" ||
+                  ie.stage === "reasoning_over_results" ||
+                  ie.stage === "synthesizing") &&
+                typeof ie.tools_completed_total === "number" &&
+                typeof ie.elapsed_ms === "number"
+              ) {
+                setIterationEvent({
+                  iteration: ie.iteration,
+                  max_iterations: ie.max_iterations,
+                  stage: ie.stage,
+                  tools_completed_total: ie.tools_completed_total,
+                  elapsed_ms: ie.elapsed_ms,
+                });
+              }
+            } else if (eventName === "thinking") {
+              // `thinking` — the LLM is classifying the query and deciding
+              // which tools to invoke. No UI state change needed here; the
+              // typing indicator (shown when streaming.text === "") already
+              // signals "I'm working on it". Future: could set a global
+              // "Thinking..." banner if desired.
+              // WHY no-op: the TypingIndicator already covers the blank-stream
+              // phase. Adding a separate "thinking" indicator would duplicate
+              // the feedback and add visual noise.
+              void data; // suppress "unused" lint warning
+            } else if (eventName === "tool_call") {
+              // `tool_call` — a specific tool has been invoked. The data shape
+              // from S8 SSEEmitter (W11-3):
+              //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
+              // We only use `tool`, `label`, and `status` for rendering.
+              const tc = data as {
+                tool?: string;
+                label?: string;
+                status?: string;
+                input?: Record<string, unknown>;
+              };
+              if (tc.tool && tc.label) {
+                setActiveTools((prev) => [
+                  // Replace any existing entry for the same tool name (idempotent).
+                  // WHY filter first: the backend could emit duplicate tool_call
+                  // events if the tool is retried; we don't want duplicate rows.
+                  ...prev.filter((t) => t.name !== tc.tool),
+                  {
+                    name: tc.tool as string,
+                    label: tc.label as string,
+                    status: "running",
+                    // Wave 3 (40s-wait feedback): wall-clock receipt time so
+                    // ToolCallIndicator can render a live "Ns" elapsed chip
+                    // next to each running tool. Date.now (not performance.now)
+                    // because the indicator compares against Date.now() in a
+                    // 1s ticker — and fake-timer tests can control both.
+                    startedAt: Date.now(),
+                  },
+                ]);
+                // Round 1 Foundation: record the debug trace entry + the
+                // wall-clock start so the matching tool_result can compute a
+                // client-side latency. Same idempotency rule as activeTools.
+                toolStartRef.current.set(tc.tool, performance.now());
+                setToolTrace((prev) => [
+                  ...prev.filter((t) => t.tool !== tc.tool),
+                  {
+                    tool: tc.tool as string,
+                    label: tc.label as string,
+                    // `input` carries the JSON arguments the LLM passed to the
+                    // tool (S8 SSEEmitter W11-3 shape). Default to {} so the
+                    // drawer can always JSON.stringify without null checks.
+                    args: tc.input ?? {},
+                    status: "running",
+                    result: null,
+                    latencyMs: null,
+                    latencySource: null,
+                  },
+                ]);
+              }
+            } else if (eventName === "tool_result") {
+              // `tool_result` — a tool has completed. The data shape from S8:
+              //   { type: "tool_result", tool: string, status: "ok"|"empty"|"error", item_count: number }
+              // We map the status onto the existing ToolCallState entry.
+              const tr = data as { tool?: string; status?: string };
+              if (tr.tool && tr.status) {
+                const resultStatus = (tr.status as ToolCallState["status"]) ?? "error";
+                setActiveTools((prev) =>
+                  prev.map((t) =>
+                    t.name === tr.tool
+                      ? { ...t, status: resultStatus }
+                      : t,
+                  ),
+                );
+                // Round 1 Foundation: close out the trace entry.
+                // Latency: prefer the server-emitted duration_ms (Wave-1
+                // backend addition — server-measured, authoritative), else
+                // client wall-clock from the tool_call receipt timestamp.
+                const startedAt = toolStartRef.current.get(tr.tool);
+                const serverDuration =
+                  typeof (data as { duration_ms?: unknown }).duration_ms === "number"
+                    ? ((data as { duration_ms: number }).duration_ms)
+                    : null;
+                const latencyMs =
+                  serverDuration ??
+                  (startedAt !== undefined
+                    ? Math.round(performance.now() - startedAt)
+                    : null);
+                // Wave 2: record WHERE the number came from so the drawer
+                // can drop the "client-measured" qualifier for server truth.
+                const latencySource: ToolTraceEntry["latencySource"] =
+                  serverDuration !== null
+                    ? "server"
+                    : latencyMs !== null
+                      ? "client"
+                      : null;
+                // Keep everything except the demux keys as the raw result
+                // payload (today: item_count; future fields flow through
+                // automatically — forward-compatible by construction).
+                const resultPayload: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(data)) {
+                  if (k !== "type" && k !== "tool" && k !== "status") {
+                    resultPayload[k] = v;
+                  }
+                }
+                setToolTrace((prev) =>
+                  prev.map((t) =>
+                    t.tool === tr.tool
+                      ? {
+                          ...t,
+                          status: resultStatus,
+                          result: resultPayload,
+                          latencyMs,
+                          latencySource,
+                        }
+                      : t,
+                  ),
+                );
+                // Wave 2: conversation-level accumulation for the rail's
+                // "Tools Used" section. Append-only (one sample per
+                // completed invocation) so count + average latency can be
+                // derived; cleared only on thread switch.
+                setToolUsage((prev) => [
+                  ...prev,
+                  { tool: tr.tool as string, latencyMs },
+                ]);
+              }
+            } else if (eventName === "pending_action") {
+              // PLAN-0082 Wave B: write-action tool requires user confirmation.
+              // The backend emits this event when the LLM calls create_alert
+              // (or any future requires_confirmation=true tool).
+              //
+              // Data shape from S8 SSEEmitter (Wave B):
+              //   { type: "pending_action", proposal_id: string, tool: string,
+              //     description: string, params: { entity_id?, condition?,
+              //     threshold?, severity? } }
+              //
+              // WHY set state from SSE: the modal must appear immediately when
+              // the pending_action event arrives, before the stream ends.  We
+              // set it here in the read loop so the React render triggers
+              // promptly.  The modal will render on the next frame.
+              const pa = data as {
+                proposal_id?: string;
+                tool?: string;
+                description?: string;
+                params?: Record<string, unknown>;
+              };
+              if (pa.proposal_id && pa.tool) {
+                setPendingAction({
+                  proposal_id: pa.proposal_id,
+                  tool: pa.tool,
+                  description: pa.description ?? `Create alert: ${pa.params?.condition ?? "?"}`,
+                  params: pa.params ?? {},
+                });
+              }
+            } else if (
+              eventName === "action_executed" ||
+              eventName === "action_rejected"
+            ) {
+              // PLAN-0082 Wave B: confirmation endpoint response events.
+              // These arrive on the SEPARATE confirm SSE stream (not the chat
+              // stream), so in practice this branch is unreachable from the
+              // chat stream reader loop.  We handle them here defensively in
+              // case S8 ever emits them inline, and to silence the linter
+              // warning about unhandled known event names.
+              //
+              // WHY clear pendingAction on executed/rejected: if the confirm
+              // stream somehow feeds back into the same hook (future multi-turn
+              // flow), the modal should auto-dismiss on both outcomes.
+              setPendingAction(null);
+            } else if (
+              eventName === "token" ||
+              (!eventName && ("text" in data || "token" in data))
+            ) {
+              // Token chunk — append to the streaming bubble immediately.
+              const chunk = (data.text ?? data.token) as string | undefined;
+              if (chunk) {
+                finalContent += chunk;
+                // Functional update: prev may have been replaced by a
+                // concurrent setState (e.g. cancel() racing the read loop).
+                setStreaming((prev) =>
+                  prev ? { ...prev, text: prev.text + chunk } : prev,
+                );
+              }
+            } else if (eventName === "citations") {
+              // WHY validate before accepting: the data is from an SSE frame
+              // over a server-controlled stream. A compromised S8 backend could
+              // inject citations with javascript: URLs that CitationList renders
+              // as <a href>. We accept objects with either:
+              //   (a) a valid https?:/mailto: URL (external news/web sources), OR
+              //   (b) url=null/undefined (knowledge-graph tool results such as
+              //       get_entity_graph, search_claims, get_contradictions, etc.)
+              // WHY allow null URL: KG citations have no hyperlink to follow —
+              // they reference in-platform graph data. Previously filtering them
+              // out caused ALL KG-sourced citations to be silently dropped.
+              // URL-safety enforcement now lives in the rendering layer: the
+              // CitationList component renders KG citations as plain text (no
+              // <a> tag) when url is null/undefined.
+              if (Array.isArray(data)) {
+                pendingCitations = data.filter(
+                  (c): c is NonNullable<Message["citations"]>[number] => {
+                    if (typeof c !== "object" || c === null) return false;
+                    const url = (c as Record<string, unknown>).url;
+                    // Accept citations without a URL (knowledge-graph sources).
+                    if (url === null || url === undefined) return true;
+                    // For citations that DO have a URL, enforce the safe-protocol
+                    // check to block javascript:/data: injection vectors.
+                    return (
+                      typeof url === "string" &&
+                      /^(https?:|mailto:)/i.test(url)
+                    );
+                  },
+                );
+              }
+            } else if (eventName === "suggestions") {
+              // Wave 2 (Wave-1 backend): server-generated follow-up
+              // suggestions, emitted AFTER the final token. Wire shape is a
+              // bare JSON string array (verified live):
+              //   event: suggestions
+              //   data: ["What's the latest news on Apple Inc.?", …]
+              // WHY filter to non-empty strings: defensive — a malformed
+              // entry must degrade to "one fewer chip", never to a chip
+              // rendering "undefined". The page PREFERS these over the
+              // client-templated generateFollowUps() output and falls back
+              // when this array is empty.
+              if (Array.isArray(data)) {
+                setServerSuggestions(
+                  data.filter(
+                    (s): s is string =>
+                      typeof s === "string" && s.trim().length > 0,
+                  ),
+                );
+              }
+              // Wave 3 (false-interrupt fix): suggestions are only ever
+              // emitted AFTER the full answer — seeing one proves the answer
+              // completed even if the trailing done frame never arrives.
+              sawAnswerComplete = true;
+            } else if (eventName === "metadata") {
+              // Wave 2: end-of-stream turn metadata — captured into
+              // pendingMeta so finalize() can attach it to the optimistic
+              // assistant message (the per-message meta strip renders
+              // intent/provider/model/latency from these fields).
+              // Type-narrow each field individually: a missing/odd-typed
+              // field degrades to "fragment absent" in the strip, never to
+              // a thrown error that would kill the stream.
+              const md = data as Record<string, unknown>;
+              pendingMeta = {
+                intent: typeof md.intent === "string" ? md.intent : null,
+                provider:
+                  typeof md.provider === "string" ? md.provider : null,
+                model: typeof md.model === "string" ? md.model : null,
+                latency_ms:
+                  typeof md.latency_ms === "number" ? md.latency_ms : null,
+              };
+              // Wave 3 (false-interrupt fix): metadata is the LAST data-bearing
+              // event before done (verified live). Its arrival proves the
+              // answer completed — see sawAnswerComplete declaration.
+              sawAnswerComplete = true;
+            } else if (eventName === "final_answer") {
+              // Wave 3: S8 emits the complete answer as one final_answer frame
+              // alongside (after) the token frames. Captured as the FALLBACK
+              // content source for streams that emitted no token frames at all
+              // (cache hits, guardrail responses) — finalize() prefers the
+              // token-accumulated finalContent when it is non-empty, so this
+              // never overrides genuinely streamed text.
+              const fa = data as { text?: unknown };
+              if (typeof fa.text === "string") {
+                finalAnswerText = fa.text;
+              }
+            } else if (eventName === "error") {
+              const msg =
+                typeof data.message === "string"
+                  ? data.message
+                  : "Stream error from server";
+              setChatError(msg);
+              setStreaming(null);
+              // PLAN-0099 W4: clear progress strip on server-emitted error
+              // so we don't leave a stale "Reasoning over…" strip hovering
+              // above the error banner.
+              setIterationEvent(null);
+              setActiveTools([]);
+              // Round 1 Foundation: remember the question so the error
+              // banner's Retry button can resubmit it.
+              lastQuestionRef.current = question;
+              return "errored";
+            }
+            // status, contradictions — no UI action needed yet; accepted
+            // silently so the parser never throws on them.
+          } catch {
+            // Non-JSON line — keep-alive comment, blank line, etc. Skip.
+          }
+          return "ok";
+        };
+
         // Read loop: SSE frames are newline-delimited; we split on \n,
         // keep the trailing partial in `buffer` for the next pump.
         // Each SSE event may have an `event:` field before its `data:` line.
-        // We read both so we can demultiplex token/citations/done/error events.
+        // handleLine demultiplexes token/citations/done/error events.
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -628,371 +1054,44 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            // FR-5.6 (MED-013): use parseSSELine for field extraction — single
-            // canonical parser (lib/sse-parser.ts) instead of inline slicing.
-            // The stateful pendingEventName accumulation stays here because it
-            // is tightly coupled to the streaming state machine.
-            const parsed = parseSSELine(line);
-            if (!parsed) continue;
-
-            // event: line — update pending event name and move to next line.
-            if (parsed.type !== "message") {
-              pendingEventName = parsed.type;
-              continue;
-            }
-
-            // data: line — extract payload and consume the pending event name.
-            const payload = parsed.data;
-
-            // Consume and reset the pending event name for this data line.
-            const eventName = pendingEventName;
-            pendingEventName = "";
-
-            // `done` event: backend signals clean end-of-stream.
-            // WHY clear activeTools here: tools should not linger in the UI
-            // after the answer is fully rendered. The `finalize()` call sets
-            // streaming=null; clearning tools at the same time keeps the two
-            // states in sync (both reset together at stream end).
-            if (eventName === "done") {
-              setActiveTools([]);
-              // PLAN-0099 W4: clear the iteration strip on clean stream end.
-              // The streaming bubble is being promoted to a final MessageBubble;
-              // the progress strip MUST disappear at the same time or it would
-              // hover next to a settled answer (misleading "still working" cue).
-              setIterationEvent(null);
-              finalize();
-              return;
-            }
-
-            // Legacy [DONE] sentinel — backward compat with older backends.
-            if (payload === "[DONE]") {
-              // WHY clear here too: same reason as the `done` event handler above.
-              // Both end-of-stream paths must reset tool indicators.
-              setActiveTools([]);
-              // PLAN-0099 W4: same reasoning — clear the iteration strip on
-              // legacy [DONE] sentinel so both end-of-stream paths agree.
-              setIterationEvent(null);
-              finalize();
-              return;
-            }
-
-            try {
-              const data = JSON.parse(payload) as Record<string, unknown>;
-
-              // ── Tool-use events (PLAN-0067 W11-5) ──────────────────────────
-              // These three event types are emitted by SSEEmitter during the
-              // tool-use phase (before any token chunks arrive). They drive
-              // ToolCallIndicator in the streaming bubble.
-
-              if (eventName === "agent_iteration") {
-                // PLAN-0099 W4: agent loop transition event. Fired by S8 at
-                // every loop boundary (planning → reasoning → synthesis) so
-                // the frontend can render a progress strip that NEVER goes
-                // blank between tool batches.
-                //
-                // Wire shape (frozen with Agent A's backend contract):
-                //   { iteration: number, max_iterations: number,
-                //     stage: "planning_tools"|"reasoning_over_results"|"synthesizing",
-                //     tools_completed_total: number, elapsed_ms: number }
-                //
-                // WHY a minimal type-narrowing block (not zod): the wire schema
-                // is owned by S8 and exercised by integration tests there. A
-                // shape mismatch here surfaces as a missing strip (graceful
-                // degradation) rather than a thrown error — we deliberately do
-                // not bring down the entire stream over a malformed iter event.
-                const ie = data as {
-                  iteration?: number;
-                  max_iterations?: number;
-                  stage?: AgentIterationEvent["stage"];
-                  tools_completed_total?: number;
-                  elapsed_ms?: number;
-                };
-                if (
-                  typeof ie.iteration === "number" &&
-                  typeof ie.max_iterations === "number" &&
-                  (ie.stage === "planning_tools" ||
-                    ie.stage === "reasoning_over_results" ||
-                    ie.stage === "synthesizing") &&
-                  typeof ie.tools_completed_total === "number" &&
-                  typeof ie.elapsed_ms === "number"
-                ) {
-                  setIterationEvent({
-                    iteration: ie.iteration,
-                    max_iterations: ie.max_iterations,
-                    stage: ie.stage,
-                    tools_completed_total: ie.tools_completed_total,
-                    elapsed_ms: ie.elapsed_ms,
-                  });
-                }
-              } else if (eventName === "thinking") {
-                // `thinking` — the LLM is classifying the query and deciding
-                // which tools to invoke. No UI state change needed here; the
-                // typing indicator (shown when streaming.text === "") already
-                // signals "I'm working on it". Future: could set a global
-                // "Thinking..." banner if desired.
-                // WHY no-op: the TypingIndicator already covers the blank-stream
-                // phase. Adding a separate "thinking" indicator would duplicate
-                // the feedback and add visual noise.
-                void data; // suppress "unused" lint warning
-              } else if (eventName === "tool_call") {
-                // `tool_call` — a specific tool has been invoked. The data shape
-                // from S8 SSEEmitter (W11-3):
-                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
-                // We only use `tool`, `label`, and `status` for rendering.
-                const tc = data as {
-                  tool?: string;
-                  label?: string;
-                  status?: string;
-                  input?: Record<string, unknown>;
-                };
-                if (tc.tool && tc.label) {
-                  setActiveTools((prev) => [
-                    // Replace any existing entry for the same tool name (idempotent).
-                    // WHY filter first: the backend could emit duplicate tool_call
-                    // events if the tool is retried; we don't want duplicate rows.
-                    ...prev.filter((t) => t.name !== tc.tool),
-                    {
-                      name: tc.tool as string,
-                      label: tc.label as string,
-                      status: "running",
-                    },
-                  ]);
-                  // Round 1 Foundation: record the debug trace entry + the
-                  // wall-clock start so the matching tool_result can compute a
-                  // client-side latency. Same idempotency rule as activeTools.
-                  toolStartRef.current.set(tc.tool, performance.now());
-                  setToolTrace((prev) => [
-                    ...prev.filter((t) => t.tool !== tc.tool),
-                    {
-                      tool: tc.tool as string,
-                      label: tc.label as string,
-                      // `input` carries the JSON arguments the LLM passed to the
-                      // tool (S8 SSEEmitter W11-3 shape). Default to {} so the
-                      // drawer can always JSON.stringify without null checks.
-                      args: tc.input ?? {},
-                      status: "running",
-                      result: null,
-                      latencyMs: null,
-                      latencySource: null,
-                    },
-                  ]);
-                }
-              } else if (eventName === "tool_result") {
-                // `tool_result` — a tool has completed. The data shape from S8:
-                //   { type: "tool_result", tool: string, status: "ok"|"empty"|"error", item_count: number }
-                // We map the status onto the existing ToolCallState entry.
-                const tr = data as { tool?: string; status?: string };
-                if (tr.tool && tr.status) {
-                  const resultStatus = (tr.status as ToolCallState["status"]) ?? "error";
-                  setActiveTools((prev) =>
-                    prev.map((t) =>
-                      t.name === tr.tool
-                        ? { ...t, status: resultStatus }
-                        : t,
-                    ),
-                  );
-                  // Round 1 Foundation: close out the trace entry.
-                  // Latency: prefer the server-emitted duration_ms (Wave-1
-                  // backend addition — server-measured, authoritative), else
-                  // client wall-clock from the tool_call receipt timestamp.
-                  const startedAt = toolStartRef.current.get(tr.tool);
-                  const serverDuration =
-                    typeof (data as { duration_ms?: unknown }).duration_ms === "number"
-                      ? ((data as { duration_ms: number }).duration_ms)
-                      : null;
-                  const latencyMs =
-                    serverDuration ??
-                    (startedAt !== undefined
-                      ? Math.round(performance.now() - startedAt)
-                      : null);
-                  // Wave 2: record WHERE the number came from so the drawer
-                  // can drop the "client-measured" qualifier for server truth.
-                  const latencySource: ToolTraceEntry["latencySource"] =
-                    serverDuration !== null
-                      ? "server"
-                      : latencyMs !== null
-                        ? "client"
-                        : null;
-                  // Keep everything except the demux keys as the raw result
-                  // payload (today: item_count; future fields flow through
-                  // automatically — forward-compatible by construction).
-                  const resultPayload: Record<string, unknown> = {};
-                  for (const [k, v] of Object.entries(data)) {
-                    if (k !== "type" && k !== "tool" && k !== "status") {
-                      resultPayload[k] = v;
-                    }
-                  }
-                  setToolTrace((prev) =>
-                    prev.map((t) =>
-                      t.tool === tr.tool
-                        ? {
-                            ...t,
-                            status: resultStatus,
-                            result: resultPayload,
-                            latencyMs,
-                            latencySource,
-                          }
-                        : t,
-                    ),
-                  );
-                  // Wave 2: conversation-level accumulation for the rail's
-                  // "Tools Used" section. Append-only (one sample per
-                  // completed invocation) so count + average latency can be
-                  // derived; cleared only on thread switch.
-                  setToolUsage((prev) => [
-                    ...prev,
-                    { tool: tr.tool as string, latencyMs },
-                  ]);
-                }
-              } else if (eventName === "pending_action") {
-                // PLAN-0082 Wave B: write-action tool requires user confirmation.
-                // The backend emits this event when the LLM calls create_alert
-                // (or any future requires_confirmation=true tool).
-                //
-                // Data shape from S8 SSEEmitter (Wave B):
-                //   { type: "pending_action", proposal_id: string, tool: string,
-                //     description: string, params: { entity_id?, condition?,
-                //     threshold?, severity? } }
-                //
-                // WHY set state from SSE: the modal must appear immediately when
-                // the pending_action event arrives, before the stream ends.  We
-                // set it here in the read loop so the React render triggers
-                // promptly.  The modal will render on the next frame.
-                const pa = data as {
-                  proposal_id?: string;
-                  tool?: string;
-                  description?: string;
-                  params?: Record<string, unknown>;
-                };
-                if (pa.proposal_id && pa.tool) {
-                  setPendingAction({
-                    proposal_id: pa.proposal_id,
-                    tool: pa.tool,
-                    description: pa.description ?? `Create alert: ${pa.params?.condition ?? "?"}`,
-                    params: pa.params ?? {},
-                  });
-                }
-              } else if (
-                eventName === "action_executed" ||
-                eventName === "action_rejected"
-              ) {
-                // PLAN-0082 Wave B: confirmation endpoint response events.
-                // These arrive on the SEPARATE confirm SSE stream (not the chat
-                // stream), so in practice this branch is unreachable from the
-                // chat stream reader loop.  We handle them here defensively in
-                // case S8 ever emits them inline, and to silence the linter
-                // warning about unhandled known event names.
-                //
-                // WHY clear pendingAction on executed/rejected: if the confirm
-                // stream somehow feeds back into the same hook (future multi-turn
-                // flow), the modal should auto-dismiss on both outcomes.
-                setPendingAction(null);
-              } else if (
-                eventName === "token" ||
-                (!eventName && ("text" in data || "token" in data))
-              ) {
-                // Token chunk — append to the streaming bubble immediately.
-                const chunk = (data.text ?? data.token) as string | undefined;
-                if (chunk) {
-                  finalContent += chunk;
-                  // Functional update: prev may have been replaced by a
-                  // concurrent setState (e.g. cancel() racing the read loop).
-                  setStreaming((prev) =>
-                    prev ? { ...prev, text: prev.text + chunk } : prev,
-                  );
-                }
-              } else if (eventName === "citations") {
-                // WHY validate before accepting: the data is from an SSE frame
-                // over a server-controlled stream. A compromised S8 backend could
-                // inject citations with javascript: URLs that CitationList renders
-                // as <a href>. We accept objects with either:
-                //   (a) a valid https?:/mailto: URL (external news/web sources), OR
-                //   (b) url=null/undefined (knowledge-graph tool results such as
-                //       get_entity_graph, search_claims, get_contradictions, etc.)
-                // WHY allow null URL: KG citations have no hyperlink to follow —
-                // they reference in-platform graph data. Previously filtering them
-                // out caused ALL KG-sourced citations to be silently dropped.
-                // URL-safety enforcement now lives in the rendering layer: the
-                // CitationList component renders KG citations as plain text (no
-                // <a> tag) when url is null/undefined.
-                if (Array.isArray(data)) {
-                  pendingCitations = data.filter(
-                    (c): c is NonNullable<Message["citations"]>[number] => {
-                      if (typeof c !== "object" || c === null) return false;
-                      const url = (c as Record<string, unknown>).url;
-                      // Accept citations without a URL (knowledge-graph sources).
-                      if (url === null || url === undefined) return true;
-                      // For citations that DO have a URL, enforce the safe-protocol
-                      // check to block javascript:/data: injection vectors.
-                      return (
-                        typeof url === "string" &&
-                        /^(https?:|mailto:)/i.test(url)
-                      );
-                    },
-                  );
-                }
-              } else if (eventName === "suggestions") {
-                // Wave 2 (Wave-1 backend): server-generated follow-up
-                // suggestions, emitted AFTER the final token. Wire shape is a
-                // bare JSON string array (verified live):
-                //   event: suggestions
-                //   data: ["What's the latest news on Apple Inc.?", …]
-                // WHY filter to non-empty strings: defensive — a malformed
-                // entry must degrade to "one fewer chip", never to a chip
-                // rendering "undefined". The page PREFERS these over the
-                // client-templated generateFollowUps() output and falls back
-                // when this array is empty.
-                if (Array.isArray(data)) {
-                  setServerSuggestions(
-                    data.filter(
-                      (s): s is string =>
-                        typeof s === "string" && s.trim().length > 0,
-                    ),
-                  );
-                }
-              } else if (eventName === "metadata") {
-                // Wave 2: end-of-stream turn metadata — captured into
-                // pendingMeta so finalize() can attach it to the optimistic
-                // assistant message (the per-message meta strip renders
-                // intent/provider/model/latency from these fields).
-                // Type-narrow each field individually: a missing/odd-typed
-                // field degrades to "fragment absent" in the strip, never to
-                // a thrown error that would kill the stream.
-                const md = data as Record<string, unknown>;
-                pendingMeta = {
-                  intent: typeof md.intent === "string" ? md.intent : null,
-                  provider:
-                    typeof md.provider === "string" ? md.provider : null,
-                  model: typeof md.model === "string" ? md.model : null,
-                  latency_ms:
-                    typeof md.latency_ms === "number" ? md.latency_ms : null,
-                };
-              } else if (eventName === "error") {
-                const msg =
-                  typeof data.message === "string"
-                    ? data.message
-                    : "Stream error from server";
-                setChatError(msg);
-                setStreaming(null);
-                // PLAN-0099 W4: clear progress strip on server-emitted error
-                // so we don't leave a stale "Reasoning over…" strip hovering
-                // above the error banner.
-                setIterationEvent(null);
-                setActiveTools([]);
-                // Round 1 Foundation: remember the question so the error
-                // banner's Retry button can resubmit it.
-                lastQuestionRef.current = question;
-                return;
-              }
-              // status, contradictions, final_answer — no UI action needed
-              // yet; accepted silently so the parser never throws on them.
-            } catch {
-              // Non-JSON line — keep-alive comment, blank line, etc. Skip.
-            }
+            const outcome = handleLine(line);
+            // "finalized" / "errored" already performed all state updates —
+            // exit send() entirely (the finally block releases the reader).
+            if (outcome !== "ok") return;
           }
         }
 
-        // ── Reader exhausted WITHOUT a `done`/[DONE] event ─────────────────
+        // ── Reader exhausted: flush the tail BEFORE judging the stream ────
+        // Wave 3 (false-interrupt fix, part 1): network chunk boundaries are
+        // arbitrary — the final chunk can end WITHOUT a trailing newline, in
+        // which case the closing `done` frame (or the metadata/suggestions
+        // events before it) is still sitting in `buffer` and/or inside the
+        // TextDecoder's internal state. Flush both and run the leftover lines
+        // through the same demux. Once the stream is closed, a final line
+        // without a trailing \n IS a complete line — process it too.
+        buffer += decoder.decode(); // flush any buffered multi-byte sequence
+        if (buffer.length > 0) {
+          for (const line of buffer.split("\n")) {
+            const outcome = handleLine(line);
+            if (outcome !== "ok") return; // late done/error handled cleanly
+          }
+        }
+
+        // ── Wave 3 (false-interrupt fix, part 2): terminal-event fallback ──
+        // The done frame genuinely never arrived — but if a post-answer
+        // terminal event (suggestions / metadata) did, the answer COMPLETED;
+        // only the closing frame was lost (observed live: the stream can end
+        // right after `metadata` when a proxy closes the connection eagerly).
+        // Finalizing cleanly here is what guarantees the detector NEVER
+        // shows "Response interrupted" under a fully-delivered answer.
+        if (sawAnswerComplete) {
+          setActiveTools([]);
+          setIterationEvent(null);
+          finalize();
+          return;
+        }
+
+        // ── Reader exhausted WITHOUT done AND without terminal events ─────
         // The server (or a proxy / the network path) closed the stream early
         // — a mid-response network blip, an S8 worker crash, an LB idle
         // timeout. Round 1 made sure this path cleared the spinners; Round 4

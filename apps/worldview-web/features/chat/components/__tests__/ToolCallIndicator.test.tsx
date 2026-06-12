@@ -9,8 +9,8 @@
  * that could mask regressions.
  */
 
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ToolCallIndicator, type ToolCallState } from "../ToolCallIndicator";
 
 describe("ToolCallIndicator", () => {
@@ -99,5 +99,69 @@ describe("ToolCallIndicator", () => {
     render(<ToolCallIndicator tools={tools} />);
     // Trailing "..." stripped → "Fetching data"
     expect(screen.getByText("Fetching data")).toBeDefined();
+  });
+});
+
+// ── Wave 3 — live elapsed chip for running tools ──────────────────────────────
+//
+// USER EVIDENCE: 40-second agentic answers left the user staring at a static
+// spinner with no proof of forward motion. Running rows now carry a ticking
+// "Ns" chip computed from ToolCallState.startedAt (stamped by useChatStream
+// at tool_call receipt).
+
+describe("ToolCallIndicator — elapsed chip (Wave 3)", () => {
+  beforeEach(() => {
+    // Fake timers drive BOTH Date.now() and the component's 1s setInterval,
+    // so elapsed values are fully deterministic.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders an elapsed chip for running tools and ticks it forward each second", () => {
+    const startedAt = Date.now();
+    const tools: ToolCallState[] = [
+      {
+        name: "search_documents",
+        label: "Searching documents...",
+        status: "running",
+        startedAt,
+      },
+    ];
+    render(<ToolCallIndicator tools={tools} />);
+
+    // Fresh tool → 0s.
+    expect(screen.getByTestId("tool-elapsed").textContent).toBe("0s");
+
+    // Advance 3 wall-clock seconds → the interval fires and the chip ticks.
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(screen.getByTestId("tool-elapsed").textContent).toBe("3s");
+  });
+
+  it("renders NO elapsed chip when startedAt is absent (legacy callers)", () => {
+    const tools: ToolCallState[] = [
+      { name: "tool_a", label: "Tool A...", status: "running" },
+    ];
+    render(<ToolCallIndicator tools={tools} />);
+    expect(screen.queryByTestId("tool-elapsed")).toBeNull();
+  });
+
+  it("completed tools drop the elapsed chip (no frozen counters on settled rows)", () => {
+    const tools: ToolCallState[] = [
+      {
+        name: "tool_a",
+        label: "Tool A...",
+        status: "ok",
+        startedAt: Date.now() - 5_000,
+      },
+    ];
+    render(<ToolCallIndicator tools={tools} />);
+    // The chip is rendered only on RUNNING rows — a done row with a frozen
+    // "5s" would read as "still waiting".
+    expect(screen.queryByTestId("tool-elapsed")).toBeNull();
   });
 });

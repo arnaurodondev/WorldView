@@ -157,3 +157,34 @@ describe("extractTickers", () => {
     expect(result.tickers).toEqual(["TSM", "AAPL"]);
   });
 });
+
+// ── Wave 3 — conference/event token blocklist ─────────────────────────────────
+//
+// LIVE FALSE POSITIVE (2026-06-11): "WWDC" (Apple's developer conference) was
+// detected as a bare ticker in a real conversation, contributing to the
+// ENTITY OVERVIEW count-without-cards bug. Conference acronyms are pervasive
+// in finance/tech prose and never primary-listing tickers.
+
+describe("extractTickersFromText — conference tokens (Wave 3)", () => {
+  it.each(["WWDC", "CES", "MWC", "GTC", "SXSW", "IFA", "EXPO", "DAVOS"])(
+    "blocklists bare %s",
+    (token) => {
+      expect(extractTickersFromText(`Big news out of ${token} this week`)).toEqual(
+        [],
+      );
+    },
+  );
+
+  it("the $ prefix still force-detects a blocklisted conference token", () => {
+    // The explicit-intent escape hatch must keep working — if a ticker ever
+    // shares a conference acronym, "$WWDC" is the analyst's override. The
+    // resolve-before-render safety net drops it later when it doesn't exist.
+    expect(extractTickersFromText("track $WWDC")).toEqual(["WWDC"]);
+  });
+
+  it("conference token in real prose: detects the ticker but not the event", () => {
+    expect(
+      extractTickersFromText("AAPL previewed new AI features at WWDC"),
+    ).toEqual(["AAPL"]);
+  });
+});
