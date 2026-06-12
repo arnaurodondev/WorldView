@@ -47,25 +47,41 @@ _CITATION_N_COLON_RE = re.compile(r"\s*\[N:\d+\]")
 # all protected by the lookahead/lookbehind guards.
 # Applied only when retrieved_items is non-empty (no point stripping when the
 # coherence guard above already removed all [N] markers).
+# BP-673: the stripper is now NON-DESTRUCTIVE by construction — it ONLY removes
+# a bare 1-30 integer when that integer is *followed by clause-ending
+# punctuation, a bracketed citation, or end-of-text*. An integer immediately
+# followed by ``whitespace + a word`` is ALWAYS a quantity / count / date label
+# ("4 reported quarters", "14 Days", "1 hop") and is NEVER stripped, regardless
+# of the following word or its case. This replaces the BP-672 unit-noun
+# allow-list (which silently dropped digits before any word not on the list —
+# e.g. "4 reported", capitalised "14 Days") with the inverse, fail-safe rule:
+# prefer leaving a stray citation integer in place over deleting a real number.
+#
+# Round-2 live evidence (run_20260612T041327Z):
+#   q_ru_nvda_amd_revenue_4q_run2: "last 4 reported quarters" -> "last  reported
+#       quarters" ("4" dropped before the adjective "reported").
+#   q_ru_mstr_news_run1: "Last 14 Days" -> "Last  Days" ("14" dropped before the
+#       CAPITALISED "Days", which the case-sensitive allow-list missed).
+#
+# The leading lookbehinds (currency / decimal / digit / hyphen-colon / bold)
+# are retained as belt-and-braces so a stray "5." after "$7." or inside a range
+# is still never mistaken for a citation.
 _BARE_CITATION_INT_RE = re.compile(
     r"(?<!\[)"  # not preceded by [ (not already a citation)
     r"(?<!\$)"  # not preceded by $ (not a currency value)
     r"(?<!\d)"  # not preceded by digit (not mid-number like "2024")
     r"(?<!\.)"  # PLAN-0104 W28-1 / BP-645: not preceded by '.' — guards the
-    # post-decimal digits of "$7.14", "0.25%", "1.10x" so we don't strip
-    # the "14"/"11" half of a decimal as a phantom bare citation.
+    # post-decimal digits of "$7.14", "0.25%", "1.10x".
     r"(?<![-–—:])"  # BP-670: not preceded by hyphen/en-dash/em-dash/colon —  # noqa: RUF001
-    # guards the day half of ISO dates ("2026-06-11"), range tails
-    # ("9-13", "9-13" with en dash) and minutes ("10:10") from being stripped.
+    # guards the day half of ISO dates ("2026-06-11"), range tails ("9-13") and
+    # minutes ("10:10") from being stripped.
     r"(?<![*_])"  # BP-672: not preceded by markdown bold/italic delimiter — the
-    # leading digit of a bolded number ("**8,095 BTC**", "**4** quarters") sits
-    # directly after the ``**``/``*``/``_`` run; without this guard the "8" of
-    # "**8,095**" rendered as "**,095**" in the live MSTR-news answer.
-    # BP-672: not preceded by a month name (+ single space) — "May 26",
-    # "Jun 1", "September 9" are calendar days, never citation refs. The live
-    # MSTR price table rendered "| May 26 |" as "| May  |" because the day was
-    # stripped. ``(?i:...)`` scopes case-insensitivity to the lookbehind only
-    # (the global pattern stays case-sensitive); covers full + 3-letter forms.
+    # leading digit of a bolded number ("**8,095 BTC**") sits directly after the
+    # ``**``/``*``/``_`` run.
+    # BP-672: not preceded by a month name (+ single space) — "May 26", "Jun 1",
+    # "September 9" are calendar days, never citation refs, even when followed by
+    # a bracketed citation ("September 9 [1]"). ``(?i:...)`` scopes the
+    # case-insensitivity to the lookbehind only; covers full + 3-letter forms.
     r"(?<!(?i:jan) )(?<!(?i:feb) )(?<!(?i:mar) )(?<!(?i:apr) )(?<!(?i:may) )"
     r"(?<!(?i:jun) )(?<!(?i:jul) )(?<!(?i:aug) )(?<!(?i:sep) )(?<!(?i:oct) )"
     r"(?<!(?i:nov) )(?<!(?i:dec) )(?<!(?i:january) )(?<!(?i:february) )"
@@ -73,29 +89,20 @@ _BARE_CITATION_INT_RE = re.compile(
     r"(?<!(?i:august) )(?<!(?i:september) )(?<!(?i:october) )"
     r"(?<!(?i:november) )(?<!(?i:december) )"
     r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
-    r"(?!\])"  # not followed by ] (not an existing citation)
-    r"(?!\d)"  # not followed by digit (not a year)
-    r"(?!,\d)"  # BP-672: not followed by ",digit" — the leading group of a
-    # comma-grouped number ("8,095", "26,500"). Without this the "8" of
-    # "8,095 BTC" was stripped, yielding the live "**,095 BTC**" artifact.
-    r"(?![×xX])"  # noqa: RUF001 — BP-672: not followed by a multiplier sign (U+00D7 or
-    # ASCII x) — "2x" / "2 times" is a multiple ("nearly 2x the revenue"),
-    # never a citation. The live answer dropped the "2" leaving "nearly the
-    # revenue" with a stray multiplier sign.
-    r"(?![%./\w:)–—-])"  # not followed by unit / word char / decimal point /  # noqa: RUF001
-    # BP-670: compound joiners and closing paren — "1-minute", "10:10",
-    # "9-13", en-dash ranges and parenthesised dates "(Jun 9)" are time/date
-    # fragments, never bare citation refs ("(Jun 9)" used to render as
-    # "(Jun )" and "1-minute bar" as "-minute bar" in the final answer).
-    r"(?!\s+(?:hop|hops|quarter|quarters|million|billion|trillion|thousand|"  # BP-672:
-    r"shares|days?|weeks?|months?|years?|hours?|minutes?|times?|x\b|bps|"
-    # not a bare citation when immediately followed by a unit / quantity noun.
-    # The live MSTR answer dropped the count digit from "4 quarters", "1 hop",
-    # "26 close" and "nearly 2x the revenue" because the stripper treated the
-    # quantity as a citation ref. A genuine bare citation ref is never followed
-    # by a counting noun. Kept as an explicit allow-list (not a generic
-    # ``\s+\w`` guard) so we still strip the legacy "grew strongly 12 [1]" form.
-    r"bn|mn|k\b|BTC|ETH|USD|EUR|GBP|%|percent))"
+    r"(?!\d)"  # not followed by digit (not a year / larger number)
+    r"(?!\.\d)"  # BP-673: not the integer part of a decimal ("1.10x", "5.3%").
+    r"(?!,\d)"  # BP-672: not the lead group of a comma number ("8,095").
+    # ── BP-673 fail-safe trailing guard ──────────────────────────────────────
+    # Strip ONLY when the integer is followed by clause-ending punctuation, a
+    # bracketed citation, or end-of-text. NB: ``:`` and ``)`` are intentionally
+    # EXCLUDED from the punctuation class — they delimit times ("10:10") and
+    # parenthesised dates ("(Jun 9)"), which must survive. Any ``whitespace +
+    # word`` continuation (a quantity / count / date) is therefore NOT matched
+    # and the digit is preserved. The legacy "Apple grew strongly 12 this
+    # quarter [1]" case — where 12 IS a stray citation but is followed by a
+    # word — is deliberately KEPT now: deleting a real number is strictly worse
+    # than leaving a stray ref, per the round-2 root-cause directive.
+    r"(?=[.,;!?]|\s+\[|\s*\n|\s*\$|\Z)"
 )
 
 # Basic PII patterns — email, phone, SSN, credit card

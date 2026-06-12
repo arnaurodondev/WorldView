@@ -202,11 +202,53 @@ _TOOL_XML_RE = re.compile(
     re.IGNORECASE,
 )
 
+# BP-675: a fenced (```json) OR bare top-level JSON OBJECT that is a tool-call
+# invocation — i.e. it carries BOTH a ``"name"`` key and an ``"arguments"`` key.
+# The capture group is the object text; we confirm the two keys separately so a
+# plain config/example JSON block (``{"setting": "value"}``) is never matched.
+# One level of brace nesting is allowed so the nested ``"arguments": { … }``
+# object is captured. NB: the object may be INVALID JSON (the live leak had
+# ``"periods":`` with no value), so we pattern-match — never ``json.loads``.
+_TOOL_CALL_JSON_KEYS_RE = re.compile(r'"name"\s*:', re.IGNORECASE)
+_TOOL_CALL_JSON_ARGS_RE = re.compile(r'"arguments"\s*:', re.IGNORECASE)
+_FENCED_JSON_BLOCK_RE = re.compile(
+    r"```(?:json)?\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*```",
+    re.DOTALL,
+)
+# Bare object only when it stands alone on its own line(s) — anchored at a line
+# start and ending at a line end — so an inline ``{"foo": 1}`` mid-sentence is
+# never swallowed.
+_BARE_JSON_OBJECT_RE = re.compile(
+    r"(?m)^\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*$",
+    re.DOTALL,
+)
+
+
+def _is_json_tool_call_object(blob: str) -> bool:
+    """True when *blob* (a JSON object's text) has both ``name`` + ``arguments`` keys."""
+    return bool(_TOOL_CALL_JSON_KEYS_RE.search(blob) and _TOOL_CALL_JSON_ARGS_RE.search(blob))
+
+
+def _strip_tool_call_json(text: str) -> str:
+    """Remove fenced/bare JSON tool-call OBJECTS (``{"name":…, "arguments":…}``).
+
+    Only objects that pattern-match the tool-call shape (both keys present) are
+    removed; a legitimate config/example JSON snippet inside a larger answer is
+    left untouched. Safe (no-op) on a clean answer.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        return "" if _is_json_tool_call_object(m.group(1)) else m.group(0)
+
+    text = _FENCED_JSON_BLOCK_RE.sub(_repl, text)
+    text = _BARE_JSON_OBJECT_RE.sub(_repl, text)
+    return text
+
 
 def _strip_tool_narration(text: str) -> str:
     """Last-resort scrub of tool-call narration leaks from synthesis output.
 
-    Three independent passes, each safe to run on a clean answer (no-op when
+    Four independent passes, each safe to run on a clean answer (no-op when
     the pattern is absent):
 
     1. Strip a single leading "I will fetch ..." sentence if the answer opens
@@ -217,6 +259,9 @@ def _strip_tool_narration(text: str) -> str:
        and the bullet list that follows them. These are pure planning blocks
        that should never reach the user.
     3. Strip any tool-call-like XML tags (open + close + self-closing).
+    4. BP-675: strip a fenced/bare JSON tool-call object
+       (``{"name": …, "arguments": …}``) — the third leaked-stub shape after
+       the XML and ``**Tool calls:**`` markdown forms.
 
     See module-level comment block above for streaming-chunk caveat.
     """
@@ -226,7 +271,93 @@ def _strip_tool_narration(text: str) -> str:
     text = _TOOL_PLAN_BLOCK_RE.sub("", text)
     # 3. Strip any tool-call-like XML tags.
     text = _TOOL_XML_RE.sub("", text)
+    # 4. Strip fenced/bare JSON tool-call objects (BP-675).
+    text = _strip_tool_call_json(text)
     return text.strip()
+
+
+# ── BP-674 — leaked tool-call / planning-stub detector ───────────────────────
+#
+# WHY: a grounding-validation rewrite turn (``_run_grounding_validation`` /
+# ``_run_entity_grounding_validation``) re-prompts the LLM with prior tool turns
+# in history. The model frequently responds with a PLANNING stub — "I will fetch
+# … <function_calls><invoke name=…>…" or "**Tool calls:**\n- get_…(…)" — instead
+# of a prose answer. That stub then REPLACES the grounded, already-streamed
+# synthesis and is shipped as ``final_answer`` (the user/downstream consumer
+# sees the planning stub, not the real table).
+#
+# Round-2 live evidence (run_20260612T041327Z):
+#   q_ru_nvda_amd_compare_qtr_run1: streamed real comparison table; final_answer
+#       = 'I will fetch … <function_calls><invoke name="get_fundamentals_history_batch">…'
+#   q_ru_nvda_amd_revenue_4q_run1: streamed real quarterly table; final_answer
+#       = "**Tool calls:**\n- get_fundamentals_history_batch(…)"
+# Round-3 live evidence (run_20260612T051019Z):
+#   q_ru_nvda_amd_compare_qtr_run2: streamed real gross-margin comparison; the
+#       final_answer was a fenced ```json tool-call OBJECT
+#       ``{"name": "get_fundamentals_history_batch", "arguments": {…}}`` — the
+#       THIRD stub shape (BP-675), missed by the XML/markdown detectors.
+#
+# Detection: ``_strip_tool_narration`` removes the lead narration sentence,
+# ``**Tool calls:**`` blocks, ``<function_calls>``/``<invoke>`` XML, AND (BP-675)
+# fenced/bare JSON tool-call objects. If stripping a candidate answer removes
+# (almost) all of it, the candidate was predominantly a tool-call stub — there
+# is no real prose answer underneath. We use that as a robust, pattern-driven
+# signal to REJECT such a rewrite and keep the original grounded answer.
+
+# Grounding banners are appended to the final answer AFTER the rewrite is chosen,
+# so a stub that survived would arrive as "<stub>\n\n⚠ … could not be verified".
+# We discount the banner when measuring collapse so the banner text is never
+# mistaken for "real answer content" left behind after the stub is stripped.
+_GROUNDING_BANNER_RE = re.compile(
+    r"⚠\s*Some (?:numbers|entity references) could not be verified[^\n]*",
+    re.IGNORECASE,
+)
+
+
+def _is_tool_call_stub(text: str) -> bool:
+    """Return True when *text* is predominantly a leaked tool-call / planning stub.
+
+    A genuine answer survives ``_strip_tool_narration`` largely intact; a
+    planning/tool-call stub collapses to (almost) nothing once the narration
+    sentence, ``**Tool calls:**`` block, ``<function_calls>``/``<invoke>`` XML
+    and (BP-675) a fenced/bare ``{"name":…, "arguments":…}`` JSON object are
+    removed. We flag the text when the scrubbed remainder is empty OR shrank to
+    a small fraction of the original AND the original carried a tool-call signal.
+    The signal gate prevents false positives on a short-but-clean prose answer
+    that merely happens to be brief OR that quotes a small inline JSON snippet.
+    """
+    if not text or not text.strip():
+        return False
+    # A tool-call signal must be present: XML tag, ``**Tool calls:**`` header,
+    # "I will fetch…" lead, OR a fenced/bare JSON object that is a tool-call
+    # invocation (both ``"name"`` and ``"arguments"`` keys). The JSON gate is
+    # tight: an inline ``{"foo": 1}`` or a config block without both keys does
+    # NOT qualify, so a prose/table answer that merely quotes JSON is untouched.
+    has_json_tool_call = any(
+        _is_json_tool_call_object(m.group(1))
+        for m in (*_FENCED_JSON_BLOCK_RE.finditer(text), *_BARE_JSON_OBJECT_RE.finditer(text))
+    )
+    has_tool_signal = bool(
+        _TOOL_XML_RE.search(text)
+        or _TOOL_PLAN_BLOCK_RE.search(text)
+        or _TOOL_NARRATION_LEAD_RE.search(text)
+        or has_json_tool_call
+    )
+    if not has_tool_signal:
+        return False
+    # Measure collapse against the content MINUS any trailing grounding banner —
+    # the banner is appended post-rewrite and is not "real answer" content.
+    base = _GROUNDING_BANNER_RE.sub("", text).strip()
+    if not base:
+        # Nothing but a banner around the stub → pure stub.
+        return True
+    scrubbed = _GROUNDING_BANNER_RE.sub("", _strip_tool_narration(text)).strip()
+    # Empty after scrub → pure stub. Otherwise flag when the scrub removed the
+    # large majority of the content (the remainder is leftover argument
+    # fragments, not a real answer).
+    if not scrubbed:
+        return True
+    return len(scrubbed) < max(40, int(len(base) * 0.35))
 
 
 def _chunk_text_for_streaming(text: str, words_per_chunk: int = _STREAM_WORDS_PER_CHUNK) -> list[str]:
@@ -2821,6 +2952,27 @@ class ChatOrchestratorUseCase:
             if not entity_grounding_passed:
                 grounding_passed = False
 
+        # ── BP-674 defense-in-depth: post-grounding narration scrub ───────────
+        # The grounding rewrites (above) replace ``full_text`` with their own
+        # stream_chat output, which BYPASSES the pre-grounding
+        # ``_strip_tool_narration`` pass at the top of this block. The rewrite
+        # guards keep the original on a detected stub, but a rewrite that only
+        # PARTIALLY leaks narration (a real answer with a stray "I will fetch…"
+        # lead or a trailing ``<invoke>`` fragment) would slip through. Re-run
+        # the scrub on the final ``full_text`` so the persisted answer and the
+        # ``final_answer`` event are always free of control-token leakage —
+        # regardless of which synthesis/rewrite path produced the text. Idempotent
+        # and a no-op on a clean answer.
+        if full_text:
+            _pre = full_text
+            full_text = _strip_tool_narration(full_text)
+            if len(full_text) != len(_pre):
+                log.warning(  # type: ignore[no-any-return]
+                    "post_grounding_narration_scrubbed",
+                    pre_len=len(_pre),
+                    post_len=len(full_text),
+                )
+
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
         # tool result. This prevents the LLM from fabricating citation IDs.
@@ -3165,6 +3317,24 @@ class ChatOrchestratorUseCase:
                 rewritten += chunk
         except Exception as exc:
             log.warning("numeric_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+        # BP-674: leaked tool-call / planning-stub guard. The rewrite re-prompt
+        # includes prior tool turns, so the LLM frequently answers with a
+        # PLANNING stub ("I will fetch … <function_calls>…" / "**Tool calls:**
+        # - get_…(…)") instead of corrected prose. Shipping that stub as
+        # final_answer REPLACES a grounded, already-streamed synthesis with a
+        # control-token fragment (live nvda/amd compare + revenue_4q runs).
+        # When the rewrite is such a stub, keep the ORIGINAL grounded answer.
+        # Checked FIRST so a stub never reaches the divergence / validation
+        # branches that assume the rewrite is real prose.
+        if _is_tool_call_stub(rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_tool_call_stub",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
@@ -3566,22 +3736,24 @@ class ChatOrchestratorUseCase:
                 False,
             )
 
-        # BP-670: rewrite sanity guard — a repair rewrite that is tool-call
-        # XML (the model trying to re-fetch data instead of writing prose;
-        # observed live: ``<function_calls><invoke name="get_entity_news">``
-        # shipped VERBATIM as the final answer because XML contains no
-        # entities or numbers to validate) or that collapses to a fraction
-        # of the original length is not a repair. Keep the original + banner.
-        _rw_lower = rewritten.lstrip().lower()
-        _looks_like_tool_xml = _rw_lower.startswith(("<function_calls", "<invoke", "<tool_call")) or (
-            "<function_calls" in _rw_lower or "<tool_call" in _rw_lower
-        )
-        if _looks_like_tool_xml or len(rewritten) < max(80, int(0.3 * len(response))):
+        # BP-670 / BP-674: rewrite sanity guard — a repair rewrite that is a
+        # tool-call / planning stub (the model trying to re-fetch data instead
+        # of writing prose; observed live as both
+        # ``<function_calls><invoke name="get_entity_news">`` XML AND
+        # ``**Tool calls:**\n- get_fundamentals_history_batch(…)`` markdown,
+        # each shipped VERBATIM as the final answer over a grounded streamed
+        # table) or that collapses to a fraction of the original length is not a
+        # repair. ``_is_tool_call_stub`` covers the XML form, the
+        # ``**Tool calls:**`` markdown form AND the "I will fetch…" narration
+        # lead (BP-674 widened the BP-670 XML-only check, which missed the
+        # markdown form). Keep the original + banner.
+        _is_stub = _is_tool_call_stub(rewritten)
+        if _is_stub or len(rewritten) < max(80, int(0.3 * len(response))):
             log.warning(  # type: ignore[no-any-return]
                 "entity_grounding_rewrite_rejected_malformed",
                 rewrite_len=len(rewritten),
                 response_len=len(response),
-                tool_xml=_looks_like_tool_xml,
+                tool_call_stub=_is_stub,
             )
             return (
                 response + "\n\n⚠ Some entity references could not be verified against retrieved data.",

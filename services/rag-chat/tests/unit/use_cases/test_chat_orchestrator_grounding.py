@@ -146,6 +146,108 @@ async def _collect(orch: Any, request: Any, uow: Any) -> tuple[list, str]:
     return events, answer
 
 
+# Verbatim round-3 leak (run_20260612T051019Z/q_ru_nvda_amd_compare_qtr_run2):
+# the final_answer was a fenced ```json tool-call OBJECT (the third stub shape),
+# followed by the grounding banner. Pinned verbatim so the detector is anchored
+# to the real artifact.
+_VERBATIM_JSON_STUB_FINAL_ANSWER = (
+    "```json\n"
+    "{\n"
+    '  "name": "get_fundamentals_history_batch",\n'
+    '  "arguments": {\n'
+    '    "tickers": ["NVDA", "AMD"],\n'
+    '    "periods": \n'
+    "  }\n"
+    "}\n"
+    "```\n\n"
+    "⚠ Some entity references could not be verified against retrieved data."
+)
+# The same stub WITHOUT the post-rewrite banner — this is what the rewrite turn
+# actually produces and what ``_is_tool_call_stub`` receives at its call sites.
+_VERBATIM_JSON_STUB_REWRITE_ONLY = (
+    "```json\n"
+    "{\n"
+    '  "name": "get_fundamentals_history_batch",\n'
+    '  "arguments": {\n'
+    '    "tickers": ["NVDA", "AMD"],\n'
+    '    "periods": \n'
+    "  }\n"
+    "}\n"
+    "```"
+)
+
+
+class TestIsToolCallStub:
+    """BP-674 / BP-675 — unit coverage for the leaked tool-call stub detector."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Verbatim round-2 leak shapes (run_20260612T041327Z).
+            (
+                "I will fetch the latest quarterly fundamentals for both NVDA and AMD to "
+                "compare revenue, EPS, and gross margin.\n\n<function_calls>\n"
+                '<invoke name="get_fundamentals_history_batch">\n'
+                '<parameter name="tickers">["NVDA", "AMD"]</parameter>\n</invoke>\n</function_calls>'
+            ),
+            (
+                "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+                '**Tool calls:**\n- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+            ),
+            'Let me fetch the data.\n<invoke name="get_price_history"></invoke>',
+            # BP-675 — verbatim round-3 fenced-JSON tool-call object (with banner).
+            _VERBATIM_JSON_STUB_FINAL_ANSWER,
+            # BP-675 — the same stub pre-banner (the rewrite-turn output).
+            _VERBATIM_JSON_STUB_REWRITE_ONLY,
+            # BP-675 — bare (unfenced) JSON tool-call object standing alone.
+            '{"name": "get_fundamentals_history_batch", "arguments": {"tickers": ["NVDA"]}}',
+        ],
+    )
+    def test_detects_stub(self, text: str) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import _is_tool_call_stub
+
+        assert _is_tool_call_stub(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "   ",
+            "Here is the comparison: | Metric | NVDA | AMD |\n| Revenue | $81.61B | $10.25B |",
+            "NVIDIA revenue grew 18% over the last 4 reported quarters [1].",
+            "I cannot find data about that entity.",
+            "Forward P/E is not currently available in our data sources.",
+            # A real answer that merely mentions a tool name in prose is NOT a stub.
+            "Using get_fundamentals_history_batch, I found revenue of $81.61B for NVDA [1].",
+            # BP-675 — a real answer that QUOTES a small inline JSON snippet
+            # (no name+arguments tool-call shape) must NOT be flagged.
+            'The screener API expects {"foo": 1} as input. NVDA revenue is $81.61B [1].',
+            # BP-675 — a config/example JSON code block that is NOT a tool call
+            # (no "name"/"arguments" keys), even when it is most of the answer.
+            (
+                "Here is the recommended screener configuration:\n"
+                "```json\n"
+                '{"market_cap_min": 50000000000, "revenue_growth": 0.1, "sector": "tech"}\n'
+                "```"
+            ),
+            # BP-675 — a substantive table answer that ALSO embeds a tool-call-
+            # shaped JSON example must NOT collapse (the JSON is a minority).
+            (
+                "Here is the side-by-side comparison:\n\n"
+                "| Metric | NVDA | AMD |\n|---|---|---|\n"
+                "| Revenue | $81.61B | $10.25B |\n| Gross Margin | 74.9% | 52.9% |\n\n"
+                "Under the hood the agent issued "
+                '`{"name": "get_fundamentals_history_batch", "arguments": {"tickers": ["NVDA", "AMD"]}}` '
+                "to retrieve these figures, which confirm NVDA's scale advantage [1]."
+            ),
+        ],
+    )
+    def test_clean_answer_not_flagged(self, text: str) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import _is_tool_call_stub
+
+        assert _is_tool_call_stub(text) is False
+
+
 class TestOrchestratorGroundingHook:
     def _build(self, **kwargs: Any) -> tuple[Any, list, MagicMock]:
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
@@ -362,6 +464,128 @@ class TestOrchestratorGroundingHook:
         assert "$509.0 million" not in content
         # The user is still warned about the one figure that tripped the pass.
         assert "could not be verified" in content
+
+    def test_numeric_rewrite_tool_call_stub_keeps_grounded_original(self) -> None:
+        """BP-674 — a numeric rewrite that leaks a tool-call / planning STUB must
+        be rejected; the grounded streamed answer is kept, NOT the stub.
+
+        Reproduces the round-2 live runs (run_20260612T041327Z):
+          q_ru_nvda_amd_compare_qtr_run1 — streamed a real comparison table; the
+            final answer became 'I will fetch … <function_calls><invoke …>…'.
+          q_ru_nvda_amd_revenue_4q_run1 — streamed a real quarterly table; the
+            final answer became '**Tool calls:**\\n- get_fundamentals_history_batch(…)'.
+        The grounding rewrite's stream_chat returned the planning stub (it was
+        re-prompted with prior tool turns in history) and it overwrote the
+        grounded synthesis. The stub guard keeps the original instead.
+        """
+        # Grounded streamed table (one figure "$28.4B" trips the validator).
+        grounded_table = (
+            "Here is the side-by-side comparison for the latest reported quarters:\n\n"
+            "| Metric | NVDA (Q1 FY2027) | AMD (Q1 FY2026) |\n"
+            "|---|---|---|\n"
+            "| Revenue | $81.61B | $10.25B |\n"
+            "| EPS (Diluted) | $1.87 | $1.37 |\n"
+            "| Gross Profit | $61.16B | $5.55B |\n\n"
+            "NVDA's revenue dwarfs AMD's, with a combined treasury value near $28.4B."
+        )
+        # Leaked tool-call stub (verbatim shape from the compare_qtr run).
+        leaked_stub = (
+            "I will fetch the latest quarterly fundamentals for both NVDA and AMD to "
+            "compare revenue, EPS, and gross margin.\n\n"
+            "<function_calls>\n"
+            '<invoke name="get_fundamentals_history_batch">\n'
+            '<parameter name="tickers">["NVDA", "AMD"]</parameter>\n'
+            "</invoke>\n"
+            "</function_calls>"
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[leaked_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2  # initial draft + rewrite both ran
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The grounded table is kept …
+        assert "side-by-side comparison" in content, f"grounded table dropped: {content!r}"
+        assert "$81.61B" in content
+        # … and NO part of the leaked tool-call stub is shipped.
+        assert "I will fetch" not in content, f"planning lead shipped: {content!r}"
+        assert "function_calls" not in content, f"tool-call XML shipped: {content!r}"
+        assert "get_fundamentals_history_batch" not in content
+
+    def test_numeric_rewrite_tool_calls_markdown_stub_rejected(self) -> None:
+        """BP-674 — the '**Tool calls:**' markdown stub form (no XML) is also
+        rejected. The BP-670 XML-only guard missed this; ``_is_tool_call_stub``
+        covers it. Mirrors q_ru_nvda_amd_revenue_4q_run1."""
+        grounded_table = (
+            "NVIDIA (FY ends Jan) — last 4 reported quarters:\n"
+            "| Quarter | Revenue |\n|---|---|\n"
+            "| Q2 FY2026 | $46.7B |\n| Q3 FY2026 | $57.0B |\n| Q4 FY2026 | $39.3B |\n\n"
+            "Revenue has grown steadily, reaching a treasury-adjusted base of $28.4B."
+        )
+        markdown_stub = (
+            "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+            "**Tool calls:**\n"
+            '- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[markdown_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        assert "last 4 reported quarters" in content, f"grounded table dropped: {content!r}"
+        assert "$46.7B" in content
+        assert "**Tool calls:**" not in content, f"markdown stub shipped: {content!r}"
+        assert "get_fundamentals_history_batch" not in content
+
+    def test_numeric_rewrite_fenced_json_stub_keeps_grounded_original(self) -> None:
+        """BP-675 — a numeric rewrite that leaks a fenced ```json tool-call
+        OBJECT must be rejected; the grounded streamed answer is kept.
+
+        Reproduces run_20260612T051019Z/q_ru_nvda_amd_compare_qtr_run2: the
+        streamed gross-margin comparison was replaced as final_answer by a
+        ```json {"name": …, "arguments": {…}} block. The round-2 XML/markdown
+        detectors missed the JSON-object form; the BP-675 JSON gate covers it.
+        """
+        grounded_table = (
+            "Now let me compute gross margin from the gross profit and revenue figures.\n\n"
+            "Here's the side-by-side comparison:\n\n"
+            "| Metric | NVDA (Q1 FY2027) | AMD (Q1 FY2026) |\n"
+            "|---|---|---|\n"
+            "| Revenue | $81.61B | $10.25B |\n"
+            "| Gross Profit | $61.16B | $5.42B |\n"
+            "| Gross Margin | 74.9% | 52.9% |\n\n"
+            "NVDA's margin advantage is stark, but its treasury base sits near $28.4B."
+        )
+        # Verbatim fenced-JSON tool-call object (pre-banner — the rewrite output).
+        json_stub = (
+            "```json\n"
+            "{\n"
+            '  "name": "get_fundamentals_history_batch",\n'
+            '  "arguments": {\n'
+            '    "tickers": ["NVDA", "AMD"],\n'
+            '    "periods": \n'
+            "  }\n"
+            "}\n"
+            "```"
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[json_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2  # initial draft + rewrite both ran
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The grounded comparison is kept …
+        assert "side-by-side comparison" in content, f"grounded table dropped: {content!r}"
+        assert "74.9%" in content
+        assert "$81.61B" in content
+        # … and NO part of the leaked JSON tool-call stub is shipped.
+        assert '"name": "get_fundamentals_history_batch"' not in content, f"json stub shipped: {content!r}"
+        assert '"arguments"' not in content
+        assert "```json" not in content
 
     def test_completion_cache_written_when_grounding_passes(self) -> None:
         """Sanity check — passing grounding still writes to the cache.
@@ -803,6 +1027,55 @@ class TestEntityNameGroundingSecondPassBridge:
         assert pipeline._rewrite_call_count["n"] >= 1, "W42 bridge widened too far — Apple-on-MSFT must trigger rewrite"
         # And the returned text MUST NOT be the verbatim original prose.
         assert text != response, "Negative case must not admit response unchanged"
+
+    def test_entity_rewrite_tool_calls_markdown_stub_keeps_original(self) -> None:
+        """BP-674 — when the entity-grounding rewrite leaks a '**Tool calls:**'
+        markdown stub, keep the ORIGINAL grounded answer + banner.
+
+        The legacy BP-670 guard here only checked for ``<function_calls>`` XML;
+        the round-2 q_ru_nvda_amd_revenue_4q_run1 leak used the markdown form,
+        which slipped through. ``_is_tool_call_stub`` now covers both.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        # Response names an UNRELATED entity → first pass flags → rewrite fires.
+        response = "Apple's revenue grew 8% year-on-year per the filing, a solid quarter."
+        prior_calls = [self._make_prior_call({"ticker": "MSFT", "metrics": ["revenue"]})]
+
+        markdown_stub = (
+            "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+            "**Tool calls:**\n"
+            '- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+        )
+        pipeline = self._make_pipeline_for_entity(rewrite_text=markdown_stub)
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=prior_calls,
+            )
+        )
+
+        assert pipeline._rewrite_call_count["n"] >= 1, "rewrite must have fired"
+        # The leaked markdown stub MUST NOT be shipped …
+        assert "**Tool calls:**" not in text, f"markdown stub shipped: {text!r}"
+        assert "get_fundamentals_history_batch" not in text
+        # … the original answer body is preserved + the banner is appended.
+        assert "Apple's revenue grew 8%" in text
+        assert "could not be verified" in text
+        assert passed is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -146,12 +146,20 @@ def test_output_preserves_decimal_values(processor: OutputProcessor, raw: str) -
 @pytest.mark.unit
 @pytest.mark.parametrize("bare", ["1", "12", "30"])
 def test_output_strips_bare_citation_integers(processor: OutputProcessor, bare: str) -> None:
-    """Bare citation-range integers NOT wrapped in [N] are still stripped."""
+    """Bare citation-range integers NOT wrapped in [N] are still stripped.
+
+    BP-673: a genuinely STRAY citation integer is one that is followed by
+    clause-ending punctuation (or end-of-text / a bracketed cite), e.g.
+    "Apple grew strongly 12." — the model meant "[12]". Those are still
+    stripped. (An integer followed by ``whitespace + a word`` — "12 this
+    quarter" — is now PRESERVED as a quantity; see
+    ``test_output_preserves_integer_before_any_word``.)
+    """
     items = [_item()]
-    raw = f"Apple grew strongly {bare} this quarter [1]."
+    raw = f"Apple grew strongly this quarter {bare}. See [1]."
     answer, _ = processor.process(raw, items)
     # The bare digit should be gone; the bracketed [1] citation survives.
-    assert f" {bare} " not in answer
+    assert f" {bare}." not in answer
     assert "[1]" in answer
 
 
@@ -246,3 +254,67 @@ def test_output_bug_a_mstr_btc_acquisition_line(processor: OutputProcessor) -> N
     answer, _ = processor.process(raw, items)
     assert "**,095 BTC**" not in answer, f"Leading digit lost: {answer!r}"
     assert "**8,095 BTC**" in answer
+
+
+# ── BP-673 regression — integer-before-ANY-word must survive ──────────────────
+#
+# Round-2 live evidence (run_20260612T041327Z) — the BP-672 unit-noun allow-list
+# still dropped the count digit when the following word was NOT on the list or
+# was capitalised:
+#   q_ru_nvda_amd_revenue_4q_run2: stream "over the last 4 reported quarters" ->
+#       final "over the last  reported quarters" ("reported" is an adjective,
+#       not a unit noun → "4" deleted).
+#   q_ru_mstr_news_run1: stream "Latest Headlines (Last 14 Days)" -> final
+#       "(Last  Days)" ("Days" is capitalised → allow-list missed it).
+# The fail-safe rule (strip only before punctuation / cite / EOS) preserves both.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        # Verbatim round-2 residuals.
+        ("Revenue grew over the last 4 reported quarters [1].", "4 reported quarters"),
+        ("## Latest Headlines (Last 14 Days)\n\nNews here [1].", "Last 14 Days"),
+        # The general principle: a digit before ANY word (any case, any word).
+        ("It rose 5 percent overall [1].", "5 percent"),
+        ("There were 12 analysts covering it [1].", "12 analysts"),
+        ("Spanning 7 trading sessions [1].", "7 trading"),
+        ("A 3 standard-deviation move [1].", "3 standard"),
+        ("Up 9 consecutive days [1].", "9 consecutive"),
+        ("Within 2 Business Days [1].", "2 Business"),
+    ],
+)
+def test_output_preserves_integer_before_any_word(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-673: an integer followed by whitespace+word is a quantity, never stripped."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+def test_output_bug_a_nvda_amd_revenue_4q_verbatim(processor: OutputProcessor) -> None:
+    """BP-673 end-to-end: round-2 q_ru_nvda_amd_revenue_4q_run2 residual.
+
+    Streamed "over the last 4 reported quarters"; the final answer used to read
+    "over the last  reported quarters".
+    """
+    items = [_item()]
+    raw = "Both companies reported revenue growth over the last 4 reported quarters [1]."
+    answer, _ = processor.process(raw, items)
+    assert "last  reported quarters" not in answer, f"'4' was deleted: {answer!r}"
+    assert "last 4 reported quarters" in answer
+
+
+@pytest.mark.unit
+def test_output_bug_a_mstr_news_last_14_days_verbatim(processor: OutputProcessor) -> None:
+    """BP-673 end-to-end: round-2 q_ru_mstr_news_run1 residual.
+
+    Streamed "Latest Headlines (Last 14 Days)"; the final answer used to read
+    "(Last  Days)" because "Days" is capitalised and missed the allow-list.
+    """
+    items = [_item()]
+    raw = "### Latest Headlines (Last 14 Days)\n\nA recent piece [1]."
+    answer, _ = processor.process(raw, items)
+    assert "(Last  Days)" not in answer, f"'14' was deleted: {answer!r}"
+    assert "(Last 14 Days)" in answer
