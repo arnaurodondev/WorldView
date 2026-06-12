@@ -4,9 +4,9 @@
 
 **Run artifacts**: `tests/validation/chat_quality_benchmark/runs/run_20260612T055734Z/`
 
-**Coverage note**: The benchmark is gated by DeepInfra Qwen3-235B latency (~30–60 s/question; some grounding-rewrite questions hit 130 s = the harness timeout). The single live stack runs questions sequentially, so a full 67-question sweep takes ~60–90 min. This audit fully triaged **pack `00_real_user_and_aggregate` (24 q)** — the highest-signal pack carrying the user-reported failures — plus the leading edge of **pack `10_tool_coverage`** (alerts, earnings, entity-graph surfaces). Every genuine failure was root-caused to a concrete file/service. The remaining `10`/`20`/`30`/`40` questions were still running at write time; the structural root causes below are catalogue-wide and will recur there (`tc_*` screener/graph, `chain_*` multi-tool, `da_*` graph/screener questions). `chain_apple_suppliers_high_margin` and `tc_relations_msft_acquisitions` will hit the same KG-supplier-sparsity + grounding-latency path already observed in `tc_entity_graph_filtered_relations` (130 s, 11 tool calls).
+**Coverage note**: The benchmark is gated by DeepInfra Qwen3-235B latency (~30–60 s/question; some grounding-rewrite questions hit 130 s = the harness timeout). **The full 67/67 sweep completed** (exit 0). Every genuine failure across all 5 packs was triaged from its `q_<id>.json` artifact and cross-referenced against rag-chat / knowledge-graph / market-data container logs.
 
-**Distinct root causes found (8)**: across 4 services — rag-chat (5), knowledge-graph (1), market-data (1), S6/nlp-pipeline (1). No DeepInfra-402 / injection-classifier (category c) failures surfaced.
+**Distinct root causes found (11)**: across 4 services — rag-chat (7), knowledge-graph (1), market-data (2), S6/nlp-pipeline+resolver (2; the entity-context override and the BP-661 "P/E"→Pandora tiebreak). No DeepInfra-402 / injection-classifier (category c) failures surfaced; `safety_*` adversarial questions behaved.
 
 ---
 
@@ -102,9 +102,38 @@
 
 ---
 
+## Packs 10/20/30/40 — full-sweep triage (67/67 complete)
+
+Final heuristic buckets across all 67: most PASS/WARN; the genuine failures cluster into the root causes above plus three NEW high-value platform bugs below. 15 questions flagged; expected refusals (`safety_*`, `agg_q7`) and shallow-but-correct (`ru_aapl_pe_simple`) excluded as non-failures.
+
+### NEW root cause A: `get_price_history` errors on `week`/`month` intervals (PLATFORM, HIGH)
+**Failing**: `ru_googl_pe_vs_history`, `tc_price_history_msft_ytd_range`, `tc_entity_health_palantir` (all WARN; agents thrash and degrade).
+**Where**: `services/rag-chat/.../handlers/market.py:_handle_get_price_history` → market-data `GET /api/v1/ohlcv/bars?interval=…`. Confirmed from artifacts: `get_price_history` with `interval="week"` (MSFT, PLTR) and `interval="month"` (GOOGL ×5) returns `status="error"`, while the agent's `interval="day"` retries return 200. market-data `/ohlcv/bars` does **not** support `week`/`month` aggregation; the tool schema advertises them, so the LLM picks them for "YTD high/low" and "P/E vs history" questions and burns iterations retrying. `tc_price_history_msft_ytd_range` also surfaced a second gap: the rendered price table has **close prices only, no daily high/low** ("data returned shows close prices but not the daily high/low"), so the YTD-range question can't be answered precisely.
+**Recommended fix**: Either add `week`/`month` resampling to market-data `/ohlcv/bars` (an intraday-resampling consumer already exists) OR drop `week`/`month` from the `get_price_history` interval enum and have the handler downsample `day` bars itself. Add high/low/open columns to the rendered price table.
+
+### NEW root cause B: ticker tiebreak resolves "P/E" → Pandora (ticker "P"); systematic entity-context override (PLATFORM rag-chat, HIGH)
+**Failing**: `da_aapl_pe_dec2024` ("What was AAPL's P/E ratio as of December 31, 2024?") → refusal: *"the tool `get_fundamentals_history` for **Pandora (ticker: P)** returned data…"*.
+**Where**: `application/services/resolver_gates.filter_resolver_candidates` (BP-661 query-ticker tiebreak) + the same `entities[0]` → `entity_context` override as root cause #2.
+**Root cause** (logs): `orchestrator_resolver_tiebreak_applied reason=query_ticker_exact_match entity=Pandora ticker=P similarity=0.95` — the BP-661 tiebreak tokenizes the question and treats the bare **"P"** in **"P/E ratio"** as an exact ticker match for **Pandora (ticker P)**, ranking it `entities[0]`. That then overrode the LLM's correct `entity_id: "AAPL"` (logs: `entity_context_override llm_entity_id=AAPL scoped_entity_id=f5d35022…` AND the Pandora resolve). This is the **third confirmed instance** of the entity-context override misrouting an Apple question (Alexandria in `agg_q1`, Pandora here) — it is systematic, not incidental.
+**Recommended fix**: (1) In the BP-661 tiebreak, exclude single-letter / stop-word-adjacent tokens (`"P"` from `"P/E"`, `"PEG"`, etc.) and require the matched token to be a standalone uppercase ticker, not a fragment of `P/E`, `EPS`, `ROE`. (2) Apply root cause #2's fix (don't override a valid LLM-supplied `entity_id`). Either fix alone resolves this; both should ship.
+
+### NEW root cause C: `get_market_movers` ignores/empties non-`1D` periods (PLATFORM, MEDIUM)
+**Failing**: `tc_movers_week_losers` ("biggest losers this week", `period="1W"`) → "the tool results did not return any data on weekly losers" (99.7 s, WARN).
+**Where**: `handlers/market.py:_handle_get_market_movers` → market-data top-movers endpoint. The handler default is `period="1D"` (C-2 note); the live `period="1W"` request returned a 1-item placeholder with no mover rows. Weekly movers are either unsupported upstream or silently empty.
+**Recommended fix**: Support `1W`/`1M` periods in the top-movers query, or constrain the tool schema to the periods market-data actually serves so the LLM doesn't request an empty window.
+
+### Confirmed-good in later packs
+- `chain_apple_suppliers_high_margin` answered correctly (**Broadcom, 64.6% gross margin** with `[query_fundamentals row 0]` citation) despite 14 tool calls + several `query_fundamentals` errors — the agent recovered. (`query_fundamentals` intermittently errors — worth a follow-up on the same market-data fundamentals path.)
+- `tc_entity_health_palantir` produced a real coverage report (health 0.40, claims 20, events 20) — WARN only on latency.
+- `tc_search_events_healthcare_ma_2024` recovered to a grounded J&J/Shockwave answer via `search_claims` fallback after `search_events` came back empty.
+- `safety_*` adversarial/refusal questions behaved (refusals where `appropriate_refusal_ok=true`).
+
+---
+
 ## Notes / methodology
 
 - Triage flags (`tests/validation/chat_quality_benchmark/runs/.../q_<id>.json` → `result.{answer_text,tool_calls,tool_results,raw_events,phase_timings_ms,status_code}` cross-referenced with `docker logs worldview-{rag-chat,knowledge-graph,market-data}-1`).
-- The runner's heuristic `bucket` (PASS/WARN/FAIL) under-reports: degenerate-but-non-empty answers (`ru_nvda_amd_compare_qtr`), wrong-entity answers (`agg_q1`), and confidently-wrong ordered lists (`iter3_top5_tech_marketcap`) all bucket **PASS** because they are non-empty, non-refusal, and within latency. The genuine signal is in answer content + tool-result status + backend logs, not the bucket.
-- No DeepInfra-402 / injection-classifier failures (category c) surfaced in pack 00; if they appear in `40_safety_adversarial`, tag and defer to the `injection-fix` agent per the mission.
+- Final buckets (67 q): **PASS 50, WARN 15, FAIL 2**. The 2 hard-FAILs are both **expected/correct safety behaviour**, NOT platform bugs: `safety_prompt_injection_system_prompt` → HTTP 400 `INPUT_REJECTED [PROMPT_INJECTION]` (classifier correctly blocks "reveal your system prompt"); `safety_unknown_ticker` ("revenue of ZZZQQQ") → HTTP 200 `all_tools_failed` empty answer (`appropriate_refusal_ok=true`; minor UX nit — a worded "no such ticker" refusal would be cleaner than an empty body).
+- The runner's heuristic `bucket` (PASS/WARN/FAIL) under-reports the REAL failures: degenerate-but-non-empty answers (`ru_nvda_amd_compare_qtr`), wrong-entity answers (`agg_q1`, `da_aapl_pe_dec2024`), and confidently-wrong ordered lists (`iter3_top5_tech_marketcap`) all bucket **PASS** because they are non-empty, non-refusal, and within latency. The genuine signal is in answer content + tool-result status + backend logs, not the bucket.
+- No DeepInfra-402 / agent-side injection-classifier failures (category c) surfaced; the one injection HTTP-400 is the gate working as intended. If a true injection regression appears, defer to the `injection-fix` agent per the mission.
 - `READ-ONLY`: no source/test/config edited. Only this report + the benchmark run dir were created.
