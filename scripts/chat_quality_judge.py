@@ -52,6 +52,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
 
 # Import the canonical judge prompt from libs/prompts. The prompt has no
@@ -129,6 +130,185 @@ _LEAKED_CONTROL_TOKEN_RE = re.compile(
     r"</?(?:" + "|".join(re.escape(n) for n in _CONTROL_TOKEN_NAMES) + r")\b",
     re.IGNORECASE,
 )
+
+
+# --------------------------------------------------------------------------
+# Tiered verdict taxonomy (PLAN-0110 W1 / PRD-0091 §6.5, AD-1)
+# --------------------------------------------------------------------------
+#
+# AD-1 is the lexicographic verdict model. The OLD model summed four soft 0-25
+# LLM dimensions and called >=85 a PASS — which let a fabricated answer (one
+# bad dim) still PASS, and let leaked control tokens / truncation slip through
+# because the LLM judge mis-scores exactly those catastrophic cases (F3 audit).
+#
+# The NEW model is a GATE-then-BAND pipeline:
+#   1. Deterministic, LLM-free INVARIANT GATES run FIRST. Any violated gate is
+#      an unconditional FAIL — the soft score can never "buy back" a hard
+#      failure (a 95/100 answer that leaks ``<function`` is still FAIL).
+#   2. ONLY answers that clear every gate are BANDED by the additive
+#      ``quality_score`` (== the old sum, FR-4 continuity) into
+#      STRONG/PASS/WEAK/FAIL.
+#
+# The four objects below are the principled vocabulary for that pipeline. They
+# REPLACE the ad-hoc ``veto`` dict at the structured-field level, but we keep
+# emitting the legacy keys alongside them for one release (back-compat for the
+# runner + artefact readers — W5 migrates those).
+
+
+class Verdict(str, Enum):
+    """The composed, tiered verdict an answer receives (PRD-0091 §6.5).
+
+    ``str`` mix-in so a ``Verdict`` serialises to its plain string value in JSON
+    artefacts (``json.dumps(Verdict.PASS) == '"PASS"'``) and compares equal to
+    the bare string — important because legacy artefact readers compare against
+    ``"PASS"``/``"FAIL"`` literals.
+
+    Ordering (STRONG > PASS > WEAK > FAIL) is defined by ``_RANK`` below rather
+    than enum declaration order so it is explicit and testable.
+    """
+
+    STRONG = "STRONG"  # gates pass + quality_score >= 90 — top band
+    PASS = "PASS"  # noqa: S105 — enum value, not a secret. gates pass + quality_score >= 75 (acceptance)
+    WEAK = "WEAK"  # gates pass + quality_score 60-74 — needs work, not a hard fail
+    FAIL = "FAIL"  # any hard invariant violated, OR quality_score < 60
+
+    @property
+    def rank(self) -> int:
+        """Severity-ordered rank: STRONG (best, 3) .. FAIL (worst, 0)."""
+        return _VERDICT_RANK[self]
+
+
+# Best-to-worst rank. Used by the report (W5) + tests to assert the ordering
+# STRONG > PASS > WEAK > FAIL without relying on enum declaration order.
+_VERDICT_RANK: dict[Verdict, int] = {
+    Verdict.STRONG: 3,
+    Verdict.PASS: 2,
+    Verdict.WEAK: 1,
+    Verdict.FAIL: 0,
+}
+
+# Band thresholds applied to ``quality_score`` (0-100) ONLY when no gate fired
+# (PRD-0091 §6.5 table). These are intentionally DISTINCT from the legacy
+# ``_PASS_THRESHOLD``/``_WARN_THRESHOLD`` (85/60) above: the tiered model adds a
+# STRONG top band and renames WARN→WEAK with a 75 acceptance line. The legacy
+# 85/60 bands still drive the back-compat ``verdict`` string for one release.
+_BAND_STRONG = 90
+_BAND_PASS = 75
+_BAND_WEAK = 60  # below this (and gates clear) → FAIL
+
+
+class InvariantCode(str, Enum):
+    """Deterministic hard-FAIL invariant gates (PRD-0091 §6.5, FR-3).
+
+    Each code is one catastrophic, deterministically-detectable failure class.
+    A gate "fires" when the invariant is VIOLATED → the verdict is FAIL with
+    this code as ``fail_reason``. ``str`` mix-in for JSON-friendly serialisation
+    + dict keys that round-trip through ``json.dumps``.
+    """
+
+    CONTROL_TOKEN_LEAK = "CONTROL_TOKEN_LEAK"  # noqa: S105 — enum value: <function/<invoke/<think or fenced-JSON stub
+    TRUNCATED = "TRUNCATED"  # mid-token/table/call cut-off (digit-drop, unbalanced markdown)
+    EMPTY_AFTER_TOOLS = "EMPTY_AFTER_TOOLS"  # tool ok+items>=1 but no substantive synthesis
+    INFRA_NON_ANSWER = "INFRA_NON_ANSWER"  # all relevant tools transport_error/5xx + apology
+    GROUNDING_CONTRADICTED = "GROUNDING_CONTRADICTED"  # numeric claim contradicted by a sample (W3)
+    GROUNDING_FLOOR = "GROUNDING_FLOOR"  # judge grounding sub-dim < GROUNDING_VETO_FLOOR
+
+
+# Priority order for choosing the SINGLE ``fail_reason`` when several gates fire
+# at once (PRD-0091 §6.7 / plan T-W1-03). Most-severe / most-diagnostic first:
+# a contradicted number is the worst outcome, then leaked scaffolding, then a
+# truncated/garbled body, then an infra non-answer, then empty-after-tools,
+# then the soft grounding floor. Order matters: an answer that both leaks a
+# token AND sits below the grounding floor is reported as CONTROL_TOKEN_LEAK.
+_INVARIANT_PRIORITY: tuple[InvariantCode, ...] = (
+    InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.CONTROL_TOKEN_LEAK,
+    InvariantCode.TRUNCATED,
+    InvariantCode.INFRA_NON_ANSWER,
+    InvariantCode.EMPTY_AFTER_TOOLS,
+    InvariantCode.GROUNDING_FLOOR,
+)
+
+# Map the existing string reasons emitted by ``detect_degenerate_answer`` to
+# the InvariantCode they represent. This is the REFACTOR seam (T-W1-02): the
+# proven detection logic is untouched; we only re-label its output. Keeping the
+# map explicit (rather than burying it in the gate) makes the routing auditable
+# and means a new detector reason fails loudly here rather than silently.
+_DEGENERATE_REASON_TO_CODE: dict[str, InvariantCode] = {
+    "leaked_control_tokens": InvariantCode.CONTROL_TOKEN_LEAK,
+    "tool_call_stub": InvariantCode.CONTROL_TOKEN_LEAK,
+    "digit_drop_corruption": InvariantCode.TRUNCATED,
+    "empty_after_tool": InvariantCode.EMPTY_AFTER_TOOLS,
+    # A plain empty answer with no successful tool is still an "empty answer"
+    # gate violation; EMPTY_AFTER_TOOLS is the closest principled code.
+    "empty_answer": InvariantCode.EMPTY_AFTER_TOOLS,
+}
+
+
+@dataclass(frozen=True)
+class GroundingCheck:
+    """Outcome of the programmatic numeric claim↔sample cross-check (FR-6).
+
+    POPULATED IN W3 (numeric cross-check). In W1 we always construct a zeroed
+    ``presumed`` instance — no grounding samples exist yet, so nothing can be
+    matched or contradicted. ``contradicted`` is the field the
+    ``GROUNDING_CONTRADICTED`` gate reads; until W3 it is always 0, so that gate
+    never fires in W1.
+    """
+
+    matched: int = 0  # numeric claims that matched a sampled value within tolerance
+    unmatched: int = 0  # claims with no corresponding sample (no evidence either way)
+    contradicted: int = 0  # claims a sample disproves → trips GROUNDING_CONTRADICTED
+    examples: list[dict[str, Any]] = field(default_factory=list)  # {claim, nearest_sample, delta}
+    evidence_mode: str = "presumed"  # "verified" (samples present) | "presumed" (legacy)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "matched": self.matched,
+            "unmatched": self.unmatched,
+            "contradicted": self.contradicted,
+            "examples": list(self.examples),
+            "evidence_mode": self.evidence_mode,
+        }
+
+
+@dataclass(frozen=True)
+class VerdictDecision:
+    """The composed, tiered verdict (PRD-0091 §6.5) — the W1 output object.
+
+    Invariants (asserted by tests):
+      * ``verdict == Verdict.FAIL`` IFF (``fail_reason is not None``) OR
+        (``quality_score < _BAND_WEAK``). I.e. a FAIL always has either a fired
+        gate or a sub-60 soft score, and any answer with a fired gate / sub-60
+        score is a FAIL.
+      * ``quality_score == sum(dimensions.values())`` (FR-4 continuity — equals
+        the old additive sum exactly; no rescaling).
+    """
+
+    verdict: Verdict
+    quality_score: int  # 0-100, additive soft score (== sum of dimensions)
+    fail_reason: InvariantCode | None  # which gate fired (None unless a gate forced FAIL)
+    gate_results: dict[InvariantCode, bool]  # per-invariant PASS (True) / VIOLATED (False)
+    grounding_check: GroundingCheck
+    dimensions: dict[str, int]  # raw judge sub-scores (4 keys, each 0-25)
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-serialisable form for the artefact + trend store (W4).
+
+        ``feedback_audit_returned_value_persistence``: ``gate_results`` and
+        ``fail_reason`` MUST reach the artefact, not just a counter — so they
+        are emitted here in full.
+        """
+        return {
+            "verdict": self.verdict.value,
+            "quality_score": self.quality_score,
+            "fail_reason": self.fail_reason.value if self.fail_reason is not None else None,
+            # gate_results keys are InvariantCode (str enum) → use ``.value`` so
+            # the JSON keys are plain strings, not ``"InvariantCode.X"`` reprs.
+            "gate_results": {code.value: passed for code, passed in self.gate_results.items()},
+            "grounding_check": self.grounding_check.to_dict(),
+            "dimensions": dict(self.dimensions),
+        }
 
 
 # --------------------------------------------------------------------------
@@ -617,6 +797,118 @@ def detect_tool_failure_nonanswer(
 
 
 # --------------------------------------------------------------------------
+# Deterministic invariant gate (PLAN-0110 W1 / T-W1-02)
+# --------------------------------------------------------------------------
+#
+# ``evaluate_invariants`` is the SINGLE entry point that consolidates the three
+# ad-hoc detectors above (degenerate-answer, tool-failure non-answer, grounding
+# floor) into one toggleable gate that emits ``InvariantCode`` results. It does
+# NOT re-implement any detection — it CALLS the existing functions and re-labels
+# their output. The functions stay callable on their own (back-compat), so the
+# existing degenerate/tool-failure unit tests keep passing unchanged (R19).
+#
+# Convention: a value of ``True`` in the returned dict means the invariant is
+# SATISFIED (the gate PASSED); ``False`` means the invariant is VIOLATED (the
+# gate FIRED → hard FAIL). Every one of the six codes is always present so the
+# report (FR-3) can show each gate's individual pass/fail.
+
+# The complete set of gates, in the canonical iteration order. Used to seed a
+# fully-passing baseline so a disabled gate is reported as "passed" rather than
+# missing from the dict.
+_ALL_INVARIANTS: tuple[InvariantCode, ...] = (
+    InvariantCode.CONTROL_TOKEN_LEAK,
+    InvariantCode.TRUNCATED,
+    InvariantCode.EMPTY_AFTER_TOOLS,
+    InvariantCode.INFRA_NON_ANSWER,
+    InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.GROUNDING_FLOOR,
+)
+
+
+def evaluate_invariants(
+    answer_text: str,
+    tool_results: list[dict[str, Any]] | None,
+    rubric: Rubric,
+    grounding_check: GroundingCheck,
+    *,
+    grounding_score: int | None = None,
+    enabled: set[InvariantCode] | None = None,
+) -> dict[InvariantCode, bool]:
+    """Run every deterministic invariant gate; return per-code pass/fail.
+
+    ``True`` = invariant satisfied (gate passed). ``False`` = violated (FAIL).
+
+    Parameters
+    ----------
+    answer_text, tool_results, rubric
+        The same inputs the legacy detectors consume.
+    grounding_check
+        The numeric cross-check result (W3). ``contradicted > 0`` trips
+        ``GROUNDING_CONTRADICTED``. In W1 this is always a zeroed ``presumed``
+        instance, so that gate never fires here.
+    grounding_score
+        The judge's ``grounding`` sub-dimension (0-25). When below
+        ``GROUNDING_VETO_FLOOR`` the ``GROUNDING_FLOOR`` gate fires. ``None``
+        (judge skipped / no sub-score) → the floor gate cannot fire (we cannot
+        know the grounding score, so we do not invent a failure).
+    enabled
+        The subset of ``InvariantCode`` that are active. ``None`` → all gates
+        enabled (the default). A DISABLED gate is reported as ``True`` (passed)
+        and never fires (FR-3 toggleability).
+
+    This is LLM-free and runs even when ``DEEPINFRA_API_KEY`` is unset, so the
+    verdict is meaningful in offline / CI mode (F-4).
+    """
+    active = _ALL_INVARIANTS if enabled is None else tuple(c for c in _ALL_INVARIANTS if c in enabled)
+
+    # Seed every gate to PASS (True). Disabled gates stay True and are skipped
+    # below, so they are reported as "passed" rather than absent.
+    results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+
+    # 1) Degenerate-answer family → CONTROL_TOKEN_LEAK / TRUNCATED /
+    #    EMPTY_AFTER_TOOLS. We call the EXISTING detector and re-label its
+    #    single reason string to the matching code. Because the detector returns
+    #    at most one reason, at most one of these three gates can fire from it.
+    degenerate_reason = detect_degenerate_answer(answer_text, tool_results)
+    if degenerate_reason is not None:
+        code = _DEGENERATE_REASON_TO_CODE.get(degenerate_reason)
+        # Only flip the gate if it maps to a code AND that gate is enabled.
+        if code is not None and code in active:
+            results[code] = False
+
+    # 2) Infra non-answer → INFRA_NON_ANSWER, via the existing detector.
+    if InvariantCode.INFRA_NON_ANSWER in active:
+        if detect_tool_failure_nonanswer(answer_text, rubric, tool_results) is not None:
+            results[InvariantCode.INFRA_NON_ANSWER] = False
+
+    # 3) Grounding contradiction → GROUNDING_CONTRADICTED (W3-populated).
+    if InvariantCode.GROUNDING_CONTRADICTED in active:
+        if grounding_check.contradicted > 0:
+            results[InvariantCode.GROUNDING_CONTRADICTED] = False
+
+    # 4) Grounding floor → GROUNDING_FLOOR. Reuses the existing veto floor
+    #    constant. Fires only when we HAVE a sub-score and it is below the floor
+    #    (strict ``<`` — score == floor does NOT fire, matching the legacy veto).
+    if InvariantCode.GROUNDING_FLOOR in active:
+        if grounding_score is not None and grounding_score < GROUNDING_VETO_FLOOR:
+            results[InvariantCode.GROUNDING_FLOOR] = False
+
+    return results
+
+
+def first_fired_invariant(gate_results: dict[InvariantCode, bool]) -> InvariantCode | None:
+    """Return the highest-priority VIOLATED gate, or ``None`` if all passed.
+
+    Priority order is ``_INVARIANT_PRIORITY`` (most-severe first). This is the
+    single ``fail_reason`` reported when several gates fire at once.
+    """
+    for code in _INVARIANT_PRIORITY:
+        if gate_results.get(code) is False:
+            return code
+    return None
+
+
+# --------------------------------------------------------------------------
 # Public judge entry point
 # --------------------------------------------------------------------------
 
@@ -659,12 +951,37 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
     LLM-graded FAILs. Dimensions are emitted as 0 (with the reason as
     feedback) so every downstream consumer that iterates DIMENSION_KEYS keeps
     working.
+
+    PLAN-0110 W1: this path is itself an invariant-gate hit, so we also build a
+    full ``VerdictDecision`` (verdict=FAIL, fail_reason=the matching
+    InvariantCode) and attach it as ``verdict_decision`` — the deterministic
+    gate produces a meaningful tiered verdict even when the LLM judge never
+    runs (T-W1-04 / F-4).
     """
     text = _DEGENERATE_REASON_TEXT.get(reason, f"DEGENERATE ANSWER: {reason}")
     # tool_failure_nonanswer is a distinct class (infra failure, not a broken
     # answer string) — tag the veto type accordingly so the report can split
     # the two lists.
     veto_type = "tool_failure" if reason == "tool_failure_nonanswer" else "degenerate"
+
+    # Map the deterministic reason to its InvariantCode and build the gate map:
+    # exactly the matched gate is VIOLATED (False); all others passed (True).
+    if reason == "tool_failure_nonanswer":
+        fired_code: InvariantCode | None = InvariantCode.INFRA_NON_ANSWER
+    else:
+        fired_code = _DEGENERATE_REASON_TO_CODE.get(reason)
+    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    if fired_code is not None:
+        gate_results[fired_code] = False
+    decision = VerdictDecision(
+        verdict=Verdict.FAIL,
+        quality_score=0,
+        fail_reason=fired_code,
+        gate_results=gate_results,
+        grounding_check=GroundingCheck(),
+        dimensions={k: 0 for k in DIMENSION_KEYS},
+    )
+
     return {
         "verdict": "FAIL",
         "score": 0,
@@ -675,6 +992,7 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
         "judge_prompt_id": judge_prompt_id,
         # ``veto`` is the load-bearing field the report + summary pivot on.
         "veto": {"type": veto_type, "reason": reason, "detail": text},
+        "verdict_decision": decision.to_dict(),
     }
 
 
@@ -727,6 +1045,13 @@ def judge_answer(
             "notes": _skipped_note,  # v1.x back-compat mirror
             "raw_response": None,
             "judge_prompt_id": judge_prompt_id,
+            # No soft sub-scores exist when the judge is skipped, so there is no
+            # quality_score to band. The answer DID clear every deterministic
+            # gate (degenerate/tool-failure short-circuit earlier) — a fired gate
+            # would already have returned a FAIL VerdictDecision above. With no
+            # gate fired and no judge, there is genuinely no verdict to compose,
+            # so we emit None rather than a misleading 0-score FAIL.
+            "verdict_decision": None,
         }
 
     user_prompt = _build_user_prompt(inp)
@@ -742,10 +1067,16 @@ def judge_answer(
             "notes": _err_note,  # v1.x back-compat mirror
             "raw_response": None,
             "judge_prompt_id": judge_prompt_id,
+            # The judge errored → no sub-scores → no verdict to compose (see the
+            # SKIPPED path above for the rationale).
+            "verdict_decision": None,
         }
 
     parsed = _parse_judge_response(raw)
-    return _finalise_verdict(parsed, raw_response=raw, judge_prompt_id=judge_prompt_id)
+    # Pass ``inp`` so the deterministic invariant gate (answer-text + tool-result
+    # checks) runs inside the tiered composition — the soft judge alone cannot
+    # see leaked tokens / truncation / infra non-answers (PLAN-0110 W1).
+    return _finalise_verdict(parsed, raw_response=raw, judge_prompt_id=judge_prompt_id, inp=inp)
 
 
 def _parse_judge_response(raw: str) -> dict[str, Any]:
@@ -765,15 +1096,80 @@ def _parse_judge_response(raw: str) -> dict[str, Any]:
     return obj if isinstance(obj, dict) else {}
 
 
-def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt_id: str) -> dict[str, Any]:
-    """Compute verdict + total score from parsed dimensions.
+def _band_quality_score(quality_score: int) -> Verdict:
+    """Band a gate-cleared ``quality_score`` (0-100) into a tiered ``Verdict``.
 
-    Score-clamping logic:
-    * each dimension is clamped to [0, _MAX_PER_DIMENSION];
-    * non-numeric / missing dimensions default to 0;
-    * verdict maps the **sum** to PASS/WARN/FAIL via the band thresholds.
+    Only called when EVERY invariant gate passed (PRD-0091 §6.5 table). A score
+    below ``_BAND_WEAK`` is still a FAIL (a barely-coherent answer is a failure
+    even with no hard-invariant violation).
+    """
+    if quality_score >= _BAND_STRONG:
+        return Verdict.STRONG
+    if quality_score >= _BAND_PASS:
+        return Verdict.PASS
+    if quality_score >= _BAND_WEAK:
+        return Verdict.WEAK
+    return Verdict.FAIL
+
+
+def compose_verdict(
+    dimensions_int: dict[str, int],
+    gate_results: dict[InvariantCode, bool],
+    grounding_check: GroundingCheck,
+) -> VerdictDecision:
+    """Lexicographically compose the tiered ``VerdictDecision`` (AD-1).
+
+    The composition is GATE-then-BAND:
+      1. If ANY invariant gate fired (a ``False`` in ``gate_results``) → the
+         verdict is ``FAIL`` and ``fail_reason`` is the highest-priority fired
+         gate. The soft ``quality_score`` is IRRELEVANT here — a hard failure
+         can never be "bought back" by a high score (the core AD-1 property).
+      2. Otherwise → band the additive ``quality_score`` (== sum of dimensions,
+         FR-4 continuity) into STRONG/PASS/WEAK/FAIL.
+    """
+    quality_score = sum(dimensions_int.values())
+    fail_reason = first_fired_invariant(gate_results)
+    if fail_reason is not None:
+        # A fired gate is an UNCONDITIONAL FAIL regardless of quality_score.
+        verdict = Verdict.FAIL
+    else:
+        verdict = _band_quality_score(quality_score)
+    return VerdictDecision(
+        verdict=verdict,
+        quality_score=quality_score,
+        fail_reason=fail_reason,
+        gate_results=gate_results,
+        grounding_check=grounding_check,
+        dimensions=dimensions_int,
+    )
+
+
+def _finalise_verdict(
+    parsed: dict[str, Any],
+    *,
+    raw_response: str,
+    judge_prompt_id: str,
+    inp: JudgeInput | None = None,
+) -> dict[str, Any]:
+    """Compute the tiered verdict + legacy fields from parsed dimensions.
+
+    Pipeline (PLAN-0110 W1 / AD-1):
+    * each dimension is clamped to [0, _MAX_PER_DIMENSION]; missing/non-numeric
+      default to 0; ``quality_score = sum(dims)`` (FR-4 continuity).
+    * deterministic invariant gates run via ``evaluate_invariants`` (LLM-free);
+    * if any gate fired → FAIL[first-fired code]; else band the quality_score.
+    * the returned dict carries BOTH the NEW ``verdict_decision`` structured
+      field AND the LEGACY ``verdict``/``score``/``dimensions``/``veto`` keys so
+      the runner + artefact readers keep working for one release (W5 migrates
+      them).
+
+    ``inp`` carries the answer/tool_results/rubric the deterministic gate needs.
+    It is optional only so legacy callers that pass nothing still get the soft
+    score (the answer-text gates then cannot run — but in the live flow
+    ``judge_answer`` always passes ``inp``).
     """
     dimensions: dict[str, dict[str, Any]] = {}
+    dimensions_int: dict[str, int] = {}  # key→score, for the VerdictDecision
     total = 0
     for key in DIMENSION_KEYS:
         entry = parsed.get(key)
@@ -796,8 +1192,47 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
         # can migrate at their own pace. ``feedback`` is canonical; ``reason``
         # mirrors it for one release.
         dimensions[key] = {"score": score, "feedback": feedback, "reason": feedback}
+        dimensions_int[key] = score
         total += score
 
+    # v2.0: canonical top-level summary key is ``reviewer_summary`` (≤800
+    # chars, written as a PR-review note). v1.x used ``notes`` (≤400 chars).
+    # Dual-read + dual-emit for one release.
+    reviewer_summary = str(parsed.get("reviewer_summary") or parsed.get("notes", ""))[:800]
+
+    grounding_score = dimensions_int.get("grounding", _MAX_PER_DIMENSION)
+
+    # ── NEW tiered composition (PLAN-0110 W1 / AD-1) ──────────────────────
+    # Run every deterministic gate. In this path the answer already cleared the
+    # degenerate + tool-failure pre-checks in ``judge_answer`` (it short-circuits
+    # those before reaching here), so the only gate that can fire from the soft
+    # judge is GROUNDING_FLOOR — but we run the FULL gate so the VerdictDecision
+    # carries an accurate, complete ``gate_results`` map (FR-3), and so a future
+    # caller invoking ``_finalise_verdict`` directly still gets correct gating.
+    # GROUNDING_CONTRADICTED is wired but inert until W3 (presumed check).
+    grounding_check = GroundingCheck()  # zeroed/presumed in W1; populated in W3
+    if inp is not None:
+        gate_results = evaluate_invariants(
+            inp.answer_text,
+            inp.tool_results,
+            inp.rubric,
+            grounding_check,
+            grounding_score=grounding_score,
+        )
+    else:
+        # No inputs → we can only evaluate the grounding floor (we still have the
+        # judge sub-score). All answer-text gates default to "passed".
+        gate_results = {code: True for code in _ALL_INVARIANTS}
+        if grounding_score < GROUNDING_VETO_FLOOR:
+            gate_results[InvariantCode.GROUNDING_FLOOR] = False
+
+    decision = compose_verdict(dimensions_int, gate_results, grounding_check)
+
+    # ── LEGACY band + grounding veto (back-compat, unchanged behaviour) ───
+    # The legacy ``verdict`` string keeps the OLD 85/60 PASS/WARN/FAIL bands and
+    # the OLD ``veto`` dict so the runner + report (which W5 will migrate) read
+    # the same values as before. The grounding floor is the ONLY gate that can
+    # reach this path, so we reproduce the legacy veto exactly when it fires.
     if total >= _PASS_THRESHOLD:
         verdict = "PASS"
     elif total >= _WARN_THRESHOLD:
@@ -805,19 +1240,7 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
     else:
         verdict = "FAIL"
 
-    # v2.0: canonical top-level summary key is ``reviewer_summary`` (≤800
-    # chars, written as a PR-review note). v1.x used ``notes`` (≤400 chars).
-    # Dual-read + dual-emit for one release.
-    reviewer_summary = str(parsed.get("reviewer_summary") or parsed.get("notes", ""))[:800]
-
-    # ── F1: GROUNDING VETO (audit 2026-06-11) ─────────────────────────────
-    # Additive scoring let a fabrication (grounding=10) still PASS at sum=85.
-    # For a financial-research agent a fabricated number is the single worst
-    # outcome, so a grounding score below the floor caps the verdict at FAIL
-    # regardless of the sum. We record the veto so the report can list these
-    # runs as a fabrication list (and so the legacy band is auditable).
     veto: dict[str, Any] | None = None
-    grounding_score = dimensions.get("grounding", {}).get("score", _MAX_PER_DIMENSION)
     if grounding_score < GROUNDING_VETO_FLOOR:
         pre_veto_verdict = verdict
         verdict = "FAIL"
@@ -847,6 +1270,11 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
         "raw_response": raw_response,
         "judge_prompt_id": judge_prompt_id,
         "veto": veto,
+        # ── NEW structured tiered verdict (PLAN-0110 W1) ──────────────────
+        # ``verdict_decision`` is the authoritative tiered object; downstream
+        # consumers (trend store W4, report W5) read it. It is emitted ALONGSIDE
+        # the legacy keys, never instead of them, for the back-compat window.
+        "verdict_decision": decision.to_dict(),
     }
 
 
@@ -886,6 +1314,11 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     # Audit 2026-06-11 — failure-first aggregates. We tally the deterministic /
     # veto FAIL classes so the report can lead with them instead of an average.
     veto_counts: dict[str, int] = {"grounding": 0, "degenerate": 0, "tool_failure": 0}
+    # PLAN-0110 W1 — tiered-verdict aggregates. Counts of the NEW Verdict bands
+    # and a histogram of which InvariantCode triggered each FAIL, both read from
+    # the structured ``verdict_decision`` block (None when judge skipped/errored).
+    tiered_counts: dict[str, int] = {"STRONG": 0, "PASS": 0, "WEAK": 0, "FAIL": 0}
+    fail_reason_counts: dict[str, int] = {}
     for r in records:
         v = str(r.get("verdict") or "ERROR")
         verdict_counts[v] = verdict_counts.get(v, 0) + 1
@@ -896,6 +1329,15 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             vt = str(veto.get("type") or "")
             if vt in veto_counts:
                 veto_counts[vt] += 1
+        # Tiered verdict roll-up (W1). Skipped/errored records have no decision.
+        decision = r.get("verdict_decision")
+        if isinstance(decision, dict):
+            tv = str(decision.get("verdict") or "")
+            if tv in tiered_counts:
+                tiered_counts[tv] += 1
+            fr = decision.get("fail_reason")
+            if isinstance(fr, str):
+                fail_reason_counts[fr] = fail_reason_counts.get(fr, 0) + 1
         if v in {"SKIPPED", "ERROR"}:
             continue
         score = r.get("score")
@@ -924,6 +1366,16 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         # non-answer. The report leads with these.
         "veto_counts": veto_counts,
         "grounding_veto_floor": GROUNDING_VETO_FLOOR,
+        # PLAN-0110 W1 — tiered verdict band counts (n_strong/n_pass/n_weak/
+        # n_fail) and the fail-reason (InvariantCode) histogram. The W5 report
+        # leads with these; they are the authoritative verdict aggregates.
+        "tiered_verdict_counts": {
+            "n_strong": tiered_counts["STRONG"],
+            "n_pass": tiered_counts["PASS"],
+            "n_weak": tiered_counts["WEAK"],
+            "n_fail": tiered_counts["FAIL"],
+        },
+        "fail_reason_counts": fail_reason_counts,
         # The rubric identifier is the same for every record in a single run
         # (all records were graded by CHAT_QUALITY_JUDGE). We surface it once at
         # the summary level so dashboards/exports can pivot on judge version
