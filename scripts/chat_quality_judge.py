@@ -86,6 +86,50 @@ _MAX_TOTAL = _MAX_PER_DIMENSION * len(DIMENSION_KEYS)  # 100
 _PASS_THRESHOLD = 85
 _WARN_THRESHOLD = 60
 
+# ── Hardening constants (audit 2026-06-11 F1/F3/F4) ───────────────────────
+# The benchmark's original verdict was a pure ``sum(4 dims)`` with PASS>=85.
+# That let a catastrophic single-dimension failure (e.g. grounding=10 =
+# "fabricated") still PASS, and let degenerate / non-answers score 100. The
+# three guards below run in the Python SCORING LAYER (not the LLM prompt) so
+# they are deterministic, longitudinally stable, and cannot be argued away by
+# a miscalibrated judge model.
+
+# F1 — GROUNDING VETO. A financial-research agent's worst outcome is a
+# fabricated number. If the judge scores grounding below this floor, the
+# answer is FAIL regardless of how the other three dimensions sum. 12 is one
+# notch below the prompt's own "presumed grounded → 20-25" band and above the
+# "honest partial (15-22)" band, so it fires only on genuine fabrication
+# signals (the prompt awards <12 only for cases (a)/(b)/(c) in its grounding
+# rubric — claims against missing/out-of-scope tool data).
+GROUNDING_VETO_FLOOR = 12
+
+# F3 — control tokens that must NEVER appear in a user-facing answer. Their
+# presence means the chat layer leaked the model's internal tool-call / think
+# scaffolding into the rendered answer (E3 in the audit). We match BOTH the
+# OPENING and CLOSING forms of every tag — the strict-validation pass found a
+# leaked ``</think>`` that the opening-only ``<think`` substring missed (gap
+# A). The regex is anchored on ``<`` + optional ``/`` so ``<think>`` and
+# ``</think>`` (and the closing forms of function/invoke/parameter/
+# function_calls/function_results) all match. These are never valid prose in
+# any real financial answer.
+_CONTROL_TOKEN_NAMES: tuple[str, ...] = (
+    "function_calls",
+    "function_results",
+    "function",
+    "invoke",
+    "parameter",
+    "think",
+)
+# Match ``<name`` or ``</name`` for each control-tag name. ``function`` is a
+# prefix of ``function_calls`` / ``function_results`` so listing it last in
+# the alternation is harmless — any of the three matches the leak. We do not
+# require the closing ``>`` so partial / truncated leaks (``<invoke name=``)
+# still trip.
+_LEAKED_CONTROL_TOKEN_RE = re.compile(
+    r"</?(?:" + "|".join(re.escape(n) for n in _CONTROL_TOKEN_NAMES) + r")\b",
+    re.IGNORECASE,
+)
+
 
 # --------------------------------------------------------------------------
 # Data structures
@@ -102,6 +146,19 @@ class Rubric:
     """
 
     expected_tools: list[str] = field(default_factory=list)
+    # F7 (audit 2026-06-11): ``required_facts`` / ``forbidden_facts`` are
+    # carried for back-compat with the YAML catalogue + the schema-lint test,
+    # but they are DELIBERATELY NOT wired into the judge prompt or the scoring
+    # layer. The catalogue values are SYMBOLIC placeholder identifiers
+    # (e.g. ``pe_ratio_value``, ``fabricated_period``), NOT literal answer
+    # substrings, so a deterministic must-mention / must-not-say check against
+    # them would be meaningless (and an LLM semantic check would require
+    # bumping the longitudinally-frozen judge prompt + rewriting every smoke
+    # question to use concrete checkable strings — out of scope here). We keep
+    # the fields inert rather than implying coverage that does not exist.
+    # TODO(PRD-scoring-redesign): if/when the catalogue is migrated to
+    # concrete checkable strings, wire required/forbidden facts into the judge
+    # as explicit must-mention / must-not-say semantic checks here.
     required_facts: list[str] = field(default_factory=list)
     forbidden_facts: list[str] = field(default_factory=list)
     expected_depth: str = "medium"  # shallow | medium | deep
@@ -214,6 +271,35 @@ def _build_user_prompt(inp: JudgeInput) -> str:
     # item_count from the current SSE schema, which is intentionally compact
     # — the judge uses these as evidence of "data was/was-not available".
     tool_trace_lines: list[str] = []
+    # F8 (audit 2026-06-11): pair each call to its result by TOOL NAME / call
+    # id, NOT by positional index. The SSE stream does not guarantee that
+    # ``tool_results[i]`` belongs to ``tool_calls[i]`` — multiple calls,
+    # interleaved or dropped result events, and retries all break the
+    # positional assumption and mislabel the evidence the judge reasons over.
+    # We consume each result at most once (a name can be called twice) so a
+    # repeated tool still aligns left-to-right within that name's results.
+    remaining_results = list(inp.tool_results)
+
+    def _pop_result_for(call: dict[str, Any]) -> dict[str, Any] | None:
+        """Return + consume the first unmatched result for this call.
+
+        Match priority: explicit call id (``call_id`` / ``id`` on both sides)
+        first, then tool name. Falls back to None when nothing matches (the
+        judge then sees ``(no result event)`` rather than a wrong result).
+        """
+        call_id = call.get("call_id") or call.get("id")
+        name = call.get("name")
+        # 1) id-based pairing (most precise when the SSE schema carries ids).
+        if call_id is not None:
+            for idx, res in enumerate(remaining_results):
+                if (res.get("call_id") or res.get("id")) == call_id:
+                    return remaining_results.pop(idx)
+        # 2) name-based pairing — first unconsumed result for this tool name.
+        for idx, res in enumerate(remaining_results):
+            if res.get("tool") == name or res.get("name") == name:
+                return remaining_results.pop(idx)
+        return None
+
     # Build a per-call/result line: "call N: <tool>(args) -> status item_count=K"
     for i, tc in enumerate(inp.tool_calls):
         name = tc.get("name", "?")
@@ -221,13 +307,21 @@ def _build_user_prompt(inp: JudgeInput) -> str:
         # Keep arg formatting compact; we only care about which keys + scalar
         # values were passed, not nested JSON.
         args_repr = ", ".join(f"{k}={_short_repr(v)}" for k, v in args.items())
-        matching = inp.tool_results[i] if i < len(inp.tool_results) else None
+        matching = _pop_result_for(tc)
         if matching:
             status = matching.get("status", "?")
             item_count = matching.get("item_count", "?")
             tool_trace_lines.append(f"  call {i + 1}: {name}({args_repr}) -> status={status} items={item_count}")
         else:
             tool_trace_lines.append(f"  call {i + 1}: {name}({args_repr}) -> (no result event)")
+
+    # Any results that never matched a call (e.g. interleaved / orphaned
+    # events) are still surfaced so the judge sees the full evidence set.
+    for res in remaining_results:
+        rname = res.get("tool") or res.get("name") or "?"
+        status = res.get("status", "?")
+        item_count = res.get("item_count", "?")
+        tool_trace_lines.append(f"  (unpaired result): {rname} -> status={status} items={item_count}")
 
     tool_trace = "\n".join(tool_trace_lines) if tool_trace_lines else "  (no tool calls)"
 
@@ -246,8 +340,342 @@ def _short_repr(v: Any) -> str:
 
 
 # --------------------------------------------------------------------------
+# Deterministic pre-checks (run BEFORE the LLM judge)
+# --------------------------------------------------------------------------
+#
+# The LLM judge is calibrated to grade QUALITY of a coherent answer. It is the
+# wrong tool to detect that the "answer" is not a real answer at all — a
+# leaked tool-call stub, a truncated mid-call fragment, an empty string after
+# a successful tool, or an infra-failure non-answer. Those are deterministic
+# string/state checks; running them here lets us HARD-FAIL such cases before
+# (and independent of) the LLM, with a precise, model-agnostic reason. This
+# directly closes the F3 ("degenerate answers score full marks") and F4
+# ("tool failures reported as perfect quality") findings in the 2026-06-11
+# audit.
+
+# A "tool-call stub" is an answer whose ENTIRE body is essentially a fenced
+# JSON object or a tool-invocation directive with no prose answer for the
+# user. We detect the digit-drop corruption pattern (E6) conservatively to
+# avoid false positives on legitimate prose.
+#
+# Leading-digit-drop signatures (E6): the streaming layer occasionally drops
+# the first character of a token, producing artefacts a human never writes:
+#   * ``**,095 BTC**``  — a bolded number that starts with a comma (the
+#     leading digits were deleted).
+#   * ``approximately **,`` — "approximately" immediately followed by a
+#     comma-led number.
+# We require the comma to be bound to surrounding markdown/number context so
+# ordinary clause commas ("Apple, Inc.") never trip the check.
+_DIGIT_DROP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # ``**,095`` — bold marker then a comma then digits (dropped leading int).
+    re.compile(r"\*\*,\d{2,}"),
+    # a standalone token that is just ``,DDD`` preceded by whitespace and a
+    # currency/word boundary, e.g. " **,095 BTC" or " ,095 BTC" — but NOT a
+    # normal thousands group like "1,095" (which has a digit before the comma).
+    re.compile(r"(?:^|[\s*$£€])[,]\d{3}\b"),
+    # Gap D (strict-validation): "last  quarters" — a DOUBLE space immediately
+    # before a unit noun is the space-where-a-digit-was form of the digit drop
+    # ("last 8 quarters" → "last  quarters"). Restricted to a small set of
+    # unit nouns so ordinary double spaces in prose never trip it. This form is
+    # UNAMBIGUOUS — verified absent from every good (negative) fixture — so it
+    # is safe to fire standalone.
+    re.compile(r"\b\w+\s{2}(?:quarter|hop|year|month|week|day|period)s?\b", re.IGNORECASE),
+)
+
+# Gap D — the AMBIGUOUS space-where-a-digit-was forms. ``( quarters)`` /
+# ``( hop)`` (open-paren + space + word) and ``Path :`` / ``**Step :**`` (word
+# + space-colon) ALSO appear in GENUINELY-GOOD answers (the OpenAI↔MSFT path
+# answers legitimately write "Path  — Direct Partnership ( hop)" with their own
+# digit drops while still DELIVERING data). So these forms must NOT fire on
+# their own — they are only corroborating evidence inside the "describes calls
+# but delivers no data" stub check (gap B). Keeping them here (not in the
+# standalone tuple above) is the whole point of the strict-validation fix.
+_DIGIT_DROP_WEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\(\s(?:quarter|hop|year|month|week|day|period|row)s?\b", re.IGNORECASE),
+    re.compile(r"(?:\*\*Step|Path|Step)\s+:", re.IGNORECASE),
+)
+
+# Gap B — signatures of an answer whose deliverable is just DESCRIBING tool
+# invocations rather than presenting their results. Each is a phrase a model
+# emits when it narrates "I will call X" instead of answering.
+_TOOL_CALL_DESCRIPTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\*\*Tool calls?:\*\*", re.IGNORECASE),  # "**Tool calls:**"
+    re.compile(r"\bCalling\s+`[a-z_]+`", re.IGNORECASE),  # "Calling `get_x`"
+    re.compile(r"\*\*Calling\s+`[a-z_]+`", re.IGNORECASE),  # "**Calling `get_x`"
+    re.compile(r"\*\*Step\b[^*]*:\s*", re.IGNORECASE),  # "**Step : ...**" / "**Step 2: ...**"
+    # enumerated "1. `get_*`/`search_*`/`query_*` for <X>" call list lines.
+    re.compile(r"^\s*\d+\.\s*`(?:get|search|query|screen|traverse)_[a-z_]+`", re.IGNORECASE | re.MULTILINE),
+)
+
+# Gap C — INVALID fenced-JSON signatures: a JSON object with a dropped value
+# (``"periods": ,`` / ``": ]`` / ``": }``) is a tool-arg echo, not an answer.
+_INVALID_JSON_VALUE_DROP_RE = re.compile(r":\s*(?:,|\]|\})")
+
+# Markers that an answer actually DELIVERS substantive content (citations,
+# real magnitudes, confidence/row references). Used as the discriminator that
+# protects the good (negative) fixtures from the stub / weak-digit-drop checks:
+# the good answers MENTION tools but DELIVER data; the stubs only describe
+# calls. A single delivery marker is enough to spare an answer from gap B/weak-D.
+_DELIVERY_MARKERS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\[(?:\d+|[a-z_]+,?\s*row\s*\d+)\]", re.IGNORECASE),  # [3] / [traverse_graph, row 0]
+    re.compile(r"\bconfidence[:\s]+\*?\*?\d", re.IGNORECASE),  # "confidence: 1.0"
+    re.compile(r"[$£€]\s?\d"),  # "$38 billion"
+    re.compile(r"\b\d+(?:\.\d+)?\s*(?:billion|million|trillion|%)", re.IGNORECASE),
+)
+
+
+def detect_degenerate_answer(
+    answer_text: str,
+    tool_results: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Deterministically flag a NON-answer; return a reason or ``None``.
+
+    Returns a short machine-stable reason string when the answer is
+    degenerate (and must HARD-FAIL the verdict before the LLM judge), or
+    ``None`` when the answer is a plausibly-real answer the LLM should grade.
+
+    Detected failure classes (all from the 2026-06-11 audit example run):
+      * ``leaked_control_tokens`` — ``<function``/``<invoke``/``<parameter``/
+        ``<think`` scaffolding (OPENING or CLOSING form) rendered as the
+        user-facing answer (E3 + strict-validation gap A).
+      * ``tool_call_stub`` — the answer's deliverable is just a fenced-JSON /
+        tool-call directive, OR a markdown DESCRIPTION of tool calls / steps
+        with no data body (E3 + gaps B/C).
+      * ``empty_after_tool`` — empty/whitespace answer after >=1 successful
+        tool call (data was fetched, nothing was said).
+      * ``empty_answer`` — empty/whitespace with no successful tool either.
+      * ``digit_drop_corruption`` — the leading-digit-drop rendering bug
+        (E6 + gap D space-where-a-digit-was forms).
+
+    Conservative by design: ambiguous-but-prose answers return ``None`` so the
+    LLM judge still grades them. Discriminator vs genuinely-good answers: good
+    answers MENTION tools / write structured paths but DELIVER data (citations,
+    magnitudes, confidence/row refs); stubs only DESCRIBE the calls. The
+    ``_answer_delivers_data`` check protects the good answers from the stub and
+    weak-digit-drop heuristics.
+    """
+    raw = answer_text or ""
+    # Strip the transparency banner the chat layer appends — it is appended to
+    # BOTH good and degenerate answers and must not mask a stub underneath.
+    body = raw
+    _BANNER = "⚠ Some numbers could not be verified against retrieved data"
+    if _BANNER in body:
+        body = body.replace(_BANNER, "")
+    stripped = body.strip()
+
+    results = tool_results or []
+    had_ok_tool = any(
+        (r.get("status") == "ok") and isinstance(r.get("item_count"), int) and r.get("item_count", 0) >= 1
+        for r in results
+    )
+
+    # 1) Empty answer (distinguish "empty after a real tool fetch" — worse).
+    if not stripped:
+        return "empty_after_tool" if had_ok_tool else "empty_answer"
+
+    # 2) Leaked control tokens (gap A) — any occurrence (opening OR closing
+    #    tag) is fatal. Never valid prose; the tool-call / think scaffolding
+    #    leaked into the answer.
+    if _LEAKED_CONTROL_TOKEN_RE.search(stripped):
+        return "leaked_control_tokens"
+
+    # Does the answer actually DELIVER substantive content? This is the
+    # discriminator that protects the GOOD answers (which mention tools but
+    # present real data) from the stub + weak-digit-drop heuristics below.
+    delivers = _answer_delivers_data(stripped)
+
+    # 3a) Whole-answer fenced-JSON / bare-JSON stub (existing E3 check).
+    fence_blocks = re.findall(r"```.*?```", stripped, flags=re.DOTALL)
+    if fence_blocks:
+        non_ws = len(re.sub(r"\s", "", stripped))
+        fence_non_ws = len(re.sub(r"\s", "", "".join(fence_blocks)))
+        if non_ws > 0 and fence_non_ws / non_ws >= 0.8:
+            return "tool_call_stub"
+        # 3b) Gap C — intro prose + fenced ```json whose contents are
+        #     STRUCTURALLY INVALID with dropped values (``"periods": ,``).
+        #     A valid JSON answer is fine; a broken tool-arg echo is a stub.
+        for fb in fence_blocks:
+            inner = re.sub(r"^```(?:json)?|```$", "", fb.strip()).strip()
+            if _INVALID_JSON_VALUE_DROP_RE.search(inner) and not delivers:
+                return "tool_call_stub"
+    # A bare JSON object as the entire answer (no fence) is also a stub.
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            json.loads(stripped)
+            return "tool_call_stub"
+        except json.JSONDecodeError:
+            pass
+
+    # 3c) Gap B — markdown tool-call / step DESCRIPTION stub. The answer's
+    #     body just narrates which tools/steps it would call and presents no
+    #     results. We require (i) >=1 call-description signature AND (ii) NO
+    #     substantive delivery. The "no delivery" half is what spares the good
+    #     OpenAI↔MSFT path answers (they mention tools but deliver cited data).
+    #     We also strengthen with the SSE signal: if expected tools returned
+    #     data (ok/items>=1) yet the answer presents none, it is a stub.
+    if not delivers:
+        desc_hits = sum(1 for p in _TOOL_CALL_DESCRIPTION_PATTERNS if p.search(stripped))
+        if desc_hits:
+            return "tool_call_stub"
+
+    # 4) Leading-digit-drop corruption (E6 + gap D).
+    #    4a) UNAMBIGUOUS forms fire standalone (verified absent from all good
+    #        fixtures).
+    for pat in _DIGIT_DROP_PATTERNS:
+        if pat.search(stripped):
+            return "digit_drop_corruption"
+    #    4b) WEAK / AMBIGUOUS forms (``( hop)`` / ``Path :``) ONLY fire when the
+    #        answer also fails to deliver data — these forms legitimately occur
+    #        in good path answers, so they must be corroborated.
+    if not delivers:
+        for pat in _DIGIT_DROP_WEAK_PATTERNS:
+            if pat.search(stripped):
+                return "digit_drop_corruption"
+
+    return None
+
+
+def _answer_delivers_data(text: str) -> bool:
+    """True when the answer presents SUBSTANTIVE content, not just call narration.
+
+    A single delivery marker (citation, magnitude, confidence/row reference) is
+    enough. This is the discriminator that keeps genuinely-good answers — which
+    mention tools and write structured paths but DELIVER cited data — from
+    tripping the markdown-stub and weak-digit-drop heuristics.
+    """
+    return any(p.search(text) for p in _DELIVERY_MARKERS)
+
+
+def detect_tool_failure_nonanswer(
+    answer_text: str,
+    rubric: Rubric,
+    tool_results: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Flag an INFRA-FAILURE non-answer that must not be scored as PASS (F4).
+
+    Returns a reason string or ``None``. Fires when ALL hold:
+      * the rubric marks ``appropriate_refusal_ok=false`` (the question is
+        answerable — a non-answer here is a failure, not correct behaviour);
+      * an EXPECTED tool's result shows an error / empty status (the agent
+        could not get the data — e.g. the screener ``transport_error`` /
+        HTTP 500 case in the audit, E2); and
+      * the answer reads as a non-answer (a refusal / "cannot reach" apology
+        rather than a substantive analysis).
+
+    This is deliberately conservative — it only fires on the intersection of
+    "question is answerable", "expected tool failed", and "no substantive
+    answer was produced", so a graceful, correct refusal (rubric permits) or a
+    successful answer is never penalised here.
+    """
+    if rubric.appropriate_refusal_ok:
+        return None
+
+    results = tool_results or []
+    expected = set(rubric.expected_tools)
+    # Status values that mean "the tool did not deliver usable data".
+    _BAD_STATUSES = {"error", "transport_error", "timeout", "missing", "failed"}
+
+    def _result_is_failure(r: dict[str, Any]) -> bool:
+        status = str(r.get("status") or "")
+        if status in _BAD_STATUSES:
+            return True
+        # ``empty`` / ok-with-zero-items counts as a non-delivery for an
+        # EXPECTED tool on an answerable question.
+        if status in {"empty", "ok"} and (r.get("item_count") or 0) == 0:
+            return True
+        return False
+
+    # Did an expected tool fail to deliver? (If no expected tools are declared,
+    # fall back to: did the ONLY tool called fail?)
+    relevant = [r for r in results if (not expected) or (r.get("tool") in expected) or (r.get("name") in expected)]
+    if not relevant:
+        return None
+    if not any(_result_is_failure(r) for r in relevant):
+        return None
+
+    # Is the answer a non-answer? Reuse the refusal-phrase shape plus the
+    # "cannot reach / try again" infra-apology shape the audit flagged (E2).
+    lowered = (answer_text or "").lower()
+    _NONANSWER_MARKERS = (
+        "cannot reach",
+        "could not reach",
+        "returned a 500",
+        "500 error",
+        "try again",
+        "please retry",
+        "i cannot find",
+        "i am unable to",
+        "i'm unable to",
+        "data is not available",
+        "no data was returned",
+        "no results were returned",
+    )
+    if not any(m in lowered for m in _NONANSWER_MARKERS):
+        return None
+
+    return "tool_failure_nonanswer"
+
+
+# --------------------------------------------------------------------------
 # Public judge entry point
 # --------------------------------------------------------------------------
+
+
+# Human-readable explanations for each deterministic FAIL reason — surfaced in
+# the per-Q artifact ``reviewer_summary`` and in the report.
+_DEGENERATE_REASON_TEXT: dict[str, str] = {
+    "leaked_control_tokens": (
+        "DEGENERATE ANSWER: tool-call control tokens (<function/<invoke/"
+        "<parameter/<think) leaked into the user-facing answer — the chat "
+        "layer rendered internal scaffolding as the response."
+    ),
+    "tool_call_stub": (
+        "DEGENERATE ANSWER: the answer is a fenced-JSON / tool-call stub (or "
+        "a mid-call truncation), not a prose answer the user can read."
+    ),
+    "empty_after_tool": (
+        "DEGENERATE ANSWER: empty answer after >=1 successful tool call — "
+        "data was fetched but nothing was said to the user."
+    ),
+    "empty_answer": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+    "digit_drop_corruption": (
+        "DEGENERATE ANSWER: leading-digit-drop rendering corruption detected "
+        "(e.g. a number rendered as '**,095') — the answer is unreliable."
+    ),
+    "tool_failure_nonanswer": (
+        "TOOL-FAILURE NON-ANSWER: an expected tool failed (error/empty) and "
+        "the agent produced an infra-apology / refusal on an answerable "
+        "question (appropriate_refusal_ok=false). An outage non-answer is "
+        "NOT a PASS."
+    ),
+}
+
+
+def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, Any]:
+    """Build a hard-FAIL verdict for a deterministic pre-check hit.
+
+    The LLM judge is NOT consulted. Score is 0 and the ``veto`` field records
+    the precise machine reason so the report can list it distinctly from
+    LLM-graded FAILs. Dimensions are emitted as 0 (with the reason as
+    feedback) so every downstream consumer that iterates DIMENSION_KEYS keeps
+    working.
+    """
+    text = _DEGENERATE_REASON_TEXT.get(reason, f"DEGENERATE ANSWER: {reason}")
+    # tool_failure_nonanswer is a distinct class (infra failure, not a broken
+    # answer string) — tag the veto type accordingly so the report can split
+    # the two lists.
+    veto_type = "tool_failure" if reason == "tool_failure_nonanswer" else "degenerate"
+    return {
+        "verdict": "FAIL",
+        "score": 0,
+        "dimensions": {k: {"score": 0, "feedback": text, "reason": text} for k in DIMENSION_KEYS},
+        "reviewer_summary": text,
+        "notes": text,  # back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        # ``veto`` is the load-bearing field the report + summary pivot on.
+        "veto": {"type": veto_type, "reason": reason, "detail": text},
+    }
 
 
 def judge_answer(
@@ -273,6 +701,19 @@ def judge_answer(
     # alongside every result (including SKIPPED/ERROR) so a year-old artefact
     # can be traced to the exact prompt body that graded it.
     judge_prompt_id = CHAT_QUALITY_JUDGE.identifier()
+
+    # ── Deterministic pre-checks (F3 + F4, audit 2026-06-11) ──────────────
+    # Run BEFORE the LLM judge. If the "answer" is a machine artefact (leaked
+    # stub / truncation / empty-after-tools / digit-drop) or an infra-failure
+    # non-answer to an answerable question, hard-FAIL it here — the LLM judge
+    # is not consulted and cannot inflate the score. This runs even when no
+    # LLM is configured, so degenerate answers are caught in offline / CI mode
+    # too. We still attach a stable judge_prompt_id for traceability.
+    degenerate_reason = detect_degenerate_answer(inp.answer_text, inp.tool_results)
+    if degenerate_reason is None:
+        degenerate_reason = detect_tool_failure_nonanswer(inp.answer_text, inp.rubric, inp.tool_results)
+    if degenerate_reason is not None:
+        return _degenerate_fail_result(degenerate_reason, judge_prompt_id=judge_prompt_id)
 
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
@@ -369,6 +810,34 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
     # Dual-read + dual-emit for one release.
     reviewer_summary = str(parsed.get("reviewer_summary") or parsed.get("notes", ""))[:800]
 
+    # ── F1: GROUNDING VETO (audit 2026-06-11) ─────────────────────────────
+    # Additive scoring let a fabrication (grounding=10) still PASS at sum=85.
+    # For a financial-research agent a fabricated number is the single worst
+    # outcome, so a grounding score below the floor caps the verdict at FAIL
+    # regardless of the sum. We record the veto so the report can list these
+    # runs as a fabrication list (and so the legacy band is auditable).
+    veto: dict[str, Any] | None = None
+    grounding_score = dimensions.get("grounding", {}).get("score", _MAX_PER_DIMENSION)
+    if grounding_score < GROUNDING_VETO_FLOOR:
+        pre_veto_verdict = verdict
+        verdict = "FAIL"
+        veto_detail = (
+            f"GROUNDING VETO: grounding={grounding_score} < floor "
+            f"{GROUNDING_VETO_FLOOR} — likely fabrication. Verdict forced FAIL "
+            f"(sum={total} would otherwise have been {pre_veto_verdict})."
+        )
+        veto = {
+            "type": "grounding",
+            "reason": "grounding_below_floor",
+            "grounding": grounding_score,
+            "floor": GROUNDING_VETO_FLOOR,
+            "detail": veto_detail,
+            "pre_veto_verdict": pre_veto_verdict,
+        }
+        # Prepend the veto to the reviewer summary so a human scanning the
+        # artifact sees WHY this FAILed even though three dims may be high.
+        reviewer_summary = (f"{veto_detail} {reviewer_summary}").strip()[:800]
+
     return {
         "verdict": verdict,
         "score": total,
@@ -377,6 +846,7 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
         "notes": reviewer_summary,  # back-compat mirror — drop in next release
         "raw_response": raw_response,
         "judge_prompt_id": judge_prompt_id,
+        "veto": veto,
     }
 
 
@@ -413,9 +883,19 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     verdict_counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIPPED": 0, "ERROR": 0}
     dim_totals: dict[str, list[int]] = {k: [] for k in DIMENSION_KEYS}
     scored_totals: list[int] = []
+    # Audit 2026-06-11 — failure-first aggregates. We tally the deterministic /
+    # veto FAIL classes so the report can lead with them instead of an average.
+    veto_counts: dict[str, int] = {"grounding": 0, "degenerate": 0, "tool_failure": 0}
     for r in records:
         v = str(r.get("verdict") or "ERROR")
         verdict_counts[v] = verdict_counts.get(v, 0) + 1
+        # Veto/degenerate FAILs carry a ``veto`` block — count by type even
+        # though their score (0) is excluded from the dimension averages below.
+        veto = r.get("veto")
+        if isinstance(veto, dict):
+            vt = str(veto.get("type") or "")
+            if vt in veto_counts:
+                veto_counts[vt] += 1
         if v in {"SKIPPED", "ERROR"}:
             continue
         score = r.get("score")
@@ -439,6 +919,11 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "score_min": min(scored_totals) if scored_totals else None,
         "dimension_avg": {k: _avg(v) for k, v in dim_totals.items()},
         "n_records": len(records),
+        # Failure-first counters (audit F5). ``grounding`` = fabrication veto,
+        # ``degenerate`` = broken-answer pre-check, ``tool_failure`` = infra
+        # non-answer. The report leads with these.
+        "veto_counts": veto_counts,
+        "grounding_veto_floor": GROUNDING_VETO_FLOOR,
         # The rubric identifier is the same for every record in a single run
         # (all records were graded by CHAT_QUALITY_JUDGE). We surface it once at
         # the summary level so dashboards/exports can pivot on judge version

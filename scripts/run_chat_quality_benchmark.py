@@ -38,6 +38,18 @@ Usage
 
 See ``docs/services/rag-chat.md`` § "Chat Quality Benchmark" for output
 schema and interpretation guide.
+
+Two catalogues (audit 2026-06-11 F9 — reconciliation note)
+----------------------------------------------------------
+There are two question catalogues and they are NOT duplicates:
+
+* ``tests/validation/chat_eval/questions.yaml`` — the binary ACCEPTANCE GATE
+  (pytest, percentile pass/fail). This is the authoritative go/no-go gate.
+* ``tests/validation/chat_quality_benchmark/questions/*.yaml`` — this
+  EXPLORATORY benchmark's catalogue (rubric-graded, descriptive, per-Q
+  artefacts). It characterises quality and surfaces failures; it does not gate
+  CI. When the two overlap, the chat_eval gate is authoritative for go/no-go;
+  this benchmark is authoritative for the quality narrative.
 """
 
 from __future__ import annotations
@@ -377,6 +389,13 @@ def write_error_file(out_dir: Path, slot: str, exc: BaseException) -> None:
 
 _ANSWER_MAX_CHARS = 1500
 
+# ``_judge_summary.json`` schema version. Bumped to "2.0" (audit 2026-06-11
+# F9) to match the v2.0 CHAT_QUALITY_JUDGE prompt + the new hardening fields
+# (``veto_counts``, ``grounding_veto_floor``, per-record ``veto`` blocks). The
+# previous value (1) skewed below the judge prompt version and implied a v1
+# schema that no longer exists.
+_JUDGE_SUMMARY_SCHEMA_VERSION = "2.0"
+
 
 def _fmt_duration(seconds: float) -> str:
     """Format ``seconds`` as ``Xm Ys`` (or ``Ys`` if under a minute)."""
@@ -655,12 +674,223 @@ def _render_errors_section(artifacts: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+# --------------------------------------------------------------------------
+# Failure-first headline (audit 2026-06-11 F5)
+# --------------------------------------------------------------------------
+#
+# The original headline led with the average score + verdict counts + per-
+# dimension averages — which AVERAGED AWAY the failures that matter (a single
+# fabrication, a leaked stub, a latency breach). The redesign LEADS with the
+# failures: min score, worst-N runs, fabrication list (grounding veto),
+# degenerate-answer list, tool-failure list, and an aggregated latency-breach
+# count. The rosy average is DEMOTED below.
+
+
+def _run_score(art: dict[str, Any]) -> float | None:
+    """Numeric judge score for a run, or None when not judged."""
+    judge = art.get("judge")
+    if isinstance(judge, dict) and isinstance(judge.get("score"), int | float):
+        return float(judge["score"])
+    return None
+
+
+def _run_latency(art: dict[str, Any]) -> float:
+    """Latency in seconds for a run (result first, heuristics fallback)."""
+    return float((art.get("result") or {}).get("latency_s") or (art.get("heuristics") or {}).get("latency_s") or 0.0)
+
+
+def _latency_breached(art: dict[str, Any]) -> bool:
+    """True when this run breached its advisory latency budget."""
+    # ``latency_within_budget`` is False only when a budget existed AND was
+    # exceeded; None (no budget) and True (within budget) are both not breaches.
+    return (art.get("heuristics") or {}).get("latency_within_budget") is False
+
+
+def _veto_block(art: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the judge ``veto`` block for a run, if present."""
+    judge = art.get("judge")
+    if isinstance(judge, dict):
+        veto = judge.get("veto")
+        if isinstance(veto, dict):
+            return veto
+    return None
+
+
+def _render_failure_first_headline(
+    *,
+    judge_summary: dict[str, Any] | None,
+    artifacts: list[dict[str, Any]],
+    worst_n: int = 5,
+) -> list[str]:
+    """Render the FAILURE-FIRST headline block (leads the report).
+
+    Order (most actionable first):
+      1. Worst (min) judge score + worst-N runs table.
+      2. Fabrication list — runs vetoed for grounding < floor.
+      3. Degenerate-answer list — runs hard-failed by the deterministic
+         pre-check (leaked tokens / stub / empty / digit-drop).
+      4. Tool-failure non-answer list.
+      5. Aggregated latency-breach count.
+    """
+    lines: list[str] = ["## ⛔ Failures first", ""]
+
+    judged = [a for a in artifacts if _run_score(a) is not None]
+    scores = [s for a in artifacts if (s := _run_score(a)) is not None]
+
+    # 1) Min score + worst-N --------------------------------------------------
+    if scores:
+        min_score = min(scores)
+        lines.append(f"**Worst run score:** {min_score:.0f}/100 (the average HIDES this — see below).")
+    else:
+        lines.append("**Worst run score:** *(no judged runs)*")
+    lines.append("")
+
+    if judged:
+        worst = sorted(judged, key=lambda a: (_run_score(a) or 0.0))[:worst_n]
+        lines.append(f"**Worst {min(worst_n, len(worst))} runs**")
+        lines.append("")
+        lines.append("| Run | Verdict | Score | Why |")
+        lines.append("|-----|---------|------:|-----|")
+        for a in worst:
+            slot = a.get("slot") or a.get("id") or "?"
+            judge = a.get("judge") or {}
+            verdict = judge.get("verdict") or "?"
+            score = judge.get("score")
+            veto = _veto_block(a)
+            why = (veto.get("detail") if veto else "") or (judge.get("reviewer_summary") or judge.get("notes") or "")
+            why = str(why).replace("\n", " ")[:160] or "—"
+            lines.append(f"| `{slot}` | {verdict} | {score}/100 | {why} |")
+        lines.append("")
+
+    # 2) Fabrication list (grounding veto) -----------------------------------
+    fabrications = [a for a in artifacts if (v := _veto_block(a)) and v.get("type") == "grounding"]
+    floor = (judge_summary or {}).get("grounding_veto_floor")
+    floor_str = f" (grounding < {floor})" if floor is not None else ""
+    lines.append(f"**🚨 Fabrication list — grounding veto{floor_str}:** {len(fabrications)}")
+    lines.append("")
+    if fabrications:
+        for a in fabrications:
+            slot = a.get("slot") or a.get("id") or "?"
+            v = _veto_block(a) or {}
+            lines.append(f"- `{slot}` — {v.get('detail') or 'grounding below floor'}")
+        lines.append("")
+
+    # 3) Degenerate-answer list ----------------------------------------------
+    degenerates = [a for a in artifacts if (v := _veto_block(a)) and v.get("type") == "degenerate"]
+    lines.append(f"**🧨 Degenerate-answer list (leaked tokens / stub / empty / digit-drop):** {len(degenerates)}")
+    lines.append("")
+    if degenerates:
+        for a in degenerates:
+            slot = a.get("slot") or a.get("id") or "?"
+            v = _veto_block(a) or {}
+            lines.append(f"- `{slot}` — {v.get('reason')}: {v.get('detail') or ''}".rstrip())
+        lines.append("")
+
+    # 4) Tool-failure non-answer list ----------------------------------------
+    tool_fails = [a for a in artifacts if (v := _veto_block(a)) and v.get("type") == "tool_failure"]
+    lines.append(f"**🔌 Tool-failure non-answer list:** {len(tool_fails)}")
+    lines.append("")
+    if tool_fails:
+        for a in tool_fails:
+            slot = a.get("slot") or a.get("id") or "?"
+            v = _veto_block(a) or {}
+            lines.append(f"- `{slot}` — {v.get('detail') or 'tool failure non-answer'}")
+        lines.append("")
+
+    # 5) Latency-breach count ------------------------------------------------
+    breaches = [a for a in artifacts if _latency_breached(a)]
+    lines.append(f"**⏱ Latency-budget breaches:** {len(breaches)} of {len(artifacts)} runs")
+    if breaches:
+        lines.append("")
+        for a in breaches:
+            slot = a.get("slot") or a.get("id") or "?"
+            lines.append(f"- `{slot}` — {_run_latency(a):.1f}s")
+    lines.append("")
+
+    return lines
+
+
+def _render_regression_section(
+    *,
+    artifacts: list[dict[str, Any]],
+    baseline_artifacts: list[dict[str, Any]] | None,
+    baseline_label: str | None,
+) -> list[str]:
+    """Render the regression section comparing this run vs a baseline (F6 gap).
+
+    For each question id present in BOTH runs we show the per-question mean
+    score delta and flag any verdict regression (PASS→WARN/FAIL or
+    WARN→FAIL). A worsening delta or verdict regression is marked ⬇️.
+    """
+    lines: list[str] = ["## Regression vs baseline", ""]
+    if not baseline_artifacts:
+        lines.append("*(no baseline run found — pass --baseline <runs-dir> or place a prior run alongside this one.)*")
+        lines.append("")
+        return lines
+
+    lines.append(f"**Baseline:** `{baseline_label or 'unknown'}`")
+    lines.append("")
+
+    # Worst verdict ranking so we can detect a regression direction.
+    _RANK = {"PASS": 0, "WARN": 1, "FAIL": 2, "SKIPPED": 3, "ERROR": 4}
+
+    def _by_q_mean(arts: list[dict[str, Any]]) -> dict[str, tuple[float | None, str]]:
+        """question id -> (mean score or None, worst verdict)."""
+        grouped = _group_by_question(arts)
+        out: dict[str, tuple[float | None, str]] = {}
+        for q_id, runs in grouped.items():
+            scs = [s for r in runs if (s := _run_score(r)) is not None]
+            mean = statistics.mean(scs) if scs else None
+            worst_v = "PASS"
+            for r in runs:
+                v = (r.get("judge") or {}).get("verdict") or r.get("bucket") or "PASS"
+                if _RANK.get(v, 0) > _RANK.get(worst_v, 0):
+                    worst_v = v
+            out[q_id] = (mean, worst_v)
+        return out
+
+    cur = _by_q_mean(artifacts)
+    base = _by_q_mean(baseline_artifacts)
+    shared = sorted(set(cur) & set(base))
+
+    if not shared:
+        lines.append("*(baseline shares no question ids with this run — nothing to compare.)*")
+        lines.append("")
+        return lines
+
+    lines.append("| Question | Baseline | Current | Δ | Verdict (base→cur) |")
+    lines.append("|----------|---------:|--------:|---:|--------------------|")
+    regressions = 0
+    for q_id in shared:
+        b_mean, b_v = base[q_id]
+        c_mean, c_v = cur[q_id]
+        b_str = f"{b_mean:.1f}" if b_mean is not None else "-"
+        c_str = f"{c_mean:.1f}" if c_mean is not None else "-"
+        if b_mean is not None and c_mean is not None:
+            delta = c_mean - b_mean
+            delta_str = f"{delta:+.1f}"
+        else:
+            delta = 0.0
+            delta_str = "-"
+        verdict_regressed = _RANK.get(c_v, 0) > _RANK.get(b_v, 0)
+        flag = " ⬇️" if (verdict_regressed or delta < 0) else ""
+        if verdict_regressed or delta < 0:
+            regressions += 1
+        lines.append(f"| `{q_id}` | {b_str} | {c_str} | {delta_str} | {b_v} → {c_v}{flag} |")
+    lines.append("")
+    lines.append(f"**Regressions (lower score OR verdict downgrade):** {regressions} of {len(shared)} shared questions")
+    lines.append("")
+    return lines
+
+
 def _render_report_md(
     *,
     meta: dict[str, Any],
     summary: dict[str, Any],
     judge_summary: dict[str, Any] | None,
     per_question_artifacts: list[dict[str, Any]],
+    baseline_artifacts: list[dict[str, Any]] | None = None,
+    baseline_label: str | None = None,
 ) -> str:
     """Render a human-readable Markdown report for a benchmark run.
 
@@ -668,17 +898,19 @@ def _render_report_md(
     ``per_question_artifacts`` is the list of ``q_<id>[_runN].json`` payloads
     (the runner passes them directly to avoid re-reading from disk).
 
-    The report has four sections:
+    Section order (FAILURE-FIRST, audit 2026-06-11 F5):
       1. Run header (timing, base URL, judge model, filters)
-      2. Headline numbers (judge avg, verdict counts, dimension averages,
-         legacy heuristic buckets)
-      3. Per-question detail (one ### per question, then #### per run with
-         answer + tools + judge feedback)
-      4. Cross-question variance table + Errors section
+      2. ⛔ Failures first — min score, worst-N, fabrication list, degenerate
+         list, tool-failure list, latency-breach count (THE headline)
+      3. Regression vs baseline (when a baseline run is available)
+      4. Aggregate numbers (averages) — DEMOTED below the failures
+      5. Per-question detail (one ### per question, then #### per run)
+      6. Cross-question variance table + Errors section
 
     Supports both v2.0 judge schema (``feedback`` / ``reviewer_summary``) and
     v1.x (``reason`` / ``notes``) — falls back gracefully so old artefacts
-    still render without crashing.
+    still render without crashing. ``baseline_artifacts`` is optional; when
+    None the regression section renders an explicit "no baseline" note.
     """
     started = _parse_iso(meta.get("started_at"))
     ended = _parse_iso(meta.get("ended_at"))
@@ -708,28 +940,63 @@ def _render_report_md(
         lines.append(f"**Judge:** {judge_model}")
     lines.append("")
 
-    # --- Headline numbers ----------------------------------------------
-    lines.append("## Headline numbers")
+    # --- FAILURES FIRST (the headline) ---------------------------------
+    # This block LEADS the report. The average is intentionally NOT here.
+    lines.extend(
+        _render_failure_first_headline(
+            judge_summary=judge_summary,
+            artifacts=per_question_artifacts,
+        )
+    )
+
+    # --- Regression vs baseline ----------------------------------------
+    lines.extend(
+        _render_regression_section(
+            artifacts=per_question_artifacts,
+            baseline_artifacts=baseline_artifacts,
+            baseline_label=baseline_label,
+        )
+    )
+
+    # --- Aggregate numbers (DEMOTED below the failures) ----------------
+    # These averages are a SECONDARY view — they smooth over the failures
+    # above and must never be read as the headline. The judge verdict is the
+    # AUTHORITATIVE grade; the legacy heuristic buckets are an advisory second
+    # opinion only (kept for the rollout, not a gate).
+    lines.append("## Aggregate numbers (secondary — see failures above)")
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     if judge_summary:
         score_avg = judge_summary.get("score_avg")
         score_avg_str = f"{score_avg:.2f} / 100" if isinstance(score_avg, int | float) else "-"
-        lines.append(f"| Judge avg score | {score_avg_str} |")
+        lines.append(f"| Judge avg score (smooths failures) | {score_avg_str} |")
+        score_min = judge_summary.get("score_min")
+        score_min_str = f"{score_min} / 100" if isinstance(score_min, int | float) else "-"
+        lines.append(f"| Judge min score | {score_min_str} |")
         verdict_counts = judge_summary.get("verdict_counts") or {}
         verdict_str = " · ".join(f"{c} {v}" for v, c in verdict_counts.items() if c) or "(none)"
-        lines.append(f"| Verdicts | {verdict_str} |")
+        lines.append(f"| Verdicts (AUTHORITATIVE) | {verdict_str} |")
+        veto_counts = judge_summary.get("veto_counts") or {}
+        if any(veto_counts.values()):
+            veto_str = " · ".join(f"{c} {v}" for v, c in veto_counts.items() if c)
+            lines.append(f"| Vetoes / hard-fails | {veto_str} |")
         dim_avg = judge_summary.get("dimension_avg") or {}
 
         def _fmt_dim(v: Any) -> str:
             return f"{v:.1f}" if isinstance(v, int | float) else "-"
 
         dims_str = " · ".join(f"{k} {_fmt_dim(v)}" for k, v in dim_avg.items()) or "(none)"
-        lines.append(f"| Dimensions | {dims_str} |")
+        lines.append(f"| Dimensions (avg) | {dims_str} |")
     bucket_counts = (summary or {}).get("bucket_counts") or {}
     bucket_str = " · ".join(f"{c} {v}" for v, c in bucket_counts.items() if c) or "(none)"
-    lines.append(f"| Heuristic buckets (legacy) | {bucket_str} |")
+    lines.append(f"| Heuristic buckets (legacy — ADVISORY ONLY, not authoritative) | {bucket_str} |")
+    lines.append("")
+    lines.append(
+        "> **Authority:** the **Judge verdict** is the authoritative grade. "
+        "The legacy heuristic buckets are an advisory second opinion kept for "
+        "the rollout and may disagree; do not gate on them."
+    )
     lines.append("")
 
     # --- Per-question detail -------------------------------------------
@@ -753,8 +1020,39 @@ def _render_report_md(
 
 
 # --------------------------------------------------------------------------
-# Direct client (sidestep the pytest.skip plumbing in the harness)
+# Baseline / regression support (audit 2026-06-11 — missing piece)
 # --------------------------------------------------------------------------
+
+
+def _load_run_artifacts(run_dir: Path) -> list[dict[str, Any]]:
+    """Load all ``q_*.json`` artefacts from a run directory (sorted, lenient)."""
+    arts: list[dict[str, Any]] = []
+    for q_file in sorted(run_dir.glob("q_*.json")):
+        try:
+            arts.append(json.loads(q_file.read_text()))
+        except json.JSONDecodeError:
+            continue
+    return arts
+
+
+def _autopick_baseline(out_parent: Path, current_run_dir: Path) -> Path | None:
+    """Pick the most recent PRIOR ``run_*`` dir under ``out_parent``.
+
+    Used when ``--baseline`` is not given. We sort the sibling ``run_*``
+    directories by name (the timestamps sort lexicographically) and return the
+    newest one that is NOT the current run and that actually contains judged
+    artefacts. Returns None when there is no usable prior run.
+    """
+    if not out_parent.is_dir():
+        return None
+    candidates = sorted(
+        (d for d in out_parent.glob("run_*") if d.is_dir() and d.resolve() != current_run_dir.resolve()),
+        reverse=True,
+    )
+    for d in candidates:
+        if any(d.glob("q_*.json")):
+            return d
+    return None
 
 
 class _StandaloneClient(RagChatClient):
@@ -862,7 +1160,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="tests/validation/chat_quality_benchmark/runs",
         help="Parent directory; the script appends a run_<ts> subdirectory.",
     )
-    p.add_argument("--concurrency", type=int, default=1, help="Currently sequential (>=1 reserved for future).")
+    # NOTE: the old ``--concurrency`` flag was REMOVED (audit 2026-06-11 F9) —
+    # it was advertised but never wired (the runner is strictly sequential), so
+    # it silently lied about parallelism. Re-add it only alongside real
+    # concurrency. TODO(PRD-scoring-redesign): parallel question execution.
+    p.add_argument(
+        "--baseline",
+        default="",
+        help=(
+            "Path to a PRIOR run directory (run_<ts>) to diff against for the "
+            "regression section. When omitted, the most recent prior run under "
+            "the same --out-dir parent is auto-picked. Pass 'none' to disable."
+        ),
+    )
     p.add_argument(
         "--max-runs-per-q",
         type=int,
@@ -948,7 +1258,7 @@ def _regrade_existing_run(runs_dir: Path) -> int:
         print(f"  {q_id:<35} judge={v} score={s}")
 
     judge_summary = {
-        "schema_version": 1,
+        "schema_version": _JUDGE_SUMMARY_SCHEMA_VERSION,
         "per_question": judge_records,
         **summarise_judge_records(judge_records),
     }
@@ -1126,7 +1436,7 @@ def main(argv: list[str] | None = None) -> int:
     judge_summary: dict[str, Any] | None = None
     if args.judge:
         judge_summary = {
-            "schema_version": 1,
+            "schema_version": _JUDGE_SUMMARY_SCHEMA_VERSION,
             "per_question": judge_records,
             **summarise_judge_records(judge_records),
         }
@@ -1145,11 +1455,33 @@ def main(argv: list[str] | None = None) -> int:
             # A malformed JSON would have been caught earlier; skip rather
             # than crashing report generation.
             continue
+
+    # Resolve the baseline for the regression section (audit 2026-06-11).
+    # --baseline <dir> wins; --baseline none disables; otherwise auto-pick the
+    # most recent prior run under the out-dir parent.
+    baseline_artifacts: list[dict[str, Any]] | None = None
+    baseline_label: str | None = None
+    baseline_arg = (args.baseline or "").strip()
+    if baseline_arg.lower() != "none":
+        baseline_dir: Path | None
+        if baseline_arg:
+            baseline_dir = Path(baseline_arg).resolve()
+            if not baseline_dir.is_dir():
+                print(f"WARN: --baseline {baseline_dir} is not a directory; skipping regression.", file=sys.stderr)
+                baseline_dir = None
+        else:
+            baseline_dir = _autopick_baseline(out_dir.parent, out_dir)
+        if baseline_dir is not None:
+            baseline_artifacts = _load_run_artifacts(baseline_dir)
+            baseline_label = baseline_dir.name
+
     report_md = _render_report_md(
         meta=meta,
         summary=summary,
         judge_summary=judge_summary,
         per_question_artifacts=per_q_artifacts,
+        baseline_artifacts=baseline_artifacts,
+        baseline_label=baseline_label,
     )
     (out_dir / "_report.md").write_text(report_md)
 

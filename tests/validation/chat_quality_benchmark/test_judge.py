@@ -769,10 +769,13 @@ def test_judge_system_prompt_includes_w51_would_help_hedging_language():
     assert "WOULD-HELP HEDGING" in _SYSTEM_PROMPT
     assert "would be required" in _SYSTEM_PROMPT
     assert "would help" in _SYSTEM_PROMPT.lower()
-    # Pin the verbatim Q5 GOOGL R10 worked example so a future rewrite that
-    # drops it (and silently regresses Q5) breaks this test loudly.
-    assert "Q5 GOOGL R10" in _SYSTEM_PROMPT
-    assert "28.99x" in _SYSTEM_PROMPT
+    # Pin distinctive verbatim W51 language so a future rewrite that drops the
+    # WOULD-HELP HEDGING calibration breaks this test loudly. v2.0 replaced the
+    # v1.x "Q5 GOOGL R10 / 28.99x" worked example with the phrase-list form +
+    # the hard pre-emption rule pinned below (the behavioural GOOGL guard lives
+    # in test_judge_would_help_hedge_with_substantive_analysis_scores_full_marks).
+    assert "A longer time series would be required" in _SYSTEM_PROMPT
+    assert "WOULD-HELP HEDGE" in _SYSTEM_PROMPT
 
 
 def test_judge_would_help_hedge_with_substantive_analysis_scores_full_marks():
