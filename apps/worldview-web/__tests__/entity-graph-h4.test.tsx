@@ -36,6 +36,10 @@ const { mockSetSettings, mockRefresh, mockGetGraph } = vi.hoisted(() => ({
     getEdgeAttributes: vi.fn(() => ({ label: "CEO_OF", weight: 0.9 })),
     degree: vi.fn(() => 3),
     nodes: vi.fn(() => []),
+    // W4: FilterController now counts visible/total edges for the "X of Y edges"
+    // indicator via graph.forEachEdge — the mock graph has no edges so the
+    // callback simply never fires (count stays 0/0, which is fine for these tests).
+    forEachEdge: vi.fn(),
   })),
 }));
 

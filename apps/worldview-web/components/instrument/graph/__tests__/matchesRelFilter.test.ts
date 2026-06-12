@@ -52,6 +52,30 @@ describe("matchesRelFilter", () => {
     expect(matchesRelFilter("COMPETES_WITH", "investor")).toBe(false);
   });
 
+  // ── PLAN-0099 W4 regression: canonical KG labels seen LIVE on AAPL ─────────
+  // These are the exact labels S7 emits (confirmed via the live graph endpoint
+  // 2026-06-12). The pre-W4 patterns MISSED owns_stake_in / investment_in for
+  // the "investor" pill — the headline "filters don't fully work" bug.
+
+  it('matches the canonical OWNS_STAKE_IN + INVESTMENT_IN for "investor"', () => {
+    expect(matchesRelFilter("OWNS_STAKE_IN", "investor")).toBe(true);
+    expect(matchesRelFilter("INVESTMENT_IN", "investor")).toBe(true);
+  });
+
+  it('matches the canonical HAS_EXECUTIVE + EMPLOYS for "executive"', () => {
+    expect(matchesRelFilter("HAS_EXECUTIVE", "executive")).toBe(true);
+    expect(matchesRelFilter("EMPLOYS", "executive")).toBe(true);
+  });
+
+  it('matches the canonical SUPPLIER_OF + PARTNER_OF for "supplier"', () => {
+    expect(matchesRelFilter("SUPPLIER_OF", "supplier")).toBe(true);
+    expect(matchesRelFilter("PARTNER_OF", "supplier")).toBe(true);
+  });
+
+  it('matches the canonical COMPETES_WITH for "competitor"', () => {
+    expect(matchesRelFilter("COMPETES_WITH", "competitor")).toBe(true);
+  });
+
   // ── "supplier" ────────────────────────────────────────────────────────────
 
   it('matches SUPPLIER_OF, MANUFACTURES, PRODUCES for "supplier"', () => {

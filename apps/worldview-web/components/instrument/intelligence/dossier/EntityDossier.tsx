@@ -270,18 +270,37 @@ export function EntityDossier({
           </div>
         )}
 
-        {/* Description with expand — line-clamp keeps the fold honest. The
-            toggle only renders when there is a real description to expand. */}
-        <p
+        {/* Description — PLAN-0099 W4 FIX (description-not-scrollable).
+            BEFORE: collapsed = line-clamp-5; expanded = the FULL text rendered
+            inline with no height bound, so a long enriched description (some run
+            8+ sentences) pushed the AI-brief + relations far below the fold and
+            could not be read without the whole left rail growing unboundedly.
+            AFTER: when expanded we render the text inside a bounded scroll box
+            (max-h-[40vh] + overflow-y-auto) so ANY length is fully readable via
+            a subtle inner scrollbar without disturbing the dossier layout.
+            Collapsed state keeps the 5-line clamp so the fold stays honest.
+            WHY a plain div with overflow-y-auto (not the Radix ScrollArea): the
+            description lives inside the dossier's own col-span-3 overflow-y-auto
+            rail; a nested Radix viewport adds a MutationObserver that jsdom
+            tests can't drive, while overflow-y-auto is natively testable and
+            renders an identical subtle scrollbar via the scrollbar-thin token. */}
+        <div
+          data-testid="dossier-description"
           className={cn(
             "text-[11px] leading-[1.5] text-foreground/80",
-            !descExpanded && "line-clamp-5",
+            descExpanded
+              ? // Expanded: bounded scroll box — full text always reachable.
+                // The subtle 4px scrollbar comes from the global ::-webkit-scrollbar
+                // / scrollbar-width:thin rules in globals.css (no plugin needed).
+                "max-h-[40vh] overflow-y-auto pr-1"
+              : // Collapsed: keep the 5-line fold.
+                "line-clamp-5",
           )}
         >
           {entity.description ?? (
             <span className="italic text-muted-foreground">No description available.</span>
           )}
-        </p>
+        </div>
         {entity.description && entity.description.length > 280 && (
           <button
             type="button"

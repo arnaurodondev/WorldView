@@ -233,6 +233,55 @@ describe("EntityDossier AI brief block", () => {
   });
 });
 
+describe("EntityDossier description scroll/expand (W4 — description-not-scrollable)", () => {
+  // A description longer than 280 chars triggers the Show more / Show less toggle.
+  const LONG_DESC =
+    "Apple Inc. designs, manufactures and markets smartphones, personal " +
+    "computers, tablets, wearables and accessories worldwide. It also sells a " +
+    "variety of related services. The company's products include iPhone, Mac, " +
+    "iPad, and a range of wearables, home and accessory products. It operates " +
+    "the App Store and provides AppleCare support and cloud services. ".repeat(2);
+
+  it("collapses the description (line-clamp) by default and exposes Show more", async () => {
+    mockGetEntityDetail.mockResolvedValue({ ...ENTITY, description: LONG_DESC });
+    renderDossier();
+    await waitFor(() => {
+      expect(screen.getByTestId("dossier-description")).toBeInTheDocument();
+    });
+    const desc = screen.getByTestId("dossier-description");
+    // Collapsed: the clamp class is present, the scroll class is not.
+    expect(desc.className).toContain("line-clamp-5");
+    expect(desc.className).not.toContain("overflow-y-auto");
+    expect(screen.getByRole("button", { name: /show more/i })).toBeInTheDocument();
+  });
+
+  it("makes the full description scrollable (max-height + overflow) when expanded", async () => {
+    mockGetEntityDetail.mockResolvedValue({ ...ENTITY, description: LONG_DESC });
+    renderDossier();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /show more/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /show more/i }));
+    const desc = screen.getByTestId("dossier-description");
+    // Expanded: a bounded scroll box (max-h + overflow) replaces the clamp so
+    // the FULL text is reachable without growing the rail unboundedly.
+    expect(desc.className).toContain("overflow-y-auto");
+    expect(desc.className).toContain("max-h-[40vh]");
+    expect(desc.className).not.toContain("line-clamp-5");
+    // The button now offers to collapse again.
+    expect(screen.getByRole("button", { name: /show less/i })).toBeInTheDocument();
+  });
+
+  it("does NOT render the toggle for short descriptions (≤280 chars)", async () => {
+    mockGetEntityDetail.mockResolvedValue({ ...ENTITY, description: "Short." });
+    renderDossier();
+    await waitFor(() => {
+      expect(screen.getByTestId("dossier-description")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: /show more/i })).toBeNull();
+  });
+});
+
 describe("EntityDossier error state", () => {
   it("renders the NAMED per-section error with Retry when the detail fetch fails", async () => {
     mockGetEntityDetail.mockRejectedValue(new Error("boom"));

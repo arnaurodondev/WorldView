@@ -156,6 +156,16 @@ export function EntityGraph({
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [layout, setLayout] = useState<"force" | "hierarchical">("force");
+  // PLAN-0099 W4 FIX: how many edges survive the pill/strength filters. Seeded
+  // to the full edge count so the toolbar reads correctly before the first
+  // FilterController pass. FilterController updates this whenever the relation
+  // pill or strength slider changes — the visible proof the filter applied.
+  const [visibleEdgeCount, setVisibleEdgeCount] = useState<number>(data.edges.length);
+  // WHY useCallback: passed into FilterController's effect dep array; a stable
+  // identity avoids re-running the count effect on every EntityGraph re-render.
+  const handleVisibleEdgeCount = useCallback((visible: number) => {
+    setVisibleEdgeCount(visible);
+  }, []);
 
   // WHY useCallback with []: stable references prevent useEffect re-registration in GraphEvents.
   const handleNodeHover = useCallback((tooltip: NodeTooltip | null) => {
@@ -188,6 +198,10 @@ export function EntityGraph({
         searchQuery={searchQuery}
         layout={layout}
         edgeCount={data.edges.length}
+        // PLAN-0099 W4 FIX: pass the post-filter visible count so the toolbar can
+        // render "showing X of Y edges" — the analyst now SEES the pill/strength
+        // filter take effect even though sigma only hides (not removes) edges.
+        visibleEdgeCount={visibleEdgeCount}
         denseGraphEdgeThreshold={DENSE_GRAPH_EDGE_THRESHOLD}
         onRelFilterChange={setActiveRelFilter}
         onMinWeightChange={setMinWeight}
@@ -257,6 +271,9 @@ export function EntityGraph({
             // each other — see FilterController docstring).
             selectedNodeId={selectedNodeId}
             selectedEdgeId={selectedEdgeId}
+            // PLAN-0099 W4 FIX: report post-filter visible-edge count up so the
+            // toolbar renders "X of Y edges". Closes the no-op-looking pill gap.
+            onVisibleEdgeCountChange={handleVisibleEdgeCount}
           />
           {/* PLAN-0099 Wave 2: "Focus graph here" camera animation */}
           <FocusNodeController focusNodeId={focusNodeId} focusNonce={focusNonce} />

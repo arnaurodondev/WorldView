@@ -291,7 +291,11 @@ async def get_entity_graph(
             _log.warning("graph_depth_cypher_timeout", entity_id=str(entity_id), depth=depth)
             raise HTTPException(
                 status_code=504,
-                detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the 5 s statement_timeout"},
+                # PLAN-0099 W4: corrected stale copy — the neighbourhood use case's
+                # statement_timeout is 20 s (_STATEMENT_TIMEOUT_MS in
+                # cypher_neighborhood.py), not 5 s. The old "5 s" string misled
+                # anyone debugging depth=3 timeouts on dense hubs (e.g. Apple).
+                detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the statement_timeout"},
             ) from exc
         return _map_cypher_to_graph_response(result)
 

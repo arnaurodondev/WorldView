@@ -26,35 +26,20 @@ import { useRouter } from "next/navigation";
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 import type { RelationFilter } from "./GraphControls";
+// PLAN-0099 W4 FIX: import matchesRelFilter from graphFilterUtils — the SINGLE
+// source of truth. This file previously kept its OWN copy of matchesRelFilter,
+// so the FilterController (which gates which edges sigma renders) used the stale
+// duplicate while the unit tests + GraphStats counting used the canonical one.
+// Two divergent copies meant a fix in graphFilterUtils.ts (e.g. the investor /
+// owns_stake_in miss) silently did NOT reach the canvas. Re-export it so the few
+// external importers of `matchesRelFilter` from this module keep working.
+import { matchesRelFilter } from "./graphFilterUtils";
+
+export { matchesRelFilter };
 
 // WHY hex literal (not Tailwind): sigma WebGL reads hex/rgb from node attributes;
 // CSS classes never reach the canvas. Mirrors --muted-foreground (#83838A) from globals.css.
 const NODE_DEFAULT_COLOR = "#83838A";
-
-// ── matchesRelFilter ──────────────────────────────────────────────────────────
-// WHY pattern-based (not exact-match): relation labels vary by data source.
-// "CEO_OF", "EXECUTIVE_CHAIR", "CHIEF_EXEC" all map to "executive".
-export function matchesRelFilter(label: string, filter: RelationFilter): boolean {
-  const upper = label.toUpperCase();
-  switch (filter) {
-    case "all": return true;
-    case "executive":
-      return upper.includes("CEO") || upper.includes("CFO") || upper.includes("CTO") ||
-        upper.includes("COO") || upper.includes("CHAIR") || upper.includes("EXEC") ||
-        upper.includes("OFFICER") || upper.includes("DIRECTOR");
-    case "investor":
-      return upper.includes("INVEST") || upper.includes("SHAREHOLDER") ||
-        upper.includes("HOLDS") || upper.includes("OWNED");
-    case "supplier":
-      return upper.includes("SUPPL") || upper.includes("MANUFACTUR") || upper.includes("PRODUCES");
-    case "customer":
-      return upper.includes("CUSTOMER") || upper.includes("CLIENT") || upper.includes("USES");
-    case "competitor":
-      return upper.includes("COMPET") || upper.includes("RIVAL");
-    default:
-      return true;
-  }
-}
 
 // ── NodeTooltip / EdgeTooltip types (shared with EntityGraph.tsx) ─────────────
 
@@ -247,6 +232,15 @@ interface FilterControllerProps {
   /** PLAN-0099 Wave 2 — the edge selected in the inspector. Key == GraphEdge.id
    *  (guaranteed by the addEdgeWithKey fix in GraphLoader). */
   selectedEdgeId?: string | null;
+  /** PLAN-0099 W4 FIX — reports how many edges remain visible after the
+   *  pill/strength filters are applied, so the toolbar can show "X of Y edges".
+   *  WHY: previously the relation pills + strength slider only HID edges inside
+   *  sigma's reducer; the GraphStats strip (rendered by the parent column from
+   *  the unfiltered graphData) never changed, so analysts perceived the pills as
+   *  no-ops. Surfacing the post-filter count is the visible proof the filter
+   *  applied. The search box only DIMS nodes (never hides), so it does not
+   *  affect this edge count by design. */
+  onVisibleEdgeCountChange?: (visible: number, total: number) => void;
 }
 
 export function FilterController({
@@ -255,8 +249,34 @@ export function FilterController({
   searchQuery,
   selectedNodeId = null,
   selectedEdgeId = null,
+  onVisibleEdgeCountChange,
 }: FilterControllerProps) {
   const sigma = useSigma();
+
+  // ── Report visible-edge count to the parent (pill/strength filter feedback) ──
+  // WHY a separate effect (not folded into the reducer effect): the reducer is a
+  // pure render-time function sigma calls per edge — calling setState from inside
+  // it would fire on every frame. Here we count once per filter change. We count
+  // an edge "visible" using the SAME predicate the edgeReducer uses below
+  // (weight >= minWeight/100 AND matches the active relation filter) so the
+  // toolbar count and the canvas can never disagree.
+  useEffect(() => {
+    if (!onVisibleEdgeCountChange) return;
+    const graph = sigma.getGraph();
+    let visible = 0;
+    let total = 0;
+    graph.forEachEdge((_edge, attrs) => {
+      total += 1;
+      const label = ((attrs.label as string) ?? "").toUpperCase();
+      const weight = (attrs.weight as number) ?? 0;
+      if (weight < minWeight / 100) return;
+      if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) return;
+      visible += 1;
+    });
+    onVisibleEdgeCountChange(visible, total);
+    // graphData identity changes when a new graph loads (depth/type filter), so
+    // include sigma in deps to recount after GraphLoader swaps the graph.
+  }, [sigma, activeRelFilter, minWeight, onVisibleEdgeCountChange]);
 
   useEffect(() => {
     // WHY selection lives INSIDE the same reducers as the filters (not a second
