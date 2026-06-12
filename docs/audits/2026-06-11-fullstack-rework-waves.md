@@ -43,3 +43,27 @@ Final gate: **vitest 3253 passed / 0 failed** (2994 → 3253), tsc 0 errors, nex
 - Foreign commits in this worktree during the run: `7ff3b8cb9` (ohlcv intraday intervals), `e9243800e` (market-ingestion scheduler) — other session's work, left intact.
 - Foreign uncommitted files left untouched: nlp-pipeline (3), create-topics.sh, rag-chat reranker.py quote-style edit.
 - Pre-commit mypy hook fails on cross-staged multi-service commits (protocol-port false positives resolved only when both files staged together); per-area commits used SKIP=mypy after agents validated mypy per-service — final frontend commit ran full hooks.
+
+---
+
+# Wave 3 addendum — fix agents + strict live QA loop (2026-06-11, 8 commits)
+
+User-reported failures, each root-caused and live-verified (QA matrix 22/22 PASS, frontend suite 3334, all containers rebuilt):
+
+| Report | Root cause | Commit |
+|---|---|---|
+| Chat streaming dead (no tokens/tools) | Two stacked transport bugs: Next compress gzip-buffered SSE through rewrites (whole stream held by zlib) + sse-starlette CRLF line endings vs `\n` client split (every event named "token\r") — curl masked both | `9e6b07d6e`, `7544ac586` |
+| BTC-USD entity refusal | BP-668 resolver hijack: "right now" matched ServiceNow ticker NOW (family: "news on"→ON Semi, "does it"→Gartner); case-aware ticker evidence + name-exact tiebreak | `b8aadf3a6` |
+| Apple-news citations [5][6][8] vs 4 wrong pills | BP-669: ContextAssembler re-sorted items AFTER prompt enumeration; dense renumbering added | `b8aadf3a6` |
+| Validator timeout + 40s answers | BP-670/671: validators flagged ordinals/headings as fabrications → stacked 30s LLM rewrites that fabricated content; deterministic guards + divergence guard; 50s→26s, grounding 31.5s→25ms | `b8aadf3a6`, `bdf4d373f` |
+| False "Response interrupted" after complete answers | done frame stranded in decoder buffer + CRLF bug; sawAnswerComplete + tail flush | `9e6b07d6e`, `7544ac586` |
+| Portfolio black spaces | Tailwind content globs never scanned features/ — xl:grid-cols-3 emitted zero CSS; repo-walking guard test kills the class | `370e8e801` |
+| Topbar tickers taller than bar | 3 stacked lines (32px glyphs) in 32px bar → single-line 132px cells | `370e8e801` |
+| TWR +278% | BP-665 backend: funding/import days counted as return; S1 degraded-snapshot/frozen-NAV/perimeter guards; +282%→+10.9% cum; flow_dates exposed | `370e8e801` |
+| Quote black void | Chart root className="" → h-full vs auto parent → circular 280px ResizeObserver loop; StrictMode init race | `14f42b6ed` |
+| Intelligence tab all-failing | URL ticker passed to UUID-typed /v1/entities routes (uniform 422) + S7 depth-2 nodes arrived edge-less (orphan-filtered); list_among_entities lateral fetch: AAPL 21n/22e→25n/46e | `14f42b6ed` |
+| Backend-blocked items | /v1/articles/{id} evidence resolution, previous_close on quotes, returns/short%/insider metrics (insider consumer was never in compose), annual statements param, 12,939-bar gap backfill, 196 prediction categories, impact-labeller diagnosis (+57 windows post-backfill vs +0/wk) | `0c04c271f` |
+
+QA loop additionally fixed in the prod container: SSE CRLF parser, streamed-citation crash (`cite.source` vs `source_name`), Financials-tab crash on `risk_summary: {}`, evidence article-title wiring (`7544ac586` — which also recovered Wave-2 files dropped by a parallel-session merge auto-resolution while HEAD still imported them).
+
+Open filed: S2 snapshot worker frozen partial_prices rows (TWR data hygiene); S8 synthesis token burst (no true typewriter streaming); residual latency = LLM planning/synthesis (model choice); BTC rail probes "BTC" not "BTC-USD"; top-movers price "—" in one widget. Parallel session opened PLAN-0109 (confidence-decay/weighting redesign per user's Appendix-E request).
