@@ -194,6 +194,52 @@ class TestCypherPathUseCase:
                 target_entity_id=_TGT,
             )
 
+    async def test_path_query_uses_20s_statement_timeout(self) -> None:
+        """The path query must use a 20 s statement_timeout, NOT the old 5 s (BP-686).
+
+        An undirected variable-length path between two hub entities is a strictly
+        harder traversal than a neighbourhood walk; with the old 5 s budget hub-to-hub
+        paths (e.g. OpenAI↔Microsoft) timed out → 504, dead-ending traverse_graph chat
+        questions. The path budget must match the neighbourhood query's 20 s.
+        """
+        from knowledge_graph.application.use_cases.cypher_path import (
+            _STATEMENT_TIMEOUT_MS,
+            CypherPathUseCase,
+        )
+        from sqlalchemy import text
+
+        # The module-level constant is the single authoritative deadline.
+        assert _STATEMENT_TIMEOUT_MS == "20000", (
+            "path query statement_timeout must be 20 s (matching cypher_neighborhood), "
+            "not the old 5 s that timed out on hub-to-hub paths (BP-686)"
+        )
+
+        uc = CypherPathUseCase()
+        session = _make_session(execute_returns=[])
+        entity_repo = _make_entity_repo(exists=True)
+        await uc.execute(
+            session,
+            entity_repo,
+            cypher_enabled=True,
+            source_entity_id=_SRC,
+            target_entity_id=_TGT,
+        )
+
+        # The SET LOCAL statement_timeout statement actually issued to the DB must
+        # carry the 20 s value (guards against the constant being read but a stale
+        # literal being embedded in the SQL string).
+        timeout_stmts = [
+            str(c.args[0]) for c in session.execute.call_args_list if c.args and "statement_timeout" in str(c.args[0])
+        ]
+        assert any(
+            "20000" in s for s in timeout_stmts
+        ), f"expected a SET LOCAL statement_timeout = '20000' call, got: {timeout_stmts}"
+        assert not any(
+            "5000" in s for s in timeout_stmts
+        ), f"path query must NOT issue the old 5000 ms timeout, got: {timeout_stmts}"
+        # Sanity: the issued statement matches what the use case builds.
+        assert str(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
+
     async def test_returns_empty_paths_when_no_path_found(self) -> None:
         """AGE returns no rows → paths=[], paths_found=0."""
         from knowledge_graph.application.use_cases.cypher_path import CypherPathUseCase

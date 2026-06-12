@@ -71,7 +71,7 @@ class CypherDisabledError(KnowledgeGraphError):
 
 
 class CypherTimeoutError(KnowledgeGraphError):
-    """Raised when the AGE Cypher query exceeds the 5 s statement_timeout."""
+    """Raised when the AGE Cypher query exceeds the 20 s statement_timeout."""
 
 
 class CypherEntityNotFoundError(KnowledgeGraphError):
@@ -122,8 +122,17 @@ class CypherPathResult:
 
 # ── AGE SQL helpers ───────────────────────────────────────────────────────────
 
-# Statement timeout — matches PRD §6.3 "504 response on AGE timeout (5s)"
-_STATEMENT_TIMEOUT_MS = "5000"
+# Statement timeout — 20 s to match the neighborhood query (cypher_neighborhood.py).
+# WHY raised from 5 s (BP-686, 2026-06-12): an undirected variable-length path
+# ``(s)-[*1..N]-(t)`` between two well-connected hub entities (e.g. OpenAI↔Microsoft)
+# is a strictly *harder* traversal than a single egocentric neighbourhood walk, yet
+# it previously got only 5 s while the neighbourhood query got 20 s. Hub-to-hub path
+# discovery routinely exceeded 5 s → ``cypher_path_timeout`` → 504 Gateway Timeout,
+# dead-ending every ``traverse_graph`` chat question. Aligning to the neighbourhood
+# budget (20 s) removes the asymmetry. The route handler awaits this use case directly
+# (no separate upstream HTTP/asyncio timeout in the KG service), so this constant is
+# the single authoritative deadline for the path query.
+_STATEMENT_TIMEOUT_MS = "20000"
 
 
 def _build_path_sql(source_id_str: str, target_id_str: str, max_hops: int, all_paths: bool) -> str:
@@ -266,7 +275,7 @@ class CypherPathUseCase:
     ------
         CypherDisabledError:       KNOWLEDGE_GRAPH_CYPHER_ENABLED=false.
         CypherEntityNotFoundError: source or target entity not in canonical_entities.
-        CypherTimeoutError:        AGE query exceeded 5 s statement_timeout.
+        CypherTimeoutError:        AGE query exceeded 20 s statement_timeout.
 
     """
 
@@ -314,7 +323,7 @@ class CypherPathUseCase:
         except Exception as exc:
             exc_str = str(exc).lower()
             if "timeout" in exc_str or "canceling" in exc_str or "statement_timeout" in exc_str:
-                raise CypherTimeoutError("AGE Cypher query exceeded 5 s statement_timeout") from exc
+                raise CypherTimeoutError("AGE Cypher query exceeded 20 s statement_timeout") from exc
             raise
 
         paths = self._build_paths(list(rows), relation_types)
