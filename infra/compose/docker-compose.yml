@@ -1231,6 +1231,13 @@ services:
       GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
       HF_HUB_ENABLE_HF_TRANSFER: "0"  # disable hf_transfer native lib
       HF_HUB_DISABLE_XET: "1"        # use standard HTTPS; xet throttles to ~63 KB/s on some hosts
+      # Server-side micro-batching (dual-trigger). The article-consumer fleet
+      # (3 replicas x 16 = ~48 concurrent single-text /ner calls) is coalesced
+      # into one batch_predict_entities forward pass per (labels, threshold)
+      # group. Throughput peaks at batch=16 (13.7x vs batch-1) and degrades
+      # beyond, so MAX_BATCH caps there. WAIT_MS bounds the fill window.
+      GLINER_MAX_BATCH: "16"
+      GLINER_BATCH_WAIT_MS: "25"
     volumes:
       - gliner_model_cache:/home/appuser/.cache/huggingface  # persist model across restarts
     healthcheck:

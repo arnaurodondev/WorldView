@@ -11,6 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
+COPY validate_batch.py .
 
 # Pre-download the model into the image layer (avoids runtime download)
 # Override GLINER_MODEL_PATH at runtime to use a different model.
@@ -25,6 +26,11 @@ ENV GLINER_MODEL_PATH=${GLINER_MODEL_PATH}
 # the weights into ``/root/.cache/huggingface`` baked into the layer.
 # We then copy them into appuser's cache so the runtime load is a no-op fetch.
 RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('${GLINER_MODEL_PATH}')"
+
+# Correctness gate: build FAILS if server-side batching (batch_predict_entities)
+# does not produce entities identical to the per-text predict_entities path.
+# This is the micro-batching cutover safety check — runs against the baked model.
+RUN python validate_batch.py
 
 EXPOSE 8080
 
