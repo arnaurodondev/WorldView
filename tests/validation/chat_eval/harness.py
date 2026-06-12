@@ -631,13 +631,22 @@ def _events_to_result(
             # PLAN-0102 W5 T-W5-02: ``{type, tool, status, item_count}``.
             # Capture the four fields the honest-refusal grader policy
             # consumes; ignore anything else to keep the artefact slim.
-            tool_results.append(
-                {
-                    "tool": str(data.get("tool", "")),
-                    "status": str(data.get("status", "")),
-                    "item_count": int(data.get("item_count", 0) or 0),
-                }
-            )
+            _tool_result_entry: dict[str, Any] = {
+                "tool": str(data.get("tool", "")),
+                "status": str(data.get("status", "")),
+                "item_count": int(data.get("item_count", 0) or 0),
+            }
+            # PLAN-0110 W2 (PRD-0091 FR-5): the backend now OPTIONALLY attaches a
+            # bounded, redacted ``grounding_sample`` ({fields, sampled_rows,
+            # total_rows, truncated}) when CHAT_EVAL_GROUNDING_SAMPLES=true and
+            # status=ok. Capture it verbatim so the W3 judge can later
+            # cross-check numeric claims against the values the tool returned.
+            # Forward-compatible: absent on older runs / when the flag is off, in
+            # which case we add nothing and the entry keeps its legacy 3 keys.
+            _grounding = data.get("grounding_sample")
+            if isinstance(_grounding, dict) and _grounding:
+                _tool_result_entry["grounding_sample"] = _grounding
+            tool_results.append(_tool_result_entry)
         elif kind == "citations" and isinstance(data, list):
             citations = data
         elif kind == "contradictions" and isinstance(data, list):

@@ -10,11 +10,18 @@ new input_summary param), updated emit_tool_result (item_count param).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+import os
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
+
+import structlog
 
 if TYPE_CHECKING:
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef
+
+# Module-level structlog logger (R12 — never stdlib logging). Used for the
+# ``grounding_sample_truncated`` observability event (PRD-0091 §13.2).
+_log = structlog.get_logger(__name__)
 
 # ── Tool label map ─────────────────────────────────────────────────────────────
 # Maps tool names (from capability_manifest.yaml) to human-readable UI labels.
@@ -438,6 +445,213 @@ class SSEEmitter:
             )
         return preview
 
+    # ── grounding_sample bounds (PRD-0091 FR-5 / FR-8 / §6.3) ─────────────────
+    # The grounding sample carries a few REDACTED, allow-listed *values* from
+    # the tool result (not just {id,title}) so a downstream judge (W3) can
+    # cross-check numeric claims in the answer against what the tool actually
+    # returned. These hard caps keep the serialized sample tiny (≤1 KB, NFR-1)
+    # regardless of how many rows / how large the values a tool produced.
+    #   - MAX_ROWS:        at most this many result rows are sampled.
+    #   - MAX_FIELDS:      at most this many allow-listed fields per row.
+    #   - VALUE_MAX_CHARS: each value is str-coerced then truncated to this.
+    #   - SAMPLE_MAX_BYTES:the whole serialized sample is bounded; over → cut +
+    #                      ``truncated=true``.
+    GROUNDING_MAX_ROWS = 3
+    GROUNDING_MAX_FIELDS_PER_ROW = 8
+    GROUNDING_VALUE_MAX_CHARS = 32
+    GROUNDING_SAMPLE_MAX_BYTES = 1024
+
+    # Per-tool field allow-list (FR-8). ONLY numeric / short-identifier fields
+    # appear here — NEVER document bodies, narrative text, or any
+    # portfolio/account identifiers. A tool NOT listed here yields NO sample at
+    # all (degrades to the id/title result_preview only); this is the
+    # fail-closed default that prevents raw-payload leakage from unknown shapes.
+    #
+    # NOTE: field names are matched duck-typed against each result item
+    # (``getattr`` on the item, then its ``citation_meta``, then dict-style
+    # ``get``) — the same robustness contract as ``build_result_preview``. When
+    # a handler does not (yet) surface a structured field, it simply does not
+    # survive into the sample; the builder never raises on a missing field.
+    _GROUNDING_FIELD_ALLOWLIST: ClassVar[dict[str, tuple[str, ...]]] = {
+        # Market / fundamentals tools — numeric financial fields + identifiers.
+        "get_fundamentals_history": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        "get_fundamentals_history_batch": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "pe_ratio",
+            "market_cap",
+        ),
+        "compare_entities": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
+        "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),
+        "get_market_movers": ("ticker", "change_pct", "price"),
+        # Knowledge / intelligence tools — short identifiers + confidence only.
+        "search_claims": ("ticker", "confidence", "polarity", "period"),
+        "search_entity_relations": ("ticker", "confidence", "relation_type"),
+        "get_contradictions": ("ticker", "confidence", "claim_type"),
+        "get_entity_health": ("ticker", "confidence", "health_score"),
+    }
+
+    # Substrings that, if present in a *surviving* field NAME, force redaction
+    # of that field (defence-in-depth on top of the allow-list — FR-8 / §8). A
+    # portfolio/account identifier must NEVER reach an eval artefact or log.
+    _GROUNDING_REDACT_NAME_SUBSTRINGS: tuple[str, ...] = (
+        "portfolio",
+        "account",
+        "holding",
+        "position_id",
+        "user_id",
+        "tenant",
+    )
+
+    @classmethod
+    def _grounding_field_value(cls, item: Any, field: str) -> Any | None:  # — duck-typed
+        """Best-effort extraction of one allow-listed field from a result item.
+
+        Probes, in order: a direct attribute on the item, the item's
+        ``citation_meta`` (where ``ticker`` is often surfaced as
+        ``entity_name``), then dict-style ``.get`` for handlers that return
+        plain dicts. Returns ``None`` when the field is absent — NEVER raises,
+        so an unexpected item shape degrades to a smaller sample rather than a
+        500 mid-stream.
+        """
+        # 1. Direct attribute on the item (e.g. a structured RetrievedItem-like
+        #    object that already exposes ``revenue`` / ``confidence``).
+        val = getattr(item, field, None)
+        if val is not None:
+            return val
+        # 2. citation_meta fallback — ``ticker`` is frequently carried as the
+        #    citation's ``entity_name``; surface it so financial tool rows still
+        #    get an identifier in the sample.
+        meta = getattr(item, "citation_meta", None)
+        if meta is not None:
+            mval = getattr(meta, field, None)
+            if mval is not None:
+                return mval
+            if field == "ticker":
+                ent = getattr(meta, "entity_name", None)
+                if ent is not None:
+                    return ent
+        # 3. dict-style item (some handlers return plain dicts).
+        if isinstance(item, dict):
+            return item.get(field)
+        return None
+
+    @classmethod
+    def build_grounding_sample(cls, tool_name: str, items: list[Any]) -> dict[str, Any] | None:
+        """Build a bounded, redacted, allow-list-only sample of tool-result values.
+
+        PRD-0091 FR-5 / FR-8 / §6.3. This is the *opt-in* counterpart to
+        :meth:`build_result_preview`: where the preview carries only
+        ``{id, title}`` for the UI, the grounding sample carries a few
+        allow-listed numeric / identifier VALUES so the W3 judge can verify (not
+        presume) grounding — e.g. cross-check a "$271,474" claim against the
+        revenue the tool actually returned.
+
+        Hard guarantees (all enforced here, server-side):
+          * Only fields in ``_GROUNDING_FIELD_ALLOWLIST[tool_name]`` are read;
+            an unknown tool → ``None`` (no sample, never a raw-payload leak).
+          * Each value is ``str``-coerced and truncated to
+            ``GROUNDING_VALUE_MAX_CHARS``.
+          * At most ``GROUNDING_MAX_ROWS`` rows and
+            ``GROUNDING_MAX_FIELDS_PER_ROW`` fields per row.
+          * Any field whose name matches a portfolio/account redaction
+            substring is dropped (defence-in-depth).
+          * The serialized sample is capped at ``GROUNDING_SAMPLE_MAX_BYTES``;
+            when the cap forces fields out, ``truncated=true``.
+
+        Returns the ``{fields, sampled_rows, total_rows, truncated}`` shape
+        (§6.3), or ``None`` when the tool is not allow-listed or no allow-listed
+        field survived (caller then emits no ``grounding_sample`` at all).
+        """
+        allow = cls._GROUNDING_FIELD_ALLOWLIST.get(tool_name)
+        if not allow:
+            # Unknown / not-allow-listed tool → fail closed: no sample.
+            return None
+
+        total_rows = len(items)
+        truncated = False
+
+        # ``fields`` is a flat {field_name: value} map sampled across the first
+        # few rows. We key by field name (not by row index) because the judge
+        # cross-checks claim numbers against the *set* of returned values; a
+        # per-row matrix would blow the byte budget for marginal benefit. When
+        # multiple sampled rows carry the same field, later rows are appended
+        # under suffixed keys (``revenue``, ``revenue_2``) so distinct values
+        # survive without collisions — still bounded by the field/byte caps.
+        fields: dict[str, str] = {}
+        sampled_rows = 0
+        for item in items[: cls.GROUNDING_MAX_ROWS]:
+            row_field_count = 0
+            row_contributed = False
+            for field in allow:
+                if row_field_count >= cls.GROUNDING_MAX_FIELDS_PER_ROW:
+                    break
+                # Defence-in-depth redaction on the field NAME (FR-8 / §8): a
+                # portfolio/account identifier must never be emitted even if it
+                # somehow appears in an allow-list (it does not today, but this
+                # guard makes the leak structurally impossible).
+                lname = field.lower()
+                if any(sub in lname for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                    continue
+                raw = cls._grounding_field_value(item, field)
+                if raw is None:
+                    continue
+                value = str(raw)[: cls.GROUNDING_VALUE_MAX_CHARS]
+                # First occurrence keeps the bare field name; subsequent rows
+                # get a numeric suffix so distinct values from different rows
+                # are not silently overwritten.
+                key = field if field not in fields else f"{field}_{sampled_rows + 1}"
+                fields[key] = value
+                row_field_count += 1
+                row_contributed = True
+            if row_contributed:
+                sampled_rows += 1
+
+        if not fields:
+            # No allow-listed field survived (e.g. the handler renders numbers
+            # into ``text`` only) → no sample, judge falls back to "presumed".
+            return None
+
+        sample: dict[str, Any] = {
+            "fields": fields,
+            "sampled_rows": sampled_rows,
+            "total_rows": total_rows,
+            "truncated": truncated,
+        }
+
+        # Enforce the byte cap LAST: drop the least-recently-added fields until
+        # the serialized sample fits, flipping ``truncated`` so the judge knows
+        # the values are partial. We re-serialize after each drop because JSON
+        # length is not a simple sum of value lengths.
+        while len(json.dumps(sample).encode("utf-8")) > cls.GROUNDING_SAMPLE_MAX_BYTES and fields:
+            # Remove the last-inserted field (dicts preserve insertion order).
+            drop_key = next(reversed(fields))
+            del fields[drop_key]
+            truncated = True
+            sample["fields"] = fields
+            sample["truncated"] = truncated
+
+        if not fields:
+            # Byte cap removed everything — degrade to no sample rather than an
+            # empty-fields object the judge cannot use.
+            return None
+
+        if truncated:
+            # PRD-0091 §13.2 observability: surface that the cap fired so the
+            # cap can be tuned from telemetry (R12 — structlog only).
+            _log.info(
+                "grounding_sample_truncated",
+                tool=tool_name,
+                total_rows=total_rows,
+                sampled_rows=sampled_rows,
+            )
+
+        return sample
+
     def emit_tool_result(
         self,
         tool_name: str,
@@ -449,6 +663,7 @@ class SSEEmitter:
         elapsed_ms: int | None = None,
         duration_ms: int | None = None,
         result_preview: list[dict[str, str | None]] | None = None,
+        grounding_sample: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
 
@@ -483,6 +698,14 @@ class SSEEmitter:
                          via :meth:`build_result_preview`. Omitted when None
                          or empty so the legacy SSE shape is preserved for
                          error/empty results.
+            grounding_sample: bounded, redacted, allow-list-only sample of
+                         tool-result VALUES built via
+                         :meth:`build_grounding_sample` (PRD-0091 FR-5). Attached
+                         to the payload ONLY when the ``CHAT_EVAL_GROUNDING_SAMPLES``
+                         env flag is on AND ``status == "ok"`` AND the sample is
+                         non-empty. Default OFF (NFR-2) — when off, the legacy
+                         4-key payload stays byte-identical, so the frontend and
+                         the chat-eval harness pattern-match unchanged (AD-4).
         """
         payload: dict[str, object] = {
             "type": "tool_result",
@@ -504,6 +727,29 @@ class SSEEmitter:
             payload["duration_ms"] = duration_ms
         if result_preview:
             payload["result_preview"] = result_preview
+        # ── grounding_sample (PRD-0091 FR-5 / AD-4 / NFR-2) ──────────────────
+        # Opt-in, omit-when-empty — mirrors the ``result_preview`` pattern above
+        # so the legacy 4-key payload is byte-identical when off. THREE
+        # conditions must ALL hold before the sample is attached:
+        #   1. status == "ok"            — never sample error/empty/transport
+        #      results (BP-623: a downed upstream has no values to verify).
+        #   2. grounding_sample is non-empty — the builder returned a real
+        #      sample (not None / not {}).
+        #   3. CHAT_EVAL_GROUNDING_SAMPLES env flag is truthy — read per-call so
+        #      ops can flip it without a restart (same hot-toggle pattern as
+        #      RAG_COMPLETION_CACHE_DISABLED / RAG_CHAT_SUGGESTIONS_ENABLED).
+        #      Default OFF in prod (NFR-2) keeps eval-only data out of normal
+        #      traffic. NOTE: the var is intentionally UN-prefixed
+        #      (CHAT_EVAL_*, not RAG_CHAT_*) per PRD-0091 §6.3 — it is an
+        #      eval-harness toggle, not a service config knob, so it is read
+        #      directly from os.environ rather than via the RAG_CHAT_-prefixed
+        #      pydantic Settings.
+        if (
+            status == "ok"
+            and grounding_sample
+            and os.environ.get("CHAT_EVAL_GROUNDING_SAMPLES", "").strip().lower() == "true"
+        ):
+            payload["grounding_sample"] = grounding_sample
         return {
             "event": "tool_result",
             "data": json.dumps(payload),

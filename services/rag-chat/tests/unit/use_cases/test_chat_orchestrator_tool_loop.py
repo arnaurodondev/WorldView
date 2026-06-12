@@ -396,6 +396,49 @@ class TestToolCallsEmitted:
         # tool_call must appear before tool_result
         assert event_types.index("tool_call") < event_types.index("tool_result")
 
+    def test_orchestrator_passes_grounding_sample(self) -> None:
+        """PLAN-0110 W2 (PRD-0091 FR-5): the orchestrator builds a grounding
+        sample from the executed tool's items and plumbs it into
+        ``emit_tool_result`` as the ``grounding_sample`` kwarg.
+
+        The emitter itself decides whether to ATTACH the sample to the wire
+        frame (flag + status gating, tested in the SSE unit suite); here we only
+        assert the plumbing — the sample is computed from ``(tool_name, items)``
+        and passed through. This is a no-op behaviour change when the flag is
+        off, so it cannot regress the legacy frame.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("get_fundamentals_history")
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+
+        # Spy: build_grounding_sample returns a sentinel so we can assert it is
+        # threaded verbatim into emit_tool_result.
+        _sentinel_sample = {"fields": {"ticker": "AAPL"}, "sampled_rows": 1, "total_rows": 1, "truncated": False}
+        pipeline.emitter.build_grounding_sample = MagicMock(return_value=_sentinel_sample)
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        # build_grounding_sample was called with the executed tool's name + items.
+        pipeline.emitter.build_grounding_sample.assert_called()
+        _gs_call = pipeline.emitter.build_grounding_sample.call_args
+        assert _gs_call.args[0] == "get_fundamentals_history"
+        assert _gs_call.args[1] == [item]
+
+        # The sentinel sample was threaded into emit_tool_result.
+        _result_calls = pipeline.emitter.emit_tool_result.call_args_list
+        assert _result_calls, "expected at least one emit_tool_result call"
+        assert _result_calls[0].kwargs.get("grounding_sample") == _sentinel_sample
+
     def test_orchestrator_execute_all_called_with_tool_blocks(self) -> None:
         """ToolExecutor.execute_all is called with the tool_use blocks from LLM response.
 

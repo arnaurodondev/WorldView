@@ -314,6 +314,21 @@ class Settings(BaseSettings):
     # it discoverable via Settings.
     suggestions_enabled: bool = True  # RAG_CHAT_SUGGESTIONS_ENABLED
 
+    # ── Eval grounding-sample capture (PRD-0091 FR-5 / NFR-2) ────────────────
+    # When the UN-prefixed env var ``CHAT_EVAL_GROUNDING_SAMPLES=true`` is set,
+    # the ``tool_result`` SSE frame carries an additional bounded, redacted,
+    # allow-list-only ``grounding_sample`` of the tool-result VALUES so the
+    # chat-eval judge can VERIFY (not presume) numeric grounding. Default OFF in
+    # prod (NFR-2) keeps eval-only data out of normal traffic.
+    #
+    # IMPORTANT: this knob is intentionally NOT a pydantic field here — it is
+    # read directly from ``os.environ`` in ``SSEEmitter.emit_tool_result`` (a
+    # per-call hot-toggle, same pattern as RAG_COMPLETION_CACHE_DISABLED). A
+    # pydantic field would force the RAG_CHAT_ prefix; PRD-0091 §6.3 fixes the
+    # name as the un-prefixed ``CHAT_EVAL_GROUNDING_SAMPLES`` because it is an
+    # eval-harness toggle, not a service config value. Documented here purely
+    # for discoverability.
+
     # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
     # Stop-words stripped from the query string BEFORE the S7 alias fuzzy
     # match so generic English fragments ("space", "sector", "industry") do not

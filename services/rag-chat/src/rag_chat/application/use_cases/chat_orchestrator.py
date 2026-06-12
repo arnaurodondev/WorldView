@@ -2096,12 +2096,20 @@ class ChatOrchestratorUseCase:
                     )
                 else:
                     _preview_items = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    # PLAN-0110 W2 (PRD-0091 FR-5): attach a bounded, redacted,
+                    # allow-list-only sample of the tool-result VALUES so the W3
+                    # judge can verify (not presume) numeric grounding. The
+                    # builder returns None for non-allow-listed tools and the
+                    # emitter only attaches the field when CHAT_EVAL_GROUNDING_SAMPLES
+                    # is on AND status == "ok" — so this is a no-op when the flag
+                    # is off (legacy frame byte-identical).
                     yield p.emitter.emit_tool_result(
                         tc.name,
                         status=_status,
                         item_count=_count,
                         duration_ms=_duration_ms,
                         result_preview=p.emitter.build_result_preview(_preview_items),
+                        grounding_sample=p.emitter.build_grounding_sample(tc.name, _preview_items),
                     )
 
                 # E-12: record each tool call outcome.
@@ -3882,6 +3890,10 @@ class ChatOrchestratorUseCase:
                         item_count=_alt_count,
                         duration_ms=_alt_duration_ms,
                         result_preview=emitter.build_result_preview(_alt_items),
+                        # PLAN-0110 W2 (PRD-0091 FR-5): same grounding sample on
+                        # the fallback path so an alt-tool's verified values reach
+                        # the judge too. No-op when the flag is off.
+                        grounding_sample=emitter.build_grounding_sample(alt_name, _alt_items),
                     )
                 )
 

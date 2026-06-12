@@ -162,7 +162,7 @@ unchanged — R11: never break wire format.
 | `thinking` | `{"stage": str}` — emitted before first LLM call; shows pulsing indicator in UI |
 | `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion"}` |
 | `tool_call` | `{"type": "tool_call", "tool": str, "label": str, "input": dict, "status": "running"}` — emitted before each tool executes |
-| `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty" \| "transport_error", "item_count": int, "duration_ms"?: int, "result_preview"?: [{"id", "title"}]}` — emitted after each tool completes. `duration_ms` is server-measured; `result_preview` is bounded to 3 entries (80-char titles) |
+| `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty" \| "transport_error", "item_count": int, "duration_ms"?: int, "result_preview"?: [{"id", "title"}], "grounding_sample"?: {"fields": {...}, "sampled_rows": int, "total_rows": int, "truncated": bool}}` — emitted after each tool completes. `duration_ms` is server-measured; `result_preview` is bounded to 3 entries (80-char titles). `grounding_sample` (PLAN-0110 W2 / PRD-0091 FR-5) is an **optional, opt-in** bounded/redacted sample of allow-listed numeric/identifier tool-result VALUES — attached **only when** `CHAT_EVAL_GROUNDING_SAMPLES=true` AND `status=="ok"` AND a sample survives the allow-list; omit-when-empty so the legacy 4-key payload stays byte-identical when off. Hard caps: ≤3 rows, ≤8 fields/row, ≤32 chars/value, ≤1024 bytes (`truncated=true` when cut). Allow-list is numeric/identifier fields only (`revenue, eps, gross_profit, pe_ratio, ticker, period, confidence, …`); document bodies, narrative text, and any portfolio/account identifiers are never sampled (FR-8). Unknown tools → no sample. Used by the chat-eval judge to verify (not presume) numeric grounding |
 | `suggestions` | JSON array of exactly 3 follow-up question strings — emitted after `contradictions`. Derived deterministically from resolved entities + executed tools (no extra LLM call); toggled by `RAG_CHAT_SUGGESTIONS_ENABLED` (default true) |
 | `token` | `{"text": "..."}` — streamed LLM output chunk |
 | `citations` | `[{ref, id, title, url, source, published_at}]` |
@@ -457,6 +457,7 @@ All env vars use prefix `RAG_CHAT_`.
 | `RAG_CHAT_LOG_LEVEL` | `INFO` | No | structlog log level |
 | `RAG_CHAT_LOG_JSON` | `true` | No | JSON-structured logs |
 | `RAG_CHAT_OTLP_ENDPOINT` | `""` | No | OpenTelemetry collector endpoint |
+| `CHAT_EVAL_GROUNDING_SAMPLES` | `false` | No | **Un-prefixed** (NOT `RAG_CHAT_`) eval-harness toggle (PLAN-0110 W2 / PRD-0091 FR-5). When `true`, the `tool_result` SSE frame carries the optional bounded/redacted `grounding_sample` (see SSE table above). Read per-call from `os.environ` in `SSEEmitter.emit_tool_result` (hot-toggle, no restart). Default OFF (NFR-2) keeps eval-only data out of normal traffic |
 
 ---
 
