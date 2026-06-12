@@ -800,6 +800,28 @@ def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
 # "tool returned None".  See FIX-LIVE-E in
 # docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
 
+
+def _successful_item_count(result: Any) -> int:
+    """Count usable RetrievedItems in a tool result, treating failures as 0.
+
+    Chat-eval #1 round-2 (2026-06-12): a tool that returns a
+    ``TransportErrorMarker`` (KG 504 / upstream 5xx) is a FAILURE, not a
+    success — but the old ``1 if item is not None else 0`` expression counted
+    the sentinel as one successful item, so the fallback chain (which only
+    fires for failed primaries) skipped it and ``ru_openai_msft_paths`` got an
+    infra-apology refusal instead of degrading to ``get_entity_paths``.
+
+    Failure shapes (all → 0): ``None`` (handler raised / no result) and any
+    ``TransportErrorMarker`` (upstream transport_error). Empty list → 0.
+    A list of items → its length. A bare non-marker item → 1.
+    """
+    if result is None or isinstance(result, TransportErrorMarker):
+        return 0
+    if isinstance(result, list):
+        return len(result)
+    return 1
+
+
 _FALLBACK_MAP: dict[str, list[str]] = {
     # search_documents → relaxed-filter retry → claims → intelligence bundle
     # WHY this order: cheapest first (same tool, looser filters), then claims
@@ -4024,7 +4046,10 @@ class ChatOrchestratorUseCase:
         recovered: list[RetrievedItem] = []
 
         for tc, item in zip(tool_calls, tool_items, strict=False):
-            _count = len(item) if isinstance(item, list) else (1 if item is not None else 0)
+            # Chat-eval #1 round-2: a TransportErrorMarker (KG 504) is a FAILURE,
+            # so its count is 0 and the fallback fires — previously the marker
+            # counted as 1 "successful" item and the fallback was skipped.
+            _count = _successful_item_count(item)
             if _count > 0:
                 continue  # primary tool succeeded — no fallback needed
 
@@ -4062,12 +4087,27 @@ class ChatOrchestratorUseCase:
                 _alt_t0 = time.monotonic()
                 _alt_result = await tool_executor.execute(_alt_block)
                 _alt_duration_ms = int((time.monotonic() - _alt_t0) * 1000)
-                _alt_count = (
-                    len(_alt_result) if isinstance(_alt_result, list) else (1 if _alt_result is not None else 0)
-                )
-                _alt_status = "ok" if _alt_count > 0 else ("empty" if _alt_result is not None else "error")
+                # Chat-eval #1 round-2: treat an alt-tool TransportErrorMarker as a
+                # failure too — never count the sentinel as a recovered item (that
+                # would crash the downstream ``item_type`` accessor) and surface a
+                # ``transport_error`` status so the operator sees the alt outage.
+                _alt_is_transport_error = isinstance(_alt_result, TransportErrorMarker)
+                _alt_count = _successful_item_count(_alt_result)
+                if _alt_is_transport_error:
+                    _alt_status = "transport_error"
+                elif _alt_count > 0:
+                    _alt_status = "ok"
+                elif _alt_result is not None:
+                    _alt_status = "empty"
+                else:
+                    _alt_status = "error"
 
-                _alt_items = _alt_result if isinstance(_alt_result, list) else ([_alt_result] if _alt_result else [])
+                # Only real RetrievedItems flow downstream — exclude the marker.
+                _alt_items = (
+                    _alt_result
+                    if isinstance(_alt_result, list)
+                    else ([_alt_result] if (_alt_result and not _alt_is_transport_error) else [])
+                )
                 sse_events_out.append(
                     emitter.emit_tool_result(
                         alt_name,

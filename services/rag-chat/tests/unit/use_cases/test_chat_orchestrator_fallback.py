@@ -543,6 +543,128 @@ class TestFallbackChainIntegration:
         tool_result_events = [e for e in events if e.get("event") == "tool_result"]
         assert len(tool_result_events) >= 1 + len(fallback_tool_calls)
 
+    def test_transport_error_primary_triggers_fallback(self) -> None:
+        """Chat-eval #1 round-2: a traverse_graph TransportErrorMarker (KG 504)
+        must trigger the get_entity_paths fallback — NOT be counted as a success.
+
+        Before this fix, ``_run_fallback_chain`` counted the marker as 1
+        successful item (``item is not None``), so the fallback never fired and
+        ``ru_openai_msft_paths`` got an infra-apology refusal.
+        """
+        from rag_chat.application.pipeline.transport_error import TransportErrorMarker
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block(
+            "traverse_graph",
+            {"start_entity": "Microsoft", "target_entity": "OpenAI"},
+        )
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        second_resp = _make_llm_tool_response(text="Paths recovered via fallback.")
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[first_resp, second_resp])
+
+        # Primary traverse_graph 504s → TransportErrorMarker; the get_entity_paths
+        # fallback returns a real item.
+        marker = TransportErrorMarker(
+            tool_name="traverse_graph",
+            reason="upstream_5xx",
+            elapsed_ms=5083,
+            status_code=504,
+            path="/api/v1/graph/cypher/path",
+        )
+        paths_item = _make_retrieved_item("Top paths: Microsoft → OpenAI (invested_in).")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[marker],  # primary transport_error
+            execute_side_effects=[[paths_item]],  # get_entity_paths fallback succeeds
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        # The fallback fired: a tool_call with is_fallback=True for get_entity_paths.
+        fallback_calls = [
+            json.loads(e["data"])
+            for e in events
+            if e.get("event") == "tool_call" and json.loads(e["data"]).get("is_fallback") is True
+        ]
+        assert len(fallback_calls) == 1
+        assert fallback_calls[0]["tool"] == "get_entity_paths"
+        assert fallback_calls[0]["fallback_of"] == "traverse_graph"
+
+        # get_entity_paths was invoked with the projected args (start_entity → entity_id).
+        executor = factory.for_request.return_value
+        alt_block = executor.execute.call_args[0][0]
+        assert alt_block.name == "get_entity_paths"
+        assert alt_block.input == {"entity_id": "Microsoft", "top_n": 5}
+
+        # No all_tools_failed (the fallback recovered data); pipeline completes.
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert "all_tools_failed" not in error_codes
+
+    def test_transport_error_empty_trigger_still_works(self) -> None:
+        """The existing EMPTY-result trigger must keep firing the fallback too."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("traverse_graph", {"start_entity": "Microsoft"})
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        second_resp = _make_llm_tool_response(text="Paths from fallback.")
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[first_resp, second_resp])
+
+        paths_item = _make_retrieved_item("Top paths for Microsoft.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[]],  # primary empty (legacy trigger)
+            execute_side_effects=[[paths_item]],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        events = asyncio.run(_collect_events(orch, _make_chat_request(), MagicMock()))
+
+        fallback_calls = [
+            json.loads(e["data"])
+            for e in events
+            if e.get("event") == "tool_call" and json.loads(e["data"]).get("is_fallback") is True
+        ]
+        assert len(fallback_calls) == 1
+        assert fallback_calls[0]["tool"] == "get_entity_paths"
+
+    def test_transport_error_alt_also_fails_no_loop_no_crash(self) -> None:
+        """If the alt tool ALSO transport-errors, do not loop or crash.
+
+        The marker must not be counted as a recovered item (that would crash the
+        downstream item_type accessor). Exactly one fallback attempt is made.
+        """
+        from rag_chat.application.pipeline.transport_error import TransportErrorMarker
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("traverse_graph", {"start_entity": "Microsoft"})
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+
+        primary_marker = TransportErrorMarker(tool_name="traverse_graph", reason="upstream_5xx", elapsed_ms=5000)
+        alt_marker = TransportErrorMarker(tool_name="get_entity_paths", reason="upstream_5xx", elapsed_ms=5001)
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[primary_marker],
+            execute_side_effects=[alt_marker],  # only ONE alt → only ONE attempt
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        events = asyncio.run(_collect_events(orch, _make_chat_request(), MagicMock()))
+
+        # Exactly one fallback attempt — no infinite loop / re-entry.
+        executor = factory.for_request.return_value
+        assert executor.execute.await_count == 1
+        # The alt transport_error surfaces as a transport_error tool_result.
+        fallback_results = [
+            json.loads(e["data"])
+            for e in events
+            if e.get("event") == "tool_result" and json.loads(e["data"]).get("tool") == "get_entity_paths"
+        ]
+        assert fallback_results and fallback_results[0]["status"] == "transport_error"
+
 
 # ---------------------------------------------------------------------------
 # Tests: FIX-LIVE-V mid-loop recovery + partial-stream recovery
