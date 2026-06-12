@@ -148,6 +148,12 @@ def _derive_for_row(row: asyncpg.Record) -> tuple[str, str, str | None, str | No
         ticker=ticker,
         alert_type=alert_type,
         is_signal_label_fallback=is_fallback,
+        # The persisted ``payload`` IS the original Kafka event, so passing it
+        # here lets backfilled GRAPH_CHANGE rows get the same rich
+        # "N new links (…)" titles as natively-enriched rows — not the bare
+        # "graph pattern change" template. Best-effort: missing fields degrade
+        # gracefully inside _compose_alert_title.
+        event=payload,
     )
     return title, signal_label, entity_name, ticker
 

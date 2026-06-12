@@ -122,7 +122,7 @@ Response:
     "entity_id": "UUID",
     "alert_type": "SIGNAL | GRAPH_CHANGE | CONTRADICTION",
     "severity": "low | medium | high | critical",
-    "title": "Apple Inc.: Bullish guidance",
+    "title": "AAPL — Bullish guidance",
     "ticker": "AAPL",
     "entity_name": "Apple Inc.",
     "signal_label": "Bullish guidance",
@@ -346,19 +346,37 @@ entity+type within one window → single alert, multiple pending delivery rows.
 4. **Single transaction**: INSERT alert + INSERT pending_alert (per watcher) + INSERT outbox_event (per watcher)
 5. **Post-commit**: WebSocket push via `ValkeyNotificationPublisher` (never inside transaction)
 
-### Alert Title Composition (signal_label fallback — F-D-006)
+### Alert Title Composition (per-AlertType, payload-aware)
 
-The `title` field is composed deterministically from `(entity_name, ticker, signal_label)`.
-Fallback chain (first non-empty wins):
+The `title` field is composed deterministically in `AlertFanoutUseCase._compose_alert_title`
+from the entity subject (`ticker` → `entity_name`, resolved via S7) **and the raw event
+payload**. Subject and detail are joined with an em-dash (`"AAPL — …"`). Per type:
 
-1. `"<entity_name>: <signal_label>"` — both present and `signal_label` is not bare-severity
-2. `"<ticker>: <signal_label>"` — ticker present, `signal_label` not bare-severity
-3. `signal_label` — meaningful label but no entity context
-4. `entity_name` (when `signal_label` was the bare-severity fallback)
-5. `ticker`
-6. Humanised `alert_type` (`"Graph Change Alert"`) — final fallback
+- **SIGNAL** — `"<subject> — <signal_label>"` where `signal_label` is derived from
+  `(claim_type, polarity)` (e.g. `"AAPL — Bullish guidance"`). When those NLP fields are
+  missing/neutral, degrades to `"<subject> — price signal detected"`, or `"Signal detected"`
+  with no subject.
+- **GRAPH_CHANGE** — composes a rich tail from the (always-populated) `change_type` +
+  `canonical_types` payload: `"AAPL — graph update: 5 new links (2 supplier, 2 executive,
+  1 listing)"`. Relation types are humanised (`supplier_of`→supplier, `competes_with`→
+  competitor, `has_executive`→executive, …) and counted, top-3 categories shown with a
+  `+N more` overflow. Falls back to `"graph update"` when no structural detail is present.
+- **CONTRADICTION** — `"<subject> — conflicting signals"` / `"Conflicting signals"`.
+
+When no subject is resolved (S7 miss), the detail is capitalised as a standalone headline
+(e.g. `"Graph update: 5 new links (…)"`) — still far better than the old opaque
+`"Graph pattern change"`.
+
+**Root-cause note**: opaque titles in the live demo were caused by (a) the S7 resolver
+being unconfigured (`ALERT_S7_KNOWLEDGE_GRAPH_BASE_URL` / `ALERT_S7_INTERNAL_JWT` unset →
+every subject `None`) and (b) graph titles ignoring the rich payload. Both are fixed:
+the env vars are now in the config templates, and `_compose_graph_change_detail` mines the
+payload.
 
 **Invariant**: `title` MUST NEVER be a bare severity string like `"LOW signal"`.
+
+The `backfill_alert_titles.py` script reuses the same composition (passing the persisted
+`payload` as the event) so legacy rows get the same rich titles.
 
 ---
 
