@@ -209,13 +209,23 @@ class ChatPipeline:
         Layer 2 (async, LLMInjectionClassifier, E-8):
           - Semantic classification via small LLM (Qwen/Qwen3.5-0.8B on DeepInfra)
           - Only runs when self.llm_classifier is wired AND Layer 1 passes
-          - Fail-closed: classifier errors → block the message
+          - Genuine UNSAFE verdict → PromptInjectionError (blocked).
+          - Provider UNAVAILABLE (transport/402/429/5xx) → the classifier raises
+            ClassifierUnavailableError which propagates UNCHANGED to the route
+            layer (mapped to CLASSIFIER_UNAVAILABLE). It is DELIBERATELY NOT
+            converted to PromptInjectionError — that conflation was the bug where
+            a DeepInfra billing blip surfaced as a fake "Semantic injection
+            detected" rejection.
 
         Returns the sanitised, XML-wrapped message string.
 
         Raises:
-            PromptInjectionError: if Layer 1 heuristic or Layer 2 LLM fires
+            PromptInjectionError: if Layer 1 heuristic or Layer 2 LLM fires a
+                                  genuine injection verdict
                                   (rag_injection_blocked counter incremented).
+            ClassifierUnavailableError: if the Layer 2 classifier could not run
+                                  (provider unavailable) and fail-closed-but-honest
+                                  policy is active. Propagated as-is.
             PIIDetectedError: if PII is detected in the message.
         """
         # ── Layer 1: synchronous regex + PII ─────────────────────────────────

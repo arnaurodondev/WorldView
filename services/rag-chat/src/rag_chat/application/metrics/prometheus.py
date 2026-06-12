@@ -125,6 +125,24 @@ rag_injection_classifier_indeterminate = Counter(
     "Layer 2 classifier returned indeterminate output (empty/unparseable); failed open",
 )
 
+# BUG-FIX (DeepInfra 402 outage): the Layer 2 classifier could NOT RUN because
+# its provider was unavailable / the transport failed (HTTP 402/429/5xx, connect
+# or network error). This is DISTINCT from rag_injection_blocked_layer2 (which
+# counts genuine UNSAFE verdicts) — conflating the two is exactly the bug that
+# made a billing blip look like a flood of "injection detected" rejections.
+# Operators alert on a sustained rate here to catch provider-availability
+# incidents WITHOUT polluting the real injection-detection signal.
+#
+# Label ``reason`` is bounded: http_status | connect_error | network_error |
+# unknown_transport_error.  ``status`` is the HTTP code string for http_status
+# rows ("402"/"429"/"503"/…) and "n/a" otherwise — bounded by the small set of
+# provider status codes we ever observe.
+rag_injection_classifier_unavailable = Counter(
+    "injection_classifier_unavailable_total",
+    "Layer 2 injection classifier could not run (provider unavailable / transport error)",
+    labelnames=["reason", "status"],
+)
+
 # ── Context management (PRD-0016 §13) ────────────────────────────────────────
 
 rag_chunk_cache_hits = Counter(

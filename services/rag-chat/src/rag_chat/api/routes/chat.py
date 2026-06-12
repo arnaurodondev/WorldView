@@ -22,6 +22,7 @@ from rag_chat.api.schemas import (
     EntityContextChatResponse,
 )
 from rag_chat.domain.errors import (
+    ClassifierUnavailableError,
     InsufficientRetrievalError,
     PIIDetectedError,
     PromptInjectionError,
@@ -97,6 +98,10 @@ async def chat(
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
+    except ClassifierUnavailableError as e:
+        # Layer 2 safety classifier could not run (provider unavailable).
+        # 503 + retryable, accurate message — NOT a 400 "injection" rejection.
+        raise HTTPException(status_code=503, detail=e.message) from e
     except (PIIDetectedError, PromptInjectionError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ThreadNotFoundError as e:
@@ -164,6 +169,11 @@ async def chat_stream(
                     yield event
             except RateLimitExceededError as e:
                 yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
+            except ClassifierUnavailableError as e:
+                # Layer 2 safety classifier could not run (provider unavailable).
+                # Distinct, ACCURATE code — NOT the misleading INPUT_REJECTED
+                # "Semantic injection detected" the old fail-closed path emitted.
+                yield emitter.emit_error("CLASSIFIER_UNAVAILABLE", e.message)
             except (PIIDetectedError, PromptInjectionError) as e:
                 yield emitter.emit_error("INPUT_REJECTED", str(e))
             except ProviderUnavailableError as e:
@@ -251,6 +261,10 @@ async def entity_context_chat(
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
+    except ClassifierUnavailableError as e:
+        # Layer 2 safety classifier could not run (provider unavailable).
+        # 503 + retryable, accurate message — NOT a 400 "injection" rejection.
+        raise HTTPException(status_code=503, detail=e.message) from e
     except (PIIDetectedError, PromptInjectionError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ThreadNotFoundError as e:
@@ -303,6 +317,11 @@ async def entity_context_chat_stream(
                     yield event
             except RateLimitExceededError as e:
                 yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
+            except ClassifierUnavailableError as e:
+                # Layer 2 safety classifier could not run (provider unavailable).
+                # Distinct, ACCURATE code — NOT the misleading INPUT_REJECTED
+                # "Semantic injection detected" the old fail-closed path emitted.
+                yield emitter.emit_error("CLASSIFIER_UNAVAILABLE", e.message)
             except (PIIDetectedError, PromptInjectionError) as e:
                 yield emitter.emit_error("INPUT_REJECTED", str(e))
             except ProviderUnavailableError as e:

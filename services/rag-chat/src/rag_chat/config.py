@@ -228,6 +228,35 @@ class Settings(BaseSettings):
     trust_w_corroboration: float = 0.1  # RAG_CHAT_TRUST_W_CORROBORATION
     trust_w_extraction: float = 0.1  # RAG_CHAT_TRUST_W_EXTRACTION
 
+    # ── Layer 2 injection classifier availability policy ─────────────────────
+    # BUG-FIX (DeepInfra 402 outage): when the Layer 2 LLM injection classifier
+    # CANNOT RUN (provider unavailable / transport error — HTTP 402/429/5xx,
+    # connect or network error), this flag controls the closed-vs-open policy.
+    #
+    #   False (default) → fail CLOSED-but-HONEST: reject the request, but with an
+    #     accurate ``CLASSIFIER_UNAVAILABLE`` error ("input safety check
+    #     temporarily unavailable, please retry") — NEVER the misleading
+    #     "Semantic injection detected".
+    #   True            → fail OPEN: let the request through (Layer 1 regex/PII
+    #     already ran). Use ONLY when continuity of service is judged to outweigh
+    #     the marginal risk of a semantic-only injection slipping past Layer 2
+    #     during a provider outage. We NEVER default to this.
+    #
+    # The classifier reads ``RAG_CHAT_CLASSIFIER_FAIL_OPEN`` from the environment
+    # per-call (same hot-toggle pattern as RAG_COMPLETION_CACHE_DISABLED /
+    # DEBUG_SKIP_CLASSIFIER) so ops can flip it during an incident without a
+    # redeploy. This field documents the knob and keeps it discoverable via
+    # Settings. NOTE: a GENUINE injection verdict is always rejected regardless
+    # of this flag — it only governs the "could not run" path.
+    classifier_fail_open: bool = False  # RAG_CHAT_CLASSIFIER_FAIL_OPEN
+
+    # Bounded retry on a transient classifier transport failure BEFORE declaring
+    # the classifier unavailable. 0 disables retries (legacy behaviour). Kept
+    # small (1) so a real outage surfaces fast instead of multiplying latency.
+    classifier_retry_attempts: int = Field(
+        default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS"
+    )
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0
