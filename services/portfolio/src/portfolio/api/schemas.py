@@ -602,6 +602,12 @@ class TwrResponse(BaseModel):
     external cash flows (see ``ComputeTwrUseCase`` for the formula and
     the flow-classification rules). ``flow_days`` counts sub-periods that
     had a non-zero external flow — a sanity-check signal for the caller.
+
+    BP-665 (additive): ``flow_dates`` lists the snapshot dates of those
+    flow-adjusted sub-periods, aligned to ``points[].date`` (a flow on a
+    non-snapshot day reports the snapshot date it folded into), so the
+    frontend's flow-artifact detector can rely on ground truth instead
+    of NAV-jump heuristics. ``len(flow_dates) == flow_days``.
     """
 
     portfolio_id: UUID
@@ -609,6 +615,7 @@ class TwrResponse(BaseModel):
     to_date: date
     points: list[TwrPointResponse]
     flow_days: int
+    flow_dates: list[date] = []
 
 
 # ── PLAN-0051 Wave A — Realised P&L (T-A-1-04) ────────────────────────────────

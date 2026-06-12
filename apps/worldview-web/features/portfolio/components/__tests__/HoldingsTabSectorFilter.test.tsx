@@ -237,3 +237,25 @@ describe("HoldingsTab sector filter (R2)", () => {
     expect(onClearSectorFilter).toHaveBeenCalledOnce();
   });
 });
+
+// ── Wave 3 (2026-06-11): overview-band layout contract ───────────────────────
+//
+// Regression (user screenshot 7): the band's `xl:grid-cols-3` produced NO CSS
+// because tailwind.config.ts did not scan ./features/** — the three panels
+// stacked as full-width sections with ~1400px elastic gaps. The Tailwind scan
+// itself is guarded by __tests__/tailwind-content-coverage.test.ts; THIS test
+// pins the markup half of the contract so neither side can silently regress.
+describe("HoldingsTab — overview band layout contract (Wave 3)", () => {
+  it("renders the 3-panel band as a grid: stacked below xl, 3 columns at xl", () => {
+    renderTab(null);
+    const band = screen.getByTestId("overview-panel-band");
+    // Single column on small screens, three side-by-side panels at xl.
+    expect(band.className).toContain("grid");
+    expect(band.className).toContain("grid-cols-1");
+    expect(band.className).toContain("xl:grid-cols-3");
+    // Separator language: horizontal dividers while stacked, vertical at xl.
+    expect(band.className).toContain("divide-y");
+    expect(band.className).toContain("xl:divide-y-0");
+    expect(band.className).toContain("xl:divide-x");
+  });
+});

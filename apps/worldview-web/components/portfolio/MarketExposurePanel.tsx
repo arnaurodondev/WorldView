@@ -47,7 +47,18 @@ interface MarketExposurePanelProps {
   betaAdjExposure?: number | null;
 }
 
-/** One label/value row — 26px, label left (muted caps), value right (mono). */
+/** One label/value row — 26px, label left (muted caps), value right (mono).
+ *
+ * WAVE-3 LAYOUT FIX (2026-06-11, screenshot 7 "huge black spaces"): the row
+ * previously used bare `justify-between` with no width cap. Whenever the
+ * panel renders wider than its xl 3-col slot (below the xl breakpoint, or
+ * when the band stacks), the elastic gap stretched to the full panel width —
+ * label hard-left, value hard-right, ~1400px of dead space between them.
+ * The fix caps the row at `max-w-[240px]`: the value column is always within
+ * one eye-saccade of its label, regardless of panel width. 240px fits the
+ * widest real content ("BUYING PWR" label + "$1,234,567.89" value) with the
+ * 8px gap, and is narrower than the ~260px column the xl 3-col slot provides,
+ * so the cap never causes truncation at the design breakpoint. */
 function StatRow({
   label,
   value,
@@ -59,7 +70,7 @@ function StatRow({
 }) {
   return (
     <div
-      className="flex h-[26px] items-center justify-between gap-2"
+      className="flex h-[26px] w-full max-w-[240px] items-center justify-between gap-2"
       title={title}
     >
       <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground shrink-0">

@@ -368,6 +368,7 @@ async def get_twr(
         to_date=result.to_date,
         points=[TwrPointResponse(date=p.date, twr_cum_pct=p.twr_cum_pct, nav=p.nav) for p in result.points],
         flow_days=result.flow_days,
+        flow_dates=result.flow_dates,
     )
 
 

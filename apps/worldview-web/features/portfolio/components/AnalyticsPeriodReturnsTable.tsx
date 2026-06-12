@@ -36,7 +36,13 @@ import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { windowReturnFromCloses } from "@/features/portfolio/lib/period-returns";
+// 2026-06-11 Wave 3: findFlowArtifactDates guards the TWR column against the
+// backend series' flow artifacts (deposits counted as returns — live audit
+// 2026-06-11 found +116%/+23.97% single-day jumps that are funding events).
+import {
+  windowReturnFromCloses,
+  findFlowArtifactDates,
+} from "@/features/portfolio/lib/period-returns";
 import type { DatedValue } from "@/features/portfolio/lib/risk-metrics";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -234,9 +240,17 @@ export function AnalyticsPeriodReturnsTable({
             // Window TWR: the endpoint rebases the series to 0 at window
             // start, so the LAST point's cumulative value IS the window
             // return. <2 points = no return derivable → "—".
+            // 2026-06-11 Wave 3: when the fetched window contains a flow
+            // artifact (backend counted a deposit/position import as return
+            // — see period-returns.ts live audit), the corrupted number is
+            // SUPPRESSED to "—" with an explanatory tooltip. Never shown,
+            // never "corrected" client-side.
             const pts = data?.points ?? [];
+            const hasFlowArtifact = findFlowArtifactDates(pts).length > 0;
             const periodReturn =
-              pts.length >= 2 ? pts[pts.length - 1].twr_cum : null;
+              pts.length >= 2 && !hasFlowArtifact
+                ? pts[pts.length - 1].twr_cum
+                : null;
 
             // Benchmark over the SAME calendar window. ALL stays null (no
             // defined window); windowReturnFromCloses also nulls windows the
@@ -259,7 +273,19 @@ export function AnalyticsPeriodReturnsTable({
                 className="h-[24px] border-b border-border/40 last:border-0"
               >
                 <td className="text-muted-foreground pr-3 py-0.5">{p.label}</td>
-                <td className={cn("pr-3 py-0.5 tabular-nums text-right", returnColorClass(periodReturn))}>
+                <td
+                  // Tooltip + testid only when the cell was artifact-suppressed
+                  // — a coverage-gap "—" keeps the generic (silent) treatment.
+                  data-testid={
+                    hasFlowArtifact ? `analytics-flow-artifact-${p.label}` : undefined
+                  }
+                  title={
+                    hasFlowArtifact
+                      ? "Suppressed — the TWR series contains a cash-flow artifact inside this window (a deposit/position import was counted as return). Backend series fix pending."
+                      : undefined
+                  }
+                  className={cn("pr-3 py-0.5 tabular-nums text-right", returnColorClass(periodReturn))}
+                >
                   {fmtReturn(periodReturn)}
                 </td>
                 {/* vs SPY — real closes over the same window (2026-06-10). */}

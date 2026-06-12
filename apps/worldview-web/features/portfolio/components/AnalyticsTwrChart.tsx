@@ -57,6 +57,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 // "insufficient analytics data" state (was a hand-rolled bordered div).
 import { EmptyState } from "@/components/primitives/EmptyState";
 import { useTwrSeries } from "@/features/portfolio/hooks/useTwrSeries";
+// 2026-06-11 Wave 3: flow-artifact detection — the chart cannot suppress its
+// line (the user needs to SEE the series), but it must NAME the corruption
+// when the backend counted a deposit/position import as return (live audit:
+// +116% on 2026-05-11, +23.97% on 2026-06-10 — both funding events).
+import { findFlowArtifactDates } from "@/features/portfolio/lib/period-returns";
 import {
   cumulativeReturnSeries,
   alignBenchmarkToDates,
@@ -246,6 +251,14 @@ export function AnalyticsTwrChart({
     [data, showNav, benchmarks, benchmarkCloses],
   );
 
+  // 2026-06-11 Wave 3: dates where the series shows a cash-flow artifact
+  // (deposit counted as return / TWR moving on frozen NAV). Memoised with
+  // the same identity as rows — one O(n) pass per fetched series.
+  const artifactDates = useMemo(
+    () => findFlowArtifactDates(data?.points ?? []),
+    [data],
+  );
+
   // First-ever fetch only — period switches keep the previous chart drawn
   // (placeholderData in useTwrSeries), so this skeleton can never flash
   // mid-session.
@@ -339,6 +352,20 @@ export function AnalyticsTwrChart({
               title="Days in this window with external deposits/withdrawals — the TWR line excludes their effect; the NAV line includes it."
             >
               {data.flow_days} flow day{data.flow_days === 1 ? "" : "s"}
+            </span>
+          )}
+          {/* 2026-06-11 Wave 3: named data-quality warning. The line is still
+              drawn (hiding the chart would hide the evidence), but the user
+              must know the series contains unadjusted flows — the live demo
+              series jumps +116% on a funding day. Warning token (amber), not
+              negative: this is a data caveat, not a loss. */}
+          {artifactDates.length > 0 && (
+            <span
+              data-testid="twr-flow-artifact-warning"
+              className="ml-2 normal-case tracking-normal text-warning"
+              title={`The TWR series contains ${artifactDates.length} suspected cash-flow artifact${artifactDates.length === 1 ? "" : "s"} (deposit/position import counted as return) on: ${artifactDates.join(", ")}. Jumps on these dates are NOT performance. Backend series fix pending.`}
+            >
+              ⚠ {artifactDates.length} flow artifact{artifactDates.length === 1 ? "" : "s"}
             </span>
           )}
         </span>

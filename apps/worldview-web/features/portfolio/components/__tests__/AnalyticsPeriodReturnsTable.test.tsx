@@ -173,4 +173,35 @@ describe("AnalyticsPeriodReturnsTable", () => {
     expect(allRow).toHaveTextContent("+20.00%");
     expect(allRow).toHaveTextContent("—");
   });
+
+  // ── Wave 3 (2026-06-11): flow-artifact suppression ────────────────────────
+  it("suppresses the TWR cell when the fetched window contains a flow artifact", async () => {
+    // Live bug: the demo series jumps +23.97% on a single day (a funding
+    // event the backend counted as return). The table must show "—" with a
+    // named tooltip — never the corrupted number.
+    mockGetTwr.mockResolvedValue({
+      portfolio_id: "p-001",
+      from_date: daysAgo(30),
+      to_date: daysAgo(0),
+      points: [
+        { date: daysAgo(30), twr_cum: 0, nav: 100 },
+        { date: daysAgo(1), twr_cum: 0.01, nav: 101 },
+        // One-day +23.76% linked jump — the live 2026-06-10 signature.
+        { date: daysAgo(0), twr_cum: 0.25, nav: 125 },
+      ],
+      flow_days: 1,
+    } satisfies TwrResponse);
+
+    render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-row-1M")).toBeInTheDocument();
+    });
+    // Every period row fetched this same corrupted series → all suppressed.
+    const cell = screen.getByTestId("analytics-flow-artifact-1M");
+    expect(cell).toHaveTextContent("—");
+    expect(cell.getAttribute("title")).toMatch(/cash-flow artifact/i);
+    // The corrupted +25%/+23.x% figures must never reach the DOM.
+    expect(screen.queryByText(/\+2[35]\.\d{2}%/)).toBeNull();
+  });
 });

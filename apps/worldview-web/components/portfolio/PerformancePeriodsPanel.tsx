@@ -203,7 +203,11 @@ export function PerformancePeriodsPanel({ portfolioId }: PerformancePeriodsPanel
             <div
               key={row.label}
               data-testid={`period-row-${row.label}`}
-              className="flex h-[24px] items-center gap-2"
+              // WAVE-3 LAYOUT FIX (2026-06-11): max-w-[340px] caps the row so
+              // the flex-1 SPY column can never stretch into a full-panel
+              // elastic gap when the band renders wider than its xl 3-col
+              // slot (screenshot-7 "huge black spaces" failure class).
+              className="flex h-[24px] w-full max-w-[340px] items-center gap-2"
             >
               {/* Window label */}
               <span className="w-[24px] shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
@@ -211,8 +215,23 @@ export function PerformancePeriodsPanel({ portfolioId }: PerformancePeriodsPanel
               </span>
 
               {/* Portfolio TWR — colored; "—" when the window isn't covered
-                  (a 2-week-old book has no honest 3M return). */}
+                  (a 2-week-old book has no honest 3M return).
+                  2026-06-11 Wave 3: ALSO "—" when the window contains a flow
+                  artifact in the backend series (deposit counted as return —
+                  the live series showed 1D +23.97% on a −4.6% book day). The
+                  tooltip names the suppression; we never render the corrupted
+                  number and never fabricate a "corrected" one. */}
               <span
+                data-testid={
+                  row.portfolioFlowArtifact
+                    ? `period-flow-artifact-${row.label}`
+                    : undefined
+                }
+                title={
+                  row.portfolioFlowArtifact
+                    ? "Suppressed — the TWR series contains a cash-flow artifact inside this window (a deposit/position import was counted as return). The backend series fix is pending; showing the number would misstate performance."
+                    : undefined
+                }
                 className={cn(
                   "w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums",
                   row.portfolio == null

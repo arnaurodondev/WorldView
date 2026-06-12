@@ -21,13 +21,24 @@ const config: Config = {
   // There is no light mode toggle (ADR-F-04)
   darkMode: ["class"],
 
-  // Scan all app + component files for Tailwind class usage
+  // Scan all app + component files for Tailwind class usage.
+  //
+  // BUG FIX (2026-06-11, Wave 3 portfolio layout): `./features/**` was MISSING
+  // from this list. Tailwind JIT only generates CSS for classes it finds in
+  // scanned files — any class used EXCLUSIVELY inside features/ (e.g. the
+  // portfolio overview band's `xl:grid-cols-3`, the Analytics tab's
+  // `lg:col-span-9`) was silently never emitted, so those layouts collapsed
+  // to stacked full-width blocks at every viewport. The bug is invisible in
+  // unit tests (jsdom doesn't apply CSS) and only shows up as broken layout
+  // in the browser. Guarded by __tests__/tailwind-content-coverage.test.ts,
+  // which fails if any directory containing className usage is not scanned.
   content: [
     "./pages/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
     "./app/**/*.{ts,tsx}",
     "./lib/**/*.{ts,tsx}",
     "./hooks/**/*.{ts,tsx}",
+    "./features/**/*.{ts,tsx}",
   ],
   prefix: "",
   theme: {

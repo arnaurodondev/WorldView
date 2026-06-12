@@ -117,7 +117,13 @@ export function SectorExposurePanel({
               <div
                 key={row.sector}
                 data-testid={`sector-row-${row.sector}`}
-                className="flex h-[22px] items-center gap-2"
+                // WAVE-3 LAYOUT FIX (2026-06-11): max-w-[380px] caps the row so
+                // the flex-1 sector name can never stretch into a full-page
+                // elastic gap when the panel renders wider than its xl 3-col
+                // slot (the "huge black spaces" screenshot-7 failure). 380px =
+                // longest real sector name ("Consumer Discretionary") + bar +
+                // weight + Δ$ columns with comfortable slack.
+                className="flex h-[22px] w-full max-w-[380px] items-center gap-2"
               >
                 {/* Sector name — flex-1 + truncate + full name in tooltip
                     (truncation convention: never clip without a tooltip). */}

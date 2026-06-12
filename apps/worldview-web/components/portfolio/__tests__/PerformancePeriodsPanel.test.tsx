@@ -47,11 +47,18 @@ function daysAgo(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** 10 days of TWR (+1pp/day) — covers 1D/1W, NOT 1M/3M. */
+/** 10 days of TWR (+1pp/day) — covers 1D/1W, NOT 1M/3M.
+ *
+ * 2026-06-11 Wave 3: NAV now moves WITH the TWR (was a constant 100_000
+ * placeholder). A frozen NAV with a moving TWR is exactly the stale-snapshot
+ * flow-artifact signature period-returns.ts now suppresses — the fixture must
+ * look like an honest flow-free series for the window-math assertions to see
+ * real numbers. */
 function shortTwr(): TwrResponse {
   const points = [];
   for (let i = 9; i >= 0; i--) {
-    points.push({ date: daysAgo(i), twr_cum: (9 - i) * 0.01, nav: 100_000 });
+    const twr = (9 - i) * 0.01;
+    points.push({ date: daysAgo(i), twr_cum: twr, nav: 100_000 * (1 + twr) });
   }
   return {
     portfolio_id: "p-1",
@@ -109,6 +116,39 @@ describe("PerformancePeriodsPanel", () => {
     // 10 days of history → 1M/3M cannot be honestly computed.
     expect(screen.getByTestId("period-row-3M")).toHaveTextContent("—");
     expect(screen.getByTestId("period-row-1M")).toHaveTextContent("—");
+  });
+
+  it("suppresses windows containing a backend flow artifact ('—' + tooltip, never +23.97%)", async () => {
+    // 2026-06-11 Wave 3 regression (live bug): the demo book's TWR series
+    // contains a final-day +24% jump that is a FLOW, not performance —
+    // the panel showed "1D +23.97%" on a −4.6% book day. The guarded math
+    // must suppress the window and name the reason in a tooltip.
+    const points = [];
+    for (let i = 9; i >= 1; i--) {
+      const twr = (9 - i) * 0.01;
+      points.push({ date: daysAgo(i), twr_cum: twr, nav: 100_000 * (1 + twr) });
+    }
+    // Final day: +24% TWR jump in one interval (> the 15% plausibility bound).
+    points.push({ date: daysAgo(0), twr_cum: 0.08 * 1.24 + 0.24, nav: 134_000 });
+    mockGetTwr.mockResolvedValue({
+      portfolio_id: "p-1",
+      from_date: daysAgo(9),
+      to_date: daysAgo(0),
+      points,
+      flow_days: 1,
+    });
+
+    render(wrap(<PerformancePeriodsPanel portfolioId="p-1" />));
+    await waitFor(() =>
+      expect(screen.getByTestId("period-row-1D")).toBeInTheDocument(),
+    );
+
+    // The 1D window contains the artifact: suppressed cell, named tooltip.
+    const suppressed = screen.getByTestId("period-flow-artifact-1D");
+    expect(suppressed).toHaveTextContent("—");
+    expect(suppressed.getAttribute("title")).toMatch(/cash-flow artifact/i);
+    // The corrupted number must never reach the DOM.
+    expect(screen.queryByText(/\+2[0-9]\.\d{2}%/)).toBeNull();
   });
 
   it("announces SPY unavailability instead of failing silently", async () => {

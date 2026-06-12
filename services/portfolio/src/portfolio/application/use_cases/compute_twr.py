@@ -41,13 +41,49 @@ Flow magnitude per transaction: broker-reported ``amount`` when present
 (quantity*price ± fees). Sign comes from ``direction``
 (INFLOW → +, OUTFLOW → -).
 
+── Honest-convention guards (BP-665, 2026-06-11) ───────────────────────
+
+A live audit of the demo portfolio found three ways the naive formula
+manufactures fake performance out of bookkeeping noise (e.g. a holdings
+import showed up as a +116% "return" day, and a phantom flow as +33%):
+
+1. **Degraded snapshots are excluded from linking.** A snapshot with
+   ``data_quality != "ok"`` (stale-price lookback or cost-basis
+   substitution — including the value==cost placeholder rows written on
+   a brokerage position-import day) cannot support return attribution.
+   Any sub-period touching a degraded endpoint yields ``r_t = 0`` and
+   the cumulative product carries through. Trade-off, documented and
+   accepted: real market movement inside a degraded stretch is dropped
+   rather than guessed — we refuse to bridge across the stretch because
+   imports change the NAV perimeter *without* matching transactions, so
+   a bridged return would re-absorb the import jump as performance.
+
+2. **Frozen NAV across a flow yields ``r_t = 0``.** When
+   ``V_t == V_{t-1}`` exactly but ``F_t != 0``, the valuation provably
+   did not register the flow (stale snapshot); computing ``-F_t / V``
+   would invent a synthetic ±return from a transaction the NAV never
+   saw. Convention: exclude the day (``r_t = 0``) — the day still counts
+   in ``flow_days``/``flow_dates`` so callers can see it was adjusted.
+
+3. **Uncorroborated flows are dropped (perimeter cross-check).** A real
+   external flow into a securities-only NAV always moves the snapshot's
+   ``total_cost`` (buys add cost basis, sells remove it). If
+   ``F_t != 0`` but ``C_t == C_{t-1}`` *exactly*, the transactions never
+   crossed the snapshot perimeter — typical of brokerage-history imports
+   whose trades are not reflected in the backfilled NAV series. The flow
+   is ignored and the raw NAV return is used. (A genuine buy+sell mix
+   netting the 8-dp cost delta to exactly zero is considered
+   practically impossible; partial corroboration — cost moved by a
+   *different* amount — is intentionally not second-guessed in v1.)
+
 Degenerate-input guards:
 
 * fewer than 2 snapshots → empty series (no sub-period to compute).
 * V_{t-1} <= 0 → that sub-period is skipped (r_t would be inf/NaN); the
-  cumulative product simply carries through (r_t treated as 0). This is
-  the same contaminated-zero discipline used by the S9 risk-metrics
-  route (F-209/F-302).
+  cumulative product simply carries through (r_t treated as 0). The day
+  still counts in ``flow_days`` when it carried a flow. This is the
+  same contaminated-zero discipline used by the S9 risk-metrics route
+  (F-209/F-302).
 
 ROOT portfolios: transactions are unioned across the owner's non-root
 active sub-portfolios (same fan-out as ``GetHoldingsUseCase``) because
@@ -65,6 +101,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID  # — used at runtime in dataclass fields
 
+from portfolio.domain.entities.portfolio_value_snapshot import DATA_QUALITY_OK
 from portfolio.domain.enums import PortfolioKind, TransactionDirection, TransactionType
 from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 
@@ -106,9 +143,15 @@ class TwrResult:
     from_date: date
     to_date: date
     points: list[TwrPoint]
-    # Number of snapshot days that had a non-zero external flow — surfaced
+    # Number of sub-periods that had a non-zero external flow — surfaced
     # so the frontend / an operator can sanity-check the flow adjustment.
     flow_days: int
+    # BP-665: the snapshot dates of those flow-adjusted sub-periods,
+    # aligned to ``points[].date`` (a flow executed on a non-snapshot day
+    # reports the snapshot date it folded into). Lets the frontend's
+    # artifact detector use ground truth instead of jump heuristics.
+    # Invariant: ``len(flow_dates) == flow_days``.
+    flow_dates: list[date]
 
 
 @dataclass(frozen=True)
@@ -165,6 +208,7 @@ class ComputeTwrUseCase:
                 to_date=query.to_date,
                 points=points,
                 flow_days=0,
+                flow_dates=[],
             )
 
         # 2. External flows, bucketed by execution date. ROOT portfolios union
@@ -210,6 +254,7 @@ class ComputeTwrUseCase:
         # the first snapshot that includes it, otherwise it pollutes r_t.
         cumulative = 1.0
         flow_days = 0
+        flow_dates: list[date] = []
         points = [
             TwrPoint(date=snapshots[0].snapshot_date, twr_cum_pct=0.0, nav=snapshots[0].total_value),
         ]
@@ -217,19 +262,50 @@ class ComputeTwrUseCase:
             prev = snapshots[i - 1]
             curr = snapshots[i]
 
-            # Net flow over (prev.date, curr.date] — covers gap days.
+            # Net flow over (prev.date, curr.date] — covers gap days
+            # (weekends / missed worker runs): a flow executed on a
+            # non-snapshot day folds into the NEXT snapshot's sub-period.
             net_flow = Decimal(0)
             for d, f in flows_by_date.items():
                 if prev.snapshot_date < d <= curr.snapshot_date:
                     net_flow += f
             if net_flow != 0:
+                # Counted regardless of whether the guards below end up
+                # excluding the sub-period — flow_days/flow_dates report
+                # "a flow landed here", not "a flow was applied here".
                 flow_days += 1
+                flow_dates.append(curr.snapshot_date)
 
-            if prev.total_value > 0:
-                r_t = float((curr.total_value - net_flow - prev.total_value) / prev.total_value)
-                cumulative *= 1.0 + r_t
-            # else: contaminated/zero base — skip the sub-period (r_t = 0),
-            # mirroring the S9 risk-metrics zero-guard discipline.
+            # ── Honest-convention guards (BP-665) — see module docstring ──
+            #
+            # Guard 1: degraded snapshot on either endpoint. Placeholder /
+            # stale-price rows (e.g. the value==cost rows written on a
+            # brokerage position-import day, then frozen for weeks) cannot
+            # attribute return — without this, a holdings import showed up
+            # as a +116% "return" day and the post-freeze revaluation
+            # catch-up as +23.97%.
+            endpoints_reliable = prev.data_quality == DATA_QUALITY_OK and curr.data_quality == DATA_QUALITY_OK
+
+            if endpoints_reliable and prev.total_value > 0:
+                if net_flow != 0 and curr.total_value == prev.total_value:
+                    # Guard 2: NAV frozen across a non-zero flow — the
+                    # valuation never registered the transaction, so
+                    # -F/V would be synthetic return. r_t = 0.
+                    pass
+                elif net_flow != 0 and curr.total_cost == prev.total_cost:
+                    # Guard 3: flow not corroborated by the snapshot
+                    # perimeter (cost basis unchanged ⇒ the transactions
+                    # never reached the measured holdings — import lag /
+                    # seed mismatch). Drop the flow, keep the raw NAV
+                    # return instead of a phantom ±F/V adjustment.
+                    r_t = float((curr.total_value - prev.total_value) / prev.total_value)
+                    cumulative *= 1.0 + r_t
+                else:
+                    r_t = float((curr.total_value - net_flow - prev.total_value) / prev.total_value)
+                    cumulative *= 1.0 + r_t
+            # else: degraded endpoint or contaminated/zero base — skip the
+            # sub-period (r_t = 0), mirroring the S9 risk-metrics
+            # zero-guard discipline. The cumulative product carries through.
 
             points.append(
                 TwrPoint(
@@ -245,4 +321,5 @@ class ComputeTwrUseCase:
             to_date=query.to_date,
             points=points,
             flow_days=flow_days,
+            flow_dates=flow_dates,
         )

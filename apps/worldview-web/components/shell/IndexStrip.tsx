@@ -104,10 +104,15 @@ export const INDEX_STRIP_TICKERS: readonly TickerConfig[] = [
  *
  * The CSS animation translates the track by one full copy-width per
  * --marquee-duration. Scaling duration with cell count keeps the PIXEL
- * velocity constant (~27px/s at 60px cells + 6px gap) no matter how many
- * tickers the manifest carries — adding instruments never speeds up the tape.
+ * velocity constant no matter how many tickers the manifest carries —
+ * adding instruments never speeds up the tape.
+ *
+ * 2026-06-11 (Wave 3 topbar fix): cells went from 60px×3-line to 132px
+ * single-line (see TickerCells). 5s per cell keeps the same ~27px/s
+ * velocity the 60px/2.5s tape had: (132+6)/5 ≈ 27.6px/s vs (60+6)/2.5 =
+ * 26.4px/s. Leaving 2.5s would have DOUBLED the apparent speed.
  */
-const MARQUEE_SECONDS_PER_CELL = 2.5;
+const MARQUEE_SECONDS_PER_CELL = 5;
 
 // ── Quote shape from the batch endpoint ──────────────────────────────────────
 
@@ -214,21 +219,32 @@ function TickerCells({
             // purely for visual loop continuity (see TickerCells docstring).
             tabIndex={inert ? -1 : undefined}
             aria-label={`${ticker.fullName}: ${formatIndexPrice(quote?.price)} (${formatChg(quote?.change_pct)})`}
-            // WHY w-[60px] shrink-0: fixed cell width keeps the tape's total
+            // ── 2026-06-11 Wave 3 fix (user screenshot 7): SINGLE-LINE cell ──
+            // The previous cell stacked THREE leading-none lines (11+11+10px =
+            // 32px of glyphs) inside the 32px (h-8) TopBar — SPY/QQQ rows
+            // clipped above and below the bar at every width. One inline row
+            // ("SPY 597.21 +0.31%") is ~11px tall and can never clip.
+            // WHY w-[132px] shrink-0: fixed cell width keeps the tape's total
             // width (and therefore the loop period) deterministic regardless
-            // of price digit count. shrink-0 prevents flex squeeze.
-            className="flex w-[60px] shrink-0 flex-col items-start px-0.5 hover:bg-muted/20"
+            // of price digit count ("76.7K" vs "597.21"). 132px fits the
+            // worst case "ETH 2345.67 +12.34%" at 10-11px mono. shrink-0
+            // prevents flex squeeze. items-baseline aligns the mixed 11px/10px
+            // type on one text baseline.
+            className="flex w-[132px] shrink-0 items-baseline gap-1 px-0.5 hover:bg-muted/20"
           >
             {/* Ticker label — monospace, medium weight, foreground */}
             <span className="font-mono font-medium text-[11px] text-foreground leading-none">
               {ticker.displayLabel}
             </span>
-            {/* Price — mono tabular so digits don't jitter on refetch */}
-            <span className="font-mono tabular-nums text-[11px] text-foreground leading-none">
+            {/* Price — mono tabular so digits don't jitter on refetch.
+                flex-1 text-right: price column right-aligns inside the fixed
+                cell so the (variable-width) label never shifts it around. */}
+            <span className="min-w-0 flex-1 truncate text-right font-mono tabular-nums text-[11px] text-foreground leading-none">
               {formatIndexPrice(quote?.price)}
             </span>
-            {/* Change% — color-coded by direction via design tokens */}
-            <span className={cn("font-mono tabular-nums text-[10px] leading-none", chgClass(quote?.change_pct))}>
+            {/* Change% — color-coded by direction via design tokens.
+                Fixed 46px lane: "+12.34%" worst case at 10px mono. */}
+            <span className={cn("w-[46px] shrink-0 text-right font-mono tabular-nums text-[10px] leading-none", chgClass(quote?.change_pct))}>
               {formatChg(quote?.change_pct)}
             </span>
           </button>
@@ -297,7 +313,9 @@ export function IndexStrip() {
             // muted blocks — Bloomberg-style. See DESIGN_SYSTEM.md §6.2 (only
             // the slow opt-in `animate-skeleton-pulse` is permitted, and never
             // raw Tailwind `animate-pulse`).
-            className="h-[22px] w-[60px] shrink-0 rounded-[2px] bg-muted/30"
+            // 2026-06-11: dims match the new SINGLE-LINE 132px cell (was
+            // 60px×22px for the 3-line cell) so data arrival causes no shift.
+            className="h-[12px] w-[132px] shrink-0 rounded-[2px] bg-muted/30"
             aria-hidden
           />
         ))}

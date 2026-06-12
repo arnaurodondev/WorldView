@@ -183,6 +183,29 @@ describe("IndexStrip (ticker tape)", () => {
     expect(primary.getAttribute("aria-hidden")).toBeNull();
   });
 
+  it("cells are SINGLE-LINE so they can never exceed the 32px TopBar (Wave 3 fix)", async () => {
+    // Regression (user screenshot 7, 2026-06-11): cells stacked THREE
+    // leading-none lines (11+11+10px = 32px of glyphs) inside the h-8 (32px)
+    // TopBar — ticker rows clipped above/below the bar. The contract is now:
+    //   - the cell button lays out as a single flex ROW (no flex-col),
+    //   - ticker + price + change% are inline siblings of that row,
+    //   - the cell keeps a fixed width (deterministic marquee loop period).
+    render(<IndexStrip />, { wrapper: makeWrapper() });
+    await waitFor(() => screen.getAllByText("SPY"));
+
+    const primary = screen.getAllByTestId("index-strip-copy")[0];
+    const cell = primary.querySelector("button")!;
+    // Single row: flex WITHOUT flex-col (the 3-line regression vector).
+    expect(cell.className).toContain("flex");
+    expect(cell.className).not.toContain("flex-col");
+    // Fixed cell width — the loop period must stay deterministic.
+    expect(cell.className).toMatch(/w-\[\d+px\]/);
+    // All three data spans are DIRECT children of the same single-row button
+    // (no nested column wrappers that could re-stack them vertically).
+    const spans = cell.querySelectorAll(":scope > span");
+    expect(spans.length).toBe(3); // ticker, price, change%
+  });
+
   it("renders a static reduced-motion fallback row (single copy, scrollable)", async () => {
     render(<IndexStrip />, { wrapper: makeWrapper() });
     await waitFor(() => screen.getAllByText("SPY"));
