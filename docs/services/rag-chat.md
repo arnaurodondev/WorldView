@@ -658,6 +658,51 @@ deterministic, LLM-free **invariant gate** that hard-FAILs on
   and projects the `chat_eval_id`-tagged entries. The old
   `tests/validation/chat_eval/questions.yaml` is a deprecated empty stub.
 
+### Judge Calibration & Recalibration Cadence (PLAN-0110 W6 / PRD-0091 FR-12)
+
+The judge is **validated against a human-labelled GOLD set** before its verdicts
+are cited as thesis-blessed numbers (UC-3). The validation artefacts and harness:
+
+- **GOLD set** — `tests/validation/chat_quality_benchmark/gold/gold_set.jsonl`: ~40
+  real captured answers stratified by failure mode (fabrication / control-token
+  leak / infra non-answer / genuinely-good / appropriate-refusal), drawn from
+  committed benchmark runs. The fabrication + leak strata are deliberately
+  over-weighted so the confusion matrix has signal in the
+  **false-PASS-on-fabrication** cell (the asymmetric failure that matters most for
+  a finance agent — AD-6). Synthetic / public-entity questions only, no real
+  user-portfolio data (§8.1). Assemble with
+  `python scripts/chat_quality_calibration.py assemble`.
+- **Human labels** — `gold/gold_labels.yaml`: a human assigns `PASS/FAIL` + the
+  four per-dimension scores (`tool_use`, `grounding`, `framing`, and the new
+  **coherence/completeness** dim that replaces the old refusal sub-dim, OQ-5),
+  each 0-25. The loader schema-validates (`verdict ∈ {PASS,FAIL}`, dims ∈ [0,25])
+  and tolerates the blank state ("N/40 labelled").
+- **Calibration harness** — `scripts/chat_quality_calibration.py calibrate`
+  re-grades each gold item **offline from the stored artefacts** (NFR-4 — no chat
+  re-run) and computes Cohen's κ (human vs machine PASS/FAIL), raw agreement, the
+  2×2 confusion matrix (false-PASS-on-fabrication highlighted), and per-dimension
+  MAE. It writes `gold/_calibration_report.{md,json}` leading with **accept/reject**.
+- **Acceptance bar (OQ-4)** — a judge version is accepted **iff κ ≥ 0.7 AND zero
+  machine-PASS on any human-FAIL fabrication item**. A non-empty
+  false-PASS-on-fabrication cell is an automatic reject regardless of κ.
+
+**Recalibration is mandatory** (FR-12 / OQ-6) on each of:
+
+1. **Every judge-prompt version bump** — e.g. the `CHAT_QUALITY_JUDGE` 2.0→**3.0**
+   bump (W3, which deleted the "PRESUME GROUNDED" instruction and added evidence
+   grounding) **invalidates** prior calibration; the v3.0 judge MUST be
+   re-calibrated against the gold set before its numbers are trusted. The run
+   artefacts stamp `judge_prompt_version` / `judge_model_id` / `verdict_model_version`
+   so a verdict is always traceable to the prompt+model that produced it.
+2. **Every agent tool-surface change** (new/removed tools, changed result shapes)
+   — the gold set goes stale (F-6) and must be reassembled + relabelled.
+3. **A monthly floor** — recalibrate at least monthly even absent the above, to
+   catch model-provider drift.
+
+Until a passing calibration exists for the current `judge_prompt_version` + model
+id, the judge's verdicts are **not thesis-blessed** and must be reported as
+provisional.
+
 ---
 
 ## Tenant Isolation

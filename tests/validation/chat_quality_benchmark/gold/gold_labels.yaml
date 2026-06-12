@@ -1,0 +1,435 @@
+# GOLD-set human labels (PLAN-0110 W6-T-02). FILL human_verdict + human_dims.
+# human_verdict: PASS | FAIL
+# human_dims: each 0-25 (tool_use, grounding, framing, coherence)
+# Leave labeler/labeled_at for the human. DO NOT edit `id` / ordering.
+# Schema bar: kappa >= 0.7 AND zero machine-PASS on any human-FAIL fabrication item.
+labels:
+  - id: gold_fabrication_01
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_02
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_03
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_04
+    # stratum=fabrication machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_05
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_06
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_07
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_08
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_fabrication_09
+    # stratum=fabrication machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_01
+    # stratum=leak machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_02
+    # stratum=leak machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_03
+    # stratum=leak machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_04
+    # stratum=leak machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_05
+    # stratum=leak machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_06
+    # stratum=leak machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_07
+    # stratum=leak machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_leak_08
+    # stratum=leak machine_verdict=FAIL machine_pass=False
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_01
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_02
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_03
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_04
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_05
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_06
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_07
+    # stratum=infra machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_infra_08
+    # stratum=infra machine_verdict=FAIL machine_pass=False
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_01
+    # stratum=good machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_02
+    # stratum=good machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_03
+    # stratum=good machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_04
+    # stratum=good machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_05
+    # stratum=good machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_06
+    # stratum=good machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_07
+    # stratum=good machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_good_08
+    # stratum=good machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_01
+    # stratum=refusal machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_02
+    # stratum=refusal machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_03
+    # stratum=refusal machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_04
+    # stratum=refusal machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_05
+    # stratum=refusal machine_verdict=PASS machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:
+  - id: gold_refusal_06
+    # stratum=refusal machine_verdict=WEAK machine_pass=True
+    human_verdict:           # PASS | FAIL
+    human_dims:
+      tool_use:              # 0-25
+      grounding:             # 0-25
+      framing:               # 0-25
+      coherence:             # 0-25
+      labeler:
+      labeled_at:
+    notes:

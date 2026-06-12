@@ -869,6 +869,23 @@ that delegates to the tiered engine, consolidating the two question catalogues (
 
 ## Wave 6 — Human-Labelled GOLD Set + Cohen's κ Calibration (HUMAN-IN-THE-LOOP)
 
+> **STATUS: AUTOMATABLE PARTS SHIPPED 2026-06-12** (T-01, T-01b loader, T-03,
+> T-04, T-05 docs). New `scripts/chat_quality_calibration.py` (`assemble` +
+> `calibrate` subcommands) + `tests/validation/chat_quality_benchmark/gold/`
+> (`gold_set.jsonl` = 39 items stratified fabrication 9 / leak 8 / infra 8 /
+> good 8 / refusal 6 across 7 real runs; blank `gold_labels.yaml`; `README.md`
+> with HUMAN LABELLING INSTRUCTIONS). Note: the gold set is written as **JSONL**
+> (not YAML) per the W6 task brief for line-stable diffs. The κ harness computes
+> Cohen's κ + 2×2 confusion (false-PASS-on-fabrication cell highlighted) +
+> per-dim MAE + the κ≥0.7-AND-zero-fabrication-false-PASS gate, writes
+> `gold/_calibration_report.{md,json}` (accept/reject first), and degrades
+> gracefully on the blank set ("0/39 labelled — cannot compute", exit 0). 26 new
+> unit tests (synthetic-κ / confusion / MAE / accept+both-reject / blank-set /
+> loader range+missing+blank validation / v2+v3 verdict extraction).
+> FR-12 recalibration cadence documented in `docs/services/rag-chat.md`.
+> **STILL PENDING: T-02 — a human must label `gold_labels.yaml`** before κ can
+> be computed (the blocking human-in-the-loop gate).
+
 **Goal**: Build a ~40-item gold set stratified by failure mode, capture human labels, and compute
 Cohen's κ + confusion matrix + per-dim MAE, gated on κ ≥ 0.7 + zero false-PASS-on-fabrication.
 **Depends on**: W3 (judge v3.0 is the version under calibration) + stable W4/W5 artefacts | **Effort**: ~1.5 dev-days + human labelling time
@@ -888,8 +905,9 @@ Cohen's κ + confusion matrix + per-dim MAE, gated on κ ≥ 0.7 + zero false-PA
 - Draw ~40 `{question_id, run_ref, answer_text, tool_trace, grounding_sample}` snapshots from **real stored runs**, **stratified by failure mode**: fabrication / leak / infra-failure / good / appropriate-refusal — including a **deliberate fabrication+leak subset** so the confusion matrix has signal in the false-PASS-on-fabrication cell. **Synthetic / public-entity questions only — no real user-portfolio data** (§8.1).
 
 **Acceptance criteria**:
-- [ ] ~40 items, each stratum represented; fabrication+leak subset present
-- [ ] No real-account / PII data in the committed fixture
+- [x] ~40 items (39), each stratum represented; fabrication+leak subset present (9 fab all machine-PASS = false-PASS signal)
+- [x] No real-account / PII data in the committed fixture (synthetic/public-entity questions only)
+- [x] Written as `gold/gold_set.jsonl` + blank `gold/gold_labels.yaml` + `gold/README.md` (assembler: `scripts/chat_quality_calibration.py assemble`)
 
 ---
 
@@ -936,8 +954,8 @@ Cohen's κ + confusion matrix + per-dim MAE, gated on κ ≥ 0.7 + zero false-PA
 | test_per_dim_mae | MAE computed per dimension | unit |
 
 **Acceptance criteria**:
-- [ ] κ, agreement %, confusion matrix, per-dim MAE computed deterministically
-- [ ] Calibration runs offline from stored artefacts (no chat re-run)
+- [x] κ, agreement %, confusion matrix, per-dim MAE computed deterministically (in `scripts/chat_quality_calibration.py`; tested on synthetic fixtures with hand-computed κ=0.40)
+- [x] Calibration runs offline from stored artefacts (no chat re-run); blank set → "0/39 labelled — cannot compute" (exit 0)
 
 ---
 
@@ -961,8 +979,8 @@ Cohen's κ + confusion matrix + per-dim MAE, gated on κ ≥ 0.7 + zero false-PA
 | test_calibration_kappa_below_bar_rejects | κ=0.65 → rejected | unit |
 
 **Acceptance criteria**:
-- [ ] Calibration rejects on κ<0.7 or any false-PASS-fabrication
-- [ ] `calibration/<judge_version>_<ts>.json` + `.md` written, accept/reject first
+- [x] Calibration rejects on κ<0.7 or any false-PASS-fabrication (both reject cases unit-tested)
+- [x] `gold/_calibration_report.json` + `.md` written, accept/reject first (FR-11)
 
 ---
 
@@ -982,9 +1000,9 @@ Cohen's κ + confusion matrix + per-dim MAE, gated on κ ≥ 0.7 + zero false-PA
 - Document the recalibration cadence (OQ-6): every judge-version bump + every agent-tool-surface change + a monthly floor.
 
 **Acceptance criteria**:
-- [ ] Uncalibrated judge version flagged before thesis numbers are trusted
-- [ ] Baseline dual-grade (v2+v3) recorded in trend + annotated
-- [ ] Cadence documented in `docs/services/rag-chat.md`
+- [x] Cadence documented in `docs/services/rag-chat.md` ("Judge Calibration & Recalibration Cadence" — tied to the v3.0 bump, tool-surface change, monthly floor)
+- [ ] Uncalibrated judge version flagged before thesis numbers are trusted (runner-side flag — deferred; needs a non-automatable trend write)
+- [ ] Baseline dual-grade (v2+v3) recorded in trend + annotated (deferred — requires a live re-grade run)
 
 ### Pre-read (W6)
 - `scripts/chat_quality_judge.py` (`build_input_from_artifact`, `judge_answer`)
