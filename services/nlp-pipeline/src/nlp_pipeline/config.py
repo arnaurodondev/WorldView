@@ -134,6 +134,29 @@ class Settings(BaseSettings):
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
     gliner_base_url: str = ""
 
+    # Per-request HTTP timeout (seconds) the article-consumer applies when calling
+    # the containerised GLiNER server's /ner/batch endpoint.
+    #
+    # WHY 240s (was 60s): after the intra-consumer concurrency bump (16
+    # handlers/replica x3) + server-side micro-batcher, the GLiNER forward pass is
+    # CPU-bound and GIL/collector-serial — ONE batch runs at a time. Measured live
+    # under concurrent load, a single 16-text /ner/batch call took ~79s end-to-end
+    # (queue wait + forward pass) while the server sat pinned at ~1 core of a
+    # 14-core host (the transformer inference does not parallelise across cores at
+    # these batch sizes). An article with up to 32 sections is two such batches
+    # (~160s), so the old 60s — and even an interim 120s — client timeout was being
+    # exceeded → spurious "GLiNER server timeout" retries even though the server
+    # returns 200s. Those retries re-enqueue work and make the saturation worse.
+    #
+    # This is genuine GLiNER capacity saturation, NOT a client bug. The durable fix
+    # is the routing change that cuts full-pipeline volume (separate work) and/or
+    # scaling GLiNER off the saturated host. Raising the timeout is the cheap, safe
+    # mitigation: it lets a healthy-but-slow request finish instead of being failed
+    # and retried. 240s keeps headroom under message_processing_timeout_s (450s) so
+    # the outer Kafka handler still bounds a truly hung call. Env-configurable so
+    # ops can tune without a rebuild.
+    gliner_request_timeout_s: float = 240.0  # NLP_PIPELINE_GLINER_REQUEST_TIMEOUT_S
+
     # Minimum word count for an article to enter the NLP pipeline.
     # Articles below this threshold are skipped (too short for meaningful extraction).
     min_word_count: int = 50  # NLP_PIPELINE_MIN_WORD_COUNT

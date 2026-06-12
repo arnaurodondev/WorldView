@@ -29,14 +29,22 @@ class GLiNERHTTPAdapter:
     Args:
         base_url: Base URL of the GLiNER server, e.g. ``http://gliner-server:8080``.
         semaphore: Limits concurrent in-flight requests.
-        timeout_seconds: Per-request timeout.
+        timeout_seconds: Per-request timeout. Default 240s — the containerised
+            GLiNER server processes ONE micro-batch forward pass at a time and
+            that pass is CPU-bound; a 16-text /ner/batch call was measured at
+            ~79s end-to-end under concurrent load, and a multi-section document
+            issues several such batches. A queued request can therefore
+            legitimately take a few minutes. A shorter timeout produces spurious
+            ``GLiNER server timeout`` retries against a server that is merely
+            slow (returning 200s), not failing — and the retries worsen the
+            saturation. Callers can override via env-backed settings.
     """
 
     def __init__(
         self,
         base_url: str,
         semaphore: asyncio.Semaphore,  # type: ignore[name-defined]
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 240.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._semaphore = semaphore

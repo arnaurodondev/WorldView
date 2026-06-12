@@ -305,6 +305,50 @@ class TestGLiNERLocalAdapter:
             gliner_local._GLINER_AVAILABLE = original
 
 
+# ── GLiNERHTTPAdapter ─────────────────────────────────────────────────────────
+
+
+class TestGLiNERHTTPAdapter:
+    """Covers the containerised-GLiNER HTTP client: timeout default/override and
+    the timeout→RetryableError mapping (regression for the self-inflicted-looking
+    but actually capacity-driven 'GLiNER server timeout' storm)."""
+
+    def test_default_timeout_is_240s(self, semaphore: asyncio.Semaphore) -> None:
+        # The default must comfortably exceed the GLiNER server's batched tail
+        # latency (a 16-text /ner/batch call measured ~79s under concurrent
+        # CPU-bound load; multi-section docs issue several such batches) so a
+        # merely-slow server (returning 200s) is not retried as a failure.
+        from ml_clients.adapters.gliner_http import GLiNERHTTPAdapter
+
+        adapter = GLiNERHTTPAdapter(base_url="http://gliner-server:8080", semaphore=semaphore)
+        assert adapter._timeout == 240.0
+
+    def test_timeout_is_overridable(self, semaphore: asyncio.Semaphore) -> None:
+        # Ops must be able to tune the timeout (env-backed setting in the
+        # nlp-pipeline) without a code change.
+        from ml_clients.adapters.gliner_http import GLiNERHTTPAdapter
+
+        adapter = GLiNERHTTPAdapter(
+            base_url="http://gliner-server:8080",
+            semaphore=semaphore,
+            timeout_seconds=200.0,
+        )
+        assert adapter._timeout == 200.0
+
+    async def test_timeout_raises_retryable(self, semaphore: asyncio.Semaphore) -> None:
+        import httpx
+        from ml_clients.adapters.gliner_http import GLiNERHTTPAdapter
+
+        adapter = GLiNERHTTPAdapter(base_url="http://gliner-server:8080", semaphore=semaphore)
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post.side_effect = httpx.TimeoutException("read timeout")
+            with pytest.raises(RetryableError, match="GLiNER server timeout"):
+                await adapter.extract_entities(NERInput(text="Apple Inc.", entity_classes=["company"]))
+
+
 # ── AnthropicExtractionAdapter ────────────────────────────────────────────────
 
 

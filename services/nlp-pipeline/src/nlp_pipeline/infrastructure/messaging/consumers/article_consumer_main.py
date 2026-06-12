@@ -102,6 +102,13 @@ async def main() -> None:
         ner_client = GLiNERHTTPAdapter(
             base_url=settings.gliner_base_url,
             semaphore=asyncio.Semaphore(settings.embedding_max_concurrent),
+            # Per-request timeout must comfortably exceed the GLiNER server's
+            # batched tail latency under concurrent load. Measured live at
+            # 22-35s per serial forward pass while CPU-saturated; with a deep
+            # micro-batch queue the tail request stacks behind several of those,
+            # so the old 60s default was being tripped (spurious retries). See
+            # NlpPipelineSettings.gliner_request_timeout_s for the full rationale.
+            timeout_seconds=settings.gliner_request_timeout_s,
         )
         log.info("gliner_http_adapter_selected", base_url=settings.gliner_base_url)
     else:
