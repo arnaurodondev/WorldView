@@ -48,6 +48,21 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _RETRIEVAL_TIMEOUT = 5.0  # seconds per task
 _MAX_GRAPH_ENTITIES = 3  # cap for egocentric + contradiction fetches
 
+# PLAN-0111 B-4: conservative cosine-similarity floor for the PURE-ANN chunk leg.
+# Universal chunk embedding (B-1/B-2) made the LIGHT tier — skewed to thin
+# ticker-news stubs — semantically retrievable. To stop near-orthogonal stub hits
+# from crowding the candidate pool on queries they don't actually match, we drop
+# ANN hits whose cosine similarity (score = 1 - cosine_distance) is below this
+# floor. 0.20 is deliberately low: relevant BGE chunk hits typically score well
+# above it, so recall is preserved while genuine junk (sim ≈ 0) is cut.
+#
+# IMPORTANT: this floor is applied ONLY to the pure-ANN search_type. In the
+# HYBRID path, S6 applies min_score to BOTH the ANN leg (cosine, 0-1) AND the
+# lexical leg (ts_rank_cd, ~0.01-0.1) — a 0.20 floor there would erase the entire
+# FTS leg. The trust-weighted fusion (score * recency * trust_weight) already
+# de-ranks low-authority stubs in the hybrid case, so no floor is needed there.
+_ANN_MIN_SCORE_FLOOR = 0.20
+
 
 class ParallelRetrievalOrchestrator:
     """Execute all RAG retrieval steps (5A-5I) concurrently.
@@ -260,10 +275,15 @@ class ParallelRetrievalOrchestrator:
         else:
             _query_text_to_send = None
 
+        # PLAN-0111 B-4: apply the cosine floor only on the pure-ANN leg (see the
+        # constant's docstring — a floor on hybrid would erase the FTS leg).
+        _min_score = _ANN_MIN_SCORE_FLOOR if _search_type == "ann" else 0.0
+
         req = ChunkSearchRequest(
             query_embedding=query_embedding,
             query_text=_query_text_to_send,
             top_k=20,
+            min_score=_min_score,
             include_entities=True,
             date_from=_date_to_dt(plan.date_filter.start) if plan.date_filter else None,
             date_to=_date_to_dt(plan.date_filter.end) if plan.date_filter else None,

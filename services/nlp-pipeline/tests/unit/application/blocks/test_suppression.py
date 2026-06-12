@@ -9,6 +9,7 @@ from nlp_pipeline.application.blocks.suppression import (
     ProcessingPath,
     apply_suppression_gate,
     should_generate_chunk_embeddings,
+    should_generate_section_embeddings,
     should_run_deep_extraction,
     should_run_entity_resolution,
 )
@@ -71,17 +72,24 @@ class TestApplySuppressionGate:
 
 @pytest.mark.unit
 class TestDownstreamFlags:
-    def test_halt_no_chunks_no_resolution_no_extraction(self) -> None:
+    def test_halt_produces_nothing(self) -> None:
+        # SUPPRESS → HALT: noise docs are discarded entirely.
         assert should_generate_chunk_embeddings(ProcessingPath.HALT) is False
+        assert should_generate_section_embeddings(ProcessingPath.HALT) is False
         assert should_run_entity_resolution(ProcessingPath.HALT) is False
         assert should_run_deep_extraction(ProcessingPath.HALT) is False
 
-    def test_section_embeddings_only_no_chunks_no_resolution_no_extraction(self) -> None:
-        assert should_generate_chunk_embeddings(ProcessingPath.SECTION_EMBEDDINGS_ONLY) is False
+    def test_light_gets_chunk_embeddings_but_no_extraction(self) -> None:
+        # PLAN-0111 B-1/B-2: LIGHT now gets CHUNK embeddings (semantically
+        # retrievable) but NO section embeddings (dead weight), and still NO
+        # entity resolution / deep extraction (those stay FULL_PIPELINE-only).
+        assert should_generate_chunk_embeddings(ProcessingPath.SECTION_EMBEDDINGS_ONLY) is True
+        assert should_generate_section_embeddings(ProcessingPath.SECTION_EMBEDDINGS_ONLY) is False
         assert should_run_entity_resolution(ProcessingPath.SECTION_EMBEDDINGS_ONLY) is False
         assert should_run_deep_extraction(ProcessingPath.SECTION_EMBEDDINGS_ONLY) is False
 
     def test_full_pipeline_all_enabled(self) -> None:
         assert should_generate_chunk_embeddings(ProcessingPath.FULL_PIPELINE) is True
+        assert should_generate_section_embeddings(ProcessingPath.FULL_PIPELINE) is True
         assert should_run_entity_resolution(ProcessingPath.FULL_PIPELINE) is True
         assert should_run_deep_extraction(ProcessingPath.FULL_PIPELINE) is True

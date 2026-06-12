@@ -54,6 +54,7 @@ from nlp_pipeline.application.blocks.sectioning import section_document
 from nlp_pipeline.application.blocks.suppression import (
     apply_suppression_gate,
     should_generate_chunk_embeddings,
+    should_generate_section_embeddings,
     should_run_deep_extraction,
 )
 from nlp_pipeline.domain.enums import ProcessingPath
@@ -851,6 +852,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             model_id=self._settings.embedding_model_id,
             instruction_prefix=self._settings.embedding_instruction_prefix,
             generate_chunk_embeddings=should_generate_chunk_embeddings(initial_path),
+            # PLAN-0111 B-2: LIGHT no longer emits section embeddings (dead weight
+            # once its chunks are embedded; chat only queries chunk granularity).
+            generate_section_embeddings=should_generate_section_embeddings(initial_path),
             chunk_text_store=self._chunk_text_store,
         )
         if chunks:

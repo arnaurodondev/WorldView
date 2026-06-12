@@ -21,6 +21,7 @@ __all__ = [
     "ProcessingPath",
     "apply_suppression_gate",
     "should_generate_chunk_embeddings",
+    "should_generate_section_embeddings",
     "should_run_deep_extraction",
     "should_run_entity_resolution",
 ]
@@ -54,7 +55,31 @@ def apply_suppression_gate(routing_decision: RoutingDecision) -> ProcessingPath:
 
 
 def should_generate_chunk_embeddings(path: ProcessingPath) -> bool:
-    """Chunk embeddings are only generated on MEDIUM/DEEP (not LIGHT, not SUPPRESS)."""
+    """Chunk embeddings are generated for every non-SUPPRESS tier (PLAN-0111 B-1).
+
+    WHY this changed: chat retrieval queries CHUNK-granularity vectors. Previously
+    LIGHT (SECTION_EMBEDDINGS_ONLY) produced no chunk embeddings, so ~21% of the
+    corpus (the LIGHT tier) was invisible to semantic ANN retrieval — reachable only
+    via the BM25/tsvector leg. We now embed LIGHT chunks too, making every ingested
+    article semantically searchable. The expensive work (entity resolution, deep LLM
+    extraction) remains gated to FULL_PIPELINE only — see the two functions below.
+
+    SUPPRESS (HALT) still produces nothing: those docs are discarded as noise.
+    """
+    return path in {ProcessingPath.FULL_PIPELINE, ProcessingPath.SECTION_EMBEDDINGS_ONLY}
+
+
+def should_generate_section_embeddings(path: ProcessingPath) -> bool:
+    """Section embeddings are generated only on MEDIUM/DEEP (PLAN-0111 B-2).
+
+    WHY: chat retrieval uses CHUNK granularity exclusively (confirmed by grepping
+    rag-chat for granularity usage). For LIGHT, now that chunk embeddings exist
+    (see should_generate_chunk_embeddings), the section embedding is pure dead
+    weight — it costs an embed call and a vector row but is never queried. We keep
+    section embeddings for MEDIUM/DEEP to avoid widening the diff / changing
+    behavior for tiers where they were already produced, but stop emitting them
+    for LIGHT. SUPPRESS (HALT) produces nothing.
+    """
     return path == ProcessingPath.FULL_PIPELINE
 
 

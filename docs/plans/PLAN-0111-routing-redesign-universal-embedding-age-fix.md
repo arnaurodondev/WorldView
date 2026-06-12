@@ -61,13 +61,14 @@ query → "could not send data to client: Broken pipe" / "connection to client l
 invisible to semantic ANN retrieval (reachable only via the BM25/tsvector leg). Section embeddings
 exist for LIGHT but chat queries chunk-granularity, so they're dead weight.
 
-| Wave | Task | Files |
-|------|------|-------|
-| B-1 | `should_generate_chunk_embeddings` → include `SECTION_EMBEDDINGS_ONLY` (LIGHT); SUPPRESS stays HALT | `services/nlp-pipeline/.../blocks/suppression.py:56` |
-| B-2 | Backfill ~6,912 missing LIGHT chunk embeddings via `embedding_retry_worker` | nlp_db |
-| B-3 | Stop emitting now-redundant LIGHT **section** embeddings (cleanup) | `.../blocks/embeddings.py:357` |
-| B-4 | Retrieval-noise guard: `min_score` floor / `source_trust` re-rank for LIGHT ticker-news stubs; validate retrieval quality unchanged | `services/rag-chat/.../retrieval_orchestrator.py` |
-| B-5 | Docs: update routing/embedding tier table | `docs/services/nlp-pipeline.md` |
+| Wave | Task | Files | Status |
+|------|------|-------|--------|
+| B-1 | `should_generate_chunk_embeddings` → include `SECTION_EMBEDDINGS_ONLY` (LIGHT); SUPPRESS stays HALT | `.../blocks/suppression.py` | ✅ done 2026-06-12 |
+| B-2 | Stop emitting now-redundant LIGHT **section** embeddings (cleanup) — new `should_generate_section_embeddings` gate + `generate_section_embeddings` flag | `.../blocks/suppression.py`, `.../blocks/embeddings.py`, `.../article_consumer.py` | ✅ done |
+| B-3 | Backfill the missing LIGHT chunk embeddings — dedicated one-shot script (NOT the retry worker; chunks were never enqueued in `embedding_pending`) | `.../workers/backfill_light_chunk_embeddings.py`, nlp_db | ✅ done |
+| B-4 | Retrieval-noise guard: conservative `min_score=0.20` floor on the **pure-ANN** chunk leg only (NOT hybrid — would erase the FTS leg); `TrustScorer` already source-weights stubs | `.../retrieval_orchestrator.py` | ✅ done |
+| B-5 | Deploy (rebuild article-consumer `--no-cache`) + validate retrieval | docker | ✅ |
+| B-6 | Docs: update routing/embedding tier table | `docs/services/nlp-pipeline.md` | ✅ done |
 
 **Cost:** ~$0.005 one-time + pennies/month. **Effort/risk:** low/low (1-line gate + backfill; no schema/contract change).
 

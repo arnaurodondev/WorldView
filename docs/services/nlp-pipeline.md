@@ -13,7 +13,7 @@ S6 is the article enrichment engine. Every article that enters the platform thro
 
 - Named entities are extracted using GLiNER (local NER model, 11 classes)
 - Entities are resolved against the canonical entity registry
-- Chunks and sections are embedded with BAAI/bge-large-en-v1.5 (1024-dim)
+- Chunks are embedded with BAAI/bge-large-en-v1.5 (1024-dim) for every non-SUPPRESS tier (incl. LIGHT); sections are embedded only on MEDIUM/DEEP (PLAN-0111 B)
 - Novelty is assessed with MinHash and embedding-based deduplication
 - High-value articles receive deep LLM extraction (events, claims, relations)
 - Routing signals are computed and an enriched event is emitted to Kafka
@@ -140,20 +140,30 @@ Routing tier boundaries:
 
 Dispatches to a `ProcessingPath` based on routing tier:
 
-| Tier | ProcessingPath |
-|------|----------------|
-| SUPPRESS | `HALT` — no downstream processing |
-| LIGHT | `SECTION_EMBEDDINGS_ONLY` — no NER reprocessing, no extraction |
-| MEDIUM / DEEP | `FULL_PIPELINE` |
+| Tier | ProcessingPath | Chunk embeddings | Section embeddings | Entity resolution | Deep extraction |
+|------|----------------|------------------|--------------------|-------------------|-----------------|
+| SUPPRESS | `HALT` — no downstream processing | ✗ | ✗ | ✗ | ✗ |
+| LIGHT | `SECTION_EMBEDDINGS_ONLY` — no NER reprocessing, no extraction | ✓ | ✗ | ✗ | ✗ |
+| MEDIUM / DEEP | `FULL_PIPELINE` | ✓ | ✓ | ✓ | ✓ |
 
 After Block 8 (novelty correction), the `final_routing_tier` field overrides `routing_tier`.
+
+**PLAN-0111 B (universal chunk embedding, 2026-06-12):** LIGHT now generates **chunk** embeddings
+so every non-SUPPRESS article is semantically retrievable (chat retrieval queries chunk
+granularity; previously LIGHT — ~21% of the corpus — was invisible to ANN and reachable only via
+the BM25/tsvector leg). LIGHT no longer emits **section** embeddings — once its chunks are embedded
+the section vector is dead weight (chat never queries section granularity). Entity resolution and
+deep LLM extraction remain **FULL_PIPELINE-only** (MEDIUM/DEEP) — LIGHT stays cheap on the expensive
+work. Backfill of the ~6.8k historical LIGHT chunks ran via
+`python -m nlp_pipeline.workers.backfill_light_chunk_embeddings`. Cost: ~$0.005 one-time + pennies/month.
 
 ### Block 7 — Embedding
 
 Generates dense vector embeddings using BAAI/bge-large-en-v1.5 (1024-dim).
 
-- **Section embeddings**: generated for ALL tiers (LIGHT and above)
-- **Chunk embeddings**: generated only on FULL_PIPELINE (MEDIUM/DEEP)
+- **Chunk embeddings**: generated for every non-SUPPRESS tier (LIGHT, MEDIUM, DEEP) — PLAN-0111 B-1
+- **Section embeddings**: generated only on FULL_PIPELINE (MEDIUM/DEEP) — PLAN-0111 B-2 (LIGHT section
+  embeddings are dead weight once chunks are embedded; chat only queries chunk granularity)
 - **Chunk text persistence** (Option B): every chunk text uploaded to MinIO at
   `nlp-pipeline/chunk-text/{doc_id}/{chunk_id}/body/v1.txt`; failure is non-fatal (sets
   `chunk_text_key=None`)
@@ -338,7 +348,7 @@ S6 connects with read/write credentials but never runs Alembic. DDL is owned by 
 | Model | Task | Dimension | Provider | Fallback |
 |-------|------|-----------|----------|---------|
 | `urchade/gliner_large-v2.1` | NER (11 classes) | — | `gliner-server` container (HTTP) | `GLiNERLocalAdapter` in-process |
-| `BAAI/bge-large-en-v1.5` | Chunk + section embeddings | 1024 | DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`) | Ollama local |
+| `BAAI/bge-large-en-v1.5` | Chunk embeddings (all non-SUPPRESS tiers) + section embeddings (MEDIUM/DEEP only) | 1024 | DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`) | Ollama local |
 | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Deep extraction (Block 10) | — | DeepInfra (`NLP_PIPELINE_EXTRACTION_API_KEY`) | Ollama local (`qwen2.5:7b-instruct`) |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Article relevance scoring | — | DeepInfra (`NLP_PIPELINE_RELEVANCE_SCORING_API_KEY`) | Ollama (`qwen3:0.6b`) |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Unresolved entity classification | — | DeepInfra (`NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY`) | Ollama (`qwen3:0.6b`) |
