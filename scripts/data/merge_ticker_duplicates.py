@@ -48,6 +48,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -143,6 +144,60 @@ def _choose_survivor(cluster: Cluster, anchored: set[str]) -> dict[str, object]:
     return min(pool, key=lambda m: m["created_at"])  # type: ignore[arg-type,return-value]
 
 
+# ── FR-13: AGE graph cleanup helper ─────────────────────────────────────────────
+#
+# The AGE shadow graph (worldview_graph) keys edges on ``relation_id`` and is
+# additive-only, so this merge — which DELETEs/re-points ``relations`` rows — must
+# remove the matching AGE edges + loser vertices itself.  This mirrors the Cypher
+# patterns in scripts/data/reconcile_age_graph.py (the full one-off reconcile);
+# kept inline here (rather than imported) so the merge stays a self-contained,
+# single-transaction operation and the dry-run rollback covers the AGE writes too.
+_AGE_GRAPH = "worldview_graph"
+_CYPHER_DELETE_EDGE = (
+    "SELECT * FROM ag_catalog.cypher('"  # noqa: S608 — _AGE_GRAPH constant; value is agtype JSON param
+    + _AGE_GRAPH
+    + "', $$ MATCH ()-[r {relation_id: $relation_id}]->() DELETE r $$, %(params)s) AS (r ag_catalog.agtype)"
+)
+_CYPHER_DETACH_DELETE_VERTEX = (
+    "SELECT * FROM ag_catalog.cypher('"  # noqa: S608 — _AGE_GRAPH constant; value is agtype JSON param
+    + _AGE_GRAPH
+    + "', $$ MATCH (e:entity {entity_id: $entity_id}) DETACH DELETE e $$, %(params)s) AS (r ag_catalog.agtype)"
+)
+
+
+def _setup_age_session(conn: psycopg.Connection) -> None:
+    """LOAD the AGE extension + set search_path on *conn* (required for Cypher)."""
+    conn.execute("LOAD 'age'")
+    conn.execute('SET search_path = ag_catalog, "$user", worldview_graph, public')
+
+
+def _age_graph_cleanup(
+    intel: psycopg.Connection,
+    *,
+    relation_ids: list[str],
+    loser_entity_ids: list[str],
+) -> tuple[int, int]:
+    """DELETE AGE edges for *relation_ids* + DETACH DELETE *loser_entity_ids*.
+
+    Returns ``(edges_deleted, vertices_deleted)`` (counts attempted — Cypher
+    DELETE of an already-absent element is a harmless no-op, so this is
+    idempotent).  AGE has no bulk delete-by-property, so we iterate.  Runs on the
+    caller's *intel* connection inside the same transaction.
+    """
+    if not relation_ids and not loser_entity_ids:
+        return (0, 0)
+    _setup_age_session(intel)
+    edges = 0
+    for rid in relation_ids:
+        intel.execute(_CYPHER_DELETE_EDGE, {"params": json.dumps({"relation_id": rid})})
+        edges += 1
+    vertices = 0
+    for eid in loser_entity_ids:
+        intel.execute(_CYPHER_DETACH_DELETE_VERTEX, {"params": json.dumps({"entity_id": eid})})
+        vertices += 1
+    return (edges, vertices)
+
+
 def _merge_cluster(
     intel: psycopg.Connection,
     nlp: psycopg.Connection,
@@ -160,11 +215,30 @@ def _merge_cluster(
 
     p = {"survivor": survivor_id, "losers": loser_ids}
 
+    # FR-13 graph-awareness: the AGE shadow graph keys edges on ``relation_id``
+    # and is additive-only (the sync worker never DELETEs).  So every relation_id
+    # this merge DELETEs or re-points must be reflected in AGE, else AGE keeps a
+    # phantom edge forever (root cause of the 49.7% phantom-edge gap).  We capture
+    # the affected relation_ids as we mutate ``relations`` and, at the end,
+    # delete the matching AGE edges + DETACH DELETE the loser entity vertices.
+    # We also re-point ``relation_evidence`` (previously only relation_evidence_raw
+    # was re-pointed — relation_evidence orphans were the source of the COALESCE
+    # workaround the FR-13 investigation flags).  See _age_graph_cleanup below.
+    #
+    # ``affected_relation_ids``: relation_ids whose AGE edge must be removed
+    #   (self-loop + collision losers — their relations row is GONE).
+    # ``evidence_repoint``: {loser_relation_id: survivor_relation_id} for
+    #   collision-collapse losers, so their evidence is re-pointed not orphaned.
+    affected_relation_ids: set[str] = set()
+    evidence_repoint: dict[str, str] = {}
+
     # ── relations: first drop loser rows whose effective triple would become a
     #     SELF-LOOP (subject==object after re-point, e.g. a loser→survivor or
     #     loser→loser edge).  These violate chk_relations_no_self_loop (BP-385)
     #     and carry no information once the endpoints are the same entity.
-    intel.execute(
+    #     RETURNING the deleted relation_ids so their AGE edges + evidence can be
+    #     cleaned up (self-loop evidence is deleted, not re-pointed).
+    selfloop_deleted = intel.execute(
         """
 DELETE FROM relations r
 WHERE (r.subject_entity_id = ANY(%(losers)s) OR r.object_entity_id = ANY(%(losers)s))
@@ -172,9 +246,14 @@ WHERE (r.subject_entity_id = ANY(%(losers)s) OR r.object_entity_id = ANY(%(loser
             ELSE r.subject_entity_id END)
     = (CASE WHEN r.object_entity_id = ANY(%(losers)s) THEN %(survivor)s::uuid
             ELSE r.object_entity_id END)
+RETURNING relation_id
 """,
         p,
-    )
+    ).fetchall()
+    selfloop_ids = [str(row[0]) for row in selfloop_deleted]
+    affected_relation_ids.update(selfloop_ids)
+    if selfloop_ids:
+        counts["relations.self_loops_deleted"] = len(selfloop_ids)
 
     # ── relations (uidx_relations_triple: subject_entity_id, canonical_type,
     #     object_entity_id) — BOTH endpoints may be re-pointed.  We map any
@@ -184,10 +263,14 @@ WHERE (r.subject_entity_id = ANY(%(losers)s) OR r.object_entity_id = ANY(%(loser
     #     uidx_relations_triple after re-pointing.  Survivor-only rows keep
     #     their natural triple and rank first, so they are never deleted.  The
     #     remaining loser rows are then re-pointed.
-    intel.execute(
+    #     FR-13: RETURNING (deleted_relation_id, kept_relation_id) per effective
+    #     triple so the deleted loser's evidence is RE-POINTED onto the kept
+    #     (survivor) relation_id rather than orphaned, and its AGE edge removed.
+    collision_deleted = intel.execute(
         """
 WITH eff AS (
     SELECT r.ctid AS cid,
+           r.relation_id AS rid,
            (r.subject_entity_id = ANY(%(losers)s) OR r.object_entity_id = ANY(%(losers)s)) AS is_loser,
            (CASE WHEN r.subject_entity_id = ANY(%(losers)s) THEN %(survivor)s::uuid
                  ELSE r.subject_entity_id END) AS subj,
@@ -205,23 +288,65 @@ ranked AS (
     -- whenever one shares the effective triple, so a loser row is never the
     -- kept duplicate against an existing survivor row (which the loser-only
     -- DELETE could not remove and would then collide with on re-point).
-    SELECT cid, is_loser,
-           row_number() OVER (PARTITION BY subj, ct, obj ORDER BY is_loser ASC, cid) AS rn
+    SELECT cid, rid, is_loser, subj, ct, obj,
+           row_number() OVER (PARTITION BY subj, ct, obj ORDER BY is_loser ASC, cid) AS rn,
+           -- the rn=1 relation_id for this effective triple = the kept survivor.
+           first_value(rid) OVER (PARTITION BY subj, ct, obj ORDER BY is_loser ASC, cid) AS kept_rid
     FROM eff
 )
 DELETE FROM relations r
 USING ranked
 WHERE r.ctid = ranked.cid AND ranked.rn > 1 AND ranked.is_loser
+RETURNING r.relation_id, ranked.kept_rid
 """,
         p,
-    )
+    ).fetchall()
+    for row in collision_deleted:
+        loser_rid, kept_rid = str(row[0]), str(row[1])
+        affected_relation_ids.add(loser_rid)
+        evidence_repoint[loser_rid] = kept_rid
+    if collision_deleted:
+        counts["relations.collisions_deleted"] = len(collision_deleted)
+
+    # FR-13: bump updated_at on the surviving re-pointed rows so the additive
+    # AGE sync re-MERGEs them with the CORRECT (re-pointed) endpoints on its next
+    # cycle.  relations has no ON UPDATE trigger, so a bare subject/object UPDATE
+    # would leave updated_at stale and the AGE edge would keep its OLD endpoints
+    # (a loser graphid that we are about to DETACH DELETE).  We also RETURN the
+    # re-pointed relation_ids and add them to ``affected_relation_ids`` so their
+    # stale-endpoint AGE edge is deleted now and rebuilt fresh on the next sync.
     for col in ("subject_entity_id", "object_entity_id"):
-        res = intel.execute(
-            f"UPDATE relations SET {col} = %(survivor)s WHERE {col} = ANY(%(losers)s)",  # noqa: S608
+        repointed = intel.execute(
+            f"UPDATE relations SET {col} = %(survivor)s, updated_at = now() "  # noqa: S608
+            f"WHERE {col} = ANY(%(losers)s) RETURNING relation_id",
             p,
+        ).fetchall()
+        if repointed:
+            counts[f"relations.{col}"] = counts.get(f"relations.{col}", 0) + len(repointed)
+            affected_relation_ids.update(str(row[0]) for row in repointed)
+
+    # ── relation_evidence (RANGE-partitioned, keyed on relation_id) — FR-13.
+    #     Previously ONLY relation_evidence_raw was re-pointed; relation_evidence
+    #     children of a DELETED relation_id were orphaned (the COALESCE workaround
+    #     in path_insight_worker masked this).  For collision-collapse losers we
+    #     RE-POINT the evidence onto the kept survivor relation_id; for self-loop
+    #     losers the relation is meaningless, so we DELETE its evidence.
+    repointed_evidence = 0
+    for loser_rid, kept_rid in evidence_repoint.items():
+        res = intel.execute(
+            "UPDATE relation_evidence SET relation_id = %(kept)s WHERE relation_id = %(loser)s",
+            {"kept": kept_rid, "loser": loser_rid},
+        )
+        repointed_evidence += res.rowcount or 0
+    if repointed_evidence:
+        counts["relation_evidence.repointed"] = repointed_evidence
+    if selfloop_ids:
+        res = intel.execute(
+            "DELETE FROM relation_evidence WHERE relation_id = ANY(%(ids)s)",
+            {"ids": selfloop_ids},
         )
         if res.rowcount:
-            counts[f"relations.{col}"] = counts.get(f"relations.{col}", 0) + res.rowcount
+            counts["relation_evidence.self_loops_deleted"] = res.rowcount
 
     # ── event_entities (event_id, entity_id[, role]) — drop loser rows that
     #     collide with a survivor row for the same event, then re-point.
@@ -453,6 +578,22 @@ WHERE la.entity_id = ANY(%(losers)s)
     )
     if res.rowcount:
         counts["entity_mentions.resolved_entity_id"] = res.rowcount
+
+    # ── FR-13 AGE graph cleanup (same intel transaction) ─────────────────────
+    #     Delete the AGE edges of every relation_id this merge removed or
+    #     re-pointed (additive sync can never remove them), and DETACH DELETE the
+    #     loser entity vertices.  Part of the same transaction so --dry-run rolls
+    #     it back too.  Re-pointed relations get rebuilt by the next AGE sync
+    #     cycle (their updated_at was bumped above).
+    edges_deleted, vertices_deleted = _age_graph_cleanup(
+        intel,
+        relation_ids=sorted(affected_relation_ids),
+        loser_entity_ids=loser_ids,
+    )
+    if edges_deleted:
+        counts["age.phantom_edges_deleted"] = edges_deleted
+    if vertices_deleted:
+        counts["age.loser_vertices_deleted"] = vertices_deleted
 
     if dry_run:
         intel.rollback()

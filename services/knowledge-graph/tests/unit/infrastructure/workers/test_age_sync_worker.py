@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -263,6 +264,9 @@ class TestAgeSyncWorkerEntities:
                 None,  # third _setup_age_session (after relations commit)
                 empty,
                 empty,  # temporal_events SELECT + exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                empty,  # FR-13: prune detection SELECT → no phantoms
             ]
         )
 
@@ -313,6 +317,9 @@ class TestAgeSyncWorkerEntities:
                 None,  # third _setup_age_session
                 _make_result([]),
                 _make_result([]),  # temporal + exposures
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
         sf = _make_session_factory(session)
@@ -396,6 +403,9 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
 
@@ -433,6 +443,9 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
 
@@ -445,8 +458,9 @@ class TestAgeSyncWorkerRelations:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
         asyncio.run(worker.run())
 
-        # F-016: 3x _setup_age_session (6 calls) + entities(1) + relations(1) + temporal(1) + exposures(1) = 10
-        assert session.execute.await_count == 10
+        # F-016: 3x _setup_age_session (6) + entities(1) + relations(1) + temporal(1) + exposures(1)
+        # + FR-13 prune (4th _setup_age_session = 2, prune detection SELECT = 1) = 13
+        assert session.execute.await_count == 13
 
     def test_prometheus_relation_counter_incremented(self) -> None:
         """s7_age_sync_relations_total is incremented by the number of relations synced."""
@@ -473,6 +487,9 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
 
@@ -589,6 +606,9 @@ class TestSyncTemporalEventsPagination:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal_events SELECT
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
         sf = _make_session_factory(session)
@@ -600,8 +620,8 @@ class TestSyncTemporalEventsPagination:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
         asyncio.run(worker.run())
 
-        # F-016: 3x2 setup calls + 4 data calls = 10 total
-        assert session.execute.await_count == 10
+        # F-016: 3x2 setup calls + 4 data calls + FR-13 prune (2 setup + 1 detect) = 13 total
+        assert session.execute.await_count == 13
 
     def test_partial_page_terminates_loop(self) -> None:
         """A page smaller than event_batch (2000) stops pagination without a second SELECT."""
@@ -628,6 +648,9 @@ class TestSyncTemporalEventsPagination:
                 _make_result([event_row]),
                 None,  # temporal SELECT + MERGE
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
         sf = _make_session_factory(session)
@@ -673,6 +696,9 @@ class TestSyncTemporalEventsPagination:
                 _make_result([event_row]),
                 None,  # temporal SELECT + Cypher
                 _make_result([]),  # exposures SELECT
+                None,
+                None,  # FR-13: fourth _setup_age_session (before prune)
+                _make_result([]),  # FR-13: prune detection SELECT → no phantoms
             ]
         )
         sf = _make_session_factory(session)
@@ -734,3 +760,91 @@ class TestSyncTemporalEventsPagination:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=_make_settings())
         # Must not raise
         asyncio.run(worker.run())
+
+
+# ── Test: FR-13 phantom-edge prune pass (_prune_phantom_relations) ──────────────
+
+
+class TestPrunePhantomRelations:
+    """FR-13: the delete-aware subtractive pass that removes AGE edges whose
+    relation_id no longer exists in ``public.relations`` (self-healing for the
+    additive-only watermark MERGE)."""
+
+    @staticmethod
+    def _make_worker(session: Any) -> Any:
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        sf = _make_session_factory(session)
+        return AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+
+    def test_no_phantoms_issues_no_delete(self) -> None:
+        """When detection finds no orphans, no Cypher DELETE is issued; returns 0."""
+        session = AsyncMock()
+        # First execute = detection query → empty result.
+        session.execute = AsyncMock(return_value=_make_result([]))
+        worker = self._make_worker(session)
+
+        deleted = asyncio.run(worker._prune_phantom_relations(session))
+
+        assert deleted == 0
+        # Exactly one call (the detection SELECT); no per-id DELETE round-trips.
+        assert session.execute.await_count == 1
+
+    def test_phantom_edges_are_deleted(self) -> None:
+        """Each detected phantom relation_id triggers one Cypher DELETE."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import _SQL_PRUNE_DELETE_EDGE
+
+        phantom_rows = [("01920000-0000-7000-8000-000000000001",), ("01920000-0000-7000-8000-000000000002",)]
+        results = [_make_result(phantom_rows)] + [_make_result([]) for _ in phantom_rows]
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=results)
+        worker = self._make_worker(session)
+
+        deleted = asyncio.run(worker._prune_phantom_relations(session))
+
+        assert deleted == 2
+        # 1 detection SELECT + 2 DELETEs = 3 calls.
+        assert session.execute.await_count == 3
+        # The two follow-up calls must be the phantom-edge DELETE statement,
+        # each carrying its relation_id in the :params JSON.
+        delete_calls = session.execute.await_args_list[1:]
+        seen_ids = set()
+        for call in delete_calls:
+            sql_arg = str(call.args[0])
+            assert "DELETE r" in sql_arg
+            params = json.loads(call.args[1]["params"])
+            seen_ids.add(params["relation_id"])
+        assert seen_ids == {
+            "01920000-0000-7000-8000-000000000001",
+            "01920000-0000-7000-8000-000000000002",
+        }
+        # Sanity: the template the worker uses really is the DELETE one.
+        assert "DELETE r" in _SQL_PRUNE_DELETE_EDGE
+
+    def test_fail_open_on_error(self) -> None:
+        """A detection/delete error is swallowed (returns 0), never aborts sync."""
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("AGE exploded"))
+        worker = self._make_worker(session)
+
+        # Must not raise.
+        deleted = asyncio.run(worker._prune_phantom_relations(session))
+        assert deleted == 0
+
+    def test_prune_invoked_during_run(self) -> None:
+        """run() wires the prune pass into the cycle (delete-aware sync)."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        session = _make_session()
+        sf = _make_session_factory(session)
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+
+        worker._sync_entities = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._sync_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._sync_temporal_events = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        prune = AsyncMock(return_value=0)
+        worker._prune_phantom_relations = prune  # type: ignore[method-assign]
+
+        asyncio.run(worker.run())
+
+        prune.assert_awaited_once()

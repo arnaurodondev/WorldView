@@ -118,6 +118,54 @@ _RELATION_BATCH = 5000
 # Confidence threshold — relations below this are not synced (noise filter).
 _MIN_RELATION_CONFIDENCE = 0.1
 
+# FR-13 prune pass: the watermark MERGE is additive-only and can never remove a
+# relation_id whose relations row was deleted on the relational side (e.g. by
+# merge_ticker_duplicates.py self-loop / triple-collision deletes).  Without a
+# subtractive pass, AGE accumulates the historical superset of every relation_id
+# ever synced (~50% phantom by 2026-06-13).  Each cycle we scan up to
+# ``_PRUNE_SCAN_LIMIT`` non-membership AGE edges, find those whose relation_id is
+# absent from ``relations``, and Cypher-DELETE up to ``_PRUNE_DELETE_LIMIT`` of
+# them.  Bounded + fail-open so the prune can never blow up cycle latency or
+# abort the sync.  A full one-off catch-up lives in
+# scripts/data/reconcile_age_graph.py.
+_PRUNE_SCAN_LIMIT = 20000
+_PRUNE_DELETE_LIMIT = 1000
+
+# Cypher DELETE for one phantom edge (by relation_id property).  Static graph
+# name; the relation_id is passed as the agtype JSON :params value.
+_SQL_PRUNE_DELETE_EDGE = (
+    "SELECT * FROM ag_catalog.cypher('worldview_graph', $$"
+    " MATCH ()-[r {relation_id: $relation_id}]->() DELETE r"
+    " $$, :params) AS (result ag_catalog.agtype)"
+)
+
+# Read-only detection of phantom relation_ids: non-membership AGE edges whose
+# relation_id property is NOT present in public.relations.  Uses the agtype-safe
+# patterns from the FR-13 investigation — edge property objects rendered with
+# ``format('%s', e.properties)::jsonb`` (a direct ``properties::text`` cast
+# raises "agtype argument must resolve to a scalar value"); the AGE label id is
+# recovered from the high 16 bits of the graphid via ``(e.id::text::bigint>>48)``.
+# Membership labels (EVENT_EXPOSES / EXPOSED_TO_THEME) are excluded — they are
+# not keyed to a relations row.  LIMIT bounds the per-cycle scan cost.
+_SQL_FIND_PHANTOM_EDGES = (
+    "WITH nm AS ("
+    "  SELECT format('%s', e.properties)::jsonb AS props"
+    "  FROM worldview_graph._ag_label_edge e"
+    "  JOIN ag_catalog.ag_graph g ON g.name = 'worldview_graph'"
+    "  JOIN ag_catalog.ag_label l"
+    "    ON l.graph = g.graphid AND l.id = (e.id::text::bigint >> 48)::int"
+    "  WHERE l.name NOT IN ('EVENT_EXPOSES', 'EXPOSED_TO_THEME')"
+    "  LIMIT :scan_limit"
+    ") "
+    "SELECT DISTINCT (props->>'relation_id') AS relation_id "
+    "FROM nm "
+    "WHERE props ? 'relation_id' "
+    "  AND NOT EXISTS ("
+    "    SELECT 1 FROM relations pr WHERE pr.relation_id = (props->>'relation_id')::uuid"
+    "  ) "
+    "LIMIT :delete_limit"
+)
+
 # Whitelist of all valid AGE edge labels (27 relation types + EVENT_EXPOSES).
 # Labels derived from ``canonical_type`` are validated here before being
 # embedded in Cypher strings to prevent label injection.
@@ -229,6 +277,7 @@ class AgeSyncWorker:
         entities_synced = 0
         relations_synced = 0
         temporal_events_synced = 0
+        relations_pruned = 0
 
         async with self._sf() as session:
             await _setup_age_session(session)
@@ -242,6 +291,12 @@ class AgeSyncWorker:
             await session.commit()
             await _setup_age_session(session)
             temporal_events_synced = await self._sync_temporal_events(session, watermark)
+            await session.commit()
+            # FR-13: bounded subtractive pass so deleted relations self-heal in
+            # AGE.  Runs on the same write session (AGE Cypher requires it) after
+            # its own _setup_age_session; commits internally; fail-open.
+            await _setup_age_session(session)
+            relations_pruned = await self._prune_phantom_relations(session)
             await session.commit()
 
         await self._set_watermark(new_watermark)
@@ -272,6 +327,7 @@ class AgeSyncWorker:
             entities_synced=entities_synced,
             relations_synced=relations_synced,
             temporal_events_synced=temporal_events_synced,
+            relations_pruned=relations_pruned,
             duration_s=round(elapsed, 2),
             new_watermark=new_watermark.isoformat(),
         )
@@ -463,6 +519,55 @@ class AgeSyncWorker:
             offset += _RELATION_BATCH
 
         return total
+
+    # ── FR-13 phantom-edge prune (delete-aware sync) ───────────────────────────
+
+    async def _prune_phantom_relations(self, session: AsyncSession) -> int:
+        """DELETE AGE edges whose relation_id no longer exists in ``relations``.
+
+        The watermark MERGE is additive-only, so relation deletions on the
+        relational side (self-loops / triple-collisions from the ticker-dedup,
+        FR-13) leave orphaned AGE edges forever.  This bounded subtractive pass
+        removes up to ``_PRUNE_DELETE_LIMIT`` such phantom edges per cycle so the
+        gap self-heals over time without a separate reconcile job.
+
+        BOUNDED: the detection scan is capped at ``_PRUNE_SCAN_LIMIT`` edges and
+        the delete at ``_PRUNE_DELETE_LIMIT`` so prune work can never dominate
+        cycle latency.  A full one-off catch-up lives in
+        ``scripts/data/reconcile_age_graph.py``.
+
+        FAIL-OPEN: any error is logged and swallowed — a prune failure must never
+        abort the sync cycle.  Returns the number of phantom relation_ids deleted.
+        """
+        try:
+            rows = await session.execute(
+                text(_SQL_FIND_PHANTOM_EDGES),
+                {"scan_limit": _PRUNE_SCAN_LIMIT, "delete_limit": _PRUNE_DELETE_LIMIT},
+            )
+            relation_ids = [str(r[0]) for r in rows.fetchall() if r[0] is not None]
+            if not relation_ids:
+                logger.debug("age_sync_prune_no_phantoms")  # type: ignore[no-any-return]
+                return 0
+
+            for rid in relation_ids:
+                await session.execute(
+                    text(_SQL_PRUNE_DELETE_EDGE),
+                    {"params": json.dumps({"relation_id": rid})},
+                )
+
+            logger.info(  # type: ignore[no-any-return]
+                "age_sync_prune_complete",
+                phantom_edges_deleted=len(relation_ids),
+                scan_limit=_PRUNE_SCAN_LIMIT,
+                delete_limit=_PRUNE_DELETE_LIMIT,
+            )
+            return len(relation_ids)
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_prune_error",
+                exc_info=True,
+            )
+            return 0
 
     # ── Temporal event sync ───────────────────────────────────────────────────
 
