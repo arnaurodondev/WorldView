@@ -222,7 +222,12 @@ export function getMarketSession(now: Date): MarketSessionInfo {
       return {
         state: "after",
         nextTransition: nyWallTimeToUtc(ny.year, ny.month, ny.day, 20, 0),
-        nextLabel: "after-hours end",
+        // W4 (user report 2026-06-12 "bug in the market clock"): the widget
+        // renders `${nextLabel} in ${countdown}`. Every other label is a VERB
+        // ("opens"/"closes"/"pre-market opens") that reads correctly; the
+        // OLD value "after-hours end" was a noun phrase, producing the broken
+        // "after-hours end in 28m". Verb form → "after-hours ends in 28m".
+        nextLabel: "after-hours ends",
       };
     }
   }

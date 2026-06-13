@@ -78,7 +78,7 @@ describe("getMarketSession — weekday session cycle (EDT)", () => {
   it("after-hours at exactly 16:00 ET, ends at 20:00 ET", () => {
     const s = getMarketSession(utc("2026-06-10T20:00:00Z")); // 16:00 ET
     expect(s.state).toBe("after");
-    expect(s.nextLabel).toBe("after-hours end");
+    expect(s.nextLabel).toBe("after-hours ends");
     expect(s.nextTransition.toISOString()).toBe("2026-06-11T00:00:00.000Z"); // 20:00 ET
   });
 

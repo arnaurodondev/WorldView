@@ -111,8 +111,8 @@ describe("AiSignalsWidget — news momentum rows", () => {
     render(<AiSignalsWidget />, { wrapper });
 
     await screen.findByRole("link", { name: /Nvidia/i });
-    // Default call: limit=20, hours=72.
-    expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 72);
+    // Default call: limit=30, hours=72.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 72);
     // The 3D toggle is the active (pressed) window.
     expect(screen.getByRole("button", { name: "3D" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -126,13 +126,13 @@ describe("AiSignalsWidget — news momentum rows", () => {
     // Click 1W → refetch with hours=168.
     await userEvent.click(screen.getByRole("button", { name: "1W" }));
     await waitFor(() => {
-      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 168);
+      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 168);
     });
 
     // Click 24H → refetch with hours=24.
     await userEvent.click(screen.getByRole("button", { name: "24H" }));
     await waitFor(() => {
-      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(20, 24);
+      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 24);
     });
   });
 

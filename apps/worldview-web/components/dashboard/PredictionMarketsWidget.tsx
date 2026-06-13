@@ -180,7 +180,10 @@ export function PredictionMarketsWidget() {
   // case-insensitive equality), making the counts and the rows definitionally
   // consistent — and pagination stays correct under a filter (offset walks
   // the FILTERED universe, not the unfiltered one).
-  const PAGE_SIZE = 15;
+  // W4 (user 2026-06-12 "blocks of 30"): page/block size 15 → 30. The
+  // server endpoint supports limit 1–200 + offset, so each scroll fetches the
+  // next 30 of the filtered universe.
+  const PAGE_SIZE = 30;
   const {
     data,
     isLoading,

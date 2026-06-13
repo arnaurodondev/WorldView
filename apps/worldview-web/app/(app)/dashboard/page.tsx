@@ -150,13 +150,16 @@ export default function DashboardPage() {
         // stretched the row to the TALLEST cell — the old Sector heatmap that
         // filled ~300px. Now that the Sector widget is a compact fixed 7+6 grid
         // (~76px) and the Clock column is a fixed two-mini stack, we pin Row 2
-        // to a FIXED 124px. Widgets taller than that (Market Snapshot's 11
+        // to a FIXED 152px. Widgets taller than that (Market Snapshot's 11
         // ticker rows, AI Signals) scroll internally rather than dragging the
         // whole row tall (their cells are overflow-hidden + the widgets own an
-        // overflow-y-auto list). 124px comfortably fits the Clock+Breadth stack
-        // (2×~50px + 12px gap) and ~4 snapshot rows before scroll.
+        // overflow-y-auto list). W4 (user report 2026-06-12 "increase the
+        // height a bit"): 124px clipped the Breadth mini's "N up / N down"
+        // footer and showed only ~3 snapshot rows; 152px gives the Clock+Breadth
+        // stack full breathing room and ~6 snapshot rows before scroll, while
+        // the 7+6 sector grid (~76px) still has comfortable padding.
         gridTemplateRows:
-          "var(--dashboard-grid-rows, auto 124px minmax(220px, 1fr) minmax(200px, 1fr))",
+          "var(--dashboard-grid-rows, auto 152px minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
       {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack

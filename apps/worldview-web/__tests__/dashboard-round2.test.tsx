@@ -49,14 +49,14 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway mock (WatchlistQuickView scenarios) ───────────────────────────────
-// Fixture design: SIX holdings so the top-5 cut is observable. Market values
+// Fixture design: SIX holdings (W4: pagination block is 30 — all render). Market values
 // (live price × qty):
 //   AAPL  200 × 10 = 2000   ← top
 //   MSFT  400 ×  4 = 1600
 //   NVDA  800 ×  1.5 = 1200
 //   AMZN  100 ×  8 =  800
 //   GOOG  150 ×  4 =  600
-//   TINY    5 × 10 =   50   ← 6th — must NOT render
+//   TINY    5 × 10 =   50   ← 6th — now renders (block of 30)
 // Day P&L: AAPL change +2.5 × 10 = +$25.00 (positive), MSFT −3 × 4 = −$12.00
 // (negative). NVDA has NO quote in the batch → P&L renders "—" and its value
 // falls back to current_price (the B-2 zero-price guard path).
@@ -243,7 +243,7 @@ describe("MarketClockWidget", () => {
 
     render(<MarketClockWidget />);
     expect(screen.getByText("AFTER HOURS")).toBeInTheDocument();
-    expect(screen.getByText(/after-hours end in 3h 30m/)).toBeInTheDocument();
+    expect(screen.getByText(/after-hours ends in 3h 30m/)).toBeInTheDocument();
   });
 });
 
@@ -252,7 +252,7 @@ describe("MarketClockWidget", () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 describe("WatchlistQuickViewWidget", () => {
-  it("renders the top-5 positions by market value and cuts the 6th", async () => {
+  it("renders positions by market value in a block of 30 (W4: no top-5 cap)", async () => {
     seedHappyPathMocks();
     renderWithClient(<WatchlistQuickViewWidget />);
 
@@ -261,8 +261,10 @@ describe("WatchlistQuickViewWidget", () => {
     for (const ticker of ["AAPL", "MSFT", "NVDA", "AMZN", "GOOG"]) {
       expect(screen.getByText(ticker)).toBeInTheDocument();
     }
-    // …and the smallest position is cut (top-5 only).
-    expect(screen.queryByText("TINY")).not.toBeInTheDocument();
+    // …and the 6th now ALSO renders — the W4 pagination block is 30, so a
+    // 6-holding book shows every position (no scroll needed). The smallest is
+    // last by value but still present.
+    expect(screen.getByText("TINY")).toBeInTheDocument();
   });
 
   it("orders rows by market value descending", async () => {
@@ -303,14 +305,15 @@ describe("WatchlistQuickViewWidget", () => {
     expect(nvdaRow.textContent).toContain("$800.00");
   });
 
-  it("requests sparklines in ONE batch for the top-5 ids", async () => {
+  it("requests sparklines in ONE batch for the visible-block ids", async () => {
     seedHappyPathMocks();
     renderWithClient(<WatchlistQuickViewWidget />);
     await waitFor(() =>
       expect(gatewayMocks.getMarketSparklines).toHaveBeenCalledTimes(1),
     );
     const [ids, days] = gatewayMocks.getMarketSparklines.mock.calls[0];
-    expect([...ids].sort()).toEqual(["ins-1", "ins-2", "ins-3", "ins-4", "ins-5"]);
+    // W4: the block is 30, so all 6 fixture holdings are visible → 6 ids.
+    expect([...ids].sort()).toEqual(["ins-1", "ins-2", "ins-3", "ins-4", "ins-5", "ins-6"]);
     expect(days).toBe(5);
     // The sparkline svg carries the row's aria-label.
     await waitFor(() =>

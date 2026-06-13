@@ -87,7 +87,7 @@ function makeMarket(i: number, overrides: Partial<PredictionMarket> = {}): Predi
 
 /** Param-aware mock backend: 20 open markets, 7 of them crypto. */
 function installBackend() {
-  const universe = Array.from({ length: 20 }, (_, i) =>
+  const universe = Array.from({ length: 40 }, (_, i) =>
     makeMarket(i, { category: i < 7 ? "crypto" : "politics" }),
   );
   mockGetPredictionMarkets.mockImplementation(
@@ -96,7 +96,7 @@ function installBackend() {
         ? universe.filter((m) => m.category === params.category)
         : universe;
       const offset = params?.offset ?? 0;
-      const limit = params?.limit ?? 15;
+      const limit = params?.limit ?? 30;
       return { markets: filtered.slice(offset, offset + limit), total: filtered.length };
     },
   );
@@ -151,41 +151,41 @@ describe("PredictionMarketsWidget — infinite scroll + server-side filter", () 
     expect(mockGetPredictionMarkets).toHaveBeenCalledWith(
       expect.objectContaining({ status: "open", offset: 0, category: undefined }),
     );
-    // First page = 15 rows (PAGE_SIZE), not the old top-3 slice.
-    expect(screen.getByText("Market question 14?")).toBeInTheDocument();
-    expect(screen.queryByText("Market question 15?")).not.toBeInTheDocument();
+    // First page = 30 rows (PAGE_SIZE), not the old top-3 slice.
+    expect(screen.getByText("Market question 29?")).toBeInTheDocument();
+    expect(screen.queryByText("Market question 30?")).not.toBeInTheDocument();
   });
 
   it("intersecting the sentinel fetches the next page and APPENDS rows", async () => {
     render(<PredictionMarketsWidget />, { wrapper: makeWrapper() });
-    await waitFor(() => screen.getByText("Market question 14?"));
+    await waitFor(() => screen.getByText("Market question 29?"));
 
-    // The sentinel rendered (20 total > 15 loaded → hasNextPage).
+    // The sentinel rendered (40 total > 30 loaded → hasNextPage).
     expect(screen.getByTestId("prediction-markets-sentinel")).toBeInTheDocument();
 
     await intersectSentinel();
 
-    // Page 2 requested at offset 15 …
+    // Page 2 requested at offset 30 …
     await waitFor(() => {
       expect(mockGetPredictionMarkets).toHaveBeenCalledWith(
-        expect.objectContaining({ offset: 15 }),
+        expect.objectContaining({ offset: 30 }),
       );
     });
     // … and appended after the existing rows (page 1 still present).
     await waitFor(() => {
-      expect(screen.getByText("Market question 19?")).toBeInTheDocument();
+      expect(screen.getByText("Market question 39?")).toBeInTheDocument();
     });
     expect(screen.getByText("Market question 0?")).toBeInTheDocument();
   });
 
   it("removes the sentinel once the full universe is loaded", async () => {
     render(<PredictionMarketsWidget />, { wrapper: makeWrapper() });
-    await waitFor(() => screen.getByText("Market question 14?"));
+    await waitFor(() => screen.getByText("Market question 29?"));
 
     await intersectSentinel();
-    await waitFor(() => screen.getByText("Market question 19?"));
+    await waitFor(() => screen.getByText("Market question 39?"));
 
-    // 20/20 loaded → no next page → sentinel unmounts (observer stops).
+    // 40/40 loaded → no next page → sentinel unmounts (observer stops).
     expect(screen.queryByTestId("prediction-markets-sentinel")).not.toBeInTheDocument();
   });
 

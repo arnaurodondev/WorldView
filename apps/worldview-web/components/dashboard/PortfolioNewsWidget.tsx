@@ -266,8 +266,9 @@ export function PortfolioNewsWidget() {
     });
 
     // Hard cap. PLAN-0050 / PLAN-0053: defence vs a backend bug returning
-    // thousands of articles.
-    return sorted.slice(0, 20);
+    // thousands of articles. W4 (user 2026-06-12 "blocks of 30"): 20 → 30 so
+    // the holdings-scoped feed shows a fuller block of portfolio news.
+    return sorted.slice(0, 30);
   }, [aggregatedArticles, activeTiers, tickerFilter, sortMode, sortDesc]);
 
   // Toggle helper for sort buttons. WHY a closure here: identical logic for

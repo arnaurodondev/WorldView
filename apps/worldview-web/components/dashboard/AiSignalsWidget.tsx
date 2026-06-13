@@ -56,9 +56,9 @@ const WINDOWS = [
 ] as const;
 const DEFAULT_WINDOW_HOURS = 72;
 
-// How many rows to request — generous so the scroll area is full; the row
-// height (22px) keeps even 20 rows cheap to render.
-const ROW_LIMIT = 20;
+// How many rows to request — W4 (user 2026-06-12 "blocks of 30"): 30 rows so
+// the scroll area is full; the 22px row height keeps 30 rows cheap to render.
+const ROW_LIMIT = 30;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

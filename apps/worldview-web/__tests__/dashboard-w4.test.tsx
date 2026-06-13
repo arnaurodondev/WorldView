@@ -265,18 +265,19 @@ describe("WatchlistQuickViewWidget — Top Positions infinite scroll", () => {
       CapturingIntersectionObserver as unknown as typeof IntersectionObserver;
 
     gatewayMocks.getPortfolios.mockResolvedValue(ONE_PORTFOLIO);
-    gatewayMocks.getHoldings.mockResolvedValue(makeHoldings(8)); // 8 > PAGE_SIZE(5)
+    // 40 > PAGE_SIZE(30) so the first block leaves rows behind for the sentinel.
+    gatewayMocks.getHoldings.mockResolvedValue(makeHoldings(40));
 
     render(<WatchlistQuickViewWidget />, { wrapper });
 
-    // First page: 5 rows. Each row's accessible name is "Open <TICKER> detail page".
+    // First page: 30 rows. Each row's accessible name is "Open <TICKER> detail page".
     await waitFor(() => {
       expect(
         screen.getAllByRole("button", { name: /detail page$/i }).length,
-      ).toBe(5);
+      ).toBe(30);
     });
     // The "scroll for more" sentinel caption confirms there are more rows.
-    expect(screen.getByText(/5 of 8 · scroll for more/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 of 40 · scroll for more/i)).toBeInTheDocument();
 
     // Fire an intersection on the sentinel → reveal the next PAGE_SIZE rows.
     act(() => {
@@ -286,10 +287,10 @@ describe("WatchlistQuickViewWidget — Top Positions infinite scroll", () => {
     await waitFor(() => {
       expect(
         screen.getAllByRole("button", { name: /detail page$/i }).length,
-      ).toBe(8);
+      ).toBe(40);
     });
     // All revealed → footer flips to the "all N positions" caption.
-    expect(screen.getByText(/all 8 positions/i)).toBeInTheDocument();
+    expect(screen.getByText(/all 40 positions/i)).toBeInTheDocument();
   });
 });
 

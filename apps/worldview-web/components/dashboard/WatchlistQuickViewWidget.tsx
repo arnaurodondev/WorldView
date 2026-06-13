@@ -69,15 +69,16 @@ import type { Holding, Quote } from "@/types/api";
  * PAGE_SIZE — how many positions are revealed initially AND appended each time
  * the infinite-scroll sentinel comes into view (W4 task 5).
  *
- * WHY 5 (was the hard `TOP_N = 5` cap): 5 rows fit the Row-3 cell at rest, so
- * the widget looks identical on first paint. The difference is the list is no
- * longer CAPPED at 5 — scrolling the panel reveals the next 5, then the next,
- * until every holding is shown. Reuses the same pattern as
- * PredictionMarketsWidget (IntersectionObserver sentinel) but windows a
- * client-side array instead of a server `useInfiniteQuery`, because the
- * holdings come back in ONE `/v1/holdings/{id}` response (no server paging).
+ * W4 (user report 2026-06-12 "on pagination I would display in blocks of 30"):
+ * the reveal block is 30 (was 5). The widget cell still scrolls internally, so
+ * the panel stays compact at rest while a block of 30 holdings loads per scroll
+ * (a typical book has <30 names, so the first block usually shows them all).
+ * Reuses the same pattern as PredictionMarketsWidget (IntersectionObserver
+ * sentinel) but windows a client-side array instead of a server
+ * `useInfiniteQuery`, because the holdings come back in ONE
+ * `/v1/holdings/{id}` response (no server paging).
  */
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 30;
 
 /** Sparkline window — 5 trading days, same convention as TopMovers Round 1. */
 const SPARKLINE_DAYS = 5;
