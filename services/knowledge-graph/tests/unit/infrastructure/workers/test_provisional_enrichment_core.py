@@ -36,6 +36,7 @@ Coverage:
 from __future__ import annotations
 
 from datetime import UTC
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -443,6 +444,10 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     # (no existing canonical owns the ticker) so existing tests fall through to
     # create_or_get exactly as before.
     repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+    # FR-11 token-superset fallback: get_by_id is consulted to confirm the
+    # superset alias match is the SAME entity_type before reuse; default None so
+    # the (default find_exact=None) path never reaches it.
+    repos.canonical_get_by_id = AsyncMock(return_value=None)
     repos.alias_insert = AsyncMock()
     repos.alias_find_exact = AsyncMock(return_value=None)  # default: no collision
     # BP-459: fuzzy_search pre-lookup; default returns empty list (no fuzzy match)
@@ -470,6 +475,8 @@ class _PersistRepoPatches:
         canonical_repo.create_or_get = repos.canonical_create_or_get
         # BP-459 ticker dedup (PLAN-0111): expose find_by_ticker pre-lookup.
         canonical_repo.find_by_ticker = repos.canonical_find_by_ticker
+        # FR-11: expose get_by_id for the token-superset entity_type guard.
+        canonical_repo.get_by_id = repos.canonical_get_by_id
 
         alias_repo = MagicMock()
         alias_repo.insert = repos.alias_insert
@@ -1692,3 +1699,137 @@ class TestPersistEnrichmentTickerDedup:
         assert result == _corteva_id
         repos.canonical_find_by_ticker.assert_awaited_once_with("CTVA")
         repos.canonical_create_or_get.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FR-11 token-superset name dedup (prevention for the SpaceX-class miss)
+# ---------------------------------------------------------------------------
+
+_SPACEX_ID = UUID("9ecb9bad-c820-4159-889b-ffba2d137f1b")
+
+
+def _fake_canonical(entity_id: UUID, canonical_name: str, entity_type: str) -> SimpleNamespace:
+    """Minimal stand-in for the CanonicalEntity domain object get_by_id returns."""
+    return SimpleNamespace(entity_id=entity_id, canonical_name=canonical_name, entity_type=entity_type)
+
+
+class TestPersistEnrichmentNameSupersetDedup:
+    async def test_spacex_shares_reuses_existing_spacex(self) -> None:
+        """A ticker-less "SpaceX shares" mention reuses the existing "SpaceX".
+
+        The 0.75 trigram pre-lookup misses (sim ~0.54), so without the FR-11
+        token-superset fallback this would mint a fresh duplicate.  Stripping the
+        "shares" suffix yields "spacex", which the EXACT alias lookup resolves to
+        the existing SpaceX canonical (same entity_type) — and we reuse it.
+        """
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # Ticker pre-lookup + fuzzy both miss (ticker-less, low trigram).
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        # The suffix-stripped name "spacex" resolves to the existing canonical.
+        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _SPACEX_ID})
+        repos.canonical_get_by_id = AsyncMock(
+            return_value=_fake_canonical(_SPACEX_ID, "SpaceX", "financial_instrument"),
+        )
+        profile = {
+            "canonical_name": "SpaceX shares",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos), structlog.testing.capture_logs() as captured:
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX shares",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _SPACEX_ID
+        # EXACT lookup was on the stripped stem, not the raw name.
+        repos.alias_find_exact.assert_awaited_once_with("spacex")
+        # No new canonical / aliases / outbox — the existing entity is reused.
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        events = [e for e in captured if e.get("event") == "provisional_entity_deduplicated_by_name_superset"]
+        assert events, f"expected name-superset dedup log; got {captured}"
+        assert events[0]["matched_entity_id"] == str(_SPACEX_ID)
+        assert events[0]["stripped_name"] == "spacex"
+
+    async def test_cross_type_superset_match_is_not_reused(self) -> None:
+        """If the stripped-name match is a DIFFERENT entity_type, do NOT reuse it.
+
+        "SpaceX shares" (financial_instrument) must NOT fold into a "SpaceX"
+        canonical that happens to be typed as a product — the cross-type guard
+        forces the normal create path instead.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _SPACEX_ID})
+        repos.canonical_get_by_id = AsyncMock(
+            return_value=_fake_canonical(_SPACEX_ID, "SpaceX", "product"),  # WRONG type
+        )
+        profile = {
+            "canonical_name": "SpaceX shares",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX shares",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Cross-type → NOT reused; falls through to create_or_get (fresh insert).
+        assert result == _ENTITY_ID
+        repos.canonical_create_or_get.assert_awaited_once()
+
+    async def test_no_generic_suffix_skips_superset_lookup(self) -> None:
+        """A name with no generic suffix never triggers the extra EXACT lookup.
+
+        "Acme Robotics" strips to itself, so the fallback is a no-op and the
+        normal create path runs — the superset EXACT lookup must not fire.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        # find_exact would only be consulted by the LLM-alias loop (no aliases
+        # here) — assert it is NEVER awaited for the superset stem.
+        repos.alias_find_exact = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Acme Robotics",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Acme Robotics",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _ENTITY_ID
+        # Stripped name == original (no suffix) → superset lookup skipped, so
+        # get_by_id is never consulted.
+        repos.canonical_get_by_id.assert_not_awaited()
+        repos.canonical_create_or_get.assert_awaited_once()

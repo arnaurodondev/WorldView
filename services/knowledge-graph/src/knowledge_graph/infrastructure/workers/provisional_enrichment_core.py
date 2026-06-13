@@ -123,6 +123,53 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
 }
 
 
+# ── FR-11 — generic finance suffixes for the token-superset dedup fallback ───────
+# A ticker-less mention like "SpaceX shares" / "SpaceX stock" / "SpaceX Class A
+# common stock" denotes the SAME entity as an existing "SpaceX" canonical, but the
+# 0.75 trigram pre-lookup misses (sim 0.54-0.58 < 0.75) and a fresh duplicate is
+# minted (root cause of FR-11 / the SpaceX 8-row cluster).  Stripping these
+# boilerplate suffixes from the END of the incoming name and retrying an EXACT
+# normalised-alias match folds the variant into the existing canonical.  Kept
+# conservative — only unambiguous corporate/security boilerplate tokens — and
+# longest-first so multi-word suffixes are removed before their single-word parts.
+_FR11_GENERIC_SUFFIXES: tuple[str, ...] = (
+    "class a common stock",
+    "class b common stock",
+    "class c common stock",
+    "common stock",
+    "ordinary shares",
+    "preferred stock",
+    "class a",
+    "class b",
+    "class c",
+    "shares",
+    "stock",
+    "equity",
+    "holdings",
+    "holding",
+    "adr",
+)
+
+
+def _strip_generic_suffixes(normalized_name: str) -> str:
+    """Iteratively strip trailing generic finance suffixes from a normalised name.
+
+    ``normalized_name`` is expected already lower-cased + whitespace-collapsed.
+    Returns the boilerplate-free stem (e.g. "spacex shares" → "spacex").  Never
+    strips a suffix that is the WHOLE name (so "shares" alone is preserved).
+    """
+    s = normalized_name
+    changed = True
+    while changed:
+        changed = False
+        for suf in _FR11_GENERIC_SUFFIXES:
+            if s != suf and s.endswith(" " + suf):
+                s = s[: -(len(suf) + 1)].strip()
+                changed = True
+                break
+    return s
+
+
 def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated", *, event_id: UUID) -> bytes:
     """Build a fully-populated entity.dirtied.v1 Confluent-Avro payload.
 
@@ -472,6 +519,38 @@ async def persist_enrichment(
         # The caller (ProvisionalEnrichmentWorker / ProvisionalQueuedConsumer)
         # will update provisional_entity_queue with this entity_id.
         return existing_entity_id
+
+    # ── FR-11 token-superset fallback — close the SpaceX-class miss ───────────
+    # The 0.75 trigram pre-lookup above misses ticker-less variants that are an
+    # existing canonical's name PLUS a generic finance suffix ("SpaceX shares" /
+    # "SpaceX stock" / "SpaceX Class A common stock"): their trigram against
+    # "spacex" is 0.54-0.58, below 0.75, so each minted a fresh duplicate (the
+    # FR-11 root cause).  Here we strip those suffixes from the incoming name and
+    # retry an EXACT normalised-alias match.  We ONLY act when the strip actually
+    # shortened the name (so this is a no-op for names without a generic suffix)
+    # and when the matched existing canonical is the SAME entity_type — never
+    # collapse across types (e.g. a "product" must not fold into a
+    # "financial_instrument").  This is a DISTINCT block, intentionally placed
+    # AFTER the ticker pre-lookup and the trigram pre-lookup so it only runs on
+    # their miss; it adds no new infrastructure (reuses the alias EXACT lookup).
+    stripped_name = _strip_generic_suffixes(lookup_name)
+    if stripped_name and stripped_name != lookup_name:
+        superset_match = await alias_repo_prelookup.find_exact(stripped_name)
+        # find_exact returns the matched entity_id; confirm same entity_type via
+        # the canonical_entities row before reusing it (cross-type guard).
+        if superset_match is not None:
+            matched_id = UUID(str(superset_match["entity_id"]))
+            matched_row = await CanonicalEntityRepository(session).get_by_id(matched_id)
+            if matched_row is not None and matched_row.entity_type == entity_type:
+                logger.info(  # type: ignore[no-any-return]
+                    "provisional_entity_deduplicated_by_name_superset",
+                    mention_text=mention_text,
+                    canonical_name=canonical_name,
+                    stripped_name=stripped_name,
+                    matched_entity_id=str(matched_id),
+                    matched_name=matched_row.canonical_name,
+                )
+                return matched_id
 
     # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
     # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  ``create_or_get``
