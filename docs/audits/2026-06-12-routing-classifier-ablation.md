@@ -6,7 +6,7 @@
 > C-3b augmented + de-biased set by swapping `--dataset`. Do not quote these
 > numbers as final.
 
-- **Dataset**: `results/routing_dataset/routing_dataset.csv` — 14750 rows, positive rate 0.6265
+- **Dataset**: `results/routing_dataset/routing_dataset_augmented.csv` — 15006 rows, positive rate 0.6253
 - **GBM library**: `lightgbm`
 - **Embedding**: `google/embeddinggemma-300m`, 768d, classification prompt
 - **CV**: stratified 5-fold, out-of-fold metrics, seed=42
@@ -16,31 +16,31 @@
 
 | Feature set | Model | ROC-AUC | PR-AUC | Brier | Acc | F1 | Thr |
 |---|---|---:|---:|---:|---:|---:|---:|
-| A — 5 hand features (baseline) | gbm | 0.7816 | 0.8093 | 0.1737 | 0.7658 | 0.8204 | 0.617 |
-| A_no_yield — 4 hand features (drop extraction_yield) | gbm | 0.7768 | 0.8116 | 0.1768 | 0.7375 | 0.7888 | 0.675 |
-| B — EmbeddingGemma(title+subtitle) only | gbm | 0.8153 | 0.8419 | 0.1544 | 0.7961 | 0.8398 | 0.581 |
-| C — Embedding + cheap structured | gbm | 0.8288 | 0.8485 | 0.1484 | 0.8142 | 0.8584 | 0.506 |
-| D — Static weighted-sum rule (deployed) | static_rule | 0.6405 | 0.7240 | 0.2475 | 0.6235 | 0.7023 | 0.415 |
+| A — 5 hand features (baseline) | gbm | 0.7789 | 0.8098 | 0.1776 | 0.7594 | 0.8139 | 0.609 |
+| A_no_yield — 4 hand features (drop extraction_yield) | gbm | 0.7695 | 0.8037 | 0.1802 | 0.7546 | 0.8147 | 0.576 |
+| B — EmbeddingGemma(title+subtitle) only | gbm | 0.8150 | 0.8432 | 0.1557 | 0.7915 | 0.8350 | 0.602 |
+| C — Embedding + cheap structured | gbm | 0.8276 | 0.8484 | 0.1510 | 0.8021 | 0.8449 | 0.561 |
+| D — Static weighted-sum rule (deployed) | static_rule | 0.6394 | 0.7229 | 0.2485 | 0.6204 | 0.6970 | 0.415 |
 
 ## All models (logreg + gbm per set)
 
 | Feature set | Model | ROC-AUC | PR-AUC | Brier | Acc | F1 |
 |---|---|---:|---:|---:|---:|---:|
-| A | logreg | 0.7738 | 0.8017 | 0.1753 | 0.7406 | 0.7906 |
-| A | gbm | 0.7816 | 0.8093 | 0.1737 | 0.7658 | 0.8204 |
-| A_no_yield | logreg | 0.7698 | 0.8065 | 0.1792 | 0.7188 | 0.7634 |
-| A_no_yield | gbm | 0.7768 | 0.8116 | 0.1768 | 0.7375 | 0.7888 |
-| B | logreg | 0.8069 | 0.8329 | 0.1621 | 0.7826 | 0.8291 |
-| B | gbm | 0.8153 | 0.8419 | 0.1544 | 0.7961 | 0.8398 |
-| C | logreg | 0.8111 | 0.8361 | 0.1643 | 0.7827 | 0.8290 |
-| C | gbm | 0.8288 | 0.8485 | 0.1484 | 0.8142 | 0.8584 |
-| D | static_rule | 0.6405 | 0.7240 | 0.2475 | 0.6235 | 0.7023 |
+| A | logreg | 0.7734 | 0.8029 | 0.1762 | 0.7398 | 0.7906 |
+| A | gbm | 0.7789 | 0.8098 | 0.1776 | 0.7594 | 0.8139 |
+| A_no_yield | logreg | 0.7686 | 0.8044 | 0.1799 | 0.7217 | 0.7687 |
+| A_no_yield | gbm | 0.7695 | 0.8037 | 0.1802 | 0.7546 | 0.8147 |
+| B | logreg | 0.8067 | 0.8365 | 0.1631 | 0.7800 | 0.8268 |
+| B | gbm | 0.8150 | 0.8432 | 0.1557 | 0.7915 | 0.8350 |
+| C | logreg | 0.8119 | 0.8406 | 0.1649 | 0.7841 | 0.8319 |
+| C | gbm | 0.8276 | 0.8484 | 0.1510 | 0.8021 | 0.8449 |
+| D | static_rule | 0.6394 | 0.7229 | 0.2485 | 0.6204 | 0.6970 |
 
 ## Verdict
 
-- Embedding-only (B) BEATS the 5-feature baseline (A) on ROC-AUC: **0.8153 vs 0.7816** (Δ = +0.0337).
-- Embedding + cheap structured (C): **0.8288** (Δ vs A = +0.0472).
-- Lift of best learned model over the deployed static rule (D, AUC 0.6405): **Δ = +0.1883**.
+- Embedding-only (B) BEATS the 5-feature baseline (A) on ROC-AUC: **0.8150 vs 0.7789** (Δ = +0.0361).
+- Embedding + cheap structured (C): **0.8276** (Δ vs A = +0.0487).
+- Lift of best learned model over the deployed static rule (D, AUC 0.6394): **Δ = +0.1882**.
 
 ## Routing economics — cost vs realised-yield (best learned set)
 
@@ -52,26 +52,26 @@ Curve for set **C** (GBM OOF):
 
 | Threshold | Routed frac | Yield recall | Precision |
 |---:|---:|---:|---:|
-| 0.00 | 1.000 | 1.000 | 0.627 |
-| 0.05 | 1.000 | 1.000 | 0.627 |
-| 0.10 | 1.000 | 1.000 | 0.627 |
-| 0.15 | 1.000 | 1.000 | 0.627 |
-| 0.20 | 0.968 | 0.997 | 0.645 |
-| 0.25 | 0.818 | 0.968 | 0.742 |
-| 0.30 | 0.776 | 0.955 | 0.771 |
-| 0.35 | 0.749 | 0.944 | 0.790 |
-| 0.40 | 0.730 | 0.932 | 0.799 |
-| 0.45 | 0.711 | 0.918 | 0.810 |
-| 0.50 | 0.688 | 0.901 | 0.820 |
-| 0.55 | 0.667 | 0.878 | 0.826 |
-| 0.60 | 0.642 | 0.851 | 0.831 |
-| 0.65 | 0.606 | 0.808 | 0.836 |
-| 0.70 | 0.560 | 0.753 | 0.843 |
-| 0.75 | 0.466 | 0.634 | 0.852 |
-| 0.80 | 0.322 | 0.443 | 0.862 |
-| 0.85 | 0.074 | 0.103 | 0.874 |
-| 0.90 | 0.007 | 0.010 | 0.860 |
-| 0.95 | 0.000 | 0.000 | 1.000 |
+| 0.00 | 1.000 | 1.000 | 0.625 |
+| 0.05 | 1.000 | 1.000 | 0.625 |
+| 0.10 | 1.000 | 1.000 | 0.625 |
+| 0.15 | 1.000 | 1.000 | 0.625 |
+| 0.20 | 0.974 | 0.998 | 0.641 |
+| 0.25 | 0.833 | 0.972 | 0.730 |
+| 0.30 | 0.789 | 0.958 | 0.759 |
+| 0.35 | 0.753 | 0.942 | 0.783 |
+| 0.40 | 0.728 | 0.926 | 0.796 |
+| 0.45 | 0.705 | 0.911 | 0.808 |
+| 0.50 | 0.680 | 0.890 | 0.818 |
+| 0.55 | 0.656 | 0.867 | 0.826 |
+| 0.60 | 0.629 | 0.837 | 0.832 |
+| 0.65 | 0.592 | 0.794 | 0.838 |
+| 0.70 | 0.536 | 0.725 | 0.845 |
+| 0.75 | 0.447 | 0.610 | 0.853 |
+| 0.80 | 0.315 | 0.435 | 0.862 |
+| 0.85 | 0.113 | 0.157 | 0.872 |
+| 0.90 | 0.010 | 0.015 | 0.924 |
+| 0.95 | 0.000 | 0.000 | 0.000 |
 | 1.00 | 0.000 | 0.000 | 0.000 |
 
 At ~94% yield-recall the router sends only **75%** of docs to deep extraction — the cost saving that justifies the router (vs routing 100% blindly).
@@ -80,19 +80,19 @@ At ~94% yield-recall the router sends only **75%** of docs to deep extraction �
 
 | Feature | Normalised importance |
 |---|---:|
-| recency | 0.5000 |
-| extraction_yield | 0.2549 |
+| recency | 0.5053 |
+| extraction_yield | 0.2509 |
 | entity_density | 0.1979 |
-| document_type | 0.0472 |
+| document_type | 0.0459 |
 | source_reliability | 0.0000 |
 
 ## GBM feature importance — set C (embedding + cheap structured)
 
 | Feature | Normalised importance |
 |---|---:|
-| embedding(all_dims) | 0.9689 |
-| recency | 0.0208 |
-| document_type | 0.0103 |
+| embedding(all_dims) | 0.9704 |
+| recency | 0.0197 |
+| document_type | 0.0099 |
 | source_reliability | 0.0000 |
 
 ---
