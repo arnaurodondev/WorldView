@@ -13,6 +13,11 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from api_gateway.routes.chat_safety import (
+    build_injection_block_body,
+    is_injection_block_response,
+    rewrite_sse_chunk_if_injection_block,
+)
 from api_gateway.routes.helpers import _auth_headers, _clients
 
 if TYPE_CHECKING:
@@ -40,6 +45,18 @@ async def chat(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
+    # Input-safety block presentation (Theme E): when S8 rejected the input as a
+    # prompt-injection / PII attempt it returns a 4xx whose body has no readable
+    # answer (the block is correct, the empty body is the defect).  We do NOT
+    # weaken the block — we re-present it with a worded explanation while keeping
+    # the HTTP status and the stable ``error.code`` so clients still see the
+    # rejection.  All other responses pass through unchanged.
+    if is_injection_block_response(resp.status_code, resp.content):
+        return Response(
+            content=build_injection_block_body(),
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
     return Response(
         content=resp.content,
         status_code=resp.status_code,
@@ -69,7 +86,12 @@ async def chat_stream(request: Request) -> Any:
             headers={"Content-Type": "application/json", **headers},
         ) as resp:
             async for chunk in resp.aiter_bytes():
-                yield chunk
+                # Input-safety block presentation (Theme E): if S8 emits an
+                # ``event: error`` for a prompt-injection / PII block, rewrite the
+                # frame so its ``message`` carries a worded explanation (the block
+                # is unchanged — code stays INPUT_REJECTED). Token / status frames
+                # pass through untouched, preserving streaming.
+                yield rewrite_sse_chunk_if_injection_block(chunk)
 
     return StreamingResponse(
         _stream_body(),
