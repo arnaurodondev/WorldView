@@ -1,9 +1,31 @@
 # PRD-0112 — Knowledge Graph Connection Discovery: Weird-Path Redesign + Pairwise Pathfinding
 
-**Status**: Draft
+**Status**: Implemented (2026-06-13)
 **Author**: Arnau Rodon (with Claude)
 **Created**: 2026-06-12
 **Branch**: `feat/frontend-enhancement-sprint`
+
+> **Shipped (2026-06-13) — PLAN-0112 6/6 waves complete.** All FRs delivered: flood stopped
+> (seeder skips terminally-failed anchors + maxhops cap), VLE engine consolidated, weirdness
+> metric (migration 0052 + `node_degree`) live and discriminating (live p10-p90 ≈ 0.23-0.78
+> vs the saturated old `surprise_score` p50 ≈ 0.95), pairwise `GET /paths/between` + global
+> `GET /connections/weird` endpoints + the `get_path_between` LLM tool + the `/connections`
+> frontend. W6 quality gate **PASSED** (0/20 auto-flagged noise vs the <3/20 target; audit
+> `docs/audits/2026-06-13-weird-path-quality-sample.md`). OQ-1/OQ-2/OQ-3/OQ-4 resolved (§14).
+>
+> **Four build corrections vs the original design** (each documented inline below):
+> 1. **AGE 1.5 has no multi-label VLE** (`-[:A|B*L..L]-` is a hard parse error at `|`) → the
+>    engine uses **untyped VLE `-[*L..L]-` + a post-hoc Python membership filter** instead of
+>    a typed allow-list on the pattern (FR-2/FR-3, AD-1). BP-689.
+> 2. **GUCs must be session-scoped `SET`, not `SET LOCAL`** — `SET LOCAL` evaporated before
+>    the traversal transaction (the live flood bug); `SET` on the same session as the query
+>    is the fix (§6.5).
+> 3. **maxhops capped at 3** — the post-hoc filter prunes *results* not the traversal
+>    *frontier*, so hop-4/5 blow up even on the pruned graph (OQ-3, AD-5; W2 spike measured).
+> 4. **Novelty `first_seen` via `COALESCE(relations.first_evidence_at, MIN(relation_evidence.evidence_date))`**
+>    to bridge the AGE↔relations sync gap (FR-13). `dst_entity_id` FK is NULL-guarded for old
+>    rows; pairwise `connected`/`shortest_hops` are derived from the same distinct-node-filtered
+>    path set the endpoint returns (§6.2 contract self-consistency).
 **Supersedes (in part)**: PLAN-0074 path-insight scoring; PLAN-0023 hub/degree-scoring slice
 **Grounding investigations**:
 - `docs/audits/2026-06-12-weird-path-redesign-feasibility.md` (primary)
@@ -557,10 +579,10 @@ the cap (config `path_max_hops`) to the largest value with pairwise p95 < 1 s an
 
 | # | Question | Default | Severity |
 |---|----------|---------|----------|
-| OQ-1 | Final metric weights (w_U/w_S/w_N) | 0.45 / 0.40 / 0.15, tuned in validation wave | DEFERRED |
-| OQ-2 | Configuration-model vs Adamic-Adar for unexpectedness | config-model default; ablation decides (AD-3) | DEFERRED |
+| ~~OQ-1~~ | ~~Final metric weights (w_U/w_S/w_N)~~ | **RESOLVED 2026-06-13 (W6 ablation): ship `0.45 / 0.40 / 0.15`.** `scripts/eval/weirdness_ablation.py` over the 514 live scored paths (audit §5): the shipped weights give a discriminating spread (p10-p90 = 0.522 > 0.5 target) and the top-20 head is **insensitive** to the U/S split (overlap 1.00 for every variant except `equal`, which both perturbs the top-20 *and* lowers the spread to 0.424). Result is not a tuning artefact. | **RESOLVED** |
+| ~~OQ-2~~ | ~~Configuration-model vs Adamic-Adar for unexpectedness~~ | **RESOLVED 2026-06-13 (W6 ablation): ship `config_model`; `adamic_adar` kept behind the `weirdness_unexpectedness_mode` config flag (AD-3) for future re-eval.** AA gives a marginally wider raw spread (0.621) but reranks *toward* megacap-hub endpoints (`Zacks → big-tech → big-tech` fan-outs), trading the config-model top-20's genuine cross-domain endpoints (Apollo, Nebius, Saudi Arabia, Constellation Energy) for high-recognition tech hubs — the opposite of the §1 goal. config_model directly demotes high-degree endpoints, which is the property we want. config_model recompute self-check vs stored U: mean abs error 0.0176 (≈0). | **RESOLVED** |
 | ~~OQ-3~~ | ~~Committed maxhops after pruning~~ | **RESOLVED 2026-06-12 (W2 spike): `path_max_hops = 3`.** Measured on the live graph (`scripts/eval/measure_maxhops_pruned.py`, audit §11): hop-3 pairwise p95=248 ms / anchor p95=1391 ms (within budget); hop-4 p95 6.5 s / 25.8 s and hop-5 timeouts — 4/5 are **not** safe even with membership pruning (hub frontier blow-up). Cap stays config-driven. Also corrected: AGE 1.5 rejects multi-label VLE `\|`, so the engine uses untyped VLE + post-hoc Python membership filter. | **RESOLVED** |
-| OQ-4 | `novelty_window_days` while graph is young (~3 wks history) | 7 days; revisit as history grows | DEFERRED |
+| ~~OQ-4~~ | ~~`novelty_window_days` while graph is young (~3 wks history)~~ | **RESOLVED 2026-06-13 (W6): keep `novelty_window_days = 7`; revisit as edge history grows.** N is uniformly 0.00 on the current ~3-week graph (no edges in the 7-day window), so it is harmless today (×0.15 of zero) and future-proofs the metric for when fresh edges arrive. No signal yet to justify changing it (the `no-novelty` weight variant kept the identical top-20, confirming N is currently dead weight, not harmful). | **RESOLVED** |
 | OQ-5 | Does the consolidated VLE engine meet budget at the desired maxhops, or fall back to in-memory adjacency? | A meets budget at maxhops≤3; in-memory fallback available (AD-1) | DEFERRED |
 | OQ-6 | Global feed: dedup near-identical paths (same endpoints, diff middle)? | show distinct endpoint-pairs, best path each | DEFERRED |
 

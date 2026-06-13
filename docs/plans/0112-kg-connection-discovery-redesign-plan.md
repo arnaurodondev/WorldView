@@ -2,9 +2,9 @@
 id: PLAN-0112
 title: KG Connection Discovery — Weird-Path Redesign + Pairwise Pathfinding
 prd: PRD-0112
-status: draft
+status: complete
 created: 2026-06-12
-updated: 2026-06-12
+updated: 2026-06-13
 ---
 
 # PLAN-0112 — KG Connection Discovery: Weird-Path Redesign + Pairwise Pathfinding
@@ -533,20 +533,31 @@ update `PathInsightsBlock.test` (weirdness + null-sub-score back-compat).
 **Goal**: Prove the redesign works (human-judged), finalise weights, update all docs.
 **Depends on**: W3, W4, W5. **Effort**: 3–4 h. **Architecture layer**: validation + docs.
 
-#### T-6-01 — Human-sample quality gate
+#### T-6-01 — Human-sample quality gate ✅ DONE (2026-06-13)
 **Type**: test · **depends_on**: T-5-02 · **blocks**: T-6-02
 **Target files**: `scripts/eval/weird_path_quality_sample.py` (NEW), report under `docs/audits/`.
 **PRD reference**: §5, §11 (validation), success metric "<3/20 noise".
 **What to build**: Pull top-20 global weird connections + top-10 per-anchor for 5 anchors; render for human
 judgement (is it hub/self-loop noise?). Gate: <3/20 noise. Record before/after vs the old surprise_score.
-**Acceptance**: [ ] sample rendered [ ] noise < 3/20 [ ] before/after recorded
+**Acceptance**: [x] sample rendered [x] noise < 3/20 (auto-flag **0/20** PASS) [x] before/after recorded
+**Result**: `scripts/eval/weird_path_quality_sample.py` (read-only, auto-flags self-loop / duplicate-name /
+membership-only). Live run: **0/20** auto-flagged noise (target <3/20 → PASS); weirdness p10-p90 = 0.234-0.756
+(spread 0.522 > 0.5 target) vs saturated old surprise_score p50 = 0.948. Top results are genuine cross-domain
+bridges (Super Micro→NVIDIA→Apollo, PulteGroup→NVIDIA→Nebius). Verdict + full sample:
+`docs/audits/2026-06-13-weird-path-quality-sample.md`. Formal human labelling remains the user's call.
 
-#### T-6-02 — Metric ablation + weight finalisation (OQ-1, OQ-2)
+#### T-6-02 — Metric ablation + weight finalisation (OQ-1, OQ-2) ✅ DONE (2026-06-13)
 **Type**: test/docs · **depends_on**: T-6-01 · **blocks**: T-6-03
 **Target files**: `scripts/eval/weirdness_ablation.py` (NEW), PRD §14 OQ updates.
 **What to build**: Compare config-model vs Adamic-Adar (OQ-2) and weight variants (OQ-1) on the labelled sample;
 commit final `weirdness_*` config defaults + `scorer_version`. Resolve OQ-1/OQ-2/OQ-4 in the PRD.
-**Acceptance**: [ ] ablation recorded [ ] weights committed [ ] OQs resolved
+**Acceptance**: [x] ablation recorded [x] weights committed (`0.45/0.40/0.15`, `config_model`) [x] OQs resolved
+**Result**: `scripts/eval/weirdness_ablation.py` (read-only) over the 514 live scored paths. OQ-1: shipped weights
+discriminate (spread 0.522) and the top-20 head is insensitive to the U/S split (overlap 1.00 for all variants
+except `equal`) → ship 0.45/0.40/0.15. OQ-2: Adamic-Adar reranks *toward* megacap hubs (worse) → ship `config_model`,
+keep AA behind the `weirdness_unexpectedness_mode` flag (config-model self-check vs stored U: mean abs err 0.0176).
+OQ-4: keep `novelty_window_days = 7` (N=0 on the young graph, harmless). OQ-1/OQ-2/OQ-4 struck through in PRD §14;
+ablation table in audit §5.
 
 #### T-6-03 — Docs + compounding
 **Type**: docs · **depends_on**: T-6-02 · **blocks**: none

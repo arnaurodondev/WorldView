@@ -311,6 +311,7 @@ apps/worldview-web/
 | `/search` | Search results | Full-text entity + instrument search |
 | `/settings` | User settings | Profile, notifications, appearance, data, integrations, security, beta program |
 | `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel |
+| `/connections` | Weird Connections feed | Global graph-wide "weird connections" feed (PLAN-0112 W5). `WeirdConnectionsFeed` consumes `GET /v1/connections/weird` via `useWeirdConnections` (TanStack Query, 5-min staleTime); ranked connections with the reliability/unexpectedness/semantic-distance/novelty sub-score breakdown + a pairwise "how are these related?" picker (`usePathBetween` → `GET /v1/paths/between`). PathsTab/PathInsightsBlock re-labelled from harmonic/diversity/surprise → weirdness. |
 | `/status` | Platform status | Service health |
 | `/dev-tools/sentry-test` | Dev only | Throws synthetic Sentry error; `notFound()` in production |
 

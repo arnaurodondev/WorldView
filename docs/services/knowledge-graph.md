@@ -156,6 +156,64 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
+### Connection Discovery — Weird-Path Engine + Metric (PLAN-0112)
+
+The path-insight feature surfaces **surprising, reliable connections** between entities. It has
+three parts: a traversal engine, a scorer, and degree materialisation.
+
+**`GraphPathEngine` port + `AgeGraphPathEngine` adapter** (`application/ports/graph_path_engine.py`,
+`infrastructure/age/graph_path_engine.py`) — the single traversal abstraction. Methods:
+`path_exists(source, target, max_hops) -> int|None` (shortest hop or None),
+`find_paths_between(source, target, ...)` (pairwise, both ends bound),
+`find_paths_from_anchor(entity_id, ...)` (per-anchor discovery, target free). It uses AGE's
+**variable-length-edge (VLE) `-[*L..L]-` staged probe** (BP-687) — probe `*1..1`, `*2..2`, … and
+stop at the first non-empty depth (never `ORDER BY length(p)` before LIMIT) — and parses
+`nodes(p)`/`relationships(p)` from agtype **text** (BP-SA5-003 applies only to prepared-statement
+agtype *list* binding, not text-parsed columns). This replaced the retired explicit untyped-edge
+form `MATCH (n0)-[r1]-(n1)` (`path_discovery.py::_build_2hop/_build_3hop`), which forced AGE to
+seq-scan all ~30 edge-label tables — **18.4 s for one 1-hop fetch** vs **0.24 s** for VLE
+(76× — **BP-689**).
+
+> **Build correction (BP-689 fix).** AGE 1.5 has **no multi-label VLE** (`-[:A|B*L..L]-` is a hard
+> parse error at `|`), so membership pruning is **not** a typed allow-list on the pattern. The
+> engine emits an **untyped VLE `-[*L..L]-`** and applies a **post-hoc Python membership filter**
+> dropping any path whose `rel_types` intersect `MEMBERSHIP_RELATIONS`
+> (`IS_IN_SECTOR`/`LISTED_ON`/`OPERATES_IN_COUNTRY`/`HEADQUARTERED_IN`, the 4 low-information
+> "47%-of-edges" hub relations, uppercase AGE-label strings in `domain/constants.py`). Because the
+> filter prunes *results* not the traversal *frontier*, `path_max_hops` is **capped at 3**
+> (hop-4/5 blow up; W2 spike measured). GUCs are applied as session-scoped `SET statement_timeout`
+> + `SET max_parallel_workers_per_gather = 0` (NOT `SET LOCAL` — that evaporated before the
+> traversal transaction, which was the original Postgres-flood bug).
+
+**`WeirdnessScorer`** (`application/services/weirdness_scorer.py`) — pure application service (no
+infra imports). Scores each `RawPath` independently of sibling paths (replaces the saturated,
+locally-normalised `surprise_score`, old p50 ≈ 0.95):
+
+```
+weirdness = reliability × (w_U·unexpectedness + w_S·semantic_distance + w_N·novelty)   clamp [0,1]
+```
+
+- **reliability** = harmonic mean of edge confidences (multiplicative gate — extraction noise
+  can't rank high; zeros clamped to 1e-6).
+- **unexpectedness** = mean per-edge configuration-model surprise `clamp01(-log(min(1, deg(u)·deg(v)/2m))/NORM)`
+  from `node_degree` + `graph_stats` (high-degree endpoints ⇒ low surprise → native hub demotion,
+  replaces `hub_penalty`). Adamic-Adar variant available behind the
+  `weirdness_unexpectedness_mode` flag (shipped default `config_model`, AD-3/OQ-2).
+- **semantic_distance** = `clamp01((1−cosine(emb(src),emb(dst)))/2)` on the `definition` embedding
+  view; missing embedding → entity_type fallback (1.0 different / 0.3 same) + `scorer_version`
+  suffix `+typefallback`.
+- **novelty** = fraction of edges whose first-seen is within `novelty_window_days` (default 7). The
+  first-seen lookup uses `COALESCE(relations.first_evidence_at, MIN(relation_evidence.evidence_date))`
+  to bridge the AGE↔relations sync gap (FR-13) — without the COALESCE, novelty was uniformly 0.
+- Self-loop / non-distinct-node paths → `weirdness = 0` (filtered before persist; mitigates the
+  duplicate-canonical FR-11 problem without dedup).
+
+**Validated live (2026-06-13)**: weirdness p10-p90 ≈ 0.23-0.78 (discriminating; target spread >0.5),
+top results are genuine cross-domain bridges with no sector-hub/self-loop noise (quality gate 0/20
+auto-flagged; `docs/audits/2026-06-13-weird-path-quality-sample.md`). Read-only eval tools:
+`scripts/eval/weird_path_quality_sample.py`, `scripts/eval/weirdness_ablation.py`,
+`scripts/eval/measure_maxhops_pruned.py`.
+
 ---
 
 ## API Endpoints
@@ -339,7 +397,9 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 | `temporal_events` | — | Geopolitical/macro events (from S2 and S7 workers) |
 | `entity_event_exposures` | — | Entity exposure to temporal events |
 | `provisional_entity_queue` | — | Unresolved entities awaiting Worker 13E enrichment; `next_retry_at` for exponential backoff |
-| `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker` |
+| `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker`. PLAN-0112 (migration 0052) added `dst_entity_id` (far endpoint, FK CASCADE, nullable for old rows), `reliability`/`unexpectedness`/`semantic_distance`/`novelty`/`weirdness` (FLOAT, the WeirdnessScorer sub-scores), `scorer_version` (e.g. `weirdness-1.0`). `composite_score` now mirrors `weirdness` (ranking column). Indexes: `idx_path_insights_global_weird (weirdness DESC) WHERE weirdness IS NOT NULL` (global feed), `idx_path_insights_dst (dst_entity_id, weirdness DESC)` (endpoint filter). |
+| `node_degree` | — | PLAN-0112 (migration 0052). Precomputed undirected degree per graph vertex (`degree`, `degree_meaningful` excluding membership edges, `refreshed_at`); PK `entity_id` FK→`canonical_entities` CASCADE. Powers the WeirdnessScorer's configuration-model unexpectedness without per-query recompute. Refreshed each AGE-sync cycle via a fast `_ag_label_edge` SQL aggregation (~sub-second / ~2.7k entities). |
+| `graph_stats` | — | PLAN-0112 (migration 0052). Single-row (`id=1` CHECK) normaliser store: `total_edges`, `total_meaningful_edges`, `max_degree`, `refreshed_at` — the `2m` term for the configuration-model surprise. Upserted alongside `node_degree`. |
 | `outbox_events` | — | Transactional outbox for Kafka messages |
 | `dead_letter_queue` | — | Poison-pill events that exhausted retries |
 | `decay_class_config` | — | 6 seeded decay classes with `decay_alpha` |
@@ -518,6 +578,18 @@ All environment variables use the prefix `KNOWLEDGE_GRAPH_`. Loaded by `pydantic
 |----------|---------|-------------|
 | `KNOWLEDGE_GRAPH_CYPHER_ENABLED` | `false` | Enable Apache AGE shadow sync and Cypher query endpoints. Set to `true` after AGE backfill is verified. |
 | `KNOWLEDGE_GRAPH_WORKER_AGE_SYNC_INTERVAL_S` | `900` | AGE sync cadence (15 min) |
+
+### Connection Discovery — Weird-Path (PLAN-0112)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KNOWLEDGE_GRAPH_PATH_MAX_HOPS` | `3` | Hard cap on traversal depth (pairwise + per-anchor discovery). Capped at 3 — hop-4/5 blow up because the post-hoc membership filter doesn't prune the traversal frontier (OQ-3/AD-5, W2 spike). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_UNEXPECTEDNESS` | `0.45` | Weight on the unexpectedness (link-surprise) term (OQ-1). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_SEMANTIC` | `0.40` | Weight on the semantic-distance term. |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_NOVELTY` | `0.15` | Weight on the novelty (recent-edge) term. |
+| `KNOWLEDGE_GRAPH_NOVELTY_WINDOW_DAYS` | `7` | Window for the novelty term; revisit as graph history grows (OQ-4). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_UNEXPECTEDNESS_MODE` | `config_model` | `config_model` (shipped) or `adamic_adar` (available behind flag, AD-3/OQ-2 — config_model wins on the live ablation, AA reranks toward megacap hubs). |
+| `KNOWLEDGE_GRAPH_PATH_INSIGHT_HUB_MIN_RELATIONS` | `5` | Minimum relation count for an anchor to qualify as a discovery hub (raised off the demo-era 2 in W1). |
 
 ### Valkey
 
