@@ -166,7 +166,8 @@ _SQL_FIND_PHANTOM_EDGES = (
     "LIMIT :delete_limit"
 )
 
-# Whitelist of all valid AGE edge labels (27 relation types + EVENT_EXPOSES).
+# Whitelist of all valid AGE edge labels (relation types + EVENT_EXPOSES +
+# EXPOSED_TO_THEME).
 # Labels derived from ``canonical_type`` are validated here before being
 # embedded in Cypher strings to prevent label injection.
 _VALID_EDGE_LABELS: frozenset[str] = frozenset(
@@ -201,6 +202,22 @@ _VALID_EDGE_LABELS: frozenset[str] = frozenset(
         "HAS_EXECUTIVE",
         "REVENUE_FROM_COUNTRY",
         "OPERATES_IN_COUNTRY",
+        # PLAN-0089 migration 0041 taxonomy expansion (relation_type_registry /
+        # RelationType enum).  These 5 asymmetric corporate-action types were
+        # added to the registry/enum but were NEVER added to this AGE whitelist,
+        # so age_sync_worker logged ``age_sync_unknown_relation_type`` and SKIPPED
+        # them — relations of these types never got AGE edges (caught in the
+        # PLAN-0112 QA full re-sync).  All ASYMMETRIC (subject→object direction is
+        # meaningful) → the default ``forward`` edge direction already handles
+        # them, and they are NOT membership/symmetric (absent from
+        # MEMBERSHIP_RELATIONS / SYMMETRIC_RELATIONS), so they join
+        # TRAVERSABLE_RELATIONS automatically without breaking the
+        # graph_path_engine import-time membership-drift guard.
+        "DIVESTED_FROM",
+        "REPORTED_REVENUE_OF",
+        "DOWNGRADED_BY",
+        "APPOINTED_AS",
+        "FILED_LAWSUIT_AGAINST",
         # temporal event exposure
         "EVENT_EXPOSES",
         # theme exposure (added in migration 0029 / PLAN-0076)

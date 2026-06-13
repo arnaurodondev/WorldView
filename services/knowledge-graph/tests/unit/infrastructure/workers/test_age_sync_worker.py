@@ -363,7 +363,7 @@ class TestEdgeLabelDerivation:
 
         assert _derive_edge_label("unknown_injected_type") is None
 
-    def test_all_27_labels_valid(self) -> None:
+    def test_all_labels_valid(self) -> None:
         """Every label in _VALID_EDGE_LABELS survives a round-trip through _derive_edge_label."""
         from knowledge_graph.infrastructure.workers.age_sync_worker import (
             _VALID_EDGE_LABELS,
@@ -372,6 +372,35 @@ class TestEdgeLabelDerivation:
 
         for label in _VALID_EDGE_LABELS:
             assert _derive_edge_label(label) == label
+
+    def test_plan_0089_0041_taxonomy_labels_whitelisted(self) -> None:
+        """PLAN-0089 migration 0041 corporate-action types are in the whitelist.
+
+        These 5 asymmetric relation types were added to the
+        relation_type_registry / RelationType enum but were initially MISSING
+        from ``_VALID_EDGE_LABELS``, so age_sync_worker skipped them and they
+        never got AGE edges (caught in the PLAN-0112 QA full re-sync).
+        """
+        from knowledge_graph.infrastructure.workers.age_sync_worker import _VALID_EDGE_LABELS
+
+        for label in (
+            "DIVESTED_FROM",
+            "REPORTED_REVENUE_OF",
+            "DOWNGRADED_BY",
+            "APPOINTED_AS",
+            "FILED_LAWSUIT_AGAINST",
+        ):
+            assert label in _VALID_EDGE_LABELS
+
+    def test_plan_0089_0041_taxonomy_types_derive(self) -> None:
+        """The lowercase canonical_type for each 0041 type derives to its AGE label."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import _derive_edge_label
+
+        assert _derive_edge_label("divested_from") == "DIVESTED_FROM"
+        assert _derive_edge_label("reported_revenue_of") == "REPORTED_REVENUE_OF"
+        assert _derive_edge_label("downgraded_by") == "DOWNGRADED_BY"
+        assert _derive_edge_label("appointed_as") == "APPOINTED_AS"
+        assert _derive_edge_label("filed_lawsuit_against") == "FILED_LAWSUIT_AGAINST"
 
 
 # ── Test: Relation edge label in Cypher ───────────────────────────────────────
