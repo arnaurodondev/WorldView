@@ -21,6 +21,34 @@ INTELLIGENCE_DB_URL=postgresql://postgres:postgres@127.0.0.1:5432/intelligence_d
 
 ---
 
+## `routing_classifier_train.py` — train + ablation harness (PLAN-0111 C-4/C-5)
+
+Offline modelling harness (NOT wired to production — that is C-6). Embeds each
+row's `title + "\n" + subtitle` with `EmbeddingGemmaRouterAdapter` (classification
+prompt, cached to `results/routing_dataset/embeddings_<dims>.parquet` by `doc_id`),
+then runs a stratified 5-fold cross-validated ablation over feature sets:
+
+- **A** — 5 hand features (baseline-to-beat); **A_no_yield** drops `extraction_yield`.
+- **B** — EmbeddingGemma(title+subtitle) only.
+- **C** — embedding + cheap structured (`source_reliability`, `recency`, `document_type`).
+- **D** — the deployed static weighted-sum rule, scored as a classifier (lift baseline).
+
+Each learned set trains logistic-regression + GBM (LightGBM if importable — requires
+`libomp` on macOS — else sklearn `HistGradientBoostingClassifier`), wrapped in
+`CalibratedClassifierCV(isotonic)`. Reports out-of-fold ROC-AUC / PR-AUC / Brier /
+accuracy / F1 at the Youden threshold, plus a cost-vs-yield (routed-fraction vs
+yield-recall) curve. Outputs `results/routing_dataset/ablation_results.json` (gitignored)
+and `docs/audits/2026-06-12-routing-classifier-ablation.md`. The `--dataset` flag is the
+single knob to re-run on the C-3b augmented + de-biased CSV.
+
+```
+NLP_PIPELINE_EXTRACTION_API_KEY=... \
+  python scripts/eval/routing_classifier_train.py \
+    --dataset results/routing_dataset/routing_dataset.csv --dims 768
+```
+
+---
+
 # Extraction-quality A/B harness (LLM-as-judge)
 
 `extraction_quality_eval.py` — an **offline** harness to decide whether a
