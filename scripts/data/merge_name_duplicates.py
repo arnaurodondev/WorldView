@@ -213,19 +213,35 @@ def _trigram(a: str, b: str) -> float:
     return inter / union if union else 0.0
 
 
+# Semantic qualifier tokens that CHANGE an entity's meaning rather than being
+# boilerplate.  If the member's extra tokens (member minus hub) are qualifiers, the
+# member is a DISTINCT entity, NOT a mergeable superset:  "Core PCE" ≠ "PCE",
+# "Real GDP" ≠ "GDP", "Core CPI" ≠ "CPI", "Adjusted EBITDA" ≠ "EBITDA".
+# Without this guard the token-superset rule false-positives (Core PCE → PCE).
+_SEMANTIC_QUALIFIERS = frozenset(
+    {"core", "real", "nominal", "gross", "net", "adjusted", "headline", "underlying", "trailing", "forward"}
+)
+
+
 def _is_token_superset(hub_norm: str, member_norm: str) -> bool:
-    """True iff every token of the hub appears in the member (hub ⊆ member).
+    """True iff the member is a mergeable token-superset of the hub (hub ⊆ member).
 
     "spacex" ⊆ "spacex shares" (pre-suffix-strip view) and, after stripping, the
     member collapses to "spacex" == hub → still a (degenerate) superset.  Empty
     hub is never a superset (avoids folding everything into a boilerplate-only
-    name).
+    name).  GUARD: a member whose EXTRA tokens are semantic qualifiers
+    (core/real/adjusted/…) is a DISTINCT metric, not a superset — never merge it
+    (e.g. "Core PCE" must NOT fold into "PCE").
     """
     hub_tokens = set(hub_norm.split())
     member_tokens = set(member_norm.split())
     if not hub_tokens:
         return False
-    return hub_tokens <= member_tokens
+    if not (hub_tokens <= member_tokens):
+        return False
+    # Reject if any token the member adds beyond the hub is a semantic qualifier.
+    extra_tokens = member_tokens - hub_tokens
+    return not (extra_tokens & _SEMANTIC_QUALIFIERS)
 
 
 def _is_encoding_artifact(hub_norm: str, member_norm: str, member_degree: int) -> bool:

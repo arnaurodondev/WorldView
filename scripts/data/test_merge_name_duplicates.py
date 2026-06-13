@@ -215,3 +215,14 @@ def test_emit_review_csv(tmp_path: Path) -> None:
     assert "hub_entity_id" in text  # header present
     # rows == number of review-tier candidates (0 or 1 depending on trigram).
     assert rows == sum(len(c.review) for c in clusters)
+
+
+def test_token_superset_rejects_semantic_qualifiers():
+    """Core/Real/Adjusted qualifiers are distinct metrics, never a mergeable superset (FR-11 false-positive guard)."""
+    from merge_name_duplicates import _is_token_superset
+
+    assert _is_token_superset("spacex", "spacex shares") is True
+    assert _is_token_superset("pce", "core pce") is False
+    assert _is_token_superset("gdp", "real gdp") is False
+    assert _is_token_superset("cpi", "core cpi") is False
+    assert _is_token_superset("ebitda", "adjusted ebitda") is False

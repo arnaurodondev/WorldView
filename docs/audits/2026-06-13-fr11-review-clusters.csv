@@ -1,0 +1,8 @@
+hub_entity_id,hub_name,hub_norm,hub_degree,candidate_entity_id,candidate_name,candidate_norm,candidate_degree,candidate_type,similarity,reason
+be7ceac8-761b-42e8-9769-299402488646,Mizuho Securities,mizuho securities,8,1e2b74aa-ccb6-4a65-a033-ed2c27c2f48c,Mizuho Securities USA LLC,mizuho securities usa,1,financial_instrument,0.818,near_match
+1bc48c55-d0d9-4176-b7eb-21e729feb167,J.P. Morgan Asset Management,j p morgan asset management,3,2372f3ee-1331-4835-8646-8cb5b80cadd9,JP Morgan Asset Management Holdings Inc.,jp morgan asset management,1,financial_instrument,0.828,near_match
+56fe618d-b88d-44e3-a13c-f58e47b15ad1,"Veris Residential, Inc.",veris residential,0,d5ae99cd-8fb4-407d-9b70-b3d14d745f0c,"Veris Residential, L.P.",veris residential l p,0,financial_instrument,0.818,near_match
+3c127971-5da3-4fe5-8937-eddb17e68358,Dr. Michelle Longmire,dr michelle longmire,0,508a5c25-ca62-46fc-af11-b4b596f8dcdd,Michelle Longmire,michelle longmire,0,person,0.857,near_match
+0195daad-c006-7000-8000-000000000001,Consumer Price Index,consumer price index,2,0195daad-c006-7000-8000-000000000002,Core Consumer Price Index,core consumer price index,0,unknown,0.875,near_match
+0195daad-c006-7000-8000-000000000009,Gross Domestic Product,gross domestic product,1,0195daad-c006-7000-8000-00000000000a,Real Gross Domestic Product,real gross domestic product,0,unknown,0.821,near_match
+0195daad-c006-7001-8001-00000000001b,10-Year U.S. Treasury Yield,10 year u s treasury yield,0,0195daad-c006-7001-8001-00000000001c,2-Year U.S. Treasury Yield,2 year u s treasury yield,0,unknown,0.821,near_match
