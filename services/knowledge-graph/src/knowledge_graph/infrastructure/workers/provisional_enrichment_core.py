@@ -346,6 +346,47 @@ async def persist_enrichment(
     }
     avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
+    # ── Ticker-equality pre-lookup — BP-459 hard dedup key (PLAN-0111) ───────
+    # ROOT CAUSE (2026-06-12): the news/provisional promotion path and the
+    # market-data instrument-seeding path (instrument_consumer) each mint a
+    # canonical_entity for the SAME ticker without ever consulting the OTHER's
+    # row.  None of the existing guards key on the ticker:
+    #   - ``create_or_get``'s ON CONFLICT is ``lower(canonical_name)`` AND its
+    #     partial index *excludes* entity_type='financial_instrument' entirely,
+    #     so two SHEL instruments never conflict on name.
+    #   - the fuzzy pre-lookup below keys on ``canonical_name`` trigram
+    #     similarity, so "NYSE:PG" / "Procter and Gamble" / "Shell Plc" never
+    #     dedup against "Shell PLC ADR" / "The Procter & Gamble Company".
+    #   - M-017 anchoring (above) only fires when ``market_data_lookup`` is
+    #     supplied AND S2 already owns the instrument; the historical SHEL
+    #     "Shell Plc" was promoted BEFORE the ADR instrument existed, so it
+    #     minted a fresh ticker-bearing canonical.
+    # Result: 451 tickers with duplicate canonicals / 593 excess rows (live
+    # count 2026-06-12).
+    #
+    # FIX: for a tradable instrument WITH a ticker, the ticker is the single
+    # strongest identity key.  Before any name-based work, look up an existing
+    # financial_instrument canonical that already owns this exact ticker and
+    # REUSE it.  This makes the ticker a hard dedup key across BOTH minting
+    # pipelines (the instrument_consumer path gets the symmetric guard).  We
+    # run this AFTER M-017 anchoring (a successful S2 lookup is an even stronger,
+    # exact-by-construction match) and AFTER ticker normalization so the value
+    # we query is the value we'd write.  When ``forced_entity_id`` was already
+    # resolved by M-017 we skip this — the anchored UUID wins.
+    if forced_entity_id is None and entity_type == "financial_instrument" and ticker:
+        existing_by_ticker = await CanonicalEntityRepository(session).find_by_ticker(ticker)
+        if existing_by_ticker is not None:
+            reused_id = UUID(str(existing_by_ticker["entity_id"]))
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_entity_deduplicated_by_ticker",
+                mention_text=mention_text,
+                canonical_name=canonical_name,
+                ticker=ticker,
+                matched_entity_id=str(reused_id),
+                matched_name=existing_by_ticker.get("canonical_name"),
+            )
+            return reused_id
+
     # ── Fuzzy pre-lookup — BP-459 provisional entity deduplication ───────────
     # ``create_or_get`` handles exact-name conflicts atomically via ON CONFLICT,
     # but the unique index only triggers when ``lower(canonical_name)`` matches

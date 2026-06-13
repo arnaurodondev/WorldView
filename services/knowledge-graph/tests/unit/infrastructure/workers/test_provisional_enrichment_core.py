@@ -439,6 +439,10 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     # ``canonical_create`` retained for any tests that still want to assert on
     # the legacy direct-create path was NOT awaited.
     repos.canonical_create = AsyncMock(return_value=_ENTITY_ID)
+    # BP-459 ticker dedup (PLAN-0111): find_by_ticker pre-lookup; default None
+    # (no existing canonical owns the ticker) so existing tests fall through to
+    # create_or_get exactly as before.
+    repos.canonical_find_by_ticker = AsyncMock(return_value=None)
     repos.alias_insert = AsyncMock()
     repos.alias_find_exact = AsyncMock(return_value=None)  # default: no collision
     # BP-459: fuzzy_search pre-lookup; default returns empty list (no fuzzy match)
@@ -464,6 +468,8 @@ class _PersistRepoPatches:
         canonical_repo.create = repos.canonical_create
         # DEF-014 / Wave A-1: expose the new atomic dedup INSERT helper.
         canonical_repo.create_or_get = repos.canonical_create_or_get
+        # BP-459 ticker dedup (PLAN-0111): expose find_by_ticker pre-lookup.
+        canonical_repo.find_by_ticker = repos.canonical_find_by_ticker
 
         alias_repo = MagicMock()
         alias_repo.insert = repos.alias_insert
@@ -1397,3 +1403,119 @@ class TestPersistEnrichmentFuzzyDedup:
         # No fuzzy match → create_or_get must have been called for the new entity.
         canonical_repo_mock.create_or_get.assert_awaited_once()
         assert result == _ENTITY_ID
+
+
+_TICKER_MATCHED_ID = UUID("01234567-89ab-7def-8012-bbbbbbbbbbbb")
+
+
+class TestPersistEnrichmentTickerDedup:
+    """BP-459 root-cause fix (PLAN-0111): ticker is a HARD dedup key.
+
+    The historical SHEL/PG/SNDK duplicates were created because the news/
+    provisional promotion path minted a fresh ticker-bearing canonical without
+    ever consulting an existing financial_instrument that already owned that
+    ticker — NONE of the prior guards keyed on the ticker (create_or_get's
+    ON CONFLICT is lower(canonical_name) and excludes financial_instrument; the
+    fuzzy pre-lookup is name-based). These tests pin the new behaviour: for a
+    tradable instrument WITH a ticker, an existing same-ticker canonical is
+    reused instead of minting a duplicate.
+    """
+
+    async def test_reuses_existing_canonical_when_ticker_matches(self) -> None:
+        """A financial_instrument profile whose ticker already exists is deduped."""
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # An existing canonical already owns ticker SHEL (the SHEL exemplar).
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _TICKER_MATCHED_ID,
+                "canonical_name": "Shell PLC ADR",
+                "entity_type": "financial_instrument",
+                "ticker": "SHEL",
+                "exchange": "US",
+            },
+        )
+        profile = {
+            # News-extracted variant name that would NOT trigram-match the
+            # instrument's canonical_name — only the ticker links them.
+            "canonical_name": "Shell Plc",
+            "entity_type": "financial_instrument",
+            "ticker": "SHEL",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos), structlog.testing.capture_logs() as captured:
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Shell Plc",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Reused the existing same-ticker canonical — no new row, no side effects.
+        assert result == _TICKER_MATCHED_ID
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        # find_by_ticker was consulted before any name-based work.
+        repos.canonical_find_by_ticker.assert_awaited_once_with("SHEL")
+        events = [e for e in captured if e.get("event") == "provisional_entity_deduplicated_by_ticker"]
+        assert events, f"Expected ticker-dedup log; captured: {captured}"
+        assert events[0]["matched_entity_id"] == str(_TICKER_MATCHED_ID)
+
+    async def test_no_ticker_match_falls_through_to_name_dedup(self) -> None:
+        """When no canonical owns the ticker, the normal create path runs."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Brand New Instrument",
+            "entity_type": "financial_instrument",
+            "ticker": "BNI",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Brand New Instrument",
+                profile=profile,
+                embedding=None,
+            )
+
+        repos.canonical_find_by_ticker.assert_awaited_once_with("BNI")
+        repos.canonical_create_or_get.assert_awaited_once()
+        assert result == _ENTITY_ID
+
+    async def test_non_instrument_with_ticker_skips_ticker_lookup(self) -> None:
+        """Ticker dedup is scoped to financial_instrument; persons/events skip it."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Some Person",
+            "entity_type": "person",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Some Person",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Non-instrument (and no ticker) → find_by_ticker never consulted.
+        repos.canonical_find_by_ticker.assert_not_awaited()

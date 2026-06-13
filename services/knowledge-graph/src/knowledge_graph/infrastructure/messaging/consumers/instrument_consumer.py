@@ -275,6 +275,31 @@ WHERE entity_id = :entity_id
                     )
                     return
             else:
+                # ── BP-459 ticker-dup detection (PLAN-0111) ──────────────────
+                # ROOT CAUSE symmetry: the news/provisional promotion path may
+                # have already minted a canonical for this ticker (with NULL
+                # exchange) BEFORE this instrument event arrived — exactly the
+                # historical SHEL case ("Shell Plc" minted 8h before "Shell PLC
+                # ADR").  We cannot reuse that row here because the instrument
+                # MUST own ``entity_id == instrument_id`` (M-017), so we still
+                # create the anchored canonical, but we log the collision so the
+                # standing same-ticker merge job (scripts/data/merge_ticker_duplicates.py)
+                # can consolidate the pre-existing dup into this authoritative
+                # instrument row.  Going forward the news path's own ticker
+                # pre-lookup (provisional_enrichment_core.persist_enrichment)
+                # reuses THIS instrument once it exists, so the race only ever
+                # produces a dup when news strictly precedes instrument seeding.
+                if ticker:
+                    _pre_existing = await entity_repo.find_by_ticker(str(ticker))
+                    if _pre_existing is not None and _pre_existing.get("entity_id") != instrument_id:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "instrument_consumer_ticker_dup_detected",
+                            ticker=str(ticker),
+                            instrument_id=str(instrument_id),
+                            pre_existing_entity_id=str(_pre_existing.get("entity_id")),
+                            pre_existing_name=_pre_existing.get("canonical_name"),
+                            merge_required=True,
+                        )
                 # Step 1: Create canonical entity (pristine path — no prior discovery).
                 # PLAN-0057 QA-iter1 F-DS-03 / F-DATA-04: pin entity_id to instrument_id
                 # so the M-017 stable cross-service identifier invariant holds even on

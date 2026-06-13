@@ -86,6 +86,10 @@ def _make_consumer(
         entity_repo_mock.create = AsyncMock(return_value=_ENTITY_ID)
         emb_repo_mock.ensure_rows_exist = AsyncMock()
         emb_repo_mock.get = AsyncMock(return_value=None)
+    # BP-459 ticker-dup detection (PLAN-0111): default to "no pre-existing
+    # ticker holder" so the create path runs unchanged. Individual tests
+    # override this to simulate a news-minted dup that already owns the ticker.
+    entity_repo_mock.find_by_ticker = AsyncMock(return_value=None)
 
     # Patch repo constructors to return our mocks
 
@@ -161,6 +165,62 @@ class TestInstrumentEntityConsumerNew:
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args
         assert call_args.args[1] == _DESCRIPTION  # source_text
+
+    def test_pre_existing_ticker_dup_is_detected_and_logged(self) -> None:
+        """BP-459: a news-minted canonical already owning the ticker is logged.
+
+        Root-cause symmetry (PLAN-0111): the instrument MUST keep entity_id ==
+        instrument_id (M-017), so we still create the anchored canonical, but we
+        emit ``instrument_consumer_ticker_dup_detected`` so the standing merge
+        job can consolidate the pre-existing dup (the historical SHEL case where
+        "Shell Plc" was minted 8h before the "Shell PLC ADR" instrument event).
+        """
+        import structlog.testing
+
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(entity_exists=False)
+        # Simulate a pre-existing news-minted canonical that already owns SHEL
+        # under a DIFFERENT entity_id (NULL exchange).
+        _pre_existing_id = uuid4()
+        entity_repo.find_by_ticker = AsyncMock(
+            return_value={"entity_id": _pre_existing_id, "canonical_name": "Shell Plc", "exchange": None},
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Shell PLC ADR",
+            "ticker": "SHEL",
+            "exchange": "US",
+            "isin": "US7802593050",
+            "description": _DESCRIPTION,
+        }
+
+        from unittest import mock
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+            structlog.testing.capture_logs() as captured,
+        ):
+            asyncio.run(consumer.process_message(None, msg, {}))
+
+        # The anchored canonical is still created (M-017 holds).
+        entity_repo.create.assert_awaited_once()
+        # The collision is surfaced for the merge job.
+        events = [e for e in captured if e.get("event") == "instrument_consumer_ticker_dup_detected"]
+        assert events, f"Expected ticker-dup detection log; captured: {captured}"
+        assert events[0]["pre_existing_entity_id"] == str(_pre_existing_id)
+        assert events[0]["merge_required"] is True
 
     def test_no_description_skips_embedding(self) -> None:
         """No description → definition_worker not called even for new entity."""
