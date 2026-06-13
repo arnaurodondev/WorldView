@@ -1519,3 +1519,92 @@ class TestPersistEnrichmentTickerDedup:
 
         # Non-instrument (and no ticker) → find_by_ticker never consulted.
         repos.canonical_find_by_ticker.assert_not_awaited()
+
+    async def test_orcl_stock_news_entity_reuses_existing_oracle(self) -> None:
+        """Regression for the 2026-06-13 gap: "ORCL stock" must reuse Oracle Corp.
+
+        A news mention "ORCL stock" produced a profile with canonical_name
+        "ORCL stock", entity_type financial_instrument, ticker ORCL.  The
+        existing instrument canonical "Oracle Corporation" (ORCL, US) must be
+        reused — the names do NOT trigram-match, only the ticker links them, so
+        ONLY the ticker pre-lookup prevents the duplicate.  (The original gap was
+        a deployment miss — the running worker image lacked this code — but this
+        test pins the behaviour so a regression in the logic is caught.)
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        _oracle_id = UUID("d4adf407-2958-413f-8ba0-de333b731d2c")
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _oracle_id,
+                "canonical_name": "Oracle Corporation",
+                "entity_type": "financial_instrument",
+                "ticker": "ORCL",
+                "exchange": "US",
+            },
+        )
+        profile = {
+            "canonical_name": "ORCL stock",
+            "entity_type": "financial_instrument",
+            "ticker": "ORCL",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="ORCL stock",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _oracle_id
+        repos.canonical_find_by_ticker.assert_awaited_once_with("ORCL")
+        repos.canonical_create_or_get.assert_not_awaited()
+
+    async def test_organization_class_with_ticker_reuses_existing(self) -> None:
+        """Regression for "Corteva Agriscience": org mention_class → FI + ticker reuses.
+
+        GLiNER tagged "Corteva Agriscience" as mention_class='organization'; the
+        LLM profile normalises entity_type to financial_instrument and carries
+        ticker CTVA.  The ticker pre-lookup runs on the NORMALISED entity_type,
+        so an existing "Corteva Inc" (CTVA, US) canonical is reused.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        _corteva_id = UUID("a264f003-926a-4975-95ca-ac631b7f38cc")
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _corteva_id,
+                "canonical_name": "Corteva Inc",
+                "entity_type": "financial_instrument",
+                "ticker": "CTVA",
+                "exchange": "US",
+            },
+        )
+        # entity_type "corp" normalises to financial_instrument (see
+        # _ENTITY_TYPE_ALIASES) — exercises the normalised-type guard path.
+        profile = {
+            "canonical_name": "Corteva Agriscience",
+            "entity_type": "corp",
+            "ticker": "CTVA",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Corteva Agriscience",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _corteva_id
+        repos.canonical_find_by_ticker.assert_awaited_once_with("CTVA")
+        repos.canonical_create_or_get.assert_not_awaited()
