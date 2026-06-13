@@ -155,8 +155,25 @@ export function QuoteTab({
        * The rail owns ONE scroll container for both children — the metrics
        * sections and the about card scroll together as a single column.
        * WHY the about card lives here now: see the module doc (reclaims
-       * 110px of chart height while keeping the profile one scroll away). */}
-      <div className="flex flex-col border-l border-border overflow-y-auto">
+       * 110px of chart height while keeping the profile one scroll away).
+       *
+       * WHY `min-h-0` (bug fix 2026-06-12): this rail is a CSS-GRID ITEM, and a
+       * grid item's default `min-height` is `auto` — it refuses to shrink below
+       * its content's intrinsic height. Without `min-h-0` the rail grew to the
+       * full height of MetricsTable + CompanyAboutCard (taller than the viewport
+       * on AAPL: Valuation → Profitability → Leverage → 52-Week → Ownership →
+       * Technicals → Analyst Consensus → Target → sector/industry/description).
+       * Because the box was never smaller than its content, `overflow-y-auto`
+       * never engaged, and the overflowing lower sections (Target, sector,
+       * description) spilled past the parent's `h-full overflow-hidden` and were
+       * CLIPPED — visible but unreachable, no scrollbar. Adding `min-h-0` lets
+       * the grid item shrink to its track height so `overflow-y-auto` engages
+       * and the rail scrolls independently. The bounded-height chain above it is
+       * intact: InstrumentPageClient `h-screen` → tab pane `flex-1 min-h-0
+       * overflow-hidden` → QuoteTab `h-full overflow-hidden` grid. The chart's
+       * own height (left column) is unaffected — it lives in a separate grid
+       * track. */}
+      <div className="flex flex-col min-h-0 border-l border-border overflow-y-auto">
         <MetricsTable
           instrumentId={instrumentId}
           fundamentals={fundamentals}

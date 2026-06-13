@@ -37,12 +37,13 @@ import type { EarningsCalendarResponse, EarningsEvent } from "@/types/api";
 /**
  * PAGE_SIZE — earnings events per page.
  *
- * WHY 10: matches the original visible row count (the prior version did
- * `.slice(0, 8)` which silently dropped further events). 10 keeps the panel
- * compact on first load while letting the user page through the full window
- * via "Load more".
+ * WHY 30 (user request 2026-06-12 "blocks of 30"): standardised with the other
+ * dashboard listing widgets so each "Load more" reveals a full block of 30
+ * events. The S9 earnings-calendar endpoint accepts `limit` 1–2000
+ * (docs/services/api-gateway.md), so 30 is well within the cap. (Was 10; before
+ * that `.slice(0, 8)` silently dropped further events.)
  */
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 30;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

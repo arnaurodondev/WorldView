@@ -50,6 +50,8 @@
 // WHY "use client": uses useQuery, useState, useMemo, click handlers.
 
 import { useMemo, useState } from "react";
+// Task 2: ticker chips deep-link to the instrument page via Next.js client nav.
+import Link from "next/link";
 // W4 fix: useQueries fans out one /v1/news/entity/{id} call per holding in a
 // single hook call (hooks can't be called inside a .map()), returning an
 // aligned array of results we aggregate below.
@@ -206,20 +208,41 @@ export function PortfolioNewsWidget() {
   };
 
   // Build the aggregated, de-duplicated candidate pool. Each article is tagged
-  // with the owning ticker so the ticker dropdown can filter precisely.
+  // with the owning ticker(s) — the portfolio holding(s) whose entity feed it
+  // surfaced under — so we can (a) filter by ticker and (b) render per-article
+  // ticker badges (Task 2, user request 2026-06-12).
   const aggregatedArticles = useMemo(() => {
     // Map keyed by article_id so the SAME story surfacing under two holdings
     // (e.g. an "Apple sues Meta" article tied to both AAPL and META) appears
-    // once. We keep the FIRST owning ticker we see for the dropdown filter.
+    // ONCE — but we ACCUMULATE every owning ticker across the fan-out into
+    // `__ownerTickers` rather than keeping only the first. This is the
+    // per-entity provenance the badges display; it derives purely from WHICH
+    // holding's entity feed returned the article (the index→ticker pairing in
+    // `holdingEntities`), so no extra fetch is needed.
     const byId = new Map<
       string,
-      RankedArticle & { __ownerTicker: string }
+      RankedArticle & { __ownerTicker: string; __ownerTickers: string[] }
     >();
     entityNewsQueries.forEach((q, idx) => {
       const ownerTicker = holdingEntities[idx]?.ticker ?? "";
       for (const a of q.data?.articles ?? []) {
-        if (!a.article_id || byId.has(a.article_id)) continue;
-        byId.set(a.article_id, { ...a, __ownerTicker: ownerTicker });
+        if (!a.article_id) continue;
+        const existing = byId.get(a.article_id);
+        if (existing) {
+          // Already seen under another holding — append this ticker if it's a
+          // new, non-empty one (dedup within the badge list too).
+          if (ownerTicker && !existing.__ownerTickers.includes(ownerTicker)) {
+            existing.__ownerTickers.push(ownerTicker);
+          }
+          continue;
+        }
+        // First sighting: seed both the legacy single-owner field (kept for the
+        // ticker-dropdown filter contract) and the badge list.
+        byId.set(a.article_id, {
+          ...a,
+          __ownerTicker: ownerTicker,
+          __ownerTickers: ownerTicker ? [ownerTicker] : [],
+        });
       }
     });
     return Array.from(byId.values());
@@ -227,8 +250,10 @@ export function PortfolioNewsWidget() {
 
   // ── 4. Filter + sort articles ──────────────────────────────────────────
   const articles = useMemo(() => {
-    let filtered: (RankedArticle & { __ownerTicker: string })[] =
-      aggregatedArticles;
+    let filtered: (RankedArticle & {
+      __ownerTicker: string;
+      __ownerTickers: string[];
+    })[] = aggregatedArticles;
 
     // Tier filter — empty set means "all".
     if (activeTiers.size > 0) {
@@ -413,7 +438,13 @@ export function PortfolioNewsWidget() {
       {!isLoading && !isError && articles.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
           {articles.map((article) => (
-            <ArticleRow key={article.article_id} article={article} />
+            <ArticleRow
+              key={article.article_id}
+              article={article}
+              // Task 2: the portfolio holding ticker(s) this article surfaced
+              // under (its per-entity provenance from the fan-out aggregation).
+              ownerTickers={article.__ownerTickers}
+            />
           ))}
         </div>
       )}
@@ -463,8 +494,21 @@ function SortButton({ active, onClick, label, arrow }: SortButtonProps) {
  * WHY click opens in new tab (default): the URL points to the original
  * publisher; opening in the same tab would navigate the user away from the
  * dashboard. PLAN-0050 T-F-6-20 layered a per-user preference on top.
+ *
+ * Task 2 (2026-06-12): `ownerTickers` is the set of portfolio holdings the
+ * article surfaced under (derived from the per-entity fan-out provenance — see
+ * `aggregatedArticles`). We render them as compact muted ticker chips so the
+ * trader sees AT A GLANCE which of their positions a headline concerns. Chips
+ * link to `/instruments/[ticker]`; clicking one must NOT also trigger the row's
+ * "open article" handler, so each chip stops event propagation.
  */
-function ArticleRow({ article }: { article: RankedArticle }) {
+function ArticleRow({
+  article,
+  ownerTickers = [],
+}: {
+  article: RankedArticle;
+  ownerTickers?: string[];
+}) {
   const score =
     article.market_impact_score ?? article.display_relevance_score ?? 0;
   const filledDots = Math.max(1, Math.min(4, Math.ceil(score * 4)));
@@ -528,6 +572,13 @@ function ArticleRow({ article }: { article: RankedArticle }) {
         {"○".repeat(4 - filledDots)}
       </span>
 
+      {/* Task 2: portfolio-holding ticker chips. Cap at 3 visible + "+N" so a
+          headline shared across many holdings doesn't blow out the 22px row.
+          Each chip is a Link to the instrument page; we stop propagation +
+          preventDefault on the row's keyboard/click path so navigating to an
+          instrument never ALSO opens the external article. */}
+      <TickerBadges tickers={ownerTickers} />
+
       <span
         className="flex-1 truncate text-[11px] text-foreground"
         title={article.title ?? ""}
@@ -539,5 +590,64 @@ function ArticleRow({ article }: { article: RankedArticle }) {
         {publishedAt}
       </span>
     </div>
+  );
+}
+
+// ── TickerBadges sub-component ────────────────────────────────────────────────
+
+/**
+ * TickerBadges — compact muted chips showing which portfolio holding(s) a news
+ * article concerns (Task 2, user request 2026-06-12).
+ *
+ * WHY cap at 3 + "+N": a headline can surface under many holdings (e.g. a broad
+ * "tech selloff" story tied to AAPL/MSFT/META/NVDA/…). Rendering all of them
+ * would overflow the 22px terminal row. Showing the first 3 and a "+N" overflow
+ * count keeps the row stable while still signalling breadth.
+ *
+ * WHY muted yellow chip (`bg-primary/15 text-primary`): the design system §2.2
+ * defines the ticker badge as "yellow tint + mono". We dim it to /15 so the
+ * chips read as secondary metadata, not a CTA — the headline stays the focus.
+ *
+ * WHY stopPropagation on the chip: the parent row is itself a click target that
+ * opens the external article. Without stopping propagation, clicking a chip
+ * would BOTH navigate to /instruments/[ticker] AND fire the row handler.
+ */
+function TickerBadges({ tickers }: { tickers: string[] }) {
+  // Nothing to show (e.g. a holding with no resolved ticker) → render nothing
+  // rather than an empty gap.
+  if (tickers.length === 0) return null;
+
+  const VISIBLE = 3;
+  const shown = tickers.slice(0, VISIBLE);
+  const overflow = tickers.length - shown.length;
+
+  return (
+    <span className="flex shrink-0 items-center gap-0.5" data-testid="portfolio-news-tickers">
+      {shown.map((ticker) => (
+        <Link
+          key={ticker}
+          href={`/instruments/${encodeURIComponent(ticker)}`}
+          // Stop the row's "open article" handler from also firing.
+          onClick={(e) => e.stopPropagation()}
+          // Don't let an Enter/Space on the chip bubble to the row's key handler.
+          onKeyDown={(e) => e.stopPropagation()}
+          data-testid="portfolio-news-ticker-badge"
+          title={`View ${ticker} instrument page`}
+          className="rounded-[2px] bg-primary/15 px-1 font-mono text-[9px] font-semibold uppercase tracking-wider text-primary transition-colors hover:bg-primary/25 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {ticker}
+        </Link>
+      ))}
+      {overflow > 0 && (
+        // Overflow indicator — not a link (the hidden tickers aren't enumerated
+        // here); just signals "this story touches N more of your holdings".
+        <span
+          className="font-mono text-[9px] text-muted-foreground"
+          title={`+${overflow} more holding${overflow === 1 ? "" : "s"}`}
+        >
+          +{overflow}
+        </span>
+      )}
+    </span>
   );
 }

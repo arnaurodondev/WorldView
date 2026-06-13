@@ -36,11 +36,13 @@ import type { EconomicCalendarResponse, EconomicImpact } from "@/types/api";
 /**
  * PAGE_SIZE — events fetched per page.
  *
- * WHY 10: matches the original visible row count (the previous version did
- * `.slice(0, 8)` which silently capped the list). 10 gives one extra row of
- * context per fetch while keeping the panel compact on first load.
+ * WHY 30 (user request 2026-06-12 "blocks of 30"): the dashboard's listing
+ * widgets are standardised on a 30-row block / page so each "Load more" reveals
+ * a full screen of context. The S9 `/v1/fundamentals/economic-calendar`
+ * endpoint accepts `limit` 1–2000 (docs/services/api-gateway.md), so 30 is well
+ * within the cap. (Was 10; before that `.slice(0, 8)` silently capped the list.)
  */
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 30;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

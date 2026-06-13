@@ -74,7 +74,11 @@ export function RecentAlerts() {
   // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
   const { data: alertsResp, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["alerts-pending"],
-    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
+    // WHY limit 30 (user request 2026-06-12 "blocks of 30"): standardised with
+    // the other dashboard listing widgets. We over-fetch the REST page to 30 so
+    // the merged live+historical list below can show a full block of 30 alerts
+    // (the prior 10 starved the slice(0, 30) cap below).
+    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 30 }),
     enabled: !!accessToken && aboveFoldReady,
     refetchInterval: 30_000, // WHY 30s: balance freshness vs API load
     staleTime: 15_000,
@@ -115,7 +119,8 @@ export function RecentAlerts() {
       }
     }
 
-    // FR-1.6 MED-003: sort by severity DESC then created_at DESC, limit to 8.
+    // FR-1.6 MED-003: sort by severity DESC then created_at DESC, capped to a
+    // block of 30 (user request 2026-06-12 "blocks of 30" — was 8).
     // WHY severity first: a CRITICAL alert from an hour ago is more actionable
     // than a LOW alert from 5 minutes ago. Traders must never have to scroll
     // past noise to find the most urgent signal.
@@ -129,7 +134,7 @@ export function RecentAlerts() {
         if (severityDiff !== 0) return severityDiff;
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       })
-      .slice(0, 8);
+      .slice(0, 30);
   }, [recentAlerts, alertsResp?.alerts]);
 
   // WHY single outer wrapper for all render paths: consistent bg-background + h-full

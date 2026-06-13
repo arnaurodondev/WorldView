@@ -319,6 +319,35 @@ describe("Round 4 — error states carry a working Retry action", () => {
     expect(await screen.findByText("No recent alerts.")).toBeInTheDocument();
     expect(gatewayMocks.getPendingAlerts).toHaveBeenCalledTimes(2);
   });
+
+  // ── Task 1 (2026-06-12): "blocks of 30" pagination contract ─────────────────
+  it("EconomicCalendar: fetches a block of 30 events per page", async () => {
+    // PAGE_SIZE bumped 10 → 30; pin the first-page limit so a regression to the
+    // old 10 (or a silent .slice cap) is caught.
+    gatewayMocks.getEconomicCalendar.mockResolvedValueOnce({ events: [], total: 0 });
+    render(<EconomicCalendar />, { wrapper });
+    await waitFor(() =>
+      expect(gatewayMocks.getEconomicCalendar).toHaveBeenCalledWith({
+        limit: 30,
+        offset: 0,
+      }),
+    );
+  });
+
+  it("RecentAlerts: over-fetches 30 alerts for the 30-row block", async () => {
+    // The merged live+historical list is capped at 30; the REST poll must
+    // over-fetch to 30 so the cap is actually reachable (was limit:10).
+    gatewayMocks.getPendingAlerts.mockResolvedValueOnce({
+      alerts: [],
+      total: 0,
+      offset: 0,
+      limit: 30,
+    });
+    render(<RecentAlerts />, { wrapper });
+    await waitFor(() =>
+      expect(gatewayMocks.getPendingAlerts).toHaveBeenCalledWith({ limit: 30 }),
+    );
+  });
 });
 
 // ── 2. Accessibility — landmarks, tablist, direction glyphs ───────────────────

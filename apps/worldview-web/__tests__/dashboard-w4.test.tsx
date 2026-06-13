@@ -246,6 +246,91 @@ describe("PortfolioNewsWidget — portfolio-scoped (per-holding) news", () => {
     expect(gatewayMocks.getTopNews).not.toHaveBeenCalled();
   });
 
+  it("tags each article with the source holding's ticker badge", async () => {
+    // Task 2 (2026-06-12): every news row carries a compact ticker chip naming
+    // the portfolio holding(s) it surfaced under. Provenance is derived from
+    // WHICH holding's entity feed returned the article (no extra fetch).
+    gatewayMocks.getPortfolios.mockResolvedValue(ONE_PORTFOLIO);
+    // makeHoldings(2) → tickers NVDA (ent-0), AAPL (ent-1).
+    gatewayMocks.getHoldings.mockResolvedValue(makeHoldings(2));
+    gatewayMocks.getEntityNews.mockImplementation((entityId: string) =>
+      Promise.resolve({
+        articles: [
+          {
+            article_id: `art-${entityId}`,
+            title: `Headline for ${entityId}`,
+            url: `https://example.com/${entityId}`,
+            published_at: new Date().toISOString(),
+            source_type: "eodhd_news",
+            routing_tier: "HIGH",
+            market_impact_score: 0.7,
+            display_relevance_score: 0.7,
+            primary_entity_id: entityId,
+            primary_entity_symbol: null,
+            impact_windows: null,
+          },
+        ],
+        total: 1,
+      }),
+    );
+
+    render(<PortfolioNewsWidget />, { wrapper });
+
+    // The ent-0 (NVDA) article renders with a NVDA ticker badge that links to
+    // the instrument page.
+    await waitFor(() => {
+      expect(screen.getByText("Headline for ent-0")).toBeInTheDocument();
+    });
+    const badges = screen.getAllByTestId("portfolio-news-ticker-badge");
+    const labels = badges.map((b) => b.textContent);
+    // Each holding's article carries its own owner ticker badge.
+    expect(labels).toContain("NVDA");
+    expect(labels).toContain("AAPL");
+    // The NVDA badge deep-links to the instrument page.
+    const nvda = badges.find((b) => b.textContent === "NVDA")!;
+    expect(nvda.getAttribute("href")).toBe("/instruments/NVDA");
+  });
+
+  it("merges ticker badges when one article surfaces under multiple holdings", async () => {
+    // Task 2: a story tied to several positions (e.g. an "Nvidia + Apple"
+    // headline) dedups to ONE row but shows BOTH owning tickers — proving the
+    // aggregation accumulates provenance across the fan-out rather than keeping
+    // only the first owner.
+    gatewayMocks.getPortfolios.mockResolvedValue(ONE_PORTFOLIO);
+    gatewayMocks.getHoldings.mockResolvedValue(makeHoldings(2)); // NVDA, AAPL
+    // BOTH entity feeds return the SAME article_id → one deduped row.
+    gatewayMocks.getEntityNews.mockResolvedValue({
+      articles: [
+        {
+          article_id: "shared-art",
+          title: "Nvidia and Apple announce partnership",
+          url: "https://example.com/shared",
+          published_at: new Date().toISOString(),
+          source_type: "eodhd_news",
+          routing_tier: "HIGH",
+          market_impact_score: 0.9,
+          display_relevance_score: 0.9,
+          primary_entity_id: "ent-0",
+          primary_entity_symbol: null,
+          impact_windows: null,
+        },
+      ],
+      total: 1,
+    });
+
+    render(<PortfolioNewsWidget />, { wrapper });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Nvidia and Apple announce partnership"),
+      ).toBeInTheDocument();
+    });
+    // Exactly one row, but two ticker badges (NVDA + AAPL) on it.
+    const badges = screen.getAllByTestId("portfolio-news-ticker-badge");
+    const labels = badges.map((b) => b.textContent).sort();
+    expect(labels).toEqual(["AAPL", "NVDA"]);
+  });
+
   it("shows the no-holdings empty state when the portfolio has no holdings", async () => {
     gatewayMocks.getPortfolios.mockResolvedValue([]);
     gatewayMocks.getHoldings.mockResolvedValue({ portfolio_id: "p1", holdings: [] });
