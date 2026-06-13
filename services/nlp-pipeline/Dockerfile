@@ -43,6 +43,14 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
+# PLAN-0111 C-2: the learned routing classifier is a LightGBM model loaded via
+# joblib at startup. LightGBM links against the OpenMP runtime (libgomp.so.1),
+# which is NOT present in python:3.11-slim. Install it (and clean apt lists) so
+# the model imports cleanly in the runtime image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 COPY --from=builder /app/.venv /app/.venv

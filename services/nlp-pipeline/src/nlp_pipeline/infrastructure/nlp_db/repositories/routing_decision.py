@@ -38,6 +38,10 @@ class RoutingDecisionRepository:
                 processing_path=(str(decision.processing_path) if decision.processing_path else None),
                 composite_score=decision.composite_score,
                 feature_scores_json=decision.feature_scores,
+                # PLAN-0111 C-6: learned-router shadow proposal (NULL when off/failed).
+                learned_tier=(str(decision.learned_tier) if decision.learned_tier else None),
+                learned_p_yield=decision.learned_p_yield,
+                learned_router_mode=decision.learned_router_mode,
             )
             .on_conflict_do_nothing(index_elements=["decision_id"])
         )

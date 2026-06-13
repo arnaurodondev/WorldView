@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -182,6 +183,21 @@ class Settings(BaseSettings):
     # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44
     routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
+
+    # ── Learned routing classifier (PLAN-0111 C-2 / C-6) ─────────────────────
+    # Controls the EmbeddingGemma-based learned router that runs ALONGSIDE the
+    # static weighted-sum router:
+    #   "off"    — the learned router is not loaded or invoked at all.
+    #   "shadow" — the learned router computes a proposed tier on every article
+    #              (logged + persisted + counted) but NEVER changes the processing
+    #              path; the static router still controls everything.
+    #   "live"   — RESERVED for the next wave (the learned tier controls
+    #              processing). NOT implemented here; treated like "shadow" until
+    #              the LLM cascade lands, so a premature flip cannot silently
+    #              change routing behaviour.
+    # Default "off" so the feature is opt-in per environment via
+    # NLP_PIPELINE_LEARNED_ROUTER_MODE; docker.env sets it to "shadow".
+    learned_router_mode: Literal["off", "shadow", "live"] = "off"
 
     # Entity resolution thresholds (PRD §6.7 Block 9)
     entity_resolution_auto_resolve_threshold: float = 0.72  # auto-resolve above this

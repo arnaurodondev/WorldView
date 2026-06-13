@@ -318,7 +318,7 @@ Extensions required: `vector`, `pg_trgm`
 | `chunk_entity_mentions` | Junction table: mention ↔ chunk many-to-many. |
 | `chunk_embeddings` | Chunk-level 1024-dim embeddings. HNSW index with partial predicate `WHERE (expires_at IS NULL OR expires_at > now())`. |
 | `section_embeddings` | Section-level 1024-dim embeddings. Separate HNSW index from chunks. |
-| `routing_decisions` | Block 5 routing tier and composite score per document. `final_routing_tier` overrides `routing_tier` after Block 8 novelty correction. |
+| `routing_decisions` | Block 5 routing tier and composite score per document. `final_routing_tier` overrides `routing_tier` after Block 8 novelty correction. PLAN-0111 C-6 adds nullable `learned_tier` / `learned_p_yield` / `learned_router_mode` — the EmbeddingGemma learned-router SHADOW proposal (observational; never controls processing). |
 | `document_source_metadata` | Citation and relevance cache for S8 RAG. Includes `llm_relevance_score`, `llm_scored_at`, `sentiment`, `impact_score`. |
 | `article_impact_windows` | Multi-window price-impact labels. Replaces `article_price_impacts`. One row per `(article_id, entity_id, window_type)`. Window types: `day_t0`, `day_t1`, `day_t2`, `day_t5`. UNIQUE index on the triple. |
 | `outbox_events` | Transactional outbox for Kafka messages. |

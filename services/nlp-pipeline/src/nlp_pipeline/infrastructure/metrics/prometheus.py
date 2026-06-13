@@ -105,6 +105,32 @@ def record_pre_persist_tenant_substituted(block_source: str) -> None:
     nlp_pipeline_pre_persist_tenant_id_substituted_total.labels(block_source=label).inc()
 
 
+# ── Learned routing classifier shadow comparison (PLAN-0111 C-6) ─────────────
+#
+# Cross-tabulates the LIVE (static weighted-sum) tier against the learned
+# classifier's PROPOSED tier for every article processed while the learned
+# router runs in shadow mode. The {actual_tier, proposed_tier} matrix lets us
+# measure agreement / disagreement structure (e.g. "learned upgrades 30% of
+# LIGHT to MEDIUM") before any LIVE flip. Cardinality is bounded: both labels
+# take values from the fixed 4-tier RoutingTier enum (4x4 = 16 series max).
+nlp_pipeline_learned_router_shadow_total = prometheus_client.Counter(
+    "nlp_pipeline_learned_router_shadow_total",
+    "Learned-router SHADOW comparisons: live static tier vs proposed learned tier "
+    "(PLAN-0111 C-6). Labelled by the actual (deployed) tier and the proposed tier.",
+    ["actual_tier", "proposed_tier"],
+)
+
+
+def record_learned_router_shadow(actual_tier: str, proposed_tier: str) -> None:
+    """Increment the shadow comparison counter for one article.
+
+    Both labels come from the fixed RoutingTier enum, so cardinality is bounded.
+    Best-effort: callers invoke this inside a try/except so a metrics error can
+    never break the article pipeline.
+    """
+    nlp_pipeline_learned_router_shadow_total.labels(actual_tier=actual_tier, proposed_tier=proposed_tier).inc()
+
+
 s6_ollama_queue_depth_current = prometheus_client.Gauge(
     "s6_ollama_queue_depth_current",
     "Current number of in-flight Ollama inference requests (backpressure depth)",

@@ -31,6 +31,16 @@ dependencies = [
     "prometheus-client>=0.20",
     "confluent-kafka>=2.3",
     "fastavro>=1.9",
+    # PLAN-0111 C-2: the learned routing classifier ships as a joblib artifact
+    # (a CalibratedClassifierCV wrapping LightGBM trees). The runtime needs
+    # scikit-learn (to unpickle + predict_proba), lightgbm (the base estimator),
+    # joblib (load), and numpy (feature matrix). Versions pinned to the ones the
+    # exporter (scripts/eval/routing_classifier_export.py) trained with so the
+    # pickle deserialises without a sklearn-version warning at load.
+    "scikit-learn>=1.5,<2",
+    "lightgbm>=4.5,<5",
+    "joblib>=1.4,<2",
+    "numpy>=1.26,<3",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +57,15 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nlp_pipeline"]
+# PLAN-0111 C-2: the learned-router artifact (joblib model + meta JSON) lives
+# inside the package at application/blocks/models/. Hatchling only bundles .py
+# files by default, so explicitly include the data files in the built wheel.
+# (The Docker image COPYs src/ directly, so this only affects pip-installed
+# wheels — but we keep it correct for both paths.)
+artifacts = [
+    "src/nlp_pipeline/application/blocks/models/*.joblib",
+    "src/nlp_pipeline/application/blocks/models/*.json",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

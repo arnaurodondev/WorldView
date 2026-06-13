@@ -227,6 +227,13 @@ class RoutingDecisionModel(Base):
     composite_score: Mapped[float] = mapped_column(Float, nullable=False)
     feature_scores_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PLAN-0111 C-6: learned-router SHADOW output. Nullable — populated only when
+    # the learned router ran (mode != "off") and produced a proposal. These columns
+    # are observability/training data ONLY in shadow mode; they never influence the
+    # processing path (which is driven by routing_tier / processing_path above).
+    learned_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    learned_p_yield: Mapped[float | None] = mapped_column(Float, nullable=True)
+    learned_router_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class OutboxEventModel(Base):

@@ -252,6 +252,36 @@ async def main() -> None:
         SessionScopedNlpUsageLogger,
     )
 
+    # PLAN-0111 C-6: construct the learned router ONLY when shadow/live and a
+    # DeepInfra key is present (it embeds headlines via EmbeddingGemma using the
+    # shared NLP_PIPELINE_EXTRACTION_API_KEY). The artifact (joblib + meta) is
+    # committed into the package, so construction loads it from disk with no
+    # network. If the key is missing in a shadow-enabled env we log and leave the
+    # router off rather than crash — shadow is non-critical.
+    learned_router = None
+    if settings.learned_router_mode != "off":
+        if _extraction_api_key:
+            from ml_clients.adapters.embeddinggemma_router import (  # type: ignore[import-not-found]
+                EmbeddingGemmaRouterAdapter,
+            )
+
+            from nlp_pipeline.application.blocks.learned_routing import LearnedRouter
+
+            router_embedder = EmbeddingGemmaRouterAdapter(
+                api_key=_extraction_api_key,
+                # 768d head — matches the exported artifact's embedding_dims.
+                default_dimensions=768,
+                # Generous timeout; the adapter wraps it in httpx.Timeout (BP-235).
+                timeout=30.0,
+            )
+            learned_router = LearnedRouter(router_embedder)
+            log.info("learned_router_enabled", mode=settings.learned_router_mode)
+        else:
+            log.warning(
+                "learned_router_mode_set_but_no_api_key",
+                mode=settings.learned_router_mode,
+            )
+
     consumer = ArticleProcessingConsumer(
         config=article_config,
         settings=settings,
@@ -270,6 +300,8 @@ async def main() -> None:
         # dedup keys are namespaced under "nlp:dedup:article_consumer" so there
         # is no key collision with the watchlist keys.
         valkey_client=valkey,
+        # PLAN-0111 C-6: None unless mode is shadow/live (and key present).
+        learned_router=learned_router,
     )
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.

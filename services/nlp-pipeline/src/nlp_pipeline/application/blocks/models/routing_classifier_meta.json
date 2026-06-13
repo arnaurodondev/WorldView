@@ -1,0 +1,35 @@
+{
+  "plan": "PLAN-0111 C-2",
+  "created_at": "2026-06-12",
+  "embedding_model_id": "google/embeddinggemma-300m",
+  "embedding_dims": 768,
+  "structured_features": [
+    "source_reliability",
+    "recency",
+    "document_type"
+  ],
+  "feature_order": "structured_features (in listed order) followed by the 768 embedding dimensions",
+  "n_structured_features": 3,
+  "total_features": 771,
+  "thr_extract": 0.5801796235982605,
+  "thr_deep": 0.8,
+  "tier_mapping": {
+    "DEEP": "p_yield >= 0.8",
+    "MEDIUM": "0.5802 <= p_yield < 0.8",
+    "LIGHT": "p_yield < 0.5802",
+    "SUPPRESS": "NOT predicted \u2014 upstream document-type / suppression-gate concern"
+  },
+  "ambiguous_band": {
+    "low": 0.4801796235982605,
+    "high": 0.6801796235982605,
+    "half_width": 0.1,
+    "note": "p_yield inside [low, high] is least-certain; candidate for future LLM cascade tie-break"
+  },
+  "calibration": "CalibratedClassifierCV(method=isotonic, cv=5)",
+  "base_estimator": "lightgbm.LGBMClassifier(n_estimators=300, learning_rate=0.05)",
+  "training_rows": 15006,
+  "positive_rate": 0.6252832200453152,
+  "dataset_path": "routing_dataset_augmented.csv",
+  "dataset_sha256_16": "2a0f0bff080ef739",
+  "random_seed": 42
+}

@@ -97,6 +97,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events impo
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_article_processed,
+    record_learned_router_shadow,
     record_pre_persist_tenant_substituted,
     s6_embeddings_created_total,
     s6_intel_commit_failures_total,
@@ -131,9 +132,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+    from nlp_pipeline.application.blocks.learned_routing import LearnedRouter
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
-    from nlp_pipeline.domain.models import EntityMention
+    from nlp_pipeline.domain.models import EntityMention, RoutingDecision
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository as OutboxRepositoryT
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
@@ -414,9 +416,15 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         chunk_text_store: ChunkTextStorePort | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
         valkey_client: ValkeyClient | None = None,
+        learned_router: LearnedRouter | None = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
+        # PLAN-0111 C-6: optional learned router. None when mode == "off" (the
+        # main entry point only constructs it for shadow/live). The consumer
+        # treats None as "no shadow proposal", so behaviour is identical to the
+        # pre-PLAN-0111 pipeline when the feature is off.
+        self._learned_router = learned_router
         self._settings = settings
         self._nlp_sf = nlp_session_factory
         self._intel_sf = intelligence_session_factory
@@ -746,6 +754,83 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             word_count=value.get("word_count"),
         )
 
+    async def _run_learned_router_shadow(
+        self,
+        *,
+        routing_decision: RoutingDecision,
+        doc_title: str | None,
+    ) -> None:
+        """Compute the learned-router SHADOW proposal and attach it to the decision.
+
+        PLAN-0111 C-6. This NEVER changes the processing path: it only
+
+          1. calls ``LearnedRouter.propose`` (best-effort — returns None on
+             failure) to get a calibrated P(yield) + proposed tier,
+          2. stamps ``learned_tier`` / ``learned_p_yield`` / ``learned_router_mode``
+             onto ``routing_decision`` so persist_artifacts writes them to
+             routing_decisions,
+          3. emits a ``learned_router_shadow`` structlog line comparing the actual
+             (static) tier with the proposed tier, and
+          4. increments the {actual_tier, proposed_tier} Prometheus counter.
+
+        Everything is inside a broad try/except: the learned router is a passive
+        observer and a failure here must not fail the article. The mode is always
+        recorded (even on failure) so a NULL learned_tier with a non-NULL mode is
+        distinguishable from "router was off entirely".
+        """
+        mode = self._settings.learned_router_mode
+        if mode == "off" or self._learned_router is None:
+            return
+
+        # Record the mode regardless of outcome (so rows are attributable).
+        routing_decision.learned_router_mode = mode
+
+        # The actual (deployed) tier that CONTROLS processing — unchanged below.
+        actual_tier = routing_decision.routing_tier
+        actual_tier_value = actual_tier.value if hasattr(actual_tier, "value") else str(actual_tier)
+
+        try:
+            # The 3 structured features the model was trained on are exactly the
+            # values already computed by the static router (same source). We pass
+            # the whole feature_scores dict; LearnedRouter picks the trained
+            # subset (source_reliability, recency, document_type) in order.
+            # No subtitle is available at this point in the pipeline, so the
+            # classifier text is the title alone (the exporter's text builder and
+            # LearnedRouter._build_text both handle an empty subtitle identically).
+            result = await self._learned_router.propose(
+                title=doc_title,
+                subtitle=None,
+                structured_features=routing_decision.feature_scores,
+            )
+            if result is None:
+                # Propose already logged the failure cause. Leave learned_tier
+                # NULL; mode is set so the row is still attributable to shadow.
+                return
+
+            routing_decision.learned_tier = result.proposed_tier
+            routing_decision.learned_p_yield = result.p_yield
+
+            proposed_tier_value = (
+                result.proposed_tier.value if hasattr(result.proposed_tier, "value") else str(result.proposed_tier)
+            )
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_shadow",
+                doc_id=str(routing_decision.doc_id),
+                actual_tier=actual_tier_value,
+                proposed_tier=proposed_tier_value,
+                p_yield=round(result.p_yield, 4),
+                agreement=(actual_tier_value == proposed_tier_value),
+                in_ambiguous_band=result.in_ambiguous_band,
+                mode=mode,
+            )
+            record_learned_router_shadow(actual_tier_value, proposed_tier_value)
+        except Exception:  # — shadow observer must never fail the article
+            logger.warning(  # type: ignore[no-any-return]
+                "learned_router_shadow_failed",
+                doc_id=str(routing_decision.doc_id),
+                exc_info=True,
+            )
+
     async def _run_pipeline(
         self,
         *,
@@ -843,6 +928,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             tier_medium=self._settings.routing_tier_medium,
             tier_light=self._settings.routing_tier_light,
         )
+
+        # ── PLAN-0111 C-6: learned-router SHADOW comparison ──────────────────
+        # The static weighted-sum tier above CONTROLS processing. When the
+        # learned router is enabled we ALSO compute a *proposed* tier and attach
+        # it (+ p_yield + mode) onto the routing_decision so persist_artifacts
+        # writes it to routing_decisions. This is strictly observational in
+        # shadow mode and is wrapped so any failure is non-fatal to the article.
+        await self._run_learned_router_shadow(
+            routing_decision=routing_decision,
+            doc_title=doc_title,
+        )
+
         initial_path = apply_suppression_gate(routing_decision)
 
         # Block 7: Embeddings + denorm fields (PLAN-0063 W5-2)

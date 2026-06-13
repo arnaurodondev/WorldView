@@ -147,6 +147,13 @@ class RoutingDecision:
     # Set by ``apply_suppression_gate(routing_decision)`` and assigned back onto
     # the entity by the article consumer immediately before persistence.
     processing_path: ProcessingPath | None = None
+    # PLAN-0111 C-6: learned-router SHADOW proposal, attached to the decision so
+    # ``persist_artifacts`` writes it to routing_decisions. None when the learned
+    # router was off or failed. In shadow mode these NEVER affect routing_tier /
+    # processing_path — they are recorded for agreement analysis only.
+    learned_tier: RoutingTier | None = None
+    learned_p_yield: float | None = None
+    learned_router_mode: str | None = None
 
 
 @dataclass
