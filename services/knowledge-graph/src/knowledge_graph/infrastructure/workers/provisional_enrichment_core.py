@@ -55,8 +55,30 @@ _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
         "place",
         "product",
         "index",
+        "exchange",  # FR-12: stock exchanges / trading venues (NYSE, NASDAQ, LSE)
         "currency",
         "unknown",
+    },
+)
+
+# FR-12 — coarse "company-ish" GLiNER/legacy classes that the alias map below
+# resolves to ``financial_instrument``.  When such a class arrives on the
+# NO-ENRICH fallback path (the LLM omitted ``entity_type`` so we fell back to the
+# raw mention_class) and there is NO ticker, the row is almost always NOT a
+# tradable instrument — it is an exchange, a private company, a foundation, or a
+# generic phrase ("Nvidia shares").  74% of live ``financial_instrument`` rows
+# were tickerless mislabels minted exactly this way.  We therefore downgrade
+# these tickerless rows to ``unknown`` instead of trusting the FI alias.
+_COMPANY_CLASS_ALIASES: frozenset[str] = frozenset(
+    {
+        "company",
+        "corp",
+        "corporation",
+        "enterprise",
+        "firm",
+        "business",
+        "inst",
+        "institution",
     },
 )
 
@@ -244,6 +266,18 @@ async def persist_enrichment(
     from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
     canonical_name: str = profile.get("canonical_name") or mention_text
+
+    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
+    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
+    # NOTE: ticker is parsed BEFORE entity_type so the FR-12 tickerless-company
+    # downgrade below can consult it.
+    _ticker_raw: str | None = profile.get("ticker")
+    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+
+    # ── entity_type resolution + FR-12 tickerless-company hardening ──────────
+    # The LLM may omit entity_type; we then fall back to the raw GLiNER
+    # mention_class.  ``_norm_type`` is the normalised source value; ``entity_type``
+    # is its canonical mapping via the alias table.
     _raw_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
     _norm_type = _raw_type.lower().strip().replace(" ", "_")
     entity_type = _ENTITY_TYPE_ALIASES.get(_norm_type, _norm_type)
@@ -255,10 +289,21 @@ async def persist_enrichment(
             defaulting_to="unknown",
         )
         entity_type = "unknown"
-    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
-    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
-    _ticker_raw: str | None = profile.get("ticker")
-    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+    # FR-12: a coarse "company"-class mention (company/corp/firm/...) only maps to
+    # ``financial_instrument`` via the alias table.  Without a ticker that mapping
+    # is almost always wrong — it is the exact path that minted NYSE, SpaceX,
+    # foundations, and "X shares" phrases as instruments (74% of FI rows were
+    # tickerless).  Reserve ``financial_instrument`` for rows that carry a ticker
+    # (or were explicitly LLM-typed to a non-company canonical value); downgrade
+    # tickerless company-class fallbacks to ``unknown``.
+    if entity_type == "financial_instrument" and ticker is None and _norm_type in _COMPANY_CLASS_ALIASES:
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_tickerless_company_downgraded",
+            raw_type=_raw_type,
+            mention_text=mention_text,
+            downgraded_to="unknown",
+        )
+        entity_type = "unknown"
     _isin_raw: str | None = profile.get("isin")
     # Standard ISIN = exactly 12 alphanumeric chars; anything else is a hallucination.
     import re as _re

@@ -801,12 +801,16 @@ class TestEntityTypeNormalisation:
             "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'unknown'."
         )
 
-    async def test_alias_corp_normalised_to_financial_instrument(self) -> None:
-        """entity_type='corp' → alias-mapped to 'financial_instrument' (BP-523, no warning)."""
+    async def test_alias_corp_WITH_ticker_maps_to_financial_instrument(self) -> None:
+        """entity_type='corp' WITH a ticker → 'financial_instrument' (BP-523).
+
+        FR-12 only downgrades TICKERLESS company-class rows; a corp that carries
+        a ticker is a real tradable instrument and keeps the FI mapping.
+        """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
-        profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": None, "isin": None, "aliases": []}
+        profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": "ACME", "isin": None, "aliases": []}
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
@@ -819,14 +823,94 @@ class TestEntityTypeNormalisation:
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('financial_instrument') was used.
-        # 'corp' is in _ENTITY_TYPE_ALIASES → 'financial_instrument' (BP-523 update;
-        # previously mapped to 'company' which is no longer a canonical kind).
+        # 'corp' WITH ticker maps to 'financial_instrument' (BP-523 alias + ticker present).
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert call_kwargs["entity_type"] == "financial_instrument", (
             f"Expected alias-mapped entity_type='financial_instrument', got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'corp' → 'financial_instrument' (BP-523)."
+            "A ticker-bearing company-class row must keep the FI mapping (FR-12)."
         )
+
+    async def test_FR12_tickerless_company_class_downgraded_to_unknown(self) -> None:
+        """FR-12: a TICKERLESS company/corp/firm fallback must NOT become FI.
+
+        ROOT CAUSE (docs/audits/2026-06-13-fr12-hub-mistyping-investigation.md):
+        the no-enrich GLiNER fallback mapped company/corp/firm → financial_instrument
+        even with no ticker, minting NYSE/SpaceX/foundations/"X shares" as
+        instruments (74% of FI rows were tickerless mislabels).  Without a ticker
+        the row must default to 'unknown'.
+        """
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        for raw in ("company", "corp", "firm", "Corporation", "business"):
+            session, repos = _make_persist_session()
+            profile = {
+                "canonical_name": "NYSE",
+                "entity_type": raw,
+                "ticker": None,  # the decisive signal
+                "isin": None,
+                "aliases": [],
+            }
+
+            with structlog.testing.capture_logs() as captured, _patch_persist_repos(repos):
+                await core.persist_enrichment(
+                    session=session,
+                    queue_id=_QUEUE_ID,
+                    mention_text="NYSE",
+                    profile=profile,
+                )
+
+            call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+            assert (
+                call_kwargs["entity_type"] == "unknown"
+            ), f"FR-12: tickerless {raw!r} must downgrade to 'unknown', got {call_kwargs['entity_type']!r}"
+            downgrade_events = [
+                e for e in captured if e.get("event") == "provisional_enrichment_tickerless_company_downgraded"
+            ]
+            assert downgrade_events, f"expected downgrade log for {raw!r}; captured {captured}"
+
+    async def test_FR12_non_company_class_unaffected_by_downgrade(self) -> None:
+        """FR-12 downgrade is scoped to company-class aliases only.
+
+        An LLM that directly types 'index' (or any non-company value) without a
+        ticker must be left untouched — the downgrade only targets the coarse
+        company/corp/firm fallback that the alias map turns into FI.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "S&P 500", "entity_type": "index", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="S&P 500",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert (
+            call_kwargs["entity_type"] == "index"
+        ), f"a directly-typed 'index' must be unaffected by the FR-12 downgrade; got {call_kwargs['entity_type']!r}"
+
+    async def test_exchange_entity_type_is_valid(self) -> None:
+        """FR-12: 'exchange' is now a valid entity_type (no warning, passes through)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "NASDAQ", "entity_type": "exchange", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="NASDAQ",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "exchange"
 
     async def test_unknown_entity_type_defaults_to_unknown(self) -> None:
         """entity_type='conglomerate' → invalid; stored as 'unknown' with warning (BP-523).
