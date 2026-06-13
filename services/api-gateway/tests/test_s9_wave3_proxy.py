@@ -297,22 +297,33 @@ async def test_economic_calendar_proxies_to_s7(authed_app, authed_mock_clients) 
 
 @pytest.mark.asyncio
 async def test_ai_signals_proxy_to_s6(authed_app, authed_mock_clients) -> None:
-    """GET /v1/signals/ai proxies to S6 and transforms to frontend AiSignal shape."""
+    """GET /v1/signals/ai proxies S6 /news/trending-entities → NEWS MOMENTUM rows.
+
+    PLAN-0099 W4: the feed is now per-entity momentum (ticker + trend + headline),
+    proxied verbatim from S6's trending-entities endpoint, under the ``signals`` key.
+    """
     s6_payload = {
-        "items": [
+        "entities": [
             {
-                "signal_id": "aaa-bbb",
                 "entity_id": "ccc-ddd",
-                "signal_type": "M_AND_A",
-                "confidence": 0.9,
-                "evidence_text": "some-claim-uuid",
-                "detected_at": "2026-04-27T22:00:00Z",
-                "market_impact_score": 0.0,
+                "ticker": "NVDA",
+                "name": "Nvidia",
+                "count": 6,
+                "prior_count": 2,
+                "delta": 4,
+                "delta_pct": 200.0,
+                "top_article": {
+                    "id": "art-1",
+                    "title": "Nvidia surges on earnings",
+                    "url": "https://finance.yahoo.com/x",
+                    "source": "yahoo",
+                    "published_at": "2026-06-11T22:00:00Z",
+                    "sentiment": "positive",
+                    "relevance": 0.81,
+                },
             }
         ],
-        "total": 1,
-        "limit": 50,
-        "offset": 0,
+        "window_hours": 24,
     }
     import json as _json
 
@@ -331,12 +342,10 @@ async def test_ai_signals_proxy_to_s6(authed_app, authed_mock_clients) -> None:
     assert "signals" in body
     assert len(body["signals"]) == 1
     sig = body["signals"][0]
-    assert sig["signal_id"] == "aaa-bbb"
     assert sig["entity_id"] == "ccc-ddd"
-    assert sig["label"] == "POSITIVE"  # M_AND_A maps to POSITIVE
-    assert sig["score"] == 0.9
-    assert sig["article_title"] is None
-    assert sig["created_at"] == "2026-04-27T22:00:00Z"
+    assert sig["ticker"] == "NVDA"
+    assert sig["delta_pct"] == 200.0
+    assert sig["top_article"]["title"] == "Nvidia surges on earnings"
     authed_mock_clients.nlp_pipeline.get.assert_called_once()
 
 

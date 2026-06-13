@@ -158,16 +158,25 @@ describe("Round 4 — error states carry a working Retry action", () => {
       .mockResolvedValueOnce({
         signals: [
           {
-            article_id: "art-1",
-            title: "NVDA beats",
-            url: "https://example.com/nvda",
-            source: "example",
-            sentiment: "positive",
-            relevance: 0.87,
-            published_at: new Date().toISOString(),
+            entity_id: "e-1",
+            ticker: "NVDA",
+            name: "Nvidia",
+            count: 6,
+            prior_count: 2,
+            delta: 4,
+            delta_pct: 200,
+            top_article: {
+              id: "art-1",
+              title: "NVDA beats",
+              url: "https://example.com/nvda",
+              source: "example",
+              sentiment: "positive",
+              relevance: 0.87,
+              published_at: new Date().toISOString(),
+            },
           },
         ],
-        window_hours: 72,
+        window_hours: 24,
       });
 
     render(<AiSignalsWidget />, { wrapper });
@@ -175,9 +184,9 @@ describe("Round 4 — error states carry a working Retry action", () => {
     // Named error state (dashboard.signals-error) — not a blank pane.
     expect(await screen.findByText("News feed unavailable")).toBeInTheDocument();
 
-    // Retry → second getAiSignals call → data renders.
+    // Retry → second getAiSignals call → the recovered momentum row renders.
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("NVDA beats")).toBeInTheDocument();
+    expect(await screen.findByText("NVDA")).toBeInTheDocument();
     expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(2);
   });
 

@@ -1,18 +1,18 @@
 /**
- * ai-signals-widget.test.tsx — rendering tests for the NEWS MOMENTUM widget
- * (2026-06-12 Wave-4 pivot).
+ * ai-signals-widget.test.tsx — rendering tests for the NEWS MOMENTUM widget.
  *
- * Pins the value-delivering behaviours the pivot introduced:
- *  1. rows render the real HEADLINE, source, honest relevance % and time;
- *  2. each row links OUT to the source article (target=_blank);
- *  3. the sentiment dot is color-coded semantically (positive/negative);
- *  4. the relevance tooltip explains the metric honestly (NOT a prediction);
- *  5. the window selector (24H / 3D / 1W) refetches with the right `hours`;
- *  6. empty + error states still render (with the selector present).
+ * Pins the value-delivering behaviours of the per-entity momentum feed
+ * (PLAN-0099 W4):
+ *  1. rows render ticker + name + the trend (↑/↓ Δ%) + the top headline;
+ *  2. the trend label is color-coded semantically (rising/falling);
+ *  3. the headline links OUT to the source article (target=_blank);
+ *  4. clicking the ROW navigates to /instruments/[ticker];
+ *  5. the trend tooltip explains the metric honestly (NOT a prediction);
+ *  6. the window selector (24H / 3D / 1W) refetches with the right `hours`;
+ *  7. empty state still renders (with the selector present).
  *
- * Loading / empty / error panel states are ALSO pinned by
- * __tests__/dashboard-round3.test.tsx and dashboard-round4.test.tsx (R19 —
- * those tests use getAiSignals → { signals: [] } which stays valid here).
+ * Loading / empty / error panel states are ALSO pinned by the dashboard round
+ * tests (R19 — those use getAiSignals → { signals: [] } which stays valid).
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -22,6 +22,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AiSignalsWidget } from "@/components/dashboard/AiSignalsWidget";
 import type { NewsMomentumItem } from "@/components/dashboard/ai-signals/types";
+
+// ── next/navigation mock — capture row-click navigation. ──────────────────────
+const mockPush = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush, replace: vi.fn(), prefetch: vi.fn() }),
+}));
 
 // ── Gateway mock — per-test data via getAiSignals(limit, hours) ───────────────
 const gatewayMocks = {
@@ -44,119 +50,123 @@ function wrapper({ children }: { children: React.ReactNode }) {
 afterEach(() => {
   gatewayMocks.getAiSignals.mockClear();
   gatewayMocks.getAiSignals.mockResolvedValue({ signals: [] });
+  mockPush.mockClear();
 });
 
-/** News-momentum item factory mirroring the live S9 payload shape. */
+/** Momentum-row factory mirroring the live S9 payload shape. */
 function item(overrides: Partial<NewsMomentumItem>): NewsMomentumItem {
   return {
-    article_id: `art-${Math.random().toString(36).slice(2)}`,
-    title: "Nvidia Breaks Below $200, Approaches Bear Market Territory",
-    url: "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
-    source: "yahoo",
-    published_at: new Date().toISOString(),
-    sentiment: "negative",
-    relevance: 0.83,
-    routing_tier: "deep",
-    market_impact_score: null,
+    entity_id: `e-${Math.random().toString(36).slice(2)}`,
+    ticker: "NVDA",
+    name: "Nvidia",
+    count: 6,
+    prior_count: 2,
+    delta: 4,
+    delta_pct: 200,
+    top_article: {
+      id: "art-1",
+      title: "Nvidia Breaks Below $200, Approaches Bear Market Territory",
+      url: "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
+      source: "yahoo",
+      published_at: new Date().toISOString(),
+      sentiment: "negative",
+      relevance: 0.83,
+    },
     ...overrides,
   };
 }
 
 describe("AiSignalsWidget — news momentum rows", () => {
-  it("renders the headline, source, honest relevance % and links to the article", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
+  it("renders ticker, name, the trend (Δ%) and the top headline linking out", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 24 });
     render(<AiSignalsWidget />, { wrapper });
 
-    // The headline is the row's primary content — the event itself.
-    const link = await screen.findByRole("link", {
-      name: /Nvidia Breaks Below \$200/i,
-    });
-    // Row links OUT to the source publisher (new tab).
+    // Headline is a link OUT to the publisher (new tab).
+    const link = await screen.findByRole("link", { name: /Nvidia Breaks Below \$200/i });
     expect(link).toHaveAttribute("href", "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html");
     expect(link).toHaveAttribute("target", "_blank");
-    // Source label + honest relevance % both present.
-    expect(screen.getByText("yahoo")).toBeInTheDocument();
-    expect(screen.getByText("83%")).toBeInTheDocument();
+    // Ticker + name + the momentum trend (↑200%) are all on the row.
+    expect(screen.getByText("NVDA")).toBeInTheDocument();
+    expect(screen.getByText("Nvidia")).toBeInTheDocument();
+    expect(screen.getByText("↑200%")).toBeInTheDocument();
   });
 
-  it("explains the relevance metric honestly in a tooltip (title attribute)", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
-    render(<AiSignalsWidget />, { wrapper });
-
-    const pct = await screen.findByText("83%");
-    expect(pct.getAttribute("title")).toMatch(/relevance/i);
-    // Crucially: it must say what the number is NOT (the old 95% bug).
-    expect(pct.getAttribute("title")).toMatch(/not a prediction of price movement/i);
-  });
-
-  it("color-codes the sentiment dot semantically (positive vs negative)", async () => {
+  it("color-codes the trend label semantically (rising vs falling)", async () => {
     gatewayMocks.getAiSignals.mockResolvedValue({
       signals: [
-        item({ title: "Up story", sentiment: "positive", url: "https://x.com/up" }),
-        item({ title: "Down story", sentiment: "negative", url: "https://x.com/down" }),
+        item({ entity_id: "up", ticker: "AAA", delta: 4, delta_pct: 200 }),
+        item({ entity_id: "down", ticker: "BBB", count: 2, prior_count: 5, delta: -3, delta_pct: -60 }),
       ],
-      window_hours: 72,
+      window_hours: 24,
     });
     const { container } = render(<AiSignalsWidget />, { wrapper });
 
-    await screen.findByRole("link", { name: /Up story/i });
+    await screen.findByText("AAA");
     // Semantic tokens (§15.11) — never the hsl(var()) JSX spelling.
     expect(container.querySelector(".text-positive")).not.toBeNull();
     expect(container.querySelector(".text-negative")).not.toBeNull();
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");
   });
 
-  it("defaults to the 3D (72h) window and requests it from the gateway", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
+  it("shows '+N' for new coverage when the prior window was empty", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({
+      signals: [item({ count: 5, prior_count: 0, delta: 5, delta_pct: 500 })],
+      window_hours: 24,
+    });
+    render(<AiSignalsWidget />, { wrapper });
+    // Prior=0 → prefer the honest "+5" reading over a giant "↑500%".
+    expect(await screen.findByText("+5")).toBeInTheDocument();
+  });
+
+  it("navigates to /instruments/[ticker] when the row is clicked", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({ ticker: "TSLA" })], window_hours: 24 });
     render(<AiSignalsWidget />, { wrapper });
 
-    await screen.findByRole("link", { name: /Nvidia/i });
-    // Default call: limit=30, hours=72.
-    expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 72);
-    // The 3D toggle is the active (pressed) window.
-    expect(screen.getByRole("button", { name: "3D" })).toHaveAttribute("aria-pressed", "true");
+    const row = await screen.findByRole("button", { name: /TSLA/i });
+    await userEvent.click(row);
+    expect(mockPush).toHaveBeenCalledWith("/instruments/TSLA");
+  });
+
+  it("explains the trend metric honestly in a tooltip (NOT a prediction)", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 24 });
+    render(<AiSignalsWidget />, { wrapper });
+
+    const trend = await screen.findByText("↑200%");
+    expect(trend.getAttribute("title")).toMatch(/article/i);
+    expect(trend.getAttribute("title")).toMatch(/not a prediction of price movement/i);
+  });
+
+  it("defaults to the 24H window and requests it from the gateway", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 24 });
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("NVDA");
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 24);
+    expect(screen.getByRole("button", { name: "24H" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("switching the window selector refetches with the new hours", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 72 });
+    gatewayMocks.getAiSignals.mockResolvedValue({ signals: [item({})], window_hours: 24 });
     render(<AiSignalsWidget />, { wrapper });
 
-    await screen.findByRole("link", { name: /Nvidia/i });
+    await screen.findByText("NVDA");
 
-    // Click 1W → refetch with hours=168.
     await userEvent.click(screen.getByRole("button", { name: "1W" }));
     await waitFor(() => {
       expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 168);
     });
 
-    // Click 24H → refetch with hours=24.
-    await userEvent.click(screen.getByRole("button", { name: "24H" }));
+    await userEvent.click(screen.getByRole("button", { name: "3D" }));
     await waitFor(() => {
-      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 24);
+      expect(gatewayMocks.getAiSignals).toHaveBeenCalledWith(30, 72);
     });
   });
 
-  it("renders a non-link row (still showing the headline) when the article has no URL", async () => {
-    gatewayMocks.getAiSignals.mockResolvedValue({
-      signals: [item({ title: "Headline without a link", url: null })],
-      window_hours: 72,
-    });
-    render(<AiSignalsWidget />, { wrapper });
-
-    expect(await screen.findByText("Headline without a link")).toBeInTheDocument();
-    // No anchor for a URL-less row.
-    expect(screen.queryByRole("link", { name: /Headline without a link/i })).not.toBeInTheDocument();
-  });
-
-  it("shows the empty state (and keeps the window selector) when there is no news", async () => {
+  it("shows the empty state (and keeps the window selector) when there is no momentum", async () => {
     gatewayMocks.getAiSignals.mockResolvedValue({ signals: [], window_hours: 24 });
     render(<AiSignalsWidget />, { wrapper });
 
-    // Empty copy hints at widening the window. Title is intentionally distinct
-    // from PortfolioNewsWidget's "No recent news" (dashboard.no-news) to keep
-    // getByText unambiguous when both empty states render together.
     expect(await screen.findByText(/No news momentum yet/i)).toBeInTheDocument();
-    // Selector is still operable so the user can recover.
     expect(screen.getByRole("button", { name: "1W" })).toBeInTheDocument();
   });
 });

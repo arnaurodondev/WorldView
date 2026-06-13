@@ -315,22 +315,31 @@ describe("Round 3 — §15.11 semantic token consumption in news momentum", () =
     gatewayMocks.getAiSignals.mockResolvedValue({
       signals: [
         {
-          article_id: "art-1",
-          title: "NVDA beats",
-          url: "https://example.com/nvda",
-          source: "example",
-          sentiment: "positive",
-          relevance: 0.87,
-          published_at: new Date().toISOString(),
+          entity_id: "e-1",
+          ticker: "NVDA",
+          name: "Nvidia",
+          count: 6,
+          prior_count: 2,
+          delta: 4,
+          delta_pct: 200,
+          top_article: {
+            id: "art-1",
+            title: "NVDA beats",
+            url: "https://example.com/nvda",
+            source: "example",
+            sentiment: "positive",
+            relevance: 0.87,
+            published_at: new Date().toISOString(),
+          },
         },
       ],
-      window_hours: 72,
+      window_hours: 24,
     });
     const { container } = render(<AiSignalsWidget />, { wrapper });
     await waitFor(() => {
       expect(screen.getByText("NVDA beats")).toBeInTheDocument();
     });
-    // The sentiment dot uses the semantic utility…
+    // The trend label + sentiment dot use the semantic utility…
     expect(container.querySelector(".text-positive")).not.toBeNull();
     // …and never the arbitrary-value spelling §15.11 reserves for canvas/SVG.
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");

@@ -1,12 +1,12 @@
 """Tests for routes/signals.py — the NEWS MOMENTUM GET /v1/signals/ai feed.
 
-Covers the 2026-06-12 Wave-4 pivot from extraction-confidence "AI signals" to a
-``/news/top``-backed news-momentum feed:
-- pure helpers: sentiment normalisation, publisher-from-URL derivation, item map
-- happy path: S6 /news/top articles → momentum rows with honest relevance
-- window selector: allowed windows pass through, out-of-set snaps to 72h default
-- rows missing title/url are dropped
-- limit trimming
+Covers the PLAN-0099 W4 per-entity momentum feed (proxies S6
+``/news/trending-entities``):
+- pure helpers: sentiment normalisation, momentum-row mapping
+- happy path: S6 entity rows → momentum rows with ticker/name/trend/headline
+- window selector: allowed windows pass through, out-of-set snaps to 24h default
+- rows without a ticker are dropped
+- limit trimming + forwarding
 - upstream S6 failure → status passthrough (never a fabricated 200)
 - auth required
 - route precedence: signals.py supersedes the legacy market.py handler
@@ -23,8 +23,7 @@ import pytest
 from api_gateway.routes.signals import (
     _DEFAULT_WINDOW_HOURS,
     _normalise_sentiment,
-    _source_from_url,
-    _to_momentum_item,
+    _to_momentum_row,
 )
 from httpx import ASGITransport, AsyncClient
 
@@ -46,32 +45,32 @@ def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
     return resp
 
 
-def _article(**overrides: object) -> dict[str, object]:
-    """One S6 /news/top article (the upstream shape this route consumes)."""
+def _entity(**overrides: object) -> dict[str, object]:
+    """One S6 /news/trending-entities row (the upstream shape this route consumes)."""
     base: dict[str, object] = {
-        "article_id": "art-1",
-        "title": "Nvidia Breaks Below $200",
-        "url": "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
-        "published_at": "2026-06-11T15:44:29Z",
-        "source_name": None,
-        "source_type": "eodhd_ticker_news",
-        "routing_tier": "deep",
-        "routing_score": 0.73,
-        "market_impact_score": None,
-        "llm_relevance_score": 0.9,
-        "display_relevance_score": 0.83,
-        "primary_entity_id": None,
-        "primary_entity_symbol": None,
-        "impact_windows": None,
-        "sentiment": "negative",
-        "impact_score": None,
+        "entity_id": "11111111-1111-1111-1111-111111111111",
+        "ticker": "NVDA",
+        "name": "Nvidia",
+        "count": 6,
+        "prior_count": 2,
+        "delta": 4,
+        "delta_pct": 200.0,
+        "top_article": {
+            "id": "art-1",
+            "title": "Nvidia Breaks Below $200",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/nvidia-200.html",
+            "source": "yahoo",
+            "published_at": "2026-06-11T15:44:29Z",
+            "sentiment": "negative",
+            "relevance": 0.83,
+        },
     }
     base.update(overrides)
     return base
 
 
-def _news_payload(articles: list[dict[str, object]]) -> bytes:
-    return json.dumps({"articles": articles, "total": len(articles)}).encode()
+def _payload(entities: list[dict[str, object]], window_hours: int = 24) -> bytes:
+    return json.dumps({"entities": entities, "window_hours": window_hours}).encode()
 
 
 async def _call(authed_app, params: str = "") -> httpx.Response:
@@ -100,27 +99,33 @@ def test_normalise_sentiment_collapses_mixed_and_unknown_to_neutral() -> None:
     assert _normalise_sentiment("bullish-ish") == "neutral"
 
 
-def test_source_from_url_strips_noise_prefixes_and_tld() -> None:
-    assert _source_from_url("https://finance.yahoo.com/x", None) == "yahoo"
-    assert _source_from_url("https://uk.finance.yahoo.com/x", None) == "yahoo"
-    assert _source_from_url("https://www.fxstreet.com/news/abc", None) == "fxstreet"
+def test_to_momentum_row_carries_trend_and_honest_relevance() -> None:
+    """The row carries the momentum fields + an honest display_relevance_score."""
+    row = _to_momentum_row(_entity())
+    assert row is not None
+    assert row["ticker"] == "NVDA"
+    assert row["name"] == "Nvidia"
+    assert row["count"] == 6
+    assert row["prior_count"] == 2
+    assert row["delta"] == 4
+    assert row["delta_pct"] == 200.0
+    assert row["top_article"]["relevance"] == 0.83
+    assert row["top_article"]["sentiment"] == "negative"
+    assert row["top_article"]["source"] == "yahoo"
 
 
-def test_source_from_url_falls_back_when_no_url() -> None:
-    """No URL → fall back to the (usually-null) source_name, else None."""
-    assert _source_from_url(None, "Reuters") == "Reuters"
-    assert _source_from_url(None, None) is None
-    assert _source_from_url("not-a-url", "Reuters") == "Reuters"
+def test_to_momentum_row_drops_entity_without_ticker() -> None:
+    """A row with no ticker (macro noise) carries nowhere to navigate → dropped."""
+    assert _to_momentum_row(_entity(ticker=None)) is None
+    assert _to_momentum_row(_entity(ticker="")) is None
 
 
-def test_to_momentum_item_uses_real_relevance_not_confidence() -> None:
-    """The headline number is display_relevance_score — never a fake confidence."""
-    item = _to_momentum_item(_article(display_relevance_score=0.83, sentiment="negative"))
-    assert item["relevance"] == 0.83
-    assert item["sentiment"] == "negative"
-    assert item["source"] == "yahoo"
-    assert item["title"] == "Nvidia Breaks Below $200"
-    assert item["url"].startswith("https://")
+def test_to_momentum_row_tolerates_missing_top_article() -> None:
+    """A null top_article degrades to a row with a neutral, empty headline."""
+    row = _to_momentum_row(_entity(top_article=None))
+    assert row is not None
+    assert row["top_article"]["sentiment"] == "neutral"
+    assert row["top_article"]["title"] is None
 
 
 # ── Route behaviour ───────────────────────────────────────────────────────────
@@ -136,19 +141,21 @@ async def test_ai_signals_requires_auth(app, mock_clients) -> None:
 
 @pytest.mark.asyncio
 async def test_momentum_payload_shape(authed_app, authed_mock_clients) -> None:
-    """Happy path: S6 /news/top articles → enriched news-momentum rows."""
+    """Happy path: S6 trending entities → momentum rows under the ``signals`` key."""
     authed_mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(
             200,
-            _news_payload(
+            _payload(
                 [
-                    _article(article_id="art-1", display_relevance_score=0.83, sentiment="negative"),
-                    _article(
-                        article_id="art-2",
-                        title="Frasers launches £1.7bn bid for Hugo Boss",
-                        url="https://uk.finance.yahoo.com/news/frasers.html",
-                        sentiment="positive",
-                        display_relevance_score=0.80,
+                    _entity(ticker="NVDA", name="Nvidia", delta_pct=200.0),
+                    _entity(
+                        entity_id="22222222-2222-2222-2222-222222222222",
+                        ticker="TSLA",
+                        name="Tesla Inc",
+                        count=4,
+                        prior_count=0,
+                        delta=4,
+                        delta_pct=400.0,
                     ),
                 ],
             ),
@@ -161,48 +168,45 @@ async def test_momentum_payload_shape(authed_app, authed_mock_clients) -> None:
     assert body["window_hours"] == _DEFAULT_WINDOW_HOURS
     sigs = body["signals"]
     assert len(sigs) == 2
-    assert sigs[0]["title"] == "Nvidia Breaks Below $200"
-    assert sigs[0]["relevance"] == 0.83
-    assert sigs[0]["sentiment"] == "negative"
-    assert sigs[0]["source"] == "yahoo"
-    assert sigs[1]["sentiment"] == "positive"
-    assert sigs[1]["source"] == "yahoo"
+    assert sigs[0]["ticker"] == "NVDA"
+    assert sigs[0]["delta_pct"] == 200.0
+    assert sigs[1]["ticker"] == "TSLA"
+    assert sigs[1]["delta_pct"] == 400.0
 
 
 @pytest.mark.asyncio
 async def test_window_selector_allowed_values_pass_through(authed_app, authed_mock_clients) -> None:
-    """?hours=24 / 168 reach S6 verbatim and are echoed in window_hours."""
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload([_article()])))
+    """?hours=24 / 72 / 168 reach S6 verbatim and are echoed in window_hours."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _payload([_entity()])))
 
     for hours in (24, 72, 168):
         resp = await _call(authed_app, f"?hours={hours}")
         assert resp.json()["window_hours"] == hours
         call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
-        assert call_kwargs["params"]["hours"] == hours
+        assert call_kwargs["params"]["window_hours"] == hours
 
 
 @pytest.mark.asyncio
 async def test_window_selector_out_of_set_snaps_to_default(authed_app, authed_mock_clients) -> None:
-    """An arbitrary ?hours=5 degrades to the safe 72h default, not passed through."""
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload([_article()])))
+    """An arbitrary ?hours=5 degrades to the safe 24h default, not passed through."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _payload([_entity()])))
 
     resp = await _call(authed_app, "?hours=5")
     assert resp.json()["window_hours"] == _DEFAULT_WINDOW_HOURS
     call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
-    assert call_kwargs["params"]["hours"] == _DEFAULT_WINDOW_HOURS
+    assert call_kwargs["params"]["window_hours"] == _DEFAULT_WINDOW_HOURS
 
 
 @pytest.mark.asyncio
-async def test_rows_missing_title_or_url_are_dropped(authed_app, authed_mock_clients) -> None:
-    """A row the user can neither read nor open carries no momentum → dropped."""
+async def test_rows_without_ticker_are_dropped(authed_app, authed_mock_clients) -> None:
+    """Macro noise (no ticker) is dropped even if S6 leaks one through."""
     authed_mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(
             200,
-            _news_payload(
+            _payload(
                 [
-                    _article(article_id="ok", title="Real headline", url="https://x.com/a"),
-                    _article(article_id="no-title", title=None),
-                    _article(article_id="no-url", url=None),
+                    _entity(ticker="AAPL"),
+                    _entity(ticker=None),
                 ],
             ),
         ),
@@ -210,14 +214,14 @@ async def test_rows_missing_title_or_url_are_dropped(authed_app, authed_mock_cli
 
     resp = await _call(authed_app)
     sigs = resp.json()["signals"]
-    assert [s["article_id"] for s in sigs] == ["ok"]
+    assert [s["ticker"] for s in sigs] == ["AAPL"]
 
 
 @pytest.mark.asyncio
 async def test_limit_trims_and_is_forwarded(authed_app, authed_mock_clients) -> None:
     """?limit=2 → returns 2 rows and asks S6 for 2."""
-    articles = [_article(article_id=f"a{i}", url=f"https://x.com/{i}") for i in range(6)]
-    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _news_payload(articles)))
+    entities = [_entity(entity_id=f"e{i}", ticker=f"T{i}") for i in range(6)]
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(return_value=_mock_response(200, _payload(entities)))
 
     resp = await _call(authed_app, "?limit=2")
     assert len(resp.json()["signals"]) == 2
@@ -235,11 +239,7 @@ async def test_s6_error_passes_through(authed_app, authed_mock_clients) -> None:
 
 @pytest.mark.asyncio
 async def test_route_supersedes_legacy_market_handler(authed_app) -> None:
-    """Registration order: /v1/signals/ai must resolve to routes.signals.ai_signals.
-
-    Guards the shadowing contract — if market_router is ever registered before
-    signals_router the legacy un-enriched handler silently takes over.
-    """
+    """Registration order: /v1/signals/ai must resolve to routes.signals.ai_signals."""
     for route in authed_app.routes:
         if getattr(route, "path", None) == "/v1/signals/ai":
             assert route.endpoint.__module__ == "api_gateway.routes.signals"

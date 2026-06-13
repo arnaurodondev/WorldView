@@ -33,6 +33,7 @@ from nlp_pipeline.api.routes import (
     news,
     search,
     signals,
+    trending_entities,
 )
 from nlp_pipeline.api.routes.search_documents import router as search_documents_router
 from nlp_pipeline.config import Settings
@@ -294,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(entities.router)
     app.include_router(search.router)
     app.include_router(news.router)
+    app.include_router(trending_entities.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
     # PLAN-0089 L-5a — 7-day news rollup endpoint consumed by market-data's

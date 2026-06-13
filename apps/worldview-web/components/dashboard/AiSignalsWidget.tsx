@@ -1,30 +1,28 @@
 /**
  * components/dashboard/AiSignalsWidget.tsx — NEWS MOMENTUM feed
  *
- * WHY THIS EXISTS: this dashboard widget answers "what's moving in the news
- * right now?" — the most relevant RECENT stories across everything the platform
- * ingests, so a user scanning the morning-routine screen sees the live news
- * flow without leaving the dashboard.
+ * WHY THIS EXISTS: this dashboard widget answers "which ENTITY is gaining news
+ * attention right now, and is it accelerating?" — the tickers surging in news
+ * coverage, ranked by momentum (surge), so a user scanning the morning-routine
+ * screen sees what the market is talking about without leaving the dashboard.
  *
- * 2026-06-12 WAVE-4 PIVOT — the previous version showed extraction-confidence
- * "AI signals" (e.g. "NA · NEWS EVENT · 95% · 11m"):
- *  - the 95% was the LLM's EXTRACTION CONFIDENCE (pinned at 0.90/0.95) — a
- *    constant decoration that READ like a price prediction;
- *  - the "NEWS EVENT / CORP ACTION / EARNINGS" labels were opaque pipeline
- *    enums, not user-relevant;
- *  - the feed surfaced internal pipeline state, not information a user acts on.
- *  The user's verdict: pivot to "occurrences in news over the last X time, or
- *  something more relevant". This rewrite does exactly that — each row is a real
- *  recent article with an HONEST relevance score, a sentiment direction, a
- *  source, and a click-through to read it. A window selector (24h / 3D / 1W)
- *  lets the user widen or tighten "right now".
+ * Each row is a tradeable ENTITY: ticker + name, an article count for the
+ * window, a TREND vs the prior equal window (↑200% / +8 — the momentum), the
+ * entity's most relevant recent headline (click → article), and a row click
+ * through to /instruments/[ticker]. Ranked by surge, NOT raw recency — that is
+ * what distinguishes this from the Portfolio News widget.
+ *
+ * WHY this is "momentum" not "recent news": an earlier iteration of this widget
+ * proxied a flat /news/top list (global recent articles), which duplicated
+ * Portfolio News and carried no surge information. PLAN-0099 W4 added a per-
+ * entity aggregation (S6 /api/v1/news/trending-entities) so we can show velocity.
  *
  * WHY 2-minute refetch: news arrives continuously as articles are processed.
  * 2 min is fast enough to feel live without hammering S9/S6.
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 2, col-span-3) — no props.
  * DATA SOURCE: S9 GET /v1/signals/ai?limit&hours via createGateway().getAiSignals
- *   (services/api-gateway routes/signals.py — proxies S6 /api/v1/news/top)
+ *   (services/api-gateway routes/signals.py — proxies S6 /news/trending-entities)
  * DESIGN REFERENCE: components/dashboard/ai-signals/* (row, meta, types)
  */
 
@@ -54,7 +52,16 @@ const WINDOWS = [
   { hours: 72, label: "3D" },
   { hours: 168, label: "1W" },
 ] as const;
-const DEFAULT_WINDOW_HOURS = 72;
+// 24H is the default: the dev corpus is dense enough (live: 137 ticker'd
+// entities with >=2 articles and real surges in the last 24h), and "right now"
+// is the most useful framing for momentum. 3D / 1W widen the lens.
+const DEFAULT_WINDOW_HOURS = 24;
+
+// Resolve the compact label ("24H"/"3D"/"1W") for the active window — passed to
+// each row so its trend tooltip reads "vs the prior 24H", etc.
+function windowLabelFor(hours: number): string {
+  return WINDOWS.find((w) => w.hours === hours)?.label ?? `${hours}H`;
+}
 
 // How many rows to request — W4 (user 2026-06-12 "blocks of 30"): 30 rows so
 // the scroll area is full; the 22px row height keeps 30 rows cheap to render.
@@ -167,8 +174,12 @@ export function AiSignalsWidget() {
       {header}
       <div className="flex-1 divide-y divide-border/30 overflow-auto">
         {items.map((item, i) => (
-          // article_id is the stable key; index fallback for the rare null id.
-          <NewsMomentumRow key={item.article_id ?? `row-${i}`} item={item} />
+          // entity_id is the stable key; ticker/index fallback for null ids.
+          <NewsMomentumRow
+            key={item.entity_id ?? item.ticker ?? `row-${i}`}
+            item={item}
+            windowLabel={windowLabelFor(windowHours)}
+          />
         ))}
       </div>
     </div>

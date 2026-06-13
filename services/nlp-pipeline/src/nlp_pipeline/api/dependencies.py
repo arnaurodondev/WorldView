@@ -15,12 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # below; the concrete class is only loaded inside the dependency function via
 # a body-level import. This satisfies LAYER-API-NO-MODULE-LEVEL-INFRA without
 # the runtime NameError that previously blocked the TYPE_CHECKING approach.
+from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
 from nlp_pipeline.application.ports.entity_mention import EntityMentionRepositoryPort
 from nlp_pipeline.application.ports.repositories import (
     DocumentSourceMetadataRepository,
     NewsQueryPort,
     SignalsQueryPort,
 )
+from nlp_pipeline.application.ports.trending_entities import TrendingEntitiesQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.get_entity_sentiment_timeseries import GetEntitySentimentTimeseriesUseCase
@@ -146,6 +148,44 @@ def get_entity_mention_repo(
 
 
 EntityMentionRepoDep = Annotated[EntityMentionRepositoryPort, Depends(get_entity_mention_repo)]
+
+
+def get_trending_entities_repo(
+    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> TrendingEntitiesQueryPort:
+    """Build a SqlaTrendingEntitiesQueryRepo backed by the read replica (R27 — query-only).
+
+    Used by GET /api/v1/news/trending-entities (NEWS MOMENTUM, PLAN-0099 W4).
+    The function-body import keeps the API layer free of module-level
+    infrastructure references (LAYER-API-NO-MODULE-LEVEL-INFRA / R25).
+    """
+    from nlp_pipeline.infrastructure.nlp_db.repositories.trending_entities_query import (
+        SqlaTrendingEntitiesQueryRepo,
+    )
+
+    return SqlaTrendingEntitiesQueryRepo(session)
+
+
+TrendingEntitiesRepoDep = Annotated[TrendingEntitiesQueryPort, Depends(get_trending_entities_repo)]
+
+
+def get_canonical_entity_repo(
+    session: Annotated[AsyncSession, Depends(get_read_intelligence_session)],  # R27: read replica
+) -> CanonicalEntityPort:
+    """Build a CanonicalEntityRepository backed by the intelligence_db read replica (R27).
+
+    Used by GET /api/v1/news/trending-entities to resolve entity_id → ticker/name
+    (the cross-database join the SQL layer cannot do). Read-only here — only
+    ``batch_get`` is exercised on this path.
+    """
+    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+
+    return CanonicalEntityRepository(session)
+
+
+CanonicalEntityRepoDep = Annotated[CanonicalEntityPort, Depends(get_canonical_entity_repo)]
 
 
 def get_entity_resolver_use_case(
