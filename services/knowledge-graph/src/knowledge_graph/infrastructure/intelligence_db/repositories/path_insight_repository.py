@@ -229,6 +229,113 @@ LIMIT :lim
             )
         return insights
 
+    async def list_global_weird(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        min_weirdness: float = 0.0,
+        since_days: int | None = None,
+        entity_type: str | None = None,
+    ) -> list[PathInsight]:
+        """Return the globally most-weird insights, deduped by endpoint pair.
+
+        PLAN-0112 W5 (T-5-01).  Strategy:
+          1. ``base`` CTE selects all rows with ``weirdness IS NOT NULL`` and
+             ``weirdness >= :min_weirdness``, optionally requiring ``novelty > 0``
+             (the ``since_days`` recent-edge proxy) and an ``entity_type`` match
+             on the anchor OR dst endpoint canonical entity.
+          2. ``DISTINCT ON (anchor_entity_id, dst_entity_id)`` keeps the single
+             highest-weirdness row per endpoint pair (OQ-6 default).  The inner
+             ORDER BY puts the best row first within each pair group.
+          3. The outer query re-orders the deduped rows by ``weirdness DESC``
+             and applies ``LIMIT`` / ``OFFSET`` pagination.
+
+        ``entity_type`` is matched via a join to ``canonical_entities`` on either
+        endpoint.  Rows whose ``dst_entity_id`` is NULL (pre-W3 / un-backfilled)
+        are excluded because the feed is endpoint-pair oriented.
+        """
+        # The recent-edge proxy: when since_days is given, only keep paths whose
+        # scorer-computed novelty is > 0 (at least one edge inside the window).
+        novelty_clause = "AND pi.novelty > 0" if since_days is not None else ""
+        # entity_type filter: the path's anchor OR dst endpoint matches the type.
+        entity_type_clause = (
+            """
+  AND EXISTS (
+        SELECT 1 FROM canonical_entities ce
+        WHERE ce.entity_id IN (pi.anchor_entity_id, pi.dst_entity_id)
+          AND ce.entity_type = :entity_type
+      )
+"""
+            if entity_type is not None
+            else ""
+        )
+
+        sql = f"""
+WITH base AS (
+    SELECT DISTINCT ON (pi.anchor_entity_id, pi.dst_entity_id)
+           pi.insight_id, pi.anchor_entity_id, pi.hop_count, pi.path_nodes, pi.path_edges,
+           pi.harmonic_score, pi.diversity_score, pi.surprise_score, pi.template_match,
+           pi.composite_score, pi.llm_explanation, pi.explanation_model, pi.computed_at,
+           pi.dst_entity_id, pi.reliability, pi.unexpectedness, pi.semantic_distance,
+           pi.novelty, pi.weirdness, pi.scorer_version
+    FROM path_insights pi
+    WHERE pi.weirdness IS NOT NULL
+      AND pi.weirdness >= :min_weirdness
+      AND pi.dst_entity_id IS NOT NULL
+      {novelty_clause}
+      {entity_type_clause}
+    ORDER BY pi.anchor_entity_id, pi.dst_entity_id, pi.weirdness DESC
+)
+SELECT insight_id, anchor_entity_id, hop_count, path_nodes, path_edges,
+       harmonic_score, diversity_score, surprise_score, template_match,
+       composite_score, llm_explanation, explanation_model, computed_at,
+       dst_entity_id, reliability, unexpectedness, semantic_distance,
+       novelty, weirdness, scorer_version
+FROM base
+ORDER BY weirdness DESC
+LIMIT :lim OFFSET :off
+"""
+        params: dict[str, object] = {
+            "min_weirdness": min_weirdness,
+            "lim": limit,
+            "off": offset,
+        }
+        if entity_type is not None:
+            params["entity_type"] = entity_type
+
+        result = await self._session.execute(text(sql), params)
+        rows = result.fetchall()
+        insights: list[PathInsight] = []
+        for row in rows:
+            nodes = _parse_nodes(row[3])
+            edges = _parse_edges(row[4])
+            insights.append(
+                PathInsight(
+                    insight_id=UUID(str(row[0])),
+                    anchor_entity_id=UUID(str(row[1])),
+                    hop_count=int(row[2]),
+                    path_nodes=nodes,
+                    path_edges=edges,
+                    harmonic_score=float(row[5]),
+                    diversity_score=float(row[6]),
+                    surprise_score=float(row[7]),
+                    template_match=str(row[8]) if row[8] else None,
+                    composite_score=float(row[9]),
+                    llm_explanation=str(row[10]) if row[10] else None,
+                    explanation_model=str(row[11]) if row[11] else None,
+                    computed_at=row[12],
+                    dst_entity_id=UUID(str(row[13])) if row[13] else None,
+                    reliability=float(row[14]) if row[14] is not None else 0.0,
+                    unexpectedness=float(row[15]) if row[15] is not None else 0.0,
+                    semantic_distance=float(row[16]) if row[16] is not None else 0.0,
+                    novelty=float(row[17]) if row[17] is not None else 0.0,
+                    weirdness=float(row[18]) if row[18] is not None else 0.0,
+                    scorer_version=str(row[19]) if row[19] else None,
+                )
+            )
+        return insights
+
     async def update_explanation(
         self,
         insight_id: UUID,

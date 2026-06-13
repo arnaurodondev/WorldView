@@ -244,6 +244,7 @@ preferable to all-or-nothing for dashboard widgets.
 | POST | `/v1/entities/{entity_id}/narratives/generate` | Manually trigger narrative generation. Proxy-layer rate limit: 1 req/hr/entity/user via `set_nx` (BP-200). Returns 202. (PLAN-0074 Wave G) | Yes |
 | GET | `/v1/entities/{entity_id}/paths` | Pre-computed multi-hop opportunity paths. Valkey-cached 5 min. Query params: `limit`, `min_score`, `min_hops`, `max_hops` (PLAN-0074 Wave G) | Yes |
 | GET | `/v1/paths/between` | On-demand pairwise pathfinding — "is A connected to B, and how?" (PLAN-0112 W4). Proxies S7 `GET /api/v1/paths/between`. Query params: `source`, `target`, `max_hops` (1–3, default 3), `limit` (1–20, default 5), `meaningful_only`. Valkey-cached 5 min, tenant-scoped key `pathbetween:{tenant}:{source}:{target}:{max_hops}:{limit}:{meaningful_only}`. Forwards S7 status codes (400/404/422/503). | Yes |
+| GET | `/v1/connections/weird` | Global "weird connections" feed (PLAN-0112 W5, FR-7). Proxies S7 `GET /api/v1/connections/weird`. Query params: `limit` (1–100, default 20), `offset` (≥0, default 0), `min_weirdness` (0–1, default 0.0), `since_days` (1–365, optional), `entity_type` (optional — None params omitted so S7 applies defaults). Returns `{connections[WeirdConnectionPublic], total, freshness_ts}`. Valkey-cached 5 min, tenant-scoped key `weird:{tenant}:{limit}:{offset}:{min_weirdness}:{since_days}:{entity_type}`. Forwards S7 status codes (422). | Yes |
 
 ### Entity-Context Chat Endpoints (→ S8 RAG-Chat)
 

@@ -898,6 +898,86 @@ async def get_paths_between(
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Global weird-connections feed (PLAN-0112 W5) ─────────────────────────────
+
+
+@router.get(
+    "/connections/weird",
+    summary="Global feed of the most surprising connections in the graph (PLAN-0112 W5)",
+)
+async def get_weird_connections(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    min_weirdness: float = Query(default=0.0, ge=0.0, le=1.0),
+    since_days: int | None = Query(default=None, ge=1, le=365),
+    entity_type: str | None = Query(default=None),
+) -> Any:
+    """Proxy GET /api/v1/connections/weird → S7 Knowledge Graph (PRD-0112 §6.2).
+
+    Returns the globally most-weird precomputed connections (FR-7), read from
+    ``path_insights`` and ranked by ``weirdness`` descending, deduped to distinct
+    (src, dst) endpoint pairs.
+
+    Caching strategy (5-minute TTL, tenant-scoped):
+      - Cache key:
+        ``weird:<tenant>:<limit>:<offset>:<min_weirdness>:<since_days>:<entity_type>``
+      - Paths are recomputed by the KG scheduler; 5 min is safe.
+      - Non-2xx responses are never cached.
+      - Fail-open on Valkey errors.
+
+    Requires authentication.  Errors flow through from S7: 422 (bad params).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    # Build a deterministic, tenant-scoped cache key from all query params.
+    cache_key = f"weird:{tenant_id}:{limit}:{offset}:{min_weirdness}:{since_days or ''}:{entity_type or ''}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit ────────────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            logger.warning("weird_connections_cache_read_failed", tenant_id=tenant_id)
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # Forward only the params the caller actually set (None ⇒ omit so S7 applies
+    # its own defaults / null semantics).
+    params: dict[str, Any] = {
+        "limit": limit,
+        "offset": offset,
+        "min_weirdness": min_weirdness,
+    }
+    if since_days is not None:
+        params["since_days"] = since_days
+    if entity_type is not None:
+        params["entity_type"] = entity_type
+
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/connections/weird",
+        params=params,
+        headers=headers,
+    )
+
+    # ── Cache store (5 min — feed changes on scheduler cadence) ──────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            await valkey.set(cache_key, resp.content.decode(), ex=300)
+        except Exception:
+            logger.warning("weird_connections_cache_write_failed", tenant_id=tenant_id)
+
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Intelligence-tab bundle (PLAN-0099 H) ────────────────────────────────────
 
 

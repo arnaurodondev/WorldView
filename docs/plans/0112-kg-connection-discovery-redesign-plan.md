@@ -475,7 +475,7 @@ endpoint type. Dedup to distinct endpoint-pairs (best path each, OQ-6 default).
 construct `get_entity_paths` already uses. ⚠ KG does NOT have a generic `ReadOnlyUnitOfWork`/`ReadUoWDep`; use
 `ReadOnlyDbSessionDep`. No AGE `LOAD 'age'` needed (pure `path_insights` SELECT) → genuine read replica (R27).
 **Tests**: ordering, filters, endpoint-pair dedup, pagination.
-**Acceptance**: [ ] ranked global [ ] filters work [ ] uses `ReadOnlyDbSessionDep` [ ] dedup
+**Acceptance**: [x] ranked global [x] filters work [x] uses `ReadOnlyDbSessionDep` [x] dedup  ← DONE
 
 #### T-5-02 — KG `GET /api/v1/connections/weird` + S9 proxy
 **Type**: impl · **depends_on**: T-5-01 · **blocks**: T-5-03
@@ -484,7 +484,7 @@ construct `get_entity_paths` already uses. ⚠ KG does NOT have a generic `ReadO
 **PRD reference**: §6.2
 **What to build**: KG route (read use case, R25) + S9 authenticated proxy with 5-min Valkey cache. Response per §6.2.
 **Tests**: KG router unit + S9 contract `test_weird_connections_contract.py`.
-**Acceptance**: [ ] route + proxy [ ] cached [ ] p95 < 300 ms (NFR-1)
+**Acceptance**: [x] route + proxy [x] cached [ ] p95 < 300 ms (NFR-1)  ← DONE (backend; perf TBD on live data)
 
 #### T-5-03 — Frontend: feed + pairwise + PathsTab re-label
 **Type**: impl · **depends_on**: T-5-02, T-4-03 · **blocks**: none

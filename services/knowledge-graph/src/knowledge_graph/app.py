@@ -33,6 +33,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import common.ids  # type: ignore[import-untyped]
 from knowledge_graph.api import (
     claims,
+    connections,  # PLAN-0112 W5: global weird-connections feed
     cypher,
     dlq,
     entities,
@@ -258,6 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
     app.include_router(paths.router)  # PLAN-0074 Wave E2 — path insights
+    app.include_router(connections.router)  # PLAN-0112 W5 — global weird-connections feed
     app.include_router(narratives.router)  # PRD-0074 Wave D — narrative history + manual trigger
     # PLAN-0099 W0 + WL: manual entity refresh, 7d intelligence rollup,
     # per-entity sector lookup (consumed by S3 screener sync + S9 brief).

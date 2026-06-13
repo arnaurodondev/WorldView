@@ -141,3 +141,40 @@ class PathsBetweenResponse(BaseModel):
     shortest_hops: int | None = None
     paths: list[PathBetweenPublic]
     computed_at: datetime
+
+
+# ── Global weird-connections feed (PLAN-0112 W5, T-5-01 / PRD §6.2) ───────────
+#
+# The wire format for GET /api/v1/connections/weird — a graph-wide feed of the
+# most surprising precomputed paths (read from ``path_insights``).  A
+# ``WeirdConnectionPublic`` is a ``PathBetweenPublic`` enriched with the two
+# endpoint ids + the ``computed_at`` timestamp so the frontend can deep-link to
+# the pairwise "how are these related?" view and show data freshness per row.
+
+
+class WeirdConnectionPublic(PathBetweenPublic):
+    """One ranked global weird connection (PRD §6.2).
+
+    = ``PathBetweenPublic`` (path_nodes / path_edges / hop_count + the
+    reliability / unexpectedness / semantic_distance / novelty / weirdness
+    sub-scores) + the path endpoints (``src_entity_id`` / ``dst_entity_id``) and
+    when it was computed.
+    """
+
+    src_entity_id: UUID
+    dst_entity_id: UUID
+    computed_at: datetime
+
+
+class WeirdConnectionsResponse(BaseModel):
+    """Top-level response for GET /api/v1/connections/weird (PRD §6.2).
+
+    ``total`` is the number of rows returned in this page (after dedup +
+    filtering).  ``freshness_ts`` = MAX(computed_at) across the returned
+    connections — None when the feed is empty.
+    """
+
+    connections: list[WeirdConnectionPublic]
+    total: int
+    # MAX(computed_at) across the returned connections — None when empty.
+    freshness_ts: datetime | None = None

@@ -409,6 +409,29 @@ def get_entity_paths_uc(
     )
 
 
+# ── Global weird-connections feed (PLAN-0112 W5) ──────────────────────────────
+# R25: All infrastructure wiring happens here — the router imports only the Dep.
+# R27: list_global_weird is a pure path_insights SELECT (no AGE) → read-replica.
+
+
+def get_global_weird_connections_uc(
+    session: ReadOnlyDbSessionDep,
+) -> GlobalWeirdConnectionsUseCase_:
+    """Build GlobalWeirdConnectionsUseCase bound to the current read-only session.
+
+    Wires ``PathInsightRepository`` here (dependencies.py) so the connections.py
+    router never imports from infrastructure/ (R25).  Read-only (R27).
+    """
+    from knowledge_graph.application.use_cases.global_weird_connections import (
+        GlobalWeirdConnectionsUseCase,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+        PathInsightRepository,
+    )
+
+    return GlobalWeirdConnectionsUseCase(PathInsightRepository(session))
+
+
 # ── Pairwise pathfinding (PLAN-0112 W4) ───────────────────────────────────────
 # R25: All infrastructure wiring happens here — the router imports only the Dep.
 # R27 exception: AGE traversal needs LOAD 'age' → the engine holds the WRITE
@@ -516,7 +539,11 @@ from knowledge_graph.application.use_cases.get_entity_paths import (  # noqa: E4
 from knowledge_graph.application.use_cases.get_relation_detail import (  # noqa: E402
     GetRelationDetailUseCase as GetRelationDetailUseCase_,
 )
+from knowledge_graph.application.use_cases.global_weird_connections import (  # noqa: E402
+    GlobalWeirdConnectionsUseCase as GlobalWeirdConnectionsUseCase_,
+)
 
 GetEntityPathsUseCaseDep = Annotated[GetEntityPathsUseCase_, Depends(get_entity_paths_uc)]
 GetRelationDetailUseCaseDep = Annotated[GetRelationDetailUseCase_, Depends(get_relation_detail_uc)]
 FindPathsBetweenUseCaseDep = Annotated[FindPathsBetweenUseCase_, Depends(get_find_paths_between_uc)]
+GlobalWeirdConnectionsUseCaseDep = Annotated[GlobalWeirdConnectionsUseCase_, Depends(get_global_weird_connections_uc)]

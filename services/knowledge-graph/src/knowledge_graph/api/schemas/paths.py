@@ -16,6 +16,8 @@ from knowledge_graph.application.schemas.paths import (
     PathInsightPublic,
     PathNodePublic,
     PathsBetweenResponse,
+    WeirdConnectionPublic,
+    WeirdConnectionsResponse,
 )
 
 __all__ = [
@@ -25,4 +27,6 @@ __all__ = [
     "PathInsightPublic",
     "PathNodePublic",
     "PathsBetweenResponse",
+    "WeirdConnectionPublic",
+    "WeirdConnectionsResponse",
 ]
