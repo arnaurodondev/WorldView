@@ -75,6 +75,11 @@ services:
       context: ../postgres
       dockerfile: Dockerfile
     profiles: [infra, all]
+    # Docker defaults /dev/shm to 64MB; parallel VACUUM/maintenance on large
+    # tables (e.g. fundamental_metrics ANALYZE in market-data migration 037)
+    # allocates >64MB of shared memory and fails with DiskFullError on the shm
+    # segment. 256MB gives comfortable headroom. (Applies on next postgres recreate.)
+    shm_size: 256mb
     ports:
       # SEC-007: bind to localhost only — prevent external DB access
       - "127.0.0.1:5432:5432"
