@@ -24,10 +24,10 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.application.ports.graph_path_engine import GraphPathEngine
     from knowledge_graph.application.services.path_scorer import PathScorer
     from knowledge_graph.application.services.path_template_matcher import PathTemplateMatcher
     from knowledge_graph.domain.entities.path_insight import PathInsightJob
-    from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
     from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_job_repository import (
         PathInsightJobRepository,
     )
@@ -39,6 +39,16 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # Maximum insights stored per anchor entity (PRD-0074 §9.3).
 _TOP_K = 50
+
+# Default per-anchor discovery hop ceiling (PLAN-0112 W2) — mirrors
+# ``Settings.path_max_hops``.  Injected via the constructor; this constant is the
+# fallback when the caller does not pass an explicit value.
+_DEFAULT_PATH_MAX_HOPS = 3
+
+# Max raw paths pulled from the engine per anchor before scoring/top-K trim.
+# The engine accumulates across hop depths up to this cap (its own _MAX_LIMIT is
+# 200); we request a generous-but-bounded set so the top-50 selection has headroom.
+_DISCOVERY_LIMIT = 200
 
 # Sleep when no jobs are available.
 _IDLE_SLEEP_SECONDS = 30
@@ -61,7 +71,9 @@ class PathInsightWorker:
                           a given session.
         insight_repo_factory: Callable that returns a PathInsightRepository for
                               a given session.
-        path_discovery: PathDiscovery adapter (AGE session factory injected).
+        path_engine: GraphPathEngine port (AGE-backed adapter injected) — replaces
+                     the deprecated PathDiscovery (PLAN-0112 T-2-04).  The worker
+                     depends on the ABC, not the concrete adapter (R25).
         scorer: PathScorer service.
         template_matcher: PathTemplateMatcher service.
         instance_uuid: Stable worker identity used for SKIP LOCKED claim.
@@ -78,18 +90,20 @@ class PathInsightWorker:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],  # type: ignore[type-arg]
-        path_discovery: PathDiscovery,
+        path_engine: GraphPathEngine,
         scorer: PathScorer,
         template_matcher: PathTemplateMatcher,
         instance_uuid: UUID,
         batch_size: int = 3,
+        path_max_hops: int = _DEFAULT_PATH_MAX_HOPS,
     ) -> None:
         self._sf = session_factory
-        self._path_discovery = path_discovery
+        self._path_engine = path_engine
         self._scorer = scorer
         self._template_matcher = template_matcher
         self._instance_uuid = instance_uuid
         self._batch_size = batch_size
+        self._path_max_hops = path_max_hops
 
     def _job_repo(self, session: AsyncSession) -> PathInsightJobRepository:
         from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_job_repository import (
@@ -144,8 +158,22 @@ class PathInsightWorker:
         never stays permanently stuck in 'running'.
         """
         try:
-            # Phase 1: discover paths via AGE (no DB session held).
-            raw_paths = await self._path_discovery.find_paths_for_anchor(job.entity_id)
+            # Phase 1: discover paths via the typed-VLE engine (membership-pruned,
+            # PLAN-0112 T-2-04).  The source end is bound to the anchor, target end
+            # free; the engine probes hop depths 1..path_max_hops (staged, BP-687)
+            # and never expands the untyped frontier (BP-689).
+            raw_paths = await self._path_engine.find_paths_from_anchor(
+                job.entity_id,
+                max_hops=self._path_max_hops,
+                prune_membership=True,
+                limit=_DISCOVERY_LIMIT,
+            )
+
+            # Self-loop guard (PLAN-0112 T-2-04): drop any path whose endpoints are
+            # the same entity.  The engine already filters these, but the worker
+            # guards too so a future engine change can't reintroduce self-loops
+            # into the scored output (the scorer zeroes them in W3 regardless).
+            raw_paths = [p for p in raw_paths if p.node_ids and p.node_ids[0] != p.node_ids[-1]]
 
             # Phase 2: score and apply template matching (CPU, no I/O).
             all_insights = []
@@ -183,8 +211,16 @@ class PathInsightWorker:
             try:
                 async with self._sf() as session:
                     job_repo = self._job_repo(session)
-                    await job_repo.mark_failed(job.job_id, error_text=str(exc)[:2000])
+                    new_status = await job_repo.mark_failed(job.job_id, error_text=str(exc)[:2000])
                     await session.commit()
+                # PLAN-0112 T-1-03 (§13): count only the terminal transition so
+                # ``path_jobs_failed_total`` rate > 0 sustained = the flood is back.
+                if new_status == "failed":
+                    from knowledge_graph.infrastructure.metrics.prometheus import (
+                        path_jobs_failed_total,
+                    )
+
+                    path_jobs_failed_total.inc()
             except Exception:
                 logger.error(  # type: ignore[no-any-return]
                     "path_insight_mark_failed_error",

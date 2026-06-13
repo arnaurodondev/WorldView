@@ -291,6 +291,14 @@ class Settings(BaseSettings):
     # APScheduler cron for PathInsightSeeder (default: 02:30 UTC daily).
     path_insight_seeder_cron: str = "30 2 * * *"
 
+    # PLAN-0112 W1 (T-1-04, §AD-5) — hard ceiling on path-discovery hop length.
+    # AGE traversal cost grows steeply with hop count; the investigation measured
+    # maxhops <= 3 safe (60-800 ms) but maxhops=4 hub-to-hub blew up to 13.8 s on
+    # the unpruned graph.  Capped at 3 until the W2 membership-pruning spike
+    # re-measures 4/5 on the pruned graph and raises this if p95 stays in budget.
+    # Env override: KNOWLEDGE_GRAPH_PATH_MAX_HOPS.
+    path_max_hops: int = 3
+
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
         """Validate startup invariants.

@@ -220,3 +220,23 @@ summary_worker_stuck_relations_total = Counter(
     "summary_worker_stuck_relations_total",
     "Relations whose summary generation has failed >= 3 consecutive times.",
 )
+
+
+# ── PLAN-0112 W1 — Path-insight remediation (FR-1 / §13) ──────────────────────
+
+# T-1-03 / BP-690: incremented by PathInsightSeeder for every hub anchor that
+# qualified by relation-count but was skipped because it has a terminally
+# ``failed`` discovery job (retry_count >= max_retries).  A flat-line at 0 once
+# the failed set drains proves the nightly re-queue flood is gone (NFR-3).
+path_jobs_requeued_skipped_total = Counter(
+    "path_jobs_requeued_skipped_total",
+    "Hub anchors skipped by the seeder because they have a terminally-failed path job.",
+)
+
+# T-1-03 / §13: incremented when a PathInsightWorker discovery job exhausts its
+# retries and transitions to terminal 'failed'.  Alert rule: a sustained rate > 0
+# means the flood is back (the discovery engine is timing out again).
+path_jobs_failed_total = Counter(
+    "path_jobs_failed_total",
+    "Path-insight discovery jobs that exhausted retries and transitioned to terminal 'failed'.",
+)

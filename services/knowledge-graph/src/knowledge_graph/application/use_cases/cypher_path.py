@@ -208,14 +208,38 @@ def _build_path_sql(
     )
 
 
-async def _setup_age_session(session: AsyncSession) -> None:
-    """Load AGE extension and set the search_path for the current session.
+async def _setup_age_session(session: AsyncSession, *, statement_timeout_ms: str | None = None) -> None:
+    """Load AGE extension and apply session GUCs before any AGE Cypher query.
 
     Must be called before any AGE Cypher query on a fresh session.
     This matches the pattern enforced in AgeSyncWorker._setup_age_session().
+
+    GUC-scope fix (PLAN-0112 W2, 2026-06-12)
+    ----------------------------------------
+    The earlier code issued ``SET LOCAL statement_timeout`` /
+    ``SET LOCAL max_parallel_workers_per_gather`` as the safety mechanism.  But
+    ``SET LOCAL`` only lasts for the duration of the *current transaction*, and
+    with SQLAlchemy's async sessions each ``execute`` of a bare DDL/SET statement
+    runs in its own implicit, auto-committed transaction that ends immediately —
+    so the GUC was rolled back before the subsequent AGE traversal query ran in a
+    *different* implicit transaction.  The timeout / parallel-worker cap therefore
+    NEVER actually constrained the traversal query (the flood kept happening).
+
+    Fix: use plain ``SET`` (session-scoped, NOT ``SET LOCAL``).  A session-scoped
+    GUC persists on the connection for every subsequent statement issued on that
+    same ``AsyncSession`` until the connection is returned to the pool, so it
+    reliably applies to the traversal query that follows.  Callers MUST run the
+    setup and the traversal query on the **same** session/connection (they do —
+    ``CypherPathUseCase.execute`` and ``AgeGraphPathEngine`` both hold one session
+    for setup + query).
     """
     await session.execute(text("LOAD 'age'"))
     await session.execute(text("SET search_path = ag_catalog, public"))
+    # Session-scoped (NOT LOCAL) so it survives to the traversal query.
+    await session.execute(text("SET max_parallel_workers_per_gather = 0"))
+    if statement_timeout_ms is not None:
+        # Validated numeric ms string — embedded as a literal (no user input).
+        await session.execute(text(f"SET statement_timeout = '{statement_timeout_ms}'"))
 
 
 # ── Agtype parsing ────────────────────────────────────────────────────────────
@@ -355,9 +379,10 @@ class CypherPathUseCase:
 
         start_ms = time.monotonic() * 1000
 
-        # AGE session setup: LOAD 'age' + set search_path (required before any AGE query).
-        await _setup_age_session(session)
-        await session.execute(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
+        # AGE session setup: LOAD 'age' + search_path + session-scoped GUCs
+        # (statement_timeout + max_parallel_workers_per_gather) on THIS session,
+        # so they actually constrain the traversal query below (GUC-scope fix).
+        await _setup_age_session(session, statement_timeout_ms=_STATEMENT_TIMEOUT_MS)
 
         rows = await self._execute_staged(
             session,

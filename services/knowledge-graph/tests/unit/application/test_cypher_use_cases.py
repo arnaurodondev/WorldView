@@ -175,12 +175,15 @@ class TestCypherPathUseCase:
         mock_result = MagicMock()
         mock_result.fetchall.return_value = []
         session = AsyncMock()
-        # First 3 calls (AGE session setup) succeed; 4th (AGE Cypher query) times out.
+        # First 4 calls (AGE session setup) succeed; 5th (AGE Cypher query) times out.
+        # PLAN-0112 W2: setup now emits 4 statements — LOAD, search_path,
+        # SET max_parallel_workers_per_gather, SET statement_timeout (session-scoped).
         session.execute = AsyncMock(
             side_effect=[
                 mock_result,  # LOAD 'age'
                 mock_result,  # SET search_path
-                mock_result,  # SET LOCAL statement_timeout
+                mock_result,  # SET max_parallel_workers_per_gather = 0
+                mock_result,  # SET statement_timeout
                 Exception("canceling statement due to statement timeout"),
             ]
         )
@@ -226,20 +229,25 @@ class TestCypherPathUseCase:
             target_entity_id=_TGT,
         )
 
-        # The SET LOCAL statement_timeout statement actually issued to the DB must
-        # carry the 30 s value (guards against the constant being read but a stale
-        # literal being embedded in the SQL string).
+        # The statement_timeout statement actually issued to the DB must carry the
+        # 30 s value (guards against the constant being read but a stale literal
+        # being embedded in the SQL string).  PLAN-0112 W2: it is now a
+        # session-scoped ``SET`` (NOT ``SET LOCAL``) so it survives to the traversal
+        # query (the GUC-scope fix).
         timeout_stmts = [
             str(c.args[0]) for c in session.execute.call_args_list if c.args and "statement_timeout" in str(c.args[0])
         ]
         assert any(
             "30000" in s for s in timeout_stmts
-        ), f"expected a SET LOCAL statement_timeout = '30000' call, got: {timeout_stmts}"
+        ), f"expected a SET statement_timeout = '30000' call, got: {timeout_stmts}"
         assert not any(
             "5000" in s or "20000" in s for s in timeout_stmts
         ), f"path query must NOT issue the old 5000/20000 ms timeout, got: {timeout_stmts}"
+        # The timeout GUC must be session-scoped (not SET LOCAL) so it binds the
+        # subsequent traversal query.
+        assert all("set local" not in s.lower() for s in timeout_stmts)
         # Sanity: the issued statement matches what the use case builds.
-        assert str(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
+        assert str(text(f"SET statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
 
     async def test_returns_empty_paths_when_no_path_found(self) -> None:
         """AGE returns no rows → paths=[], paths_found=0."""
@@ -339,11 +347,13 @@ class TestCypherPathUseCase:
         setup_result.fetchall.return_value = []
 
         session = AsyncMock()
+        # PLAN-0112 W2: 4 setup calls (LOAD, search_path, parallel, timeout).
         session.execute = AsyncMock(
             side_effect=[
                 setup_result,  # LOAD 'age'
                 setup_result,  # SET search_path
-                setup_result,  # SET LOCAL statement_timeout
+                setup_result,  # SET max_parallel_workers_per_gather = 0
+                setup_result,  # SET statement_timeout
                 one_path_result,  # L=1 probe — HITS, must stop here
             ]
         )
@@ -357,8 +367,8 @@ class TestCypherPathUseCase:
             max_hops=3,
         )
 
-        # 3 setup + exactly 1 Cypher probe = 4 total. No L=2/L=3 probes were issued.
-        assert session.execute.call_count == 4, (
+        # 4 setup + exactly 1 Cypher probe = 5 total. No L=2/L=3 probes were issued.
+        assert session.execute.call_count == 5, (
             "a 1-hop hit must stop staged probing after the L=1 query — got "
             f"{session.execute.call_count} calls (deeper frontier was expanded)"
         )
@@ -387,11 +397,13 @@ class TestCypherPathUseCase:
         hit.fetchall.return_value = [(None, None)]
 
         session = AsyncMock()
+        # PLAN-0112 W2: 4 setup calls (LOAD, search_path, parallel, timeout).
         session.execute = AsyncMock(
             side_effect=[
                 empty,  # LOAD 'age'
                 empty,  # SET search_path
-                empty,  # SET LOCAL statement_timeout
+                empty,  # SET max_parallel_workers_per_gather = 0
+                empty,  # SET statement_timeout
                 empty,  # L=1 probe — no direct edge
                 empty,  # L=2 probe — no 2-hop path
                 hit,  # L=3 probe — found
@@ -407,8 +419,8 @@ class TestCypherPathUseCase:
             max_hops=3,
         )
 
-        # 3 setup + 3 probes (1,2,3) = 6 calls; the L=3 hit terminates the loop.
-        assert session.execute.call_count == 6
+        # 4 setup + 3 probes (1,2,3) = 7 calls; the L=3 hit terminates the loop.
+        assert session.execute.call_count == 7
         cypher_calls = [str(c.args[0]) for c in session.execute.call_args_list if "ag_catalog.cypher" in str(c.args[0])]
         assert len(cypher_calls) == 3, f"expected 3 ascending probes, got {len(cypher_calls)}"
         assert "*1..1" in cypher_calls[0]

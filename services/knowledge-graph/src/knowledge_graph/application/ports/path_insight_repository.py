@@ -35,12 +35,17 @@ class PathInsightJobRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    async def mark_failed(self, job_id: UUID, error_text: str) -> None:
+    async def mark_failed(self, job_id: UUID, error_text: str) -> str | None:
         """Transition a job on failure.
 
         - ``retry_count < 3`` → increment retry_count, reset to ``pending``,
           clear ``claimed_by``.
         - ``retry_count == 3`` → set ``status='failed'`` (terminal).
+
+        Returns the resulting status ('failed' on the terminal transition,
+        otherwise 'pending'; ``None`` if the job_id was not found) so callers can
+        emit ``path_jobs_failed_total`` only on the terminal transition
+        (PLAN-0112 T-1-03).
         """
         ...
 

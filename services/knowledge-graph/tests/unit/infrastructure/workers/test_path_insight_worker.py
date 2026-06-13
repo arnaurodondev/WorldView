@@ -65,7 +65,7 @@ def _make_session_factory() -> tuple[MagicMock, AsyncMock]:
 
 def _make_worker(
     session_factory: MagicMock | None = None,
-    path_discovery: MagicMock | None = None,
+    path_engine: MagicMock | None = None,
     scorer: MagicMock | None = None,
     template_matcher: MagicMock | None = None,
     instance_uuid: UUID | None = None,
@@ -75,9 +75,9 @@ def _make_worker(
 
     if session_factory is None:
         session_factory, _ = _make_session_factory()
-    if path_discovery is None:
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=[])
+    if path_engine is None:
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
     if scorer is None:
         scorer = MagicMock()
     if template_matcher is None:
@@ -86,7 +86,7 @@ def _make_worker(
 
     return PathInsightWorker(
         session_factory=session_factory,
-        path_discovery=path_discovery,
+        path_engine=path_engine,
         scorer=scorer,
         template_matcher=template_matcher,
         instance_uuid=instance_uuid or uuid4(),
@@ -95,30 +95,108 @@ def _make_worker(
 
 
 class TestPathInsightWorker:
-    def test_worker_claims_and_processes_job(self) -> None:
-        """Worker claims jobs and calls path_discovery for each job entity_id."""
+    def test_worker_uses_graph_path_engine(self) -> None:
+        """Worker claims jobs and calls the GraphPathEngine for each job entity_id."""
         from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
         job = _make_job()
         entity_id = job.entity_id  # type: ignore[attr-defined]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=[])
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
         scorer = MagicMock()
         template_matcher = AsyncMock()
         template_matcher.match = AsyncMock(return_value=None)
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
         )
 
         asyncio.run(worker._process_job(job))
-        path_discovery.find_paths_for_anchor.assert_awaited_once_with(entity_id)
+        # Engine is called with the anchor entity_id (PLAN-0112 T-2-04).
+        path_engine.find_paths_from_anchor.assert_awaited_once()
+        call = path_engine.find_paths_from_anchor.await_args
+        assert call.args[0] == entity_id
+
+    def test_worker_passes_prune_membership(self) -> None:
+        """Worker requests membership-pruned discovery at the configured hop cap."""
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        job = _make_job()
+
+        session_factory, _session = _make_session_factory()
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
+
+        worker = PathInsightWorker(
+            session_factory=session_factory,
+            path_engine=path_engine,
+            scorer=MagicMock(),
+            template_matcher=AsyncMock(),
+            instance_uuid=uuid4(),
+            path_max_hops=4,
+        )
+
+        asyncio.run(worker._process_job(job))
+        call = path_engine.find_paths_from_anchor.await_args
+        assert call.kwargs["prune_membership"] is True
+        assert call.kwargs["max_hops"] == 4
+
+    def test_worker_filters_self_loops(self) -> None:
+        """Paths whose endpoints are the same entity are dropped before scoring."""
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.services.path_scorer import PathScorer
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        job = _make_job()
+        same_id = str(uuid4())
+        # A self-loop path: first and last node ids identical.
+        self_loop = RawPath(
+            node_ids=(same_id, str(uuid4()), same_id),
+            node_names=("A", "B", "A"),
+            node_types=("company", "company", "company"),
+            rel_types=("SUPPLIER_OF", "SUPPLIER_OF"),
+            edge_confs=(0.8, 0.8),
+        )
+        good = _make_raw_path(2)
+
+        session_factory, _session = _make_session_factory()
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[self_loop, good])
+
+        worker = PathInsightWorker(
+            session_factory=session_factory,
+            path_engine=path_engine,
+            scorer=PathScorer(),
+            template_matcher=AsyncMock(),
+            instance_uuid=uuid4(),
+        )
+
+        captured: list = []
+
+        class _FakeInsightRepo:
+            async def replace_for_anchor(self, anchor_id: UUID, insights: list) -> None:
+                captured.extend(insights)
+
+        class _FakeJobRepo:
+            async def mark_done(self, job_id: UUID, paths_found: int) -> None:
+                pass
+
+            async def mark_failed(self, job_id: UUID, error_text: str) -> None:
+                pass
+
+        worker._template_matcher.match = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        worker._insight_repo = lambda session: _FakeInsightRepo()  # type: ignore[method-assign]
+        worker._job_repo = lambda session: _FakeJobRepo()  # type: ignore[method-assign]
+
+        asyncio.run(worker._process_job(job))
+        # Only the non-self-loop path is scored/persisted.
+        assert len(captured) == 1
 
     def test_worker_failure_increments_retry(self) -> None:
         """When path_discovery raises, mark_failed is called (BP-113)."""
@@ -129,12 +207,12 @@ class TestPathInsightWorker:
         job = _make_job()
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(side_effect=RuntimeError("AGE error"))
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(side_effect=RuntimeError("AGE error"))
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
@@ -168,8 +246,8 @@ class TestPathInsightWorker:
         raw_paths = [_make_raw_path(2)]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=raw_paths)
 
         scorer = PathScorer()
         template_matcher = AsyncMock()
@@ -177,7 +255,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
@@ -214,15 +292,15 @@ class TestPathInsightWorker:
         raw_paths = [_make_raw_path(2) for _ in range(60)]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=raw_paths)
         scorer = PathScorer()
         template_matcher = AsyncMock()
         template_matcher.match = AsyncMock(return_value=None)
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
@@ -270,7 +348,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
@@ -315,14 +393,14 @@ class TestPathInsightWorker:
         sf_b, _ = _make_session_factory()
         worker_a = PathInsightWorker(
             session_factory=sf_a,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=worker_a_uuid,
         )
         worker_b = PathInsightWorker(
             session_factory=sf_b,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=worker_b_uuid,
@@ -354,7 +432,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
