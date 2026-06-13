@@ -93,6 +93,18 @@ class PathInsight:
     # Hub penalty applied during scoring (2026-05-23).  Defaults to 0.0 so
     # existing rows loaded from DB without a hub_penalty column remain valid.
     hub_penalty: float = 0.0
+    # ── PLAN-0112 W3 (T-3-04): the new weirdness metric + its sub-scores ──────
+    # All defaulted (mirroring the hub_penalty precedent) so rows persisted by a
+    # pre-W3 worker — and the deserializer reading NULL columns — remain valid.
+    # ``weirdness`` is mirrored into ``composite_score`` by the scorer, so the
+    # existing composite-based ranking and the in-range invariant cover it.
+    dst_entity_id: UUID | None = None
+    reliability: float = 0.0
+    unexpectedness: float = 0.0
+    semantic_distance: float = 0.0
+    novelty: float = 0.0
+    weirdness: float = 0.0
+    scorer_version: str | None = None
 
     def __post_init__(self) -> None:
         # Invariant: hop_count must equal the number of edges.

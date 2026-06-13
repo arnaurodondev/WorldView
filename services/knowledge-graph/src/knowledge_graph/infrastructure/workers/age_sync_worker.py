@@ -45,12 +45,18 @@ from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_age_sync_duration_seconds,
     s7_age_sync_entities_total,
     s7_age_sync_relations_total,
+    s7_node_degree_refresh_seconds,
 )
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.application.ports.node_degree_repository import (
+        NodeDegreeRepositoryPort,
+    )
     from knowledge_graph.config import Settings
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
@@ -179,8 +185,15 @@ class AgeSyncWorker:
         valkey_client: ValkeyClient,
         settings: Settings,
         read_session_factory: Any = None,
+        node_degree_repo_factory: Callable[[AsyncSession], NodeDegreeRepositoryPort] | None = None,
     ) -> None:
         self._sf = session_factory
+        # PLAN-0112 W3 (T-3-02): after each AGE-sync cycle the worker recomputes
+        # the per-vertex degree (powering the weirdness scorer's unexpectedness
+        # term) and upserts node_degree + graph_stats.  The factory builds a
+        # NodeDegreeRepositoryPort from a session (R25: worker depends on the ABC,
+        # not the concrete repo).  When None (legacy/tests) the refresh is skipped.
+        self._node_degree_repo_factory = node_degree_repo_factory
         # DEF-034 (Wave B-5): AGE Cypher MERGE statements (which are writes
         # against intelligence_db) and the entity/relation SELECTs all share
         # one session in :meth:`run` because every AGE write requires
@@ -233,6 +246,12 @@ class AgeSyncWorker:
 
         await self._set_watermark(new_watermark)
 
+        # PLAN-0112 W3 (T-3-02): refresh node_degree + graph_stats from the
+        # just-synced AGE graph so the weirdness scorer's unexpectedness term has
+        # up-to-date degrees.  Fail-open: a refresh error must never abort the
+        # sync cycle (the previous degree snapshot stays usable until next run).
+        await self._refresh_node_degrees()
+
         elapsed = time.monotonic() - start
         s7_age_sync_entities_total.inc(entities_synced)
         s7_age_sync_relations_total.inc(relations_synced)
@@ -256,6 +275,45 @@ class AgeSyncWorker:
             duration_s=round(elapsed, 2),
             new_watermark=new_watermark.isoformat(),
         )
+
+    # ── node_degree refresh (PLAN-0112 W3, T-3-02) ─────────────────────────────
+
+    async def _refresh_node_degrees(self) -> None:
+        """Recompute + upsert node_degree/graph_stats from the synced AGE graph.
+
+        Fail-open: any error is logged and swallowed so a degree-refresh failure
+        never aborts the AGE-sync cycle (BP-540/541 — degrade gracefully rather
+        than block the pipeline).  Emits ``s7_node_degree_refresh_seconds``.
+        """
+        if self._node_degree_repo_factory is None:
+            logger.debug("node_degree_refresh_skipped_no_factory")  # type: ignore[no-any-return]
+            return
+        refresh_start = time.monotonic()
+        try:
+            async with self._sf() as session:
+                # PLAN-0112 W3 live-QA fix: the degree refresh is now PURE SQL over
+                # the raw AGE storage tables (``_ag_label_edge`` + ``entity``),
+                # using fully-qualified ``ag_catalog`` agtype helpers — it needs
+                # NEITHER ``LOAD 'age'`` NOR any Cypher (the old Cypher ``-[r]-``
+                # enumeration timed out at 50 s on the live graph).  We keep the
+                # serial-plan GUC so the scan stays off the parallel path.
+                await session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+                repo = self._node_degree_repo_factory(session)
+                stats = await repo.refresh_from_age()
+                await session.commit()
+            s7_node_degree_refresh_seconds.observe(time.monotonic() - refresh_start)
+            logger.info(  # type: ignore[no-any-return]
+                "node_degree_refresh_complete",
+                total_edges=stats.total_edges,
+                total_meaningful_edges=stats.total_meaningful_edges,
+                max_degree=stats.max_degree,
+                duration_s=round(time.monotonic() - refresh_start, 3),
+            )
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "node_degree_refresh_error",
+                exc_info=True,
+            )
 
     # ── Watermark ─────────────────────────────────────────────────────────────
 

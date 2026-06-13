@@ -236,6 +236,15 @@ def _make_insight_row(
         None,  # 10: llm_explanation
         None,  # 11: explanation_model
         _NOW,  # 12: computed_at
+        # PLAN-0112 W3: the 7 new weirdness columns.  NULL here exercises the
+        # backward-compat path (old rows pre-migration deserialize to defaults).
+        None,  # 13: dst_entity_id
+        None,  # 14: reliability
+        None,  # 15: unexpectedness
+        None,  # 16: semantic_distance
+        None,  # 17: novelty
+        None,  # 18: weirdness
+        None,  # 19: scorer_version
     )
 
 
@@ -346,8 +355,9 @@ class TestPathInsightRepository:
         assert params["min_hops"] == 3
         assert params["max_hops"] == 4
 
-    def test_list_by_anchor_sorted_by_composite_score_desc(self) -> None:
-        """list_by_anchor SQL orders by composite_score DESC."""
+    def test_list_by_anchor_sorted_by_weirdness_desc(self) -> None:
+        """PLAN-0112 W3: list_by_anchor ranks by weirdness (COALESCE-ing to the
+        legacy composite_score for un-backfilled rows)."""
         from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
             PathInsightRepository,
         )
@@ -357,7 +367,7 @@ class TestPathInsightRepository:
         repo = PathInsightRepository(session)
         asyncio.run(repo.list_by_anchor(anchor))
         sql_str = str(session.execute.call_args_list[0][0][0]).lower()
-        assert "composite_score desc" in sql_str
+        assert "coalesce(weirdness, composite_score) desc" in sql_str
 
     def test_update_explanation_calls_update(self) -> None:
         """update_explanation issues an UPDATE SQL."""

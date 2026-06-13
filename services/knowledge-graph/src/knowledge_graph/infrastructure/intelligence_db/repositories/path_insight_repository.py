@@ -100,6 +100,8 @@ class PathInsightRepository(PathInsightRepositoryPort):
             # between the named-param ``:name`` and the Postgres cast ``::type``.
             # Use explicit CAST(:name AS type) for all typed columns to avoid
             # the parse ambiguity (BP-180 pattern).
+            # PLAN-0112 W3 (T-3-04): persist the new weirdness columns alongside
+            # the legacy ones.  dst_entity_id is nullable (CAST handles None).
             rows_sql_parts.append(
                 f"(CAST(:insight_id{suffix} AS UUID), "
                 f"CAST(:anchor{suffix} AS UUID), "
@@ -113,7 +115,14 @@ class PathInsightRepository(PathInsightRepositoryPort):
                 f":composite{suffix}, "
                 f":llm_exp{suffix}, "
                 f":exp_model{suffix}, "
-                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ))"
+                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ), "
+                f"CAST(:dst{suffix} AS UUID), "
+                f":reliability{suffix}, "
+                f":unexpectedness{suffix}, "
+                f":semantic{suffix}, "
+                f":novelty{suffix}, "
+                f":weirdness{suffix}, "
+                f":scorer_version{suffix})"
             )
             params[f"insight_id{suffix}"] = str(insight.insight_id)
             params[f"anchor{suffix}"] = str(insight.anchor_entity_id)
@@ -128,12 +137,21 @@ class PathInsightRepository(PathInsightRepositoryPort):
             params[f"llm_exp{suffix}"] = insight.llm_explanation
             params[f"exp_model{suffix}"] = insight.explanation_model
             params[f"computed_at{suffix}"] = insight.computed_at
+            params[f"dst{suffix}"] = str(insight.dst_entity_id) if insight.dst_entity_id else None
+            params[f"reliability{suffix}"] = insight.reliability
+            params[f"unexpectedness{suffix}"] = insight.unexpectedness
+            params[f"semantic{suffix}"] = insight.semantic_distance
+            params[f"novelty{suffix}"] = insight.novelty
+            params[f"weirdness{suffix}"] = insight.weirdness
+            params[f"scorer_version{suffix}"] = insight.scorer_version
 
         sql = (
             "INSERT INTO path_insights "
             "(insight_id, anchor_entity_id, path_nodes, path_edges, hop_count, "
             "harmonic_score, diversity_score, surprise_score, template_match, "
-            "composite_score, llm_explanation, explanation_model, computed_at) "
+            "composite_score, llm_explanation, explanation_model, computed_at, "
+            "dst_entity_id, reliability, unexpectedness, semantic_distance, "
+            "novelty, weirdness, scorer_version) "
             f"VALUES {', '.join(rows_sql_parts)}"
         )
         await self._session.execute(text(sql), params)
@@ -147,18 +165,26 @@ class PathInsightRepository(PathInsightRepositoryPort):
         min_hops: int = 2,
         max_hops: int = 5,
     ) -> list[PathInsight]:
-        """Return insights ordered by composite_score DESC with optional filters."""
+        """Return insights ordered by weirdness DESC with optional filters.
+
+        PLAN-0112 W3: ranking switches to ``weirdness`` (mirrored into
+        ``composite_score``).  ``COALESCE(weirdness, composite_score)`` keeps
+        pre-W3 rows (weirdness IS NULL) ordered by their legacy composite_score
+        so an un-backfilled deployment still returns sensibly-ranked paths.
+        """
         result = await self._session.execute(
             text("""
 SELECT insight_id, anchor_entity_id, hop_count, path_nodes, path_edges,
        harmonic_score, diversity_score, surprise_score, template_match,
-       composite_score, llm_explanation, explanation_model, computed_at
+       composite_score, llm_explanation, explanation_model, computed_at,
+       dst_entity_id, reliability, unexpectedness, semantic_distance,
+       novelty, weirdness, scorer_version
 FROM path_insights
 WHERE anchor_entity_id = CAST(:anchor AS UUID)
   AND composite_score >= :min_score
   AND hop_count >= :min_hops
   AND hop_count <= :max_hops
-ORDER BY composite_score DESC
+ORDER BY COALESCE(weirdness, composite_score) DESC
 LIMIT :lim
 """),
             {
@@ -189,6 +215,16 @@ LIMIT :lim
                     llm_explanation=str(row[10]) if row[10] else None,
                     explanation_model=str(row[11]) if row[11] else None,
                     computed_at=row[12],
+                    # PLAN-0112 W3 weirdness columns.  All NULLable: old rows
+                    # written before the migration deserialize to the entity
+                    # defaults (None / 0.0), keeping the in-range invariant.
+                    dst_entity_id=UUID(str(row[13])) if row[13] else None,
+                    reliability=float(row[14]) if row[14] is not None else 0.0,
+                    unexpectedness=float(row[15]) if row[15] is not None else 0.0,
+                    semantic_distance=float(row[16]) if row[16] is not None else 0.0,
+                    novelty=float(row[17]) if row[17] is not None else 0.0,
+                    weirdness=float(row[18]) if row[18] is not None else 0.0,
+                    scorer_version=str(row[19]) if row[19] else None,
                 )
             )
         return insights

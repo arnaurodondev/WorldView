@@ -299,6 +299,22 @@ class Settings(BaseSettings):
     # Env override: KNOWLEDGE_GRAPH_PATH_MAX_HOPS.
     path_max_hops: int = 3
 
+    # ── PLAN-0112 W3 (T-3-03) — WeirdnessScorer knobs ─────────────────────────
+    # weirdness = reliability x (w_U*unexpectedness + w_S*semantic_distance + w_N*novelty)
+    # Weights default to (0.45, 0.40, 0.15) per §6.5; tuned in the metric-validation
+    # wave against human-judged samples.  Env: KNOWLEDGE_GRAPH_WEIRDNESS_W_*.
+    weirdness_w_unexpectedness: float = 0.45
+    weirdness_w_semantic: float = 0.40
+    weirdness_w_novelty: float = 0.15
+    # novelty = fraction of the path's edges with first_evidence_at within this
+    # many days.  Small (7) because the graph is only ~3 weeks old (audit Thread 2).
+    # Env: KNOWLEDGE_GRAPH_NOVELTY_WINDOW_DAYS.
+    novelty_window_days: int = 7
+    # Unexpectedness formula selector (AD-3): "config_model" (default,
+    # configuration-model surprise -log(deg(u)*deg(v)/2m)) or "adamic_adar".
+    # Env: KNOWLEDGE_GRAPH_WEIRDNESS_UNEXPECTEDNESS_MODE.
+    weirdness_unexpectedness_mode: str = "config_model"
+
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
         """Validate startup invariants.

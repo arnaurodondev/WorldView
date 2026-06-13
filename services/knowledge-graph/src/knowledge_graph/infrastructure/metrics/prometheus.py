@@ -133,6 +133,15 @@ s7_age_sync_phase_stalled_total = Counter(
     ["phase"],
 )
 
+# PLAN-0112 W3 (T-3-02): duration of one node_degree + graph_stats refresh that
+# the AGE-sync worker runs at the end of each cycle.  Powers the weirdness
+# scorer's unexpectedness term; the audit measured the aggregation at ~18 ms.
+s7_node_degree_refresh_seconds = Histogram(
+    "s7_node_degree_refresh_seconds",
+    "Duration of one node_degree + graph_stats refresh (PLAN-0112 W3) in seconds.",
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+)
+
 s7_insider_transactions_relations_total = Counter(
     "s7_insider_transactions_relations_total",
     "Total has_executive relations upserted by Worker 13D-8, by ticker.",

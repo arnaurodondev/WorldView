@@ -344,6 +344,9 @@ def build_workers(
     }
 
     if valkey_client is not None:
+        from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+            NodeDegreeRepository,
+        )
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         workers["age_sync"] = AgeSyncWorker(
@@ -351,6 +354,8 @@ def build_workers(
             valkey_client,
             settings,
             read_session_factory=_read_factory,
+            # PLAN-0112 W3 (T-3-02): refresh node_degree + graph_stats each cycle.
+            node_degree_repo_factory=NodeDegreeRepository,
         )
 
     # Worker 13J: structured enrichment (PRD-0073). Built unconditionally —

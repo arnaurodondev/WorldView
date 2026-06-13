@@ -469,3 +469,186 @@ class TestPathInsightWorker:
         repo = PathInsightJobRepository(session)
         count = asyncio.run(repo.reclaim_stuck(timeout_seconds=600))
         assert count == 5
+
+
+# ── PLAN-0112 W3 live-QA fixes: novelty first_seen fallback + dst FK guard ──────
+
+
+class _Result:
+    """Minimal fake SQLAlchemy result for mocked sessions."""
+
+    def __init__(self, rows: list | None = None) -> None:
+        self._rows = rows or []
+
+    def fetchall(self) -> list:
+        return self._rows
+
+
+class TestFetchFirstSeenFallback:
+    """BUG 1: novelty was 0 for every path because the AGE edge ``relation_id``
+    is often absent from ``relations`` (sync gap) — first_seen must COALESCE in
+    ``relation_evidence.MIN(evidence_date)``.
+    """
+
+    def test_first_seen_query_coalesces_relation_evidence(self) -> None:
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        rid = uuid4()
+        captured: dict[str, str] = {}
+
+        async def _execute(stmt, params=None):
+            captured["sql"] = str(getattr(stmt, "text", stmt))
+            return _Result([(str(rid), _NOW)])
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+
+        out = asyncio.run(PathInsightWorker._fetch_first_seen(session, {rid}))
+        # The fallback source MUST be queried.
+        assert "relation_evidence" in captured["sql"]
+        assert "COALESCE" in captured["sql"].upper()
+        assert out[rid] == _NOW
+
+    def test_empty_rel_ids_returns_empty(self) -> None:
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        session = AsyncMock()
+        session.execute = AsyncMock()
+        out = asyncio.run(PathInsightWorker._fetch_first_seen(session, set()))
+        assert out == {}
+        session.execute.assert_not_called()
+
+
+class TestScoreWithWeirdnessDstGuard:
+    """BUG 2: a path ending on a non-canonical entity_id must persist with
+    dst_entity_id=NULL (no FK violation), and rel_ids must flow into novelty.
+    """
+
+    def _make_settings(self):
+        from knowledge_graph.config import Settings
+
+        return Settings(
+            database_url="postgresql://u:p@localhost/db",
+            storage_access_key="k",
+            storage_secret_key="s",
+        )
+
+    def _routed_session(
+        self,
+        *,
+        canonical_ids: set,
+        first_seen_rows: list,
+    ):
+        """Session whose execute routes each prefetch query to canned rows."""
+
+        async def _execute(stmt, params=None):
+            sql = str(getattr(stmt, "text", stmt))
+            if "FROM node_degree" in sql:
+                return _Result([])  # degree map empty → fail-open degree 1
+            if "FROM graph_stats" in sql:
+                return _Result()  # get_graph_stats → fetchone None handled below
+            if "entity_embedding_state" in sql:
+                return _Result([])
+            if "relation_evidence" in sql or "first_evidence_at" in sql:
+                return _Result(first_seen_rows)
+            if "FROM canonical_entities" in sql:
+                return _Result([(str(e),) for e in canonical_ids])
+            return _Result([])
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=None)
+        return session
+
+    def test_non_canonical_endpoint_nulls_dst(self) -> None:
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.ports.node_degree_repository import GraphStats
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        src = uuid4()
+        mid = uuid4()
+        non_canonical_dst = uuid4()
+        rid1, rid2 = uuid4(), uuid4()
+        raw = RawPath(
+            node_ids=(str(src), str(mid), str(non_canonical_dst)),
+            node_names=("Src", "Mid", "Dst"),
+            node_types=("company", "company", "person"),
+            rel_types=("REGULATES", "REGULATES"),
+            edge_confs=(1.0, 1.0),
+            rel_ids=(rid1, rid2),
+        )
+
+        session = self._routed_session(
+            canonical_ids={src, mid},  # dst is NOT canonical
+            first_seen_rows=[(str(rid1), _NOW)],
+        )
+        factory = MagicMock(return_value=session)
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+            NodeDegreeRepository,
+        )
+
+        with patch.object(NodeDegreeRepository, "get_graph_stats", AsyncMock(return_value=GraphStats(10, 8, 5))):
+            worker = PathInsightWorker(
+                session_factory=factory,
+                path_engine=AsyncMock(),
+                scorer=MagicMock(),
+                template_matcher=AsyncMock(),
+                instance_uuid=uuid4(),
+                node_degree_repo_factory=NodeDegreeRepository,
+                settings=self._make_settings(),
+            )
+            insights = asyncio.run(worker._score_with_weirdness([raw]))
+
+        assert len(insights) == 1
+        # dst is non-canonical → must be NULLed to avoid the FK violation.
+        assert insights[0].dst_entity_id is None
+
+    def test_canonical_endpoint_keeps_dst_and_novelty_nonzero(self) -> None:
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.ports.node_degree_repository import GraphStats
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        src = uuid4()
+        mid = uuid4()
+        dst = uuid4()
+        rid1, rid2 = uuid4(), uuid4()
+        # Use a first_seen well within the 7-day window so novelty > 0.
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        recent = utc_now()
+        raw = RawPath(
+            node_ids=(str(src), str(mid), str(dst)),
+            node_names=("Src", "Mid", "Dst"),
+            node_types=("company", "company", "person"),
+            rel_types=("REGULATES", "REGULATES"),
+            edge_confs=(1.0, 1.0),
+            rel_ids=(rid1, rid2),
+        )
+
+        session = self._routed_session(
+            canonical_ids={src, mid, dst},  # all canonical
+            first_seen_rows=[(str(rid1), recent), (str(rid2), recent)],
+        )
+        factory = MagicMock(return_value=session)
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+            NodeDegreeRepository,
+        )
+
+        with patch.object(NodeDegreeRepository, "get_graph_stats", AsyncMock(return_value=GraphStats(10, 8, 5))):
+            worker = PathInsightWorker(
+                session_factory=factory,
+                path_engine=AsyncMock(),
+                scorer=MagicMock(),
+                template_matcher=AsyncMock(),
+                instance_uuid=uuid4(),
+                node_degree_repo_factory=NodeDegreeRepository,
+                settings=self._make_settings(),
+            )
+            insights = asyncio.run(worker._score_with_weirdness([raw]))
+
+        assert insights[0].dst_entity_id == dst
+        # rel_id flowed into the novelty term (recent edge → novelty == 1.0).
+        assert insights[0].novelty == pytest.approx(1.0)

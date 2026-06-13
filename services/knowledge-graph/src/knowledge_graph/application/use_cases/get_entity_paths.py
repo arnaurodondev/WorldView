@@ -146,6 +146,13 @@ class GetEntityPathsUseCase:
                     surprise_score=path.surprise_score,
                     template_match=path.template_match,
                     composite_score=path.composite_score,
+                    # PLAN-0112 W3: surface the weirdness metric + sub-scores
+                    # (additive; old rows carry the entity defaults of 0.0).
+                    reliability=path.reliability,
+                    unexpectedness=path.unexpectedness,
+                    semantic_distance=path.semantic_distance,
+                    novelty=path.novelty,
+                    weirdness=path.weirdness,
                     path_nodes=[
                         PathNodePublic(
                             entity_id=node.entity_id,

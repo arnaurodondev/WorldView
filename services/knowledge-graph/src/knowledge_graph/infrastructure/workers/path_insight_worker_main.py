@@ -83,6 +83,12 @@ async def main() -> None:
     scorer = PathScorer()
     template_matcher = PathTemplateMatcher(write_factory)
 
+    # PLAN-0112 W3 (T-3-04): inject the node_degree repo factory + settings so
+    # the worker scores via WeirdnessScorer (degrees/embeddings/first_seen).
+    from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+        NodeDegreeRepository,
+    )
+
     worker = PathInsightWorker(
         session_factory=write_factory,
         path_engine=path_engine,
@@ -90,6 +96,8 @@ async def main() -> None:
         template_matcher=template_matcher,
         instance_uuid=instance_uuid,
         path_max_hops=settings.path_max_hops,
+        node_degree_repo_factory=NodeDegreeRepository,
+        settings=settings,
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.

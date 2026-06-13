@@ -63,6 +63,14 @@ class PathInsightPublic(BaseModel):
     # template_match is None when no template pattern was identified.
     template_match: str | None = None  # BP-126: nullable → default=None
     composite_score: float
+    # ── PLAN-0112 W3: the weirdness metric + its sub-scores (additive, R5) ────
+    # All default to None so old NULL DB rows (pre-migration) serialise cleanly
+    # and existing API clients ignore the new optional fields (NFR-4 back-compat).
+    reliability: float | None = None
+    unexpectedness: float | None = None
+    semantic_distance: float | None = None
+    novelty: float | None = None
+    weirdness: float | None = None
     path_nodes: list[PathNodePublic]
     path_edges: list[PathEdgePublic]
     # llm_explanation is None while the background task has not yet completed.
