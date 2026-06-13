@@ -913,6 +913,110 @@ _PLAN_ONLY_REFUSAL = (
 )
 
 
+# ── Theme F (2026-06-12 root-cause audit) — false write-action claim guard ───
+#
+# WHY: ``tc_create_alert_nvda_below`` ("Set an alert to notify me when NVDA drops
+# below $400.") FAILED because the agent answered with a PROSE confirmation
+# request — "I'd be happy to set that alert for you. Before I proceed, I need
+# your explicit confirmation … Could you please confirm that you'd like me to
+# create this alert?" — WITHOUT calling the confirmation-gated ``create_alert``
+# tool. No ``pending_action`` SSE event fired, so the alert was never registered.
+# Asserting (or offering) a write-action in free prose while the actual
+# confirmable-action flow was never engaged is a trust failure: the user is led
+# to believe an action is in motion when nothing happened.
+#
+# The set of registered confirmation-gated WRITE tools. ``create_alert`` is the
+# only one today (PLAN-0082). When a new requires_confirmation tool is added,
+# extend this set so the guard recognises its imperative + claim shapes.
+_WRITE_ACTION_TOOLS: frozenset[str] = frozenset({"create_alert"})
+
+# QUESTION shape: the user issued an alert/notify imperative. Matches
+# "set/create/add an alert", "alert me when …", "notify me when/if …",
+# "let me know when …", "watch … and tell me". Deliberately broad on the verb
+# but anchored on alert/notify intent so ordinary questions never match.
+_ALERT_IMPERATIVE_RE = re.compile(
+    r"\b("
+    r"(?:set|create|add|place|make|configure|setup|set\s+up)\s+(?:an?\s+|a\s+)?(?:price\s+|stock\s+)?alert"
+    r"|alert\s+me\s+(?:when|if|once)"
+    r"|notify\s+me\s+(?:when|if|once)"
+    r"|let\s+me\s+know\s+(?:when|if|once)"
+    r"|(?:send|give)\s+me\s+(?:an?\s+)?(?:alert|notification)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# ANSWER shape (FALSE-COMPLETION): the reply asserts the alert was ALREADY set.
+# This is the most severe failure — claiming a completed write that never ran.
+# Matches "I('ve| have)? (set|created|added|placed|configured) (an? )?alert",
+# "your alert (is|has been) (set|created)", "the alert (is|has been) created",
+# "alert (is|has been) set up", "I've gone ahead and set …".
+_ALERT_COMPLETION_CLAIM_RE = re.compile(
+    r"\b("
+    r"I(?:'ve|\s+have)?\s+(?:gone\s+ahead\s+and\s+)?(?:set|created|added|placed|configured|set\s+up)\s+"
+    r"(?:an?\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r"|(?:your|the)\s+(?:price\s+)?alert\s+(?:is|has\s+been|was)\s+(?:now\s+)?(?:set|created|added|placed|configured|active|live)"
+    r"|(?:price\s+)?alert\s+(?:is\s+now|has\s+been)\s+(?:set|created|configured)"
+    r"|done[!.]?\s+(?:I(?:'ve|\s+have)?\s+)?(?:set|created)\s+(?:an?\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# ANSWER shape (PROSE OFFER / FAKE GATE): the reply OFFERS to set the alert or
+# free-texts a confirmation request instead of invoking the tool. This is the
+# observed ``tc_create_alert_nvda_below`` shape ("I'd be happy to set that
+# alert … I need your explicit confirmation"). Less severe than a false
+# completion claim, but still a misroute — the real confirmation gate
+# (pending_action card) never surfaced. Matches "I'd be happy to set …",
+# "I can set up an alert …", "(could you )confirm … (create|set) … alert",
+# "shall I set …", "would you like me to set/create … alert".
+_ALERT_PROSE_OFFER_RE = re.compile(
+    r"\b("
+    r"I(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to\s+(?:set|create|add|place)\b"
+    r"|I\s+can\s+(?:set|create|add|place|configure)\s+(?:up\s+)?(?:an?\s+|that\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r"|(?:shall|should|would\s+you\s+like\s+me\s+to)\s+I?\s*(?:set|create|add|place|go\s+ahead)\b"
+    r"|confirm\s+(?:that\s+)?you(?:'d|\s+would)?\s+(?:like|want)\s+(?:me\s+to\s+)?(?:set|create|add|place)\b"
+    r"|need\s+your\s+(?:explicit\s+)?confirmation\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Honest offer text used to REPAIR a misrouted reply when create_alert/
+# pending_action never fired. It explicitly states the alert was NOT created —
+# never asserts a completed action — and invites the user to retry the request
+# so the confirmation-gated tool runs. ``{detail}`` is filled with the parsed
+# condition when available, else a generic phrasing.
+_ALERT_NOT_CREATED_REPAIR = (
+    "To be clear, I have not created any alert and nothing has been registered on "
+    "your account. If you'd like to go ahead, please restate the request (for "
+    'example: "yes, notify me when NVDA drops below $400") and it will be set up '
+    "through the confirmation step."
+)
+
+
+def _is_alert_imperative(question: str) -> bool:
+    """Return True when *question* is an alert/notify write-action imperative.
+
+    Theme F: gate the false-write-action guard to genuine alert requests so a
+    normal question that happens to contain the word "alert" in passing does not
+    trip the repair path.
+    """
+    return bool(_ALERT_IMPERATIVE_RE.search(question or ""))
+
+
+def _claims_or_offers_uninvoked_alert(answer: str) -> bool:
+    """Return True when *answer* asserts/ offers an alert action in prose.
+
+    Either a false completion claim ("I've set an alert …") OR a prose
+    offer / fake confirmation gate ("I'd be happy to set that alert … I need
+    your confirmation"). Both shapes mean the LLM produced a write-action reply
+    in free text; the caller only repairs when the real ``create_alert`` /
+    ``pending_action`` flow did NOT fire this turn.
+    """
+    if not answer:
+        return False
+    return bool(_ALERT_COMPLETION_CLAIM_RE.search(answer) or _ALERT_PROSE_OFFER_RE.search(answer))
+
+
 _FALLBACK_MAP: dict[str, list[str]] = {
     # search_documents → relaxed-filter retry → claims → intelligence bundle
     # WHY this order: cheapest first (same tool, looser filters), then claims
@@ -1828,6 +1932,17 @@ class ChatOrchestratorUseCase:
         # below for why this is needed.
         _skip_final_stream = False
 
+        # ── Theme F (2026-06-12 root-cause audit) — write-action provenance ──
+        # ``tc_create_alert_nvda_below`` FAILED because the agent answered an
+        # alert imperative ("notify me when NVDA drops below $400") with a PROSE
+        # confirmation request ("I'd be happy to set that alert … I need your
+        # explicit confirmation") WITHOUT ever calling ``create_alert`` — so no
+        # ``pending_action`` SSE event fired and no alert was ever registered.
+        # We track whether a confirmation-gated write-action actually surfaced
+        # this turn so the synthesis guard below can repair a free-texted
+        # "I'll set that alert"/"alert set" reply that never invoked the tool.
+        _pending_action_emitted = False
+
         # PLAN-0093 E-5 T-E-5-02: tool-call dedup cache across iterations.
         # Key = (tool_name, frozenset((k, repr(v)) for k,v in input.items())).
         # The cache holds the LAST result for that key so a re-emitted call
@@ -2313,6 +2428,10 @@ class ChatOrchestratorUseCase:
                     description=_description,
                     params=_display_params,
                 )
+                # Theme F: a structured confirmation-gate surfaced this turn —
+                # the write-action guard below must NOT flag a prose "I'll set
+                # that alert" reply when the real pending_action card was emitted.
+                _pending_action_emitted = True
 
             # Emit tool_result events + record per-tool metrics + E-12 audit.
             #
@@ -3224,6 +3343,46 @@ class ChatOrchestratorUseCase:
                     reprompt_chars=len(_reprompted),
                 )
 
+        # ── Theme F (2026-06-12 root-cause audit): false write-action guard ───
+        # ``tc_create_alert_nvda_below`` shipped a PROSE confirmation request
+        # ("I'd be happy to set that alert … I need your explicit confirmation")
+        # for an alert imperative WITHOUT calling ``create_alert`` — so no
+        # ``pending_action`` ever surfaced and no alert was registered. Claiming
+        # (or offering, via a fake prose gate) a write-action that was never
+        # routed through the confirmation-gated tool is a trust failure.
+        #
+        # Deterministic repair: when (a) the question is an alert/notify
+        # imperative, (b) the answer asserts/offers an alert action in prose,
+        # and (c) NO write-action tool ran AND NO ``pending_action`` fired this
+        # turn → rewrite the answer to an honest offer that EXPLICITLY states
+        # the alert has NOT been created and invites the user to confirm (which
+        # re-runs the turn through ``create_alert``'s real confirmation gate).
+        # Mirrors the Theme D plan-only repair shape; ``grounded=False`` folds
+        # it into ``grounding_passed`` below so the repaired text is never cached.
+        #
+        # Gating is intentionally conservative: it fires ONLY for genuine alert
+        # imperatives whose reply free-texts the action while the structured
+        # action flow was absent. If ``create_alert`` ran (pending_action
+        # emitted) the guard is a no-op — the prose offer is the legitimate
+        # companion to a real confirmation card.
+        _write_action_repaired = False
+        _write_action_ran = any(name in _WRITE_ACTION_TOOLS for name in _executed_tool_names)
+        if (
+            full_text.strip()
+            and not _pending_action_emitted
+            and not _write_action_ran
+            and _is_alert_imperative(request.message)
+            and _claims_or_offers_uninvoked_alert(full_text)
+        ):
+            log.warning(  # type: ignore[no-any-return]
+                "synthesis_false_write_action_detected",
+                executed_tools=sorted(set(_executed_tool_names)),
+                pending_action_emitted=_pending_action_emitted,
+                chars=len(full_text),
+            )
+            full_text = _ALERT_NOT_CREATED_REPAIR
+            _write_action_repaired = True
+
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
         # Before any other synthesis check, confirm that AT LEAST ONE
         # retrieved item references an entity from the original question.
@@ -3244,7 +3403,10 @@ class ChatOrchestratorUseCase:
         # Theme D: a plan-only refusal also sets grounded=False so the numeric /
         # entity grounding passes skip the bounded refusal string and it is never
         # cached (folded via grounding_passed below).
-        grounded = not _plan_only_refused
+        # Theme F: a write-action repair also sets grounded=False so the honest
+        # "not created" offer skips numeric/entity grounding (it has no facts to
+        # verify) and is never written to the completion cache.
+        grounded = not _plan_only_refused and not _write_action_repaired
         # Chat-eval pack-10 (2026-06-12): skip the guard for universe/aggregate/
         # screener questions — they have no single anchor entity, S6 mis-resolves
         # the question to garbage, and the calendar/screener/movers items carry

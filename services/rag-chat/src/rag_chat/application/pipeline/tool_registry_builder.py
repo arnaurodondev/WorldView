@@ -1178,12 +1178,23 @@ def build_default_registry() -> ToolRegistry:
             name="create_alert",
             description=(
                 "Creates a user-initiated alert rule for a specific entity and condition. "
-                'Use when the user explicitly asks to set, create, or add an alert (e.g. "alert '
-                'me when AAPL drops below $200" or "set a price alert for NVDA"). IMPORTANT: '
-                "this tool requires explicit user confirmation before execution "
-                "(requires_confirmation: true). Do NOT call this tool unless the user has "
-                "clearly and unambiguously asked to create an alert — never create alerts "
-                "speculatively or as a follow-up to an unrelated question."
+                "**You MUST call this tool — and call it IMMEDIATELY — whenever the user "
+                'issues an alert imperative such as "alert me when AAPL drops below $200", '
+                '"set a price alert for NVDA above $1000", "notify me when TSLA spikes", or '
+                '"add an alert for ...". Calling this tool is how the alert gets set.** '
+                "How the confirmation gate works (READ THIS — it is the #1 mistake on this "
+                "tool): the system itself handles user confirmation. When you call this tool, "
+                "it does NOT execute the write immediately — it returns a structured pending "
+                "action that the application surfaces to the user as a confirm/cancel card, and "
+                "the user confirms there. Your job is ONLY to call the tool with the parsed "
+                "entity + condition + threshold. Do NOT ask the user to confirm in your text "
+                "reply, do NOT write a prose sentence like 'I need your confirmation before I "
+                "proceed', and do NOT claim the alert has been or will be created in prose "
+                "INSTEAD of calling this tool — the confirmation step happens automatically "
+                "AFTER you call it. Free-texting a confirmation request or a fake 'alert set' "
+                "message without calling this tool is a failure: the alert is never registered. "
+                "The ONLY thing you must NOT do is invent an alert the user did not ask for — "
+                "never create alerts speculatively or as a follow-up to an unrelated question."
             ),
             parameters=[
                 ParameterSpec(
