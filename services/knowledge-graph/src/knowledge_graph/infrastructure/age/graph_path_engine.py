@@ -310,7 +310,13 @@ class AgeGraphPathEngine(GraphPathEngine):
         prune_membership: bool,
         limit: int,
     ) -> list[RawPath]:
-        """Return up to ``limit`` shortest paths between two bound endpoints."""
+        """Return up to ``limit`` distinct paths between two bound endpoints.
+
+        Paths are accumulated across hop depths shortest-first: several routes at
+        the shortest depth and, if fewer than ``limit`` exist there, longer
+        alternative routes at deeper depths (within ``max_hops``).  Distinct by
+        node-id sequence.
+        """
         src = _validate_uuid(source)
         tgt = _validate_uuid(target)
         if src == tgt:
@@ -368,8 +374,20 @@ class AgeGraphPathEngine(GraphPathEngine):
     ) -> list[RawPath]:
         """Shared staged-probe + parse loop for both pairwise and anchor modes.
 
-        For PAIRWISE (target bound): stop at the first non-empty depth (shortest
-        paths only — a longer path is never among the shortest set, BP-687).
+        BOTH modes ACCUMULATE distinct paths ACROSS depths up to ``limit``,
+        iterating hop depths ascending so the result is shortest-first
+        (PLAN-0112 W4 refinement 2026-06-13).
+
+        For PAIRWISE (target bound): we no longer stop at the first non-empty
+        depth.  "How are A and B connected?" should show the VARIETY of routes —
+        several distinct paths at the shortest hop length AND, if fewer than
+        ``limit`` exist there, longer alternative routes at deeper depths (within
+        ``max_hops``).  ``seen`` dedupes by node-id sequence so each route is
+        distinct; the use case derives ``shortest_hops`` = min(hop_count) over
+        the returned set, which is still the shortest depth that yielded a path.
+        (The cheap shortest-only existence probe lives in ``path_exists``, which
+        is unchanged and still used for the disconnected short-circuit.)
+
         For ANCHOR (target free): accumulate paths across depths up to ``limit``
         so the discovery returns the multi-hop neighbourhood (per-anchor insight
         discovery wants 2- and 3-hop paths, not just the nearest).
@@ -377,6 +395,8 @@ class AgeGraphPathEngine(GraphPathEngine):
         capped_limit = min(limit, _MAX_LIMIT)
         collected: list[RawPath] = []
         seen: set[tuple[str, ...]] = set()
+        # ``pairwise`` is retained for logging only — both modes now accumulate
+        # distinct paths across depths up to ``capped_limit`` (no early-stop).
         pairwise = target_id is not None
 
         async with self._sf() as session:
@@ -395,7 +415,6 @@ class AgeGraphPathEngine(GraphPathEngine):
                     limit=fetch,
                 )
                 rows = await self._execute(session, sql)
-                hit_this_depth = False
                 for row in rows:
                     if len(collected) >= capped_limit:
                         break
@@ -416,10 +435,9 @@ class AgeGraphPathEngine(GraphPathEngine):
                         continue
                     seen.add(key)
                     collected.append(path)
-                    hit_this_depth = True
-                # Pairwise: the first depth that connects is the shortest — stop.
-                if pairwise and hit_this_depth:
-                    break
+                # Both pairwise and anchor modes ACCUMULATE across depths
+                # (shortest-first): we continue to the next deeper depth unless
+                # ``capped_limit`` is reached (checked at the top of the loop).
 
         logger.info(  # type: ignore[no-any-return]
             "graph_path_engine_discover_complete",

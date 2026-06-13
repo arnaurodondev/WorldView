@@ -170,15 +170,101 @@ class TestVleNotExplicit:
 
 
 class TestStagedProbe:
-    def test_staged_probe_stops_at_first_depth(self) -> None:
-        """Pairwise: probe ``*1..1`` then stop on first hit; no deeper query."""
+    def test_pairwise_accumulates_across_depths(self) -> None:
+        """Pairwise (W4 refinement): accumulate distinct paths ACROSS depths.
+
+        "How are A and B connected?" should surface the VARIETY of routes — not
+        just the single shortest one.  With fewer paths at the shortest depth
+        than ``limit``, the engine continues to deeper depths (within max_hops)
+        for alternative routes, preserving shortest-first ordering.
+        """
         from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
 
-        src, mid = str(uuid4()), str(uuid4())
-        tgt = str(uuid4())
-        row = (_agtype_nodes(_vertex(src, "A"), _vertex(tgt, "B")), _agtype_edges(_edge("PARTNER_OF", 0.9)))
-        # Depth 1 returns a path → engine must not issue depth-2 / depth-3 queries.
-        session, _ = _make_session(rows_per_depth=[[row], [], []])
+        src, tgt = str(uuid4()), str(uuid4())
+        # One direct (1-hop) route, two distinct 2-hop routes, one 3-hop route.
+        one_hop = (_agtype_nodes(_vertex(src, "A"), _vertex(tgt, "B")), _agtype_edges(_edge("PARTNER_OF", 0.9)))
+        two_hop_a = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(str(uuid4()), "M1"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("PARTNER_OF", 0.9), _edge("SUPPLIER_OF", 0.8)),
+        )
+        two_hop_b = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(str(uuid4()), "M2"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("COMPETITOR_OF", 0.7), _edge("PARTNER_OF", 0.6)),
+        )
+        three_hop = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(str(uuid4()), "X"), _vertex(str(uuid4()), "Y"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("PARTNER_OF", 0.9), _edge("PARTNER_OF", 0.8), _edge("PARTNER_OF", 0.7)),
+        )
+        session, _ = _make_session(rows_per_depth=[[one_hop], [two_hop_a, two_hop_b], [three_hop]])
+        engine = AgeGraphPathEngine(_make_factory(session))
+
+        paths = asyncio.run(
+            engine.find_paths_between(
+                __import__("uuid").UUID(src),
+                __import__("uuid").UUID(tgt),
+                max_hops=3,
+                prune_membership=False,
+                limit=5,
+            ),
+        )
+        # All four distinct routes are returned (limit not reached).
+        assert len(paths) == 4
+        # Shortest-first ordering preserved (1, 2, 2, 3).
+        assert [p.hop_count for p in paths] == [1, 2, 2, 3]
+        # All three depths were probed (no early-stop).
+        traversal_sqls = [s for s in session._executed_sql if "nodes_col" in s and "cypher" in s]
+        assert len(traversal_sqls) == 3
+        assert any("*1..1" in s for s in traversal_sqls)
+        assert any("*2..2" in s for s in traversal_sqls)
+        assert any("*3..3" in s for s in traversal_sqls)
+        # No ORDER BY length(p) (the BP-687 anti-pattern) on any probe.
+        for sql in traversal_sqls:
+            assert "order by length" not in sql.lower()
+
+    def test_pairwise_respects_limit_across_depths(self) -> None:
+        """Accumulation stops once ``limit`` distinct paths are collected."""
+        from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
+
+        src, tgt = str(uuid4()), str(uuid4())
+        # Three 1-hop+2-hop candidates but limit=2 → only the first two (shortest).
+        one_hop = (_agtype_nodes(_vertex(src, "A"), _vertex(tgt, "B")), _agtype_edges(_edge("PARTNER_OF", 0.9)))
+        two_hop_a = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(str(uuid4()), "M1"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("PARTNER_OF", 0.9), _edge("SUPPLIER_OF", 0.8)),
+        )
+        two_hop_b = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(str(uuid4()), "M2"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("COMPETITOR_OF", 0.7), _edge("PARTNER_OF", 0.6)),
+        )
+        session, _ = _make_session(rows_per_depth=[[one_hop], [two_hop_a, two_hop_b], []])
+        engine = AgeGraphPathEngine(_make_factory(session))
+
+        paths = asyncio.run(
+            engine.find_paths_between(
+                __import__("uuid").UUID(src),
+                __import__("uuid").UUID(tgt),
+                max_hops=3,
+                prune_membership=False,
+                limit=2,
+            ),
+        )
+        assert len(paths) == 2
+        assert [p.hop_count for p in paths] == [1, 2]
+        # Once limit was reached after depth 2, depth 3 is never probed.
+        traversal_sqls = [s for s in session._executed_sql if "nodes_col" in s and "cypher" in s]
+        assert all("*3..3" not in s for s in traversal_sqls)
+
+    def test_pairwise_dedups_identical_routes_across_depths(self) -> None:
+        """Distinct-by-node-id-sequence: a duplicate route is collected once."""
+        from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
+
+        src, tgt, mid = str(uuid4()), str(uuid4()), str(uuid4())
+        two_hop = (
+            _agtype_nodes(_vertex(src, "A"), _vertex(mid, "M"), _vertex(tgt, "B")),
+            _agtype_edges(_edge("PARTNER_OF", 0.9), _edge("SUPPLIER_OF", 0.8)),
+        )
+        # Same node-id sequence appears twice at depth 2 → deduped to one.
+        session, _ = _make_session(rows_per_depth=[[], [two_hop, two_hop], []])
         engine = AgeGraphPathEngine(_make_factory(session))
 
         paths = asyncio.run(
@@ -191,13 +277,7 @@ class TestStagedProbe:
             ),
         )
         assert len(paths) == 1
-        traversal_sqls = [s for s in session._executed_sql if "nodes_col" in s and "cypher" in s]
-        # Only ONE traversal query (depth 1) — stopped after the first hit.
-        assert len(traversal_sqls) == 1
-        assert "*1..1" in traversal_sqls[0]
-        # No ORDER BY length(p) (the BP-687 anti-pattern).
-        assert "order by length" not in traversal_sqls[0].lower()
-        assert mid not in traversal_sqls[0]  # sanity: only src/tgt embedded
+        assert paths[0].hop_count == 2
 
     def test_anchor_discovery_never_returns_one_hop_path(self) -> None:
         """Regression: anchor discovery starts probing at depth 2, never returns a 1-hop path.

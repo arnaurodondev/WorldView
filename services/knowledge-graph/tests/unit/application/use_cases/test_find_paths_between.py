@@ -142,6 +142,23 @@ class TestFindPathsBetween:
         assert res.paths[0].weirdness == 0.9
         assert res.paths[0].hop_count == 2
 
+    async def test_multiple_distinct_paths_across_depths_returned(self) -> None:
+        """W4 refinement: several routes spanning multiple hop depths are returned.
+
+        The engine now accumulates distinct paths across depths (1-, 2-, 3-hop);
+        the use case ranks + returns them all (within limit) so the answer to "how
+        are A and B connected?" shows the variety of routes.  shortest_hops stays
+        = the minimum hop length among the returned paths.
+        """
+        engine = _FakeEngine(shortest=1, paths=[_raw(1), _raw(2), _raw(3)])
+        # Equal weirdness so the hop-asc tiebreak yields a clean 1,2,3 ordering.
+        uc = _uc(engine, _FakeScorer({1: 0.5, 2: 0.5, 3: 0.5}))
+        res = await uc.execute(_SRC, _TGT, max_hops=3, limit=5)
+        assert res.connected is True
+        assert len(res.paths) == 3
+        assert [p.hop_count for p in res.paths] == [1, 2, 3]
+        assert res.shortest_hops == 1  # min over the returned set
+
     async def test_shortest_hops_derived_from_returned_paths_not_probe(self) -> None:
         """shortest_hops is min(hop_count) of REPORTABLE paths, not the path_exists probe.
 
