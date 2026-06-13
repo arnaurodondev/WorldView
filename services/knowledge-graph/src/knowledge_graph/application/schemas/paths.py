@@ -93,3 +93,51 @@ class EntityPathsResponse(BaseModel):
     total: int
     # MAX(computed_at) across returned paths — None when paths list is empty.
     freshness_ts: datetime | None = None  # BP-126: nullable → default=None
+
+
+# ── Pairwise pathfinding (PLAN-0112 W4, T-4-02 / PRD §6.2) ────────────────────
+#
+# These models are the wire format for GET /api/v1/paths/between — the on-demand
+# "is A connected to B, and how?" endpoint.  They deliberately do NOT reuse
+# ``PathInsightPublic``: pairwise paths can be a single direct (1-hop) edge,
+# whereas ``PathInsight`` (and its public mirror) enforce ``hop_count >= 2`` and
+# carry batch-discovery-only fields (insight_id, llm_explanation,
+# explanation_pending).  A leaner, scored-on-the-fly shape keeps the pairwise
+# contract independent of the precomputed insight pipeline.
+
+
+class PathBetweenPublic(BaseModel):
+    """A single ranked path between two bound endpoints (PRD §6.2).
+
+    Scored on-the-fly by the ``WeirdnessScorer`` using graph-global statistics.
+    All sub-scores are in [0, 1]; ``weirdness`` is the composite used for
+    ranking (desc), tie-broken by ascending ``hop_count``.
+    """
+
+    path_nodes: list[PathNodePublic]
+    path_edges: list[PathEdgePublic]
+    hop_count: int
+    # ── Weirdness metric + its sub-scores (all [0, 1]) ───────────────────────
+    reliability: float
+    unexpectedness: float
+    semantic_distance: float
+    novelty: float
+    weirdness: float
+
+
+class PathsBetweenResponse(BaseModel):
+    """Top-level response for GET /api/v1/paths/between (PRD §6.2).
+
+    ``connected`` is True when at least one path exists within ``max_hops``;
+    ``shortest_hops`` is the length of the shortest such path (None when not
+    connected).  ``paths`` is up to ``limit`` ranked ``PathBetweenPublic`` (empty
+    when disconnected).
+    """
+
+    source_entity_id: UUID
+    target_entity_id: UUID
+    connected: bool
+    # None when no path exists within max_hops.
+    shortest_hops: int | None = None
+    paths: list[PathBetweenPublic]
+    computed_at: datetime

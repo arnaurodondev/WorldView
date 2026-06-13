@@ -1,4 +1,4 @@
-version: "4"
+version: "5"
 tools:
   - name: get_price_history
     description: >
@@ -468,6 +468,36 @@ tools:
     example_queries:
       - "What are the most significant connections in AAPL's network?"
       - "Show me the top relationship paths for Microsoft"
+
+  - name: get_path_between
+    description: >
+      Performs an ON-DEMAND, live, bounded search for connection PATHS between
+      TWO specific entities — "is X connected to Y, and how are they linked?".
+      Returns whether a connection exists within max_hops, the shortest hop
+      count, and the ranked intermediary paths (ranked by how surprising the
+      connection is). Use this for any TWO-ENTITY relationship question:
+      "how is Nvidia connected to SpaceX", "is Apple linked to OpenAI", "what
+      connects Microsoft and Anthropic". DO NOT use for single-entity network
+      questions (use get_entity_paths, which is one-anchor and pre-computed).
+    parameters:
+      - name: source_entity
+        type: string
+        description: First entity — UUID, ticker, or company name. Resolved server-side.
+        required: true
+      - name: target_entity
+        type: string
+        description: Second entity — UUID, ticker, or company name. Resolved server-side. Must differ from source_entity.
+        required: true
+      - name: max_hops
+        type: integer
+        description: Maximum path length to search (1-3). Default 3.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v5"
+    deprecated_at: null
+    example_queries:
+      - "How is Nvidia connected to SpaceX?"
+      - "Is Apple linked to OpenAI, and how?"
 
   - name: get_entity_health
     description: >

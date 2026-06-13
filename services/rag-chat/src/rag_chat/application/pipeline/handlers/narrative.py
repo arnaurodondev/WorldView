@@ -38,7 +38,14 @@ class NarrativeHandler(ToolHandler):
     """
 
     _HANDLED_TOOLS = frozenset(
-        {"get_entity_narrative", "get_entity_paths", "get_entity_health", "get_entity_intelligence"}
+        {
+            "get_entity_narrative",
+            "get_entity_paths",
+            "get_entity_health",
+            "get_entity_intelligence",
+            # PLAN-0112 W4: on-demand two-entity pairwise pathfinding.
+            "get_path_between",
+        }
     )
 
     def __init__(
@@ -77,6 +84,7 @@ class NarrativeHandler(ToolHandler):
             "get_entity_paths": self._handle_get_entity_paths,
             "get_entity_health": self._handle_get_entity_health,
             "get_entity_intelligence": self._handle_get_entity_intelligence,
+            "get_path_between": self._handle_get_path_between,
         }
         target = dispatch.get(tool_name)
         if target is None:
@@ -283,6 +291,117 @@ class NarrativeHandler(ToolHandler):
                 source_name="knowledge_graph",
                 published_at=None,
                 entity_name=entity_name,
+            ),
+        )
+        return [item]
+
+    # ── Pairwise resolver (M-1: NO context-pin override for two-entity tools) ──
+
+    async def _resolve_pairwise_entity_id(self, tool_name: str, raw_id: str | None) -> UUID | None:
+        """Resolve a single endpoint id for ``get_path_between`` (UUID / ticker / name).
+
+        Unlike :meth:`_resolve_intel_entity_id`, this deliberately does NOT apply
+        the EntityContext PINNED override: a pairwise query names TWO distinct
+        entities, so forcing either to the scoped entity_id would collapse the
+        query to "A connected to A" (always disconnected) — the very bug the
+        same-entity guard rejects. We resolve each supplied identifier on its own
+        merits (UUID fast-path → S6 ticker → S7 alias name).
+        """
+        if raw_id is None:
+            return None
+        try:
+            return UUID(raw_id)
+        except ValueError:
+            pass
+
+        identifier = raw_id.strip()
+        # Ticker-shaped → S6 ticker resolution (phantom-twin aware).
+        if self._s6 is not None and _TICKER_SHAPE_RE.match(identifier):
+            try:
+                resolved = await asyncio.wait_for(
+                    self._s6.resolve_entity_by_ticker(identifier),
+                    timeout=self._timeout,
+                )
+            except Exception as e:
+                log.warning("tool_ticker_resolution_failed", tool=tool_name, ticker=identifier, error=str(e))
+                resolved = None
+            if resolved is not None:
+                return resolved
+
+        # Free-text name → S7 alias resolution.
+        if self._name_resolver is not None:
+            resolved = await self._name_resolver.resolve_name(tool_name, identifier)
+            if resolved is not None:
+                return resolved
+
+        log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=raw_id)
+        return None
+
+    async def _handle_get_path_between(
+        self,
+        tool_call: ToolUseBlock,
+        source_entity: str | None = None,
+        target_entity: str | None = None,
+        max_hops: int = 3,
+    ) -> list[RetrievedItem]:
+        """On-demand pairwise pathfinding between two entities via S9 (PLAN-0112 W4).
+
+        Calls ``S7IntelligencePort.get_path_between`` (S9-proxied, R14). Both
+        endpoints are resolved independently (no context pinning). Returns a
+        single ``RetrievedItem`` summarising connectivity + the ranked paths;
+        an empty list when a port/endpoint is missing or the entities are not
+        connected (R9 safe degradation).
+        """
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_path_between", port="s7_intel")
+            return []
+
+        source_id = await self._resolve_pairwise_entity_id("get_path_between", source_entity)
+        target_id = await self._resolve_pairwise_entity_id("get_path_between", target_entity)
+        if source_id is None or target_id is None:
+            log.warning("tool_no_data", tool="get_path_between", source=source_entity, target=target_entity)
+            return []
+        if source_id == target_id:
+            log.warning("tool_same_entity", tool="get_path_between", entity_id=str(source_id))
+            return []
+
+        max_hops_clamped = max(1, min(int(max_hops), 3))
+
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_path_between(source_id, target_id, max_hops=max_hops_clamped),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_path_between", error=str(e))
+            return []
+
+        src_label = source_entity or str(source_id)
+        tgt_label = target_entity or str(target_id)
+
+        if not result.connected:
+            text = f"No connection found between {src_label} and {tgt_label} " f"within {max_hops_clamped} hops."
+        else:
+            lines = [
+                f"{src_label} IS connected to {tgt_label} "
+                f"(shortest path: {result.shortest_hops} hop(s)). Top paths:"
+            ]
+            for i, path in enumerate(result.paths, 1):
+                lines.append(f"  {i}. {str(path)[:240]}")
+            text = "\n".join(lines)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:pathbetween:{source_id}:{target_id}",
+            item_type=ItemType.relation,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.86,
+            trust_weight=0.82,
+            citation_meta=CitationMeta(
+                title=f"Connection: {src_label} ↔ {tgt_label}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=src_label,
             ),
         )
         return [item]

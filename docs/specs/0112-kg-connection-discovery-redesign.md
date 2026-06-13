@@ -183,13 +183,22 @@ measured, pairwise feasible). Remaining items are DEFERRED with documented defau
   | Field | Type | Description |
   |-------|------|-------------|
   | `source_entity_id` / `target_entity_id` | UUID | Echoed |
-  | `connected` | bool | Path exists within max_hops |
-  | `shortest_hops` | int \| null | Length of shortest path; null if not connected |
+  | `connected` | bool | A **reportable** path exists within max_hops (see note below) |
+  | `shortest_hops` | int \| null | Length of the shortest **returned** path; null if not connected |
   | `paths` | list[PathBetweenPublic] | Up to `limit`, ranked by weirdness then ascending hop_count |
   | `computed_at` | datetime | UTC |
   - **PathBetweenPublic**: `path_nodes` (list[PathNodePublic]), `path_edges` (list[PathEdgePublic]),
     `hop_count` (int), `reliability` / `unexpectedness` / `semantic_distance` / `novelty` /
     `weirdness` (float [0,1]).
+  - **Contract self-consistency (live-QA fix 2026-06-13)**: `connected` and `shortest_hops` are
+    derived from the SAME enumerated + node-distinct-filtered path set that `paths` returns — NOT
+    from a separate, looser existence probe. The fast existence probe is used only to short-circuit
+    the truly-disconnected case. When the only connecting path routes through a **duplicate canonical
+    vertex** (the deferred FR-11 entity-dedup — e.g. SpaceX has a duplicate), the distinct-node guard
+    drops it, so there are zero reportable paths: the response is `connected:false, shortest_hops:null,
+    paths:[]` rather than the contradictory `connected:true, shortest_hops:N, paths:[]`. Such a pair is
+    reported as not-connected **until FR-11 dedup lands**. `shortest_hops = min(hop_count)` over the
+    returned paths.
 - **Errors**: 400 (source==target / bad UUID), 401, 404 (entity not found), 422 (max_hops out of range),
   504-mapped-to-200-with-`connected:false` is NOT used — a timeout returns 503 with retry hint.
 - **Rate limit**: 60 req/min authenticated. **Cache**: S9 Valkey 5 min, key

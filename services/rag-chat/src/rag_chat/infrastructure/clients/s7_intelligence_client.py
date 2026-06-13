@@ -18,6 +18,7 @@ from rag_chat.application.ports.upstream_clients import (
     EntityIntelligenceResult,
     EntityPathsResult,
     NarrativeResult,
+    PathBetweenResult,
 )
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 
@@ -81,6 +82,42 @@ class S7IntelligenceClient(BaseUpstreamClient):
             )
         except (KeyError, TypeError, ValueError):
             return EntityPathsResult(entity_id=str(entity_id))
+
+    async def get_path_between(
+        self,
+        source: UUID,
+        target: UUID,
+        max_hops: int = 3,
+    ) -> PathBetweenResult:
+        """GET /v1/paths/between → on-demand pairwise paths between two entities.
+
+        Calls the S9-proxied pairwise endpoint (R14/R7 — never S7 directly). The
+        underlying ``BaseUpstreamClient._get`` sets an explicit httpx timeout
+        (BP-235) and promotes transport failures to ``UpstreamTransportError``.
+        A 4xx (e.g. source==target → 400, missing entity → 404) returns ``{}`` →
+        a disconnected result, never a crash (R9 safe degradation).
+        """
+        raw = await self._get(
+            "/v1/paths/between",
+            params={
+                "source": str(source),
+                "target": str(target),
+                "max_hops": max_hops,
+            },
+        )
+        if not raw:
+            return PathBetweenResult(source_entity_id=str(source), target_entity_id=str(target))
+        try:
+            paths = raw.get("paths") or []
+            return PathBetweenResult(
+                source_entity_id=str(raw.get("source_entity_id") or source),
+                target_entity_id=str(raw.get("target_entity_id") or target),
+                connected=bool(raw.get("connected", False)),
+                shortest_hops=raw.get("shortest_hops"),
+                paths=paths if isinstance(paths, list) else [],
+            )
+        except (KeyError, TypeError, ValueError):
+            return PathBetweenResult(source_entity_id=str(source), target_entity_id=str(target))
 
     async def get_entity_intelligence(self, entity_id: UUID) -> EntityIntelligenceResult | None:
         """GET /api/v1/entities/{id}/intelligence → full intelligence bundle.

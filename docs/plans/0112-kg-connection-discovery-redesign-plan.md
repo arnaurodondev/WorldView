@@ -389,7 +389,7 @@ score each via `WeirdnessScorer`; rank by weirdness then ascending hop_count; re
 `EntityEmbeddingStateRepository`(read), entity-exists check. **Read/Write**: read-path but `LOAD 'age'` needs
 write-session (documented R27 exception, as CypherPathUseCase).
 **Tests**: connected/disconnected/self-loop-rejected/maxhops-422/ranking-order/meaningful_only-prunes.
-**Acceptance**: [ ] correct connectivity [ ] ranked [ ] validation errors [ ] timeout mapped
+**Acceptance**: [x] correct connectivity [x] ranked [x] validation errors [x] timeout mapped
 
 #### T-4-02 — KG router `GET /api/v1/paths/between` + schemas
 **Type**: impl · **depends_on**: T-4-01 · **blocks**: T-4-03
@@ -399,7 +399,7 @@ write-session (documented R27 exception, as CypherPathUseCase).
 **What to build**: Route per §6.2 (params source/target/max_hops/limit/meaningful_only; response
 connected/shortest_hops/paths[]/computed_at). R25: router → use case only. Errors 400/401/404/422/503.
 **Tests**: `tests/unit/api/test_paths_between_router.py` — param validation, 404, response shape.
-**Acceptance**: [ ] route wired via use case [ ] errors correct [ ] schema matches PRD
+**Acceptance**: [x] route wired via use case [x] errors correct [x] schema matches PRD
 
 #### T-4-03 — S9 proxy `GET /v1/paths/between` + cache
 **Type**: impl · **depends_on**: T-4-02 · **blocks**: T-4-05
@@ -409,7 +409,7 @@ connected/shortest_hops/paths[]/computed_at). R25: router → use case only. Err
 **What to build**: Authenticated proxy → S6; forward params; Valkey 5-min cache key
 `pathbetween:{tenant}:{source}:{target}:{max_hops}:{limit}:{meaningful_only}`; rate-limit 60/min.
 **Tests**: contract `test_paths_between_contract.py` (shape + forwarding); cache hit/miss.
-**Acceptance**: [ ] proxied [ ] cached per-tenant [ ] rate-limited
+**Acceptance**: [x] proxied [x] cached per-tenant [x] rate-limited (shared RateLimitMiddleware)
 
 #### T-4-04 — `get_path_between` LLM tool (rag-chat) + manifest bump (R29)
 **Type**: impl · **depends_on**: T-4-01 · **blocks**: T-4-05
@@ -422,26 +422,26 @@ the tool YAML manifest file, `application/pipeline/handlers/narrative.py` (or a 
 `/v1/paths/between`; returns a `PathBetweenResult` dict for Claude. Bump manifest version; keep manifest↔handler
 in sync (R29). EntityContext enforcement consistent with existing tools (PLAN-0080 M-1).
 **Tests**: handler unit (success/empty/missing-port); `test_tool_manifest_sync` (R29 — manifest matches handlers).
-**Acceptance**: [ ] tool callable [ ] manifest version bumped [ ] R29 sync test green
+**Acceptance**: [x] tool callable [x] manifest version bumped (4→5) [x] R29 sync test green
 
 #### T-4-05 — Pairwise contract + integration tests
 **Type**: test · **depends_on**: T-4-03, T-4-04 · **blocks**: none
 **Target files**: `services/knowledge-graph/tests/contract/test_paths_between_contract.py` (NEW),
 `tests/integration/.../test_paths_between_age.py` (NEW, AGE-backed).
 **What to build**: S9↔S6 contract; AGE integration measuring p95 < 1 s for representative pairs (NFR-1).
-**Acceptance**: [ ] contract green [ ] latency within budget recorded
+**Acceptance**: [x] contract green [~] latency within budget recorded (AGE-backed integration test deferred to live QA — unit/contract/router green; W2 spike already measured hop-3 pairwise p95=248ms < 1s budget)
 
 #### Pre-read
 - `application/use_cases/cypher_path.py`, `application/use_cases/get_entity_paths.py`, `api/paths.py`,
   `api-gateway/routes/intelligence.py`, rag-chat `tool_registry_builder.py` + `s7_intelligence_client.py`.
 
 #### Validation Gate
-- [ ] ruff + mypy (S6, S9, S8) · [ ] ≥10 new tests · [ ] contract + R29 green · [ ] latency recorded
-- [ ] docs: api-gateway.md + rag-chat.md tool list updated
+- [x] ruff + mypy (S6, S9, S8) · [x] ≥10 new tests (37: 10 use-case + 6 KG router + 4 KG contract + 4 S9 proxy + 6 rag-chat handler + 2 rag-chat client + 5 registry/parity bumps) · [x] contract + R29 green · [~] latency recorded (W2 spike: hop-3 pairwise p95=248ms; live AGE integration deferred to W6 QA)
+- [x] docs: api-gateway.md + rag-chat.md tool list updated (+ knowledge-graph.md route)
 
 #### Architecture Compliance
-- [ ] R25 — routers use only use cases · [ ] R27 — read endpoint, AGE write-session exception documented
-- [ ] R14/R7 — rag-chat → S9 only, never S6 directly · [ ] R29 — manifest sync test
+- [x] R25 — routers use only use cases · [x] R27 — read endpoint, AGE write-session exception documented
+- [x] R14/R7 — rag-chat → S9 only, never S6 directly · [x] R29 — manifest sync test
 
 #### Break Impact
 | Broken File | Why | Fix |

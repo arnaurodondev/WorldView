@@ -823,6 +823,81 @@ async def get_entity_paths(
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Pairwise pathfinding (PLAN-0112 W4) ──────────────────────────────────────
+
+
+@router.get(
+    "/paths/between",
+    summary="On-demand pairwise pathfinding — is A connected to B, and how? (PLAN-0112 W4)",
+)
+async def get_paths_between(
+    request: Request,
+    source: UUID = Query(..., description="Source entity UUID."),
+    target: UUID = Query(..., description="Target entity UUID (must differ from source)."),
+    max_hops: int = Query(default=3, ge=1, le=3),
+    limit: int = Query(default=5, ge=1, le=20),
+    meaningful_only: bool = Query(default=False),
+) -> Any:
+    """Proxy GET /api/v1/paths/between → S7 Knowledge Graph (PRD-0112 §6.2).
+
+    On-demand bounded pairwise search reusing S7's staged-VLE engine. Returns a
+    ``connected`` flag, the ``shortest_hops`` count, and up to ``limit`` paths
+    ranked by ``weirdness`` (desc) then ``hop_count`` (asc).
+
+    Caching strategy (5-minute TTL, tenant-scoped):
+      - Cache key: ``pathbetween:<tenant>:<source>:<target>:<max_hops>:<limit>:<meaningful_only>``
+      - Pairwise results are deterministic between graph refreshes; 5 min is safe.
+      - Non-2xx responses are never cached.
+      - Fail-open on Valkey errors.
+
+    Requires authentication (the shared RateLimitMiddleware applies the standard
+    per-user request budget — no extra per-route limit needed). Errors flow
+    through from S7: 400 (source==target), 404 (entity missing), 422 (bad
+    params), 503 (AGE traversal timeout).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    cache_key = f"pathbetween:{tenant_id}:{source}:{target}:{max_hops}:{limit}:{int(meaningful_only)}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit ────────────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            logger.warning("paths_between_cache_read_failed", source=str(source), target=str(target))
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/paths/between",
+        params={
+            "source": str(source),
+            "target": str(target),
+            "max_hops": max_hops,
+            "limit": limit,
+            "meaningful_only": "true" if meaningful_only else "false",
+        },
+        headers=headers,
+    )
+
+    # ── Cache store (only 2xx) ───────────────────────────────────────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            await valkey.set(cache_key, resp.content.decode(), ex=300)
+        except Exception:
+            logger.warning("paths_between_cache_write_failed", source=str(source), target=str(target))
+
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Intelligence-tab bundle (PLAN-0099 H) ────────────────────────────────────
 
 

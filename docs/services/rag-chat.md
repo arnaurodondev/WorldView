@@ -209,6 +209,7 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
 | `get_portfolio_context` | S1 | User portfolio holdings | v1 |
 | `get_entity_narrative` | S9→S7 | LLM-generated entity narrative (markdown); high-authority (trust_weight=0.88). Endpoint: `GET /api/v1/entities/{id}/narratives` | v2 |
 | `get_entity_paths` | S9→S7 | Top-N pre-computed multi-hop relationship paths, composite_score-ranked. Endpoint: `GET /api/v1/entities/{id}/paths` | v2 |
+| `get_path_between` | S9→S7 | On-demand TWO-entity pairwise pathfinding — "is X connected to Y, and how?". Params: `source_entity`, `target_entity` (required; UUID/ticker/name, resolved independently — no EntityContext pinning), `max_hops` (1–3, default 3). Endpoint: `GET /v1/paths/between`. Distinct from `get_entity_paths` (single anchor, pre-computed). Manifest bumped to v5. | v5 |
 | `get_entity_health` | S9→S7 | Entity health score, key metrics, source distribution (extracted from intelligence bundle). Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_entity_intelligence` | S9→S7 | Full intelligence bundle: narrative + paths + health + relations summary. Single call for "tell me everything about X". Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |

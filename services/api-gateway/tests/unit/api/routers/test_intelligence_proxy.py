@@ -453,3 +453,106 @@ async def test_paths_404_from_s7_forwarded(authed_app, authed_mock_clients) -> N
         )
 
     assert resp.status_code == 404
+
+
+# ── PLAN-0112 W4: GET /v1/paths/between (pairwise) ───────────────────────────
+
+_SRC_UUID = "01930000-0000-7000-8000-0000000000a1"
+_TGT_UUID = "01930000-0000-7000-8000-0000000000a2"
+
+
+@pytest.mark.asyncio
+async def test_paths_between_requires_auth(app, mock_clients) -> None:
+    """GET /v1/paths/between without auth → 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(f"/v1/paths/between?source={_SRC_UUID}&target={_TGT_UUID}")
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_paths_between_forwards_params_and_caches(authed_app, authed_mock_clients) -> None:
+    """Pairwise proxy forwards source/target/max_hops/limit/meaningful_only + caches per tenant."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(return_value=None)
+    mock_valkey.set = AsyncMock()
+
+    payload = {
+        "source_entity_id": _SRC_UUID,
+        "target_entity_id": _TGT_UUID,
+        "connected": True,
+        "shortest_hops": 1,
+        "paths": [],
+        "computed_at": "2026-06-13T12:00:00+00:00",
+    }
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=_mock_response(200, payload))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/paths/between",
+            params={
+                "source": _SRC_UUID,
+                "target": _TGT_UUID,
+                "max_hops": "2",
+                "limit": "3",
+                "meaningful_only": "true",
+            },
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Upstream S6 path is the un-prefixed KG route.
+    call_path = authed_mock_clients.knowledge_graph.get.call_args[0][0]
+    assert call_path == "/api/v1/paths/between"
+    forwarded = authed_mock_clients.knowledge_graph.get.call_args[1].get("params", {})
+    assert forwarded["source"] == _SRC_UUID
+    assert forwarded["target"] == _TGT_UUID
+    assert forwarded["max_hops"] == 2
+    assert forwarded["limit"] == 3
+    assert forwarded["meaningful_only"] == "true"
+    # Cached under the tenant-scoped pairwise key.
+    set_key = mock_valkey.set.call_args[0][0]
+    assert set_key.startswith("pathbetween:")
+    assert _SRC_UUID in set_key and _TGT_UUID in set_key
+
+
+@pytest.mark.asyncio
+async def test_paths_between_cache_hit_skips_upstream(authed_app, authed_mock_clients) -> None:
+    """A Valkey cache hit returns the cached body without calling S6."""
+    cached_body = b'{"connected": false, "shortest_hops": null, "paths": []}'
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(return_value=cached_body)
+    authed_mock_clients.knowledge_graph.get = AsyncMock()
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/paths/between?source={_SRC_UUID}&target={_TGT_UUID}",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_paths_between_503_from_s7_forwarded(authed_app, authed_mock_clients) -> None:
+    """S6 503 (AGE timeout) → 503 forwarded; not cached."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(return_value=None)
+    mock_valkey.set = AsyncMock()
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(503, {"detail": "Path search timed out; please retry."}),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/paths/between?source={_SRC_UUID}&target={_TGT_UUID}",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503
+    mock_valkey.set.assert_not_called()

@@ -12,8 +12,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from knowledge_graph.api.dependencies import GetEntityPathsUseCaseDep  # type: ignore[attr-defined]
-from knowledge_graph.api.schemas.paths import EntityPathsResponse
+from knowledge_graph.api.dependencies import (  # type: ignore[attr-defined]
+    FindPathsBetweenUseCaseDep,
+    GetEntityPathsUseCaseDep,
+)
+from knowledge_graph.api.schemas.paths import EntityPathsResponse, PathsBetweenResponse
+from knowledge_graph.application.use_cases.cypher_path import CypherTimeoutError
+from knowledge_graph.application.use_cases.find_paths_between import (
+    PathsBetweenEntityNotFoundError,
+    PathsBetweenSameEntityError,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["paths"])
@@ -77,3 +85,63 @@ async def get_entity_paths(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return response  # type: ignore[no-any-return]
+
+
+@router.get(
+    "/paths/between",
+    response_model=PathsBetweenResponse,
+    summary="On-demand pairwise pathfinding — is A connected to B, and how? (PLAN-0112 W4)",
+    description=(
+        "Bounded on-demand search for paths between two entities (PRD-0112 FR-8). "
+        "Reuses the staged variable-length-edge engine (BP-687) for the existence/"
+        "shortest-hop probe and the WeirdnessScorer for ranking.\n\n"
+        "**connected=false / shortest_hops=null** when no path exists within "
+        "``max_hops``.  Paths are ranked by ``weirdness`` descending, then "
+        "``hop_count`` ascending.\n\n"
+        "**400**: ``source == target``.  **404**: an endpoint does not exist.  "
+        "**422**: ``max_hops`` / ``limit`` out of range.  **503**: AGE traversal "
+        "exceeded the statement timeout (retry)."
+    ),
+)
+async def get_paths_between(
+    uc: FindPathsBetweenUseCaseDep,
+    source: UUID = Query(..., description="Source entity UUID."),
+    target: UUID = Query(..., description="Target entity UUID (must differ from source)."),
+    max_hops: int = Query(default=3, ge=1, le=3, description="Maximum path length (1..path_max_hops)."),
+    limit: int = Query(default=5, ge=1, le=20, description="Maximum ranked paths to return."),
+    meaningful_only: bool = Query(
+        default=False,
+        description="When true, prune membership edges from the traversal results.",
+    ),
+) -> PathsBetweenResponse:
+    """Return ranked pairwise paths between *source* and *target*.
+
+    - **200**: response with ``connected`` flag + ranked ``paths`` (empty when
+      disconnected within ``max_hops``).
+    - **400**: ``source == target``.
+    - **404**: ``source`` or ``target`` not found in ``canonical_entities``.
+    - **422**: ``max_hops`` or ``limit`` out of range (FastAPI ge/le + use case).
+    - **503**: AGE traversal timed out — transient, retry.
+    """
+    try:
+        return await uc.execute(  # type: ignore[no-any-return]
+            source,
+            target,
+            max_hops=max_hops,
+            limit=limit,
+            meaningful_only=meaningful_only,
+        )
+    except PathsBetweenSameEntityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PathsBetweenEntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except ValueError as exc:
+        # Use-case bound validation raises ValueError → 422.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CypherTimeoutError as exc:
+        # AGE statement timeout → 503 with retry hint (PRD §6.2).
+        raise HTTPException(
+            status_code=503,
+            detail="Path search timed out; please retry.",
+            headers={"Retry-After": "5"},
+        ) from exc

@@ -39,7 +39,14 @@ from api_gateway.schemas.intelligence_bundle import EntityIntelligenceBundleResp
 from api_gateway.schemas.market import YieldCurveResponse, YieldPoint
 from api_gateway.schemas.narratives import NarrativeListResponse, NarrativeTriggerResponse
 from api_gateway.schemas.news import ArticleImpactHistoryResponse, ImpactWindow, NewsArticle, NewsTopResponse
-from api_gateway.schemas.paths import EntityPathsResponse, PathEdgePublic, PathInsightPublic, PathNodePublic
+from api_gateway.schemas.paths import (
+    EntityPathsResponse,
+    PathBetweenPublic,
+    PathEdgePublic,
+    PathInsightPublic,
+    PathNodePublic,
+    PathsBetweenResponse,
+)
 from api_gateway.schemas.portfolios import (
     PortfolioBundleResponse,
     PortfolioResponse,
@@ -84,9 +91,11 @@ __all__ = [
     "NewsTopResponse",
     "OHLCVBar",
     "OHLCVResponse",
+    "PathBetweenPublic",
     "PathEdgePublic",
     "PathInsightPublic",
     "PathNodePublic",
+    "PathsBetweenResponse",
     "PortfolioBundleResponse",
     "PortfolioResponse",
     "PortfolioSectorAttributionResponse",

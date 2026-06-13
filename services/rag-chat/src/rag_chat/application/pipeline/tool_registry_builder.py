@@ -618,6 +618,56 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # PLAN-0112 W4: on-demand TWO-ENTITY pairwise pathfinding (FR-9). Distinct
+    # from get_entity_paths (single anchor, pre-computed): this binds BOTH ends
+    # and searches live via S9 /v1/paths/between (R14). Manifest bumped to v5.
+    registry.register(
+        ToolSpec(
+            name="get_path_between",
+            description=(
+                "Performs an ON-DEMAND, live, bounded search for connection PATHS between TWO "
+                "specific entities — 'is X connected to Y, and how are they linked?'. Returns "
+                "whether a connection exists within max_hops, the shortest hop count, and the "
+                "ranked intermediary paths (ranked by how surprising the connection is). Use "
+                "this for ANY two-entity relationship question: 'how is Nvidia connected to "
+                "SpaceX', 'is Apple linked to OpenAI', 'what connects Microsoft and Anthropic'. "
+                "DO NOT use for single-entity network questions — use get_entity_paths "
+                "(one anchor, pre-computed) instead."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="source_entity",
+                    type="string",
+                    description=(
+                        "First entity — UUID, ticker symbol (e.g. 'NVDA'), or company name. " "Resolved server-side."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="target_entity",
+                    type="string",
+                    description=(
+                        "Second entity — UUID, ticker, or company name. Resolved server-side. "
+                        "Must differ from source_entity."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="max_hops",
+                    type="integer",
+                    description="Maximum path length to search (1-3). Default 3.",
+                    required=False,
+                ),
+            ],
+            source_type="knowledge_graph",
+            example_queries=[
+                "How is Nvidia connected to SpaceX?",
+                "Is Apple linked to OpenAI, and how?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     registry.register(
         ToolSpec(
             name="get_entity_health",

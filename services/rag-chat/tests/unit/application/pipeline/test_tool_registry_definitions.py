@@ -96,7 +96,8 @@ class TestRegistryParameterCoverage:
         # → 25. Method name kept for grep parity.
         registry = build_default_registry()
         names = {s.name for s in registry.all_specs()}
-        assert len(names) == 25, f"Expected 25 tools, got {len(names)}: {sorted(names)}"
+        # PLAN-0112 W4 bumped 25 → 26 by adding ``get_path_between`` (pairwise).
+        assert len(names) == 26, f"Expected 26 tools, got {len(names)}: {sorted(names)}"
 
     def test_every_audit_placeholder_tool_now_carries_params_or_is_zero_param(self) -> None:
         """D-R1-002: 18 placeholder tools were filled in; 3 intentionally zero-arg."""
@@ -160,7 +161,8 @@ class TestProductionRegistryToolDefinitions:
         # PLAN-0104 W32: 25 after adding query_fundamentals.
         registry = build_default_registry()
         defs = registry.to_tool_definitions()
-        assert len(defs) == 25
+        # PLAN-0112 W4: 26 after adding get_path_between.
+        assert len(defs) == 26
 
     def test_every_definition_has_openai_envelope(self) -> None:
         registry = build_default_registry()
@@ -207,6 +209,8 @@ class TestProductionRegistryToolDefinitions:
             "get_entity_news",
             # PLAN-0104 W32
             "query_fundamentals",
+            # PLAN-0112 W4
+            "get_path_between",
         }
         assert names == expected, f"Missing: {expected - names}; Extra: {names - expected}"
 
