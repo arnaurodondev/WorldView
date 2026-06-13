@@ -100,6 +100,16 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
           );
           const relSummary = relationTypes.slice(0, 3).join(", ");
 
+          // PLAN-0112 T-5-03: surface the "weirdness" headline in the rail.
+          // Prefer the explicit `weirdness` field; fall back to `composite_score`
+          // for pre-PLAN-0112 rows (they are the same number when both present).
+          // If BOTH are missing/null we omit the chip entirely (back-compat).
+          const weird = path.weirdness ?? path.composite_score;
+          const weirdPct =
+            typeof weird === "number" && Number.isFinite(weird)
+              ? Math.round(Math.min(1, Math.max(0, weird)) * 100)
+              : null;
+
           return (
             <button
               key={path.insight_id}
@@ -109,8 +119,16 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
               }
               className="w-full min-h-[38px] py-1 px-2 flex flex-col justify-center text-left border border-border-subtle hover:bg-muted/20 transition-color-only duration-100"
             >
-              {/* WHY ellipsis on path: long paths ("A → B → C → D") overflow the narrow rail */}
-              <span className="text-[11px] text-foreground/90 truncate w-full">{pathLabel}</span>
+              <div className="flex w-full items-center justify-between gap-2">
+                {/* WHY ellipsis on path: long paths ("A → B → C → D") overflow the narrow rail */}
+                <span className="text-[11px] text-foreground/90 truncate">{pathLabel}</span>
+                {/* Weirdness chip (relabelled from the old composite score). */}
+                {weirdPct !== null && (
+                  <span className="shrink-0 rounded-[2px] bg-primary/15 px-1 py-0.5 text-[8px] font-mono uppercase tracking-wider text-primary">
+                    weird {weirdPct}%
+                  </span>
+                )}
+              </div>
               <span className="text-[9px] text-muted-foreground mt-0.5">
                 {path.hop_count} hop{path.hop_count !== 1 ? "s" : ""} · {relSummary}
               </span>

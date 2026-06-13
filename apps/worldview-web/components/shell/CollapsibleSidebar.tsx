@@ -47,6 +47,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Settings,
+  Spline,
   TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -67,6 +68,10 @@ const NAV_ITEMS = [
   { href: "/portfolio",          icon: Briefcase,       label: "Portfolio"   },
   { href: "/instruments",        icon: TrendingUp,      label: "Instruments" },
   { href: "/screener",           icon: Filter,          label: "Screener"    },
+  // PLAN-0112 T-5-03: graph-wide "weird connections" feed + pairwise pathfinder.
+  // WHY after Screener: it is a discovery surface (like the screener), placed in
+  // the "research/discovery" cluster of the daily workflow.
+  { href: "/connections",        icon: Spline,          label: "Connections" },
   { href: "/workspace",          icon: LayoutGrid,      label: "Workspace"   },
   { href: "/prediction-markets", icon: BarChart2,       label: "Predictions" },
   { href: "/alerts",             icon: Bell,            label: "Alerts"      },

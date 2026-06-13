@@ -37,6 +37,9 @@ import {
   useEntityPaths,
   useEntityNarrativeHistory,
   useTriggerNarrativeGeneration,
+  // PLAN-0112 T-5-03 — global feed + pairwise hooks.
+  useWeirdConnections,
+  usePathBetween,
 } from "@/lib/api/intelligence";
 
 // ── Mock @/lib/api-client ─────────────────────────────────────────────────────
@@ -226,6 +229,200 @@ describe("useEntityPaths", () => {
     const calledUrl = (fetchMock.mock.calls[0][0] as string);
     expect(calledUrl).toContain("min_score=0.5");
     expect(calledUrl).toContain("max_hops=3");
+  });
+});
+
+// ── PLAN-0112 T-5-03: useWeirdConnections ─────────────────────────────────────
+
+function mockWeirdConnectionsResponse() {
+  return {
+    connections: [
+      {
+        path_nodes: [
+          { entity_id: "a", name: "Apple", entity_type: "company" },
+          { entity_id: "b", name: "Anthropic", entity_type: "company" },
+        ],
+        path_edges: [{ relation_type: "PARTNER_OF", confidence: 0.8 }],
+        hop_count: 1,
+        reliability: 0.8,
+        unexpectedness: 0.9,
+        semantic_distance: 0.7,
+        novelty: 0.2,
+        weirdness: 0.71,
+        src_entity_id: "a",
+        dst_entity_id: "b",
+        computed_at: "2026-06-12T00:00:00Z",
+      },
+    ],
+    total: 1,
+    freshness_ts: "2026-06-12T00:00:00Z",
+  };
+}
+
+describe("useWeirdConnections", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls /v1/connections/weird and returns ranked connections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(mockWeirdConnectionsResponse()), { status: 200 }),
+      ),
+    );
+
+    const { result } = renderHook(() => useWeirdConnections(), {
+      wrapper: makeWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.connections).toHaveLength(1);
+    expect(result.current.data?.connections[0].weirdness).toBe(0.71);
+
+    const fetchMock = vi.mocked(global.fetch);
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/v1/connections/weird");
+  });
+
+  it("builds the query string only from DEFINED filters", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(mockWeirdConnectionsResponse()), { status: 200 }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () => useWeirdConnections({ limit: 25, minWeirdness: 0.5 }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const calledUrl = vi.mocked(global.fetch).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("limit=25");
+    expect(calledUrl).toContain("min_weirdness=0.5");
+    // offset / since_days / entity_type were not provided → must be absent.
+    expect(calledUrl).not.toContain("offset=");
+    expect(calledUrl).not.toContain("since_days=");
+    expect(calledUrl).not.toContain("entity_type=");
+  });
+
+  it("is enabled with only a token (global, no entity id needed)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(mockWeirdConnectionsResponse()), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useWeirdConnections(), {
+      wrapper: makeWrapper(),
+    });
+
+    // With a token present (mocked useAccessToken → "test-token") the query fires.
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+// ── PLAN-0112 T-5-03: usePathBetween ──────────────────────────────────────────
+
+function mockPathsBetweenResponse(connected = true) {
+  return {
+    source_entity_id: "src",
+    target_entity_id: "dst",
+    connected,
+    shortest_hops: connected ? 2 : null,
+    paths: connected
+      ? [
+          {
+            path_nodes: [
+              { entity_id: "src", name: "Apple", entity_type: "company" },
+              { entity_id: "mid", name: "TSMC", entity_type: "company" },
+              { entity_id: "dst", name: "ASML", entity_type: "company" },
+            ],
+            path_edges: [
+              { relation_type: "SUPPLIER_OF", confidence: 0.7 },
+              { relation_type: "CUSTOMER_OF", confidence: 0.6 },
+            ],
+            hop_count: 2,
+            reliability: 0.65,
+            unexpectedness: 0.8,
+            semantic_distance: 0.5,
+            novelty: 0.1,
+            weirdness: 0.55,
+          },
+        ]
+      : [],
+    computed_at: "2026-06-12T00:00:00Z",
+  };
+}
+
+describe("usePathBetween", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is DISABLED (idle) until both source and target are set", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Only source set → must not fire.
+    const { result } = renderHook(() => usePathBetween("src", ""), {
+      wrapper: makeWrapper(),
+    });
+
+    expect(result.current.status).toBe("pending");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("calls /v1/paths/between with source+target+knobs when both set", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(mockPathsBetweenResponse(true)), { status: 200 }),
+      ),
+    );
+
+    const { result } = renderHook(
+      () =>
+        usePathBetween("src", "dst", {
+          maxHops: 3,
+          limit: 10,
+          meaningfulOnly: true,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const calledUrl = vi.mocked(global.fetch).mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/v1/paths/between");
+    expect(calledUrl).toContain("source=src");
+    expect(calledUrl).toContain("target=dst");
+    expect(calledUrl).toContain("max_hops=3");
+    expect(calledUrl).toContain("limit=10");
+    expect(calledUrl).toContain("meaningful_only=true");
+
+    expect(result.current.data?.connected).toBe(true);
+    expect(result.current.data?.shortest_hops).toBe(2);
+  });
+
+  it("returns connected=false with empty paths for a disconnected pair", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(mockPathsBetweenResponse(false)), { status: 200 }),
+      ),
+    );
+
+    const { result } = renderHook(() => usePathBetween("src", "dst"), {
+      wrapper: makeWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.connected).toBe(false);
+    expect(result.current.data?.shortest_hops).toBeNull();
+    expect(result.current.data?.paths).toHaveLength(0);
   });
 });
 

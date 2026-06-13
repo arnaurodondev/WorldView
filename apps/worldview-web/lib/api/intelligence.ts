@@ -50,6 +50,11 @@ import type {
   EntityPathsResponse,
   NarrativeHistoryPage,
   PathFilters,
+  // PLAN-0112 (T-5-03): global weird-connections feed + pairwise pathfinding.
+  WeirdConnectionsResponse,
+  WeirdConnectionsFilters,
+  PathsBetweenResponse,
+  PathBetweenOptions,
 } from "@/types/intelligence";
 
 // ── Query key factory ─────────────────────────────────────────────────────────
@@ -81,6 +86,25 @@ const iqk = {
   /** Cache key for GET /v1/articles/{document_id} (QA Wave-3 closeout) */
   articleMeta: (documentId: string) =>
     ["evidence-article-meta", documentId] as const,
+  /**
+   * Cache key for GET /v1/connections/weird (PLAN-0112 T-5-03 global feed).
+   * WHY filters in the key: the feed is filterable (min-weirdness, paging,
+   * entity-type). Each unique filter combo gets its own cache slot so toggling
+   * a filter shows previously-fetched data instantly.
+   */
+  weirdConnections: (filters: WeirdConnectionsFilters) =>
+    ["weird-connections", filters] as const,
+  /**
+   * Cache key for GET /v1/paths/between (PLAN-0112 T-5-03 pairwise).
+   * WHY source+target+opts in the key: the answer is fully determined by the
+   * pair and the tuning knobs; caching per-tuple means re-asking the same
+   * question is instant and matches the backend's per-tuple Valkey cache.
+   */
+  pathBetween: (
+    source: string,
+    target: string,
+    opts: PathBetweenOptions,
+  ) => ["path-between", source, target, opts] as const,
 };
 
 // ── useEntityIntelligence ─────────────────────────────────────────────────────
@@ -160,6 +184,114 @@ export function useEntityPaths(entityId: string, filters: PathFilters = {}) {
     // 5 min — matches backend cache TTL for path computation (see module comment)
     staleTime: 300_000,
     enabled: !!entityId && !!token,
+  });
+}
+
+// ── useWeirdConnections (PLAN-0112 T-5-03) ────────────────────────────────────
+
+/**
+ * useWeirdConnections — fetches the GLOBAL ranked "weird connections" feed.
+ *
+ * WHAT IT IS: a graph-wide list of the most surprising multi-hop connections in
+ * the knowledge graph, ranked by the "weirdness" score (precomputed in
+ * `path_insights` by the S6 WeirdnessScorer). Unlike useEntityPaths this is NOT
+ * scoped to one entity — it answers "show me the weirdest things in the whole
+ * graph right now".
+ *
+ * WHY staleTime 300_000 (5 min):
+ * The feed reads a precomputed table that the discovery worker refreshes on a
+ * cron cadence, and S9 caches the response for 5 min per the §8 cache key. There
+ * is zero benefit to re-fetching faster than the backend cache TTL.
+ *
+ * WHY build the query string only from DEFINED params (mirrors useEntityPaths):
+ * The backend applies its own defaults for absent params. Sending `min_weirdness=`
+ * (empty) or `undefined` would either no-op or 422. Only serialising present
+ * values keeps the URL minimal AND keeps the cache key ↔ URL in lockstep.
+ *
+ * @param filters Optional feed filters (limit, offset, minWeirdness, sinceDays,
+ *                entityType). Defaults to an empty object so callers can omit it.
+ */
+export function useWeirdConnections(filters: WeirdConnectionsFilters = {}) {
+  const token = useAccessToken();
+
+  return useQuery<WeirdConnectionsResponse>({
+    // WHY filters in key: see iqk.weirdConnections doc comment.
+    queryKey: iqk.weirdConnections(filters),
+    queryFn: () => {
+      // Build query params — only add DEFINED values (snake_case on the wire).
+      const params = new URLSearchParams();
+      if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+      if (filters.offset !== undefined) params.set("offset", String(filters.offset));
+      if (filters.minWeirdness !== undefined)
+        params.set("min_weirdness", String(filters.minWeirdness));
+      if (filters.sinceDays !== undefined)
+        params.set("since_days", String(filters.sinceDays));
+      if (filters.entityType !== undefined && filters.entityType !== "")
+        params.set("entity_type", filters.entityType);
+      const qs = params.toString();
+      return apiFetch<WeirdConnectionsResponse>(
+        `/v1/connections/weird${qs ? `?${qs}` : ""}`,
+        { token: token ?? undefined },
+      );
+    },
+    // 5 min — matches the S9 Valkey cache TTL for the precomputed feed.
+    staleTime: 300_000,
+    // WHY only token-gated (no entity id): the feed is global; it just needs auth.
+    enabled: !!token,
+  });
+}
+
+// ── usePathBetween (PLAN-0112 T-5-03) ─────────────────────────────────────────
+
+/**
+ * usePathBetween — answers "how are entity A and entity B related?".
+ *
+ * WHAT IT IS: an on-demand pairwise pathfinder. Given a source and target entity
+ * id it returns whether they are connected, the shortest hop count, and a ranked
+ * list of paths between them (each scored by weirdness). Drives the "How are
+ * these related?" UI.
+ *
+ * WHY enabled ONLY when BOTH source AND target are set:
+ * The endpoint is meaningless (and 422s) without both endpoints. The picker UI
+ * mounts this hook unconditionally (hooks cannot be conditional) but leaves
+ * source/target empty until the user has chosen two entities — the `enabled`
+ * gate keeps the query idle until then, so no wasted/erroring request fires.
+ *
+ * WHY staleTime 300_000 (5 min):
+ * The pairwise compute is bounded but non-trivial (graph traversal + scoring) and
+ * S9 caches it for 5 min keyed by (source, target, knobs). Re-asking the exact
+ * same question within the window returns identical data — cache it.
+ *
+ * @param source Source entity UUID (or "" when not yet chosen).
+ * @param target Target entity UUID (or "" when not yet chosen).
+ * @param opts   Optional tuning (maxHops, limit, meaningfulOnly).
+ */
+export function usePathBetween(
+  source: string,
+  target: string,
+  opts: PathBetweenOptions = {},
+) {
+  const token = useAccessToken();
+
+  return useQuery<PathsBetweenResponse>({
+    // WHY source+target+opts in key: the answer is fully determined by them.
+    queryKey: iqk.pathBetween(source, target, opts),
+    queryFn: () => {
+      // `source` + `target` are REQUIRED query params; the optional knobs are
+      // serialised only when present (mirror useEntityPaths / useWeirdConnections).
+      const params = new URLSearchParams({ source, target });
+      if (opts.maxHops !== undefined) params.set("max_hops", String(opts.maxHops));
+      if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts.meaningfulOnly !== undefined)
+        params.set("meaningful_only", String(opts.meaningfulOnly));
+      return apiFetch<PathsBetweenResponse>(
+        `/v1/paths/between?${params.toString()}`,
+        { token: token ?? undefined },
+      );
+    },
+    staleTime: 300_000,
+    // Only fire when BOTH endpoints are chosen AND we have a token (see doc above).
+    enabled: !!source && !!target && !!token,
   });
 }
 

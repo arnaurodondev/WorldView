@@ -35,6 +35,10 @@ import { useEntityPaths } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+// PLAN-0112 T-5-03: the headline metric is now "weirdness" with a four-part
+// sub-score breakdown (reliability / unexpectedness / semantic distance / novelty)
+// replacing the old harmonic/diversity/surprise display.
+import { WeirdnessBreakdown } from "@/components/intelligence/WeirdnessBreakdown";
 import type { PathInsightPublic, PathNodePublic, PathEdgePublic } from "@/types/intelligence";
 import type { EntityGraph } from "@/types/api";
 
@@ -122,7 +126,12 @@ function PathCard({
   const containsSelected = insight.path_nodes.some(
     (n) => n.entity_id === selectedEntityId,
   );
-  const pct = Math.round(insight.composite_score * 100);
+  // PLAN-0112: the headline is "weirdness". The backend mirrors weirdness into
+  // `composite_score`, so we prefer the explicit `weirdness` field but fall back
+  // to `composite_score` for old rows where `weirdness` is null/absent (R5 back-
+  // compat) — they are the same number when both are present.
+  const weirdness = insight.weirdness ?? insight.composite_score;
+  const pct = Math.round(weirdness * 100);
 
   return (
     <div
@@ -136,7 +145,7 @@ function PathCard({
           : "border-border/50 bg-card/40",
       )}
       role="article"
-      aria-label={`${insight.hop_count}-hop path, composite score ${pct}%`}
+      aria-label={`${insight.hop_count}-hop path, weirdness ${pct}%`}
     >
       {/* ── Card header ──────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-2">
@@ -156,21 +165,23 @@ function PathCard({
           </span>
         </div>
 
-        {/* Composite score progress bar */}
+        {/* Weirdness headline bar (relabelled from "composite score"). */}
         <div className="flex items-center gap-1.5">
+          {/* WHY a "WEIRD" label here (not on the old composite bar): the metric
+              changed meaning; an explicit label keeps the relabel unambiguous. */}
+          <span className="text-[8px] font-mono uppercase tracking-wider text-muted-foreground">
+            weird
+          </span>
           <div
             className="w-[48px] h-1.5 bg-muted rounded-full overflow-hidden"
             role="progressbar"
             aria-valuenow={pct}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={`Composite score: ${pct}%`}
+            aria-label={`Weirdness: ${pct}%`}
           >
             <div
-              className={cn(
-                "h-full rounded-full",
-                pct >= 70 ? "bg-positive/70" : pct >= 40 ? "bg-warning/70" : "bg-negative/70",
-              )}
+              className="h-full rounded-full bg-primary"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -185,6 +196,17 @@ function PathCard({
         nodes={insight.path_nodes}
         edges={insight.path_edges}
         selectedEntityId={selectedEntityId}
+      />
+
+      {/* ── Weirdness sub-score breakdown (replaces harmonic/diversity/surprise).
+          Fields may be null on pre-PLAN-0112 rows → WeirdnessBreakdown renders
+          "—" for those, so the relabel is back-compatible. */}
+      <WeirdnessBreakdown
+        reliability={insight.reliability}
+        unexpectedness={insight.unexpectedness}
+        semantic_distance={insight.semantic_distance}
+        novelty={insight.novelty}
+        className="mt-2"
       />
 
       {/* ── LLM explanation ─────────────────────────────────────────────── */}
