@@ -65,6 +65,19 @@ class TestPathEdge:
         with pytest.raises((AttributeError, TypeError)):
             e.confidence = 0.9  # type: ignore[misc]
 
+    def test_path_edge_forward_defaults_true(self) -> None:
+        """forward defaults True (back-compat with pre-directionality-fix callers)."""
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+
+        assert PathEdge(relation_type="ACQUIRED_BY", confidence=0.5).forward is True
+
+    def test_path_edge_forward_explicit_reverse(self) -> None:
+        """forward=False marks a reverse-walked edge (subject is the later node)."""
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+
+        e = PathEdge(relation_type="ACQUIRED_BY", confidence=0.5, forward=False)
+        assert e.forward is False
+
 
 class TestPathInsight:
     def _make_insight(

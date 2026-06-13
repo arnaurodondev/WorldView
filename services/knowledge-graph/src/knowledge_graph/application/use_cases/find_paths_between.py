@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from common.time import utc_now  # type: ignore[import-untyped]
+from knowledge_graph.application.ports.graph_path_engine import edge_forward_at as _forward_at
 from knowledge_graph.domain.errors import KnowledgeGraphError
 
 if TYPE_CHECKING:
@@ -203,8 +204,12 @@ class FindPathsBetweenUseCase:
                         for nid, name, etype in zip(raw.node_ids, raw.node_names, raw.node_types, strict=False)
                     ],
                     path_edges=[
-                        PathEdgePublic(relation_type=rt, confidence=float(conf))
-                        for rt, conf in zip(raw.rel_types, raw.edge_confs, strict=False)
+                        PathEdgePublic(
+                            relation_type=rt,
+                            confidence=float(conf),
+                            forward=_forward_at(raw.edge_forward, i),
+                        )
+                        for i, (rt, conf) in enumerate(zip(raw.rel_types, raw.edge_confs, strict=False))
                     ],
                     hop_count=raw.hop_count,
                     reliability=reliability,

@@ -953,3 +953,28 @@ class TestAgtypeParser:
         assert edges[1].from_entity_id == "b"
         assert edges[1].to_entity_id == "c"
         assert edges[1].canonical_type == "PARTNER_OF"
+        # No start_id/end_id + no graphid → default forward (back-compat).
+        assert edges[0].direction == "forward"
+        assert edges[1].direction == "forward"
+
+    def test_extract_edges_direction_from_start_end_ids(self) -> None:
+        """direction reflects TRUE subject→object via start_id/end_id (2026-06-13)."""
+        from knowledge_graph.application.use_cases.cypher_path import _extract_edges, _PathNode
+
+        nodes = [
+            _PathNode(entity_id="a", canonical_name="A", entity_type="co", graphid="100"),
+            _PathNode(entity_id="b", canonical_name="B", entity_type="co", graphid="200"),
+        ]
+        # Forward: stored subject (start_id=100) == node we leave from (A).
+        fwd = _extract_edges(
+            [{"label": "ACQUIRED_BY", "start_id": 100, "end_id": 200, "properties": {"confidence": 0.9}}],
+            nodes,
+        )
+        assert fwd[0].direction == "forward"
+        # Reverse: stored subject (start_id=200=B) is the node we ARRIVE at →
+        # the undirected walk went against the stored direction.
+        rev = _extract_edges(
+            [{"label": "ACQUIRED_BY", "start_id": 200, "end_id": 100, "properties": {"confidence": 0.9}}],
+            nodes,
+        )
+        assert rev[0].direction == "reverse"

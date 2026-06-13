@@ -90,6 +90,11 @@ class _PathNode:
     entity_id: str
     canonical_name: str
     entity_type: str
+    # AGE vertex graphid (top-level ``id`` on the vertex agtype).  Used to decide
+    # per-edge walk orientation in ``_extract_edges`` (undirected VLE can walk an
+    # edge against its stored subject→object direction, 2026-06-13).  Optional for
+    # back-compat with hand-built test nodes.
+    graphid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -281,11 +286,13 @@ def _extract_nodes(node_dicts: list[dict[str, Any]]) -> list[_PathNode]:
         canonical_name = props.get("canonical_name")
         entity_type = props.get("entity_type")
         if entity_id and canonical_name and entity_type:
+            gid = nd.get("id")
             nodes.append(
                 _PathNode(
                     entity_id=str(entity_id),
                     canonical_name=str(canonical_name),
                     entity_type=str(entity_type),
+                    graphid=str(gid) if gid is not None else None,
                 ),
             )
     return nodes
@@ -307,13 +314,28 @@ def _extract_edges(edge_dicts: list[dict[str, Any]], nodes: list[_PathNode]) -> 
         to_node = nodes[idx + 1] if (idx + 1) < len(nodes) else None
         if from_node is None or to_node is None:
             continue
+        # True direction relative to the stored subject→object edge: FORWARD when
+        # the edge's ``start_id`` (subject) equals the graphid of the node we leave
+        # from (``from_node``); REVERSE when the undirected VLE walked it backward.
+        # Unresolvable ids → default "forward" (pre-fix behaviour, back-compat).
+        start_id = ed.get("start_id")
+        end_id = ed.get("end_id")
+        if start_id is not None and end_id is not None and from_node.graphid is not None:
+            if str(start_id) == from_node.graphid:
+                direction = "forward"
+            elif str(end_id) == from_node.graphid:
+                direction = "reverse"
+            else:
+                direction = "forward"
+        else:
+            direction = "forward"
         edges.append(
             _PathEdge(
                 from_entity_id=from_node.entity_id,
                 to_entity_id=to_node.entity_id,
                 canonical_type=str(canonical_type),
                 confidence=float(confidence_raw),
-                direction="forward",
+                direction=direction,
             ),
         )
     return edges

@@ -200,10 +200,21 @@ def _parse_rel_id(props: dict[str, Any]) -> UUID | None:
 def _row_to_raw_path(nodes_raw: Any, rels_raw: Any) -> RawPath | None:
     """Assemble a :class:`RawPath` from one (nodes_col, rels_col) agtype row.
 
-    ``nodes(p)`` and ``relationships(p)`` come back in path order; edge ``i``
+    ``nodes(p)`` and ``relationships(p)`` come back in PATH-WALK order; edge ``i``
     connects ``nodes[i] → nodes[i + 1]``.  We pull entity_id / canonical_name /
     entity_type from each vertex's properties and label / confidence / relation_id
     from each edge.
+
+    Edge directionality (2026-06-13, see
+    docs/audits/2026-06-13-edge-directionality-investigation.md): the VLE
+    traversal is UNDIRECTED, so an edge can be walked against its stored
+    ``subject → object`` direction.  Each AGE edge still carries its real
+    ``start_id`` (subject) and ``end_id`` (object), and each AGE vertex carries
+    its graphid ``id``.  We therefore compare each edge's ``start_id`` to the
+    graphid of the path node it leaves from (``nodes[i].id``): if they match the
+    edge was walked FORWARD (subject→object); otherwise it was walked REVERSE.
+    This per-edge ``edge_forward`` flag lets renderers present every hop in TRUE
+    subject→object order regardless of walk direction.
     """
     node_dicts = _parse_agtype_text(nodes_raw)
     edge_dicts = _parse_agtype_text(rels_raw)
@@ -213,6 +224,10 @@ def _row_to_raw_path(nodes_raw: Any, rels_raw: Any) -> RawPath | None:
     node_ids: list[str] = []
     node_names: list[str] = []
     node_types: list[str] = []
+    # AGE vertex graphids (top-level ``id`` on each vertex agtype), used to decide
+    # per-edge walk orientation below.  Coerced to str for stable comparison with
+    # the edge ``start_id`` / ``end_id`` (which json.loads may yield as int).
+    node_graphids: list[str | None] = []
     for nd in node_dicts:
         props = nd.get("properties") or {}
         eid = props.get("entity_id")
@@ -223,11 +238,15 @@ def _row_to_raw_path(nodes_raw: Any, rels_raw: Any) -> RawPath | None:
         node_ids.append(str(eid))
         node_names.append(str(name))
         node_types.append(str(etype))
+        gid = nd.get("id")
+        node_graphids.append(str(gid) if gid is not None else None)
 
     rel_types: list[str] = []
     edge_confs: list[float] = []
     rel_ids: list[UUID] = []
-    for ed in edge_dicts:
+    # ``edge_forward`` is aligned 1:1 with ``rel_types`` (one entry per edge).
+    edge_forward: list[bool] = []
+    for idx, ed in enumerate(edge_dicts):
         props = ed.get("properties") or {}
         label = ed.get("label", "")
         conf = props.get("confidence")
@@ -241,6 +260,12 @@ def _row_to_raw_path(nodes_raw: Any, rels_raw: Any) -> RawPath | None:
         rel_id = _parse_rel_id(props)
         if rel_id is not None:
             rel_ids.append(rel_id)
+        # Determine walk orientation for edge ``idx`` (connecting path node idx →
+        # idx+1).  FORWARD = the edge's stored subject (``start_id``) is the node
+        # we leave from (``nodes[idx].id``).  If we cannot resolve the ids (legacy
+        # agtype without start_id/id) we default to forward — the pre-fix
+        # behaviour — so nothing regresses.
+        edge_forward.append(_edge_is_forward(ed, node_graphids, idx))
 
     # Consistency: edge count must be node count - 1.
     if len(rel_types) != len(node_ids) - 1:
@@ -253,7 +278,38 @@ def _row_to_raw_path(nodes_raw: Any, rels_raw: Any) -> RawPath | None:
         rel_types=tuple(rel_types),
         edge_confs=tuple(edge_confs),
         rel_ids=tuple(rel_ids),
+        edge_forward=tuple(edge_forward),
     )
+
+
+def _edge_is_forward(edge: dict[str, Any], node_graphids: list[str | None], idx: int) -> bool:
+    """Return True if edge ``idx`` was walked subject→object (FORWARD).
+
+    Compares the edge's stored ``start_id`` (subject) / ``end_id`` (object)
+    graphids to the graphid of the path node the edge leaves from
+    (``node_graphids[idx]``).  Returns:
+      - True  if ``start_id == nodes[idx].id`` (walked subject→object), OR if the
+        ids cannot be resolved (defensive back-compat default = forward).
+      - False if ``end_id == nodes[idx].id`` (walked object→subject, REVERSE).
+
+    The comparison is string-based: ``_parse_agtype_text`` runs the agtype through
+    ``json.loads`` so graphids arrive as ints; both sides are stringified by the
+    caller / here for a stable match.
+    """
+    start_id = edge.get("start_id")
+    end_id = edge.get("end_id")
+    from_gid = node_graphids[idx] if idx < len(node_graphids) else None
+    if start_id is None or end_id is None or from_gid is None:
+        # Legacy / unparsable payload — preserve the old node[i]→node[i+1]
+        # assumption (forward) rather than guessing a reversal.
+        return True
+    if str(start_id) == from_gid:
+        return True
+    if str(end_id) == from_gid:
+        return False
+    # Neither endpoint matches the leaving node (should not happen for a valid
+    # path) — default forward to avoid spuriously inverting a hop.
+    return True
 
 
 # ── Adapter ────────────────────────────────────────────────────────────────────

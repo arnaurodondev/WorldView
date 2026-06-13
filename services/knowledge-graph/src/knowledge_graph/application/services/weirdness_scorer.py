@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
+from knowledge_graph.application.ports.graph_path_engine import edge_forward_at as _forward_at
 from knowledge_graph.domain.entities.path_insight import (
     PathEdge,
     PathInsight,
@@ -139,9 +140,18 @@ class WeirdnessScorer:
             PathNode(entity_id=_parse_uuid(nid), name=str(nn), entity_type=str(nt))
             for nid, nn, nt in zip(raw_path.node_ids, raw_path.node_names, raw_path.node_types, strict=False)
         )
+        # ``edge_forward`` carries per-edge traversal orientation (subject→object
+        # vs reverse) for correct rendering.  It is direction-agnostic for scoring
+        # — it never enters any weirdness sub-score — but must be threaded onto the
+        # PathEdge so downstream renderers (LLM prompt / wire schema) read true
+        # subject→object.  Missing entry (legacy RawPath) defaults to forward.
         edges = tuple(
-            PathEdge(relation_type=str(rt), confidence=_clamp01(float(conf)))
-            for rt, conf in zip(raw_path.rel_types, raw_path.edge_confs, strict=False)
+            PathEdge(
+                relation_type=str(rt),
+                confidence=_clamp01(float(conf)),
+                forward=_forward_at(raw_path.edge_forward, i),
+            )
+            for i, (rt, conf) in enumerate(zip(raw_path.rel_types, raw_path.edge_confs, strict=False))
         )
 
         anchor_id = nodes[0].entity_id if nodes else new_uuid7()

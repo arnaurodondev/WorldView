@@ -233,6 +233,60 @@ class TestPathExplanationServiceSanitization:
         # is the CORRECT sanitized output; the test verifies control-char stripping only.
 
 
+class TestPromptDirectionRendering:
+    """_build_prompt renders each hop in TRUE subject→object order (2026-06-13).
+
+    The undirected traversal can walk an edge backward; the prompt must present
+    the stored ``subject --[rel]--> object`` fact (not the path-walk order) for
+    asymmetric relations, and leave symmetric relations untouched.
+    """
+
+    def _service(self):  # type: ignore[no-untyped-def]
+        from knowledge_graph.application.services.path_explanation_service import PathExplanationService
+
+        return PathExplanationService(path_insight_repo=AsyncMock(), llm_client=None, model_id="test-model")
+
+    def _nodes(self):  # type: ignore[no-untyped-def]
+        from knowledge_graph.domain.entities.path_insight import PathNode
+
+        return [
+            PathNode(entity_id=uuid4(), name="Informatica", entity_type="company"),
+            PathNode(entity_id=uuid4(), name="Salesforce", entity_type="company"),
+        ]
+
+    def test_forward_asymmetric_renders_walk_order(self) -> None:
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+
+        prompt = self._service()._build_prompt(
+            self._nodes(),
+            [PathEdge(relation_type="ACQUIRED_BY", confidence=0.9, forward=True)],
+        )
+        assert "Informatica --[ACQUIRED_BY]--> Salesforce" in prompt
+
+    def test_reverse_asymmetric_swaps_endpoints(self) -> None:
+        """Reverse-walked ACQUIRED_BY must read true subject→object (swapped)."""
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+
+        prompt = self._service()._build_prompt(
+            self._nodes(),  # walk order Informatica → Salesforce
+            [PathEdge(relation_type="ACQUIRED_BY", confidence=0.9, forward=False)],
+        )
+        # Subject (Salesforce, the true start_id) must lead; object (Informatica) follows.
+        assert "Salesforce --[ACQUIRED_BY]--> Informatica" in prompt
+        assert "Informatica --[ACQUIRED_BY]--> Salesforce" not in prompt
+
+    def test_reverse_symmetric_not_swapped(self) -> None:
+        """Symmetric COMPETES_WITH reads correctly in walk order even if reverse-walked."""
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+
+        prompt = self._service()._build_prompt(
+            self._nodes(),
+            [PathEdge(relation_type="COMPETES_WITH", confidence=0.9, forward=False)],
+        )
+        # No swap: symmetric edges read either way; keep walk order.
+        assert "Informatica --[COMPETES_WITH]--> Salesforce" in prompt
+
+
 class TestGetEntityPathsBackgroundTask:
     """Integration-style tests verifying that create_task fires generate_explanation."""
 

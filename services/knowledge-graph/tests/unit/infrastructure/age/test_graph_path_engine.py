@@ -31,11 +31,43 @@ def _vertex(entity_id: str, name: str, etype: str = "company") -> dict:
     }
 
 
+def _vertex_graphid(entity_id: str) -> int:
+    """The AGE graphid ``_vertex`` assigns for a given entity_id (kept in sync)."""
+    return abs(hash(entity_id)) % (10**9)
+
+
 def _edge(label: str, conf: float, relation_id: str | None = None) -> dict:
     props: dict = {"confidence": conf}
     if relation_id is not None:
         props["relation_id"] = relation_id
     return {"id": 1, "label": label, "properties": props}
+
+
+def _directed_edge(
+    label: str,
+    conf: float,
+    *,
+    subject_entity_id: str,
+    object_entity_id: str,
+    relation_id: str | None = None,
+) -> dict:
+    """An edge agtype carrying its true stored direction via start_id/end_id.
+
+    ``start_id`` = subject vertex graphid, ``end_id`` = object vertex graphid —
+    exactly what AGE returns from ``relationships(p)`` (see the directionality
+    investigation, 2026-06-13).  The graphids are derived the same way ``_vertex``
+    assigns them so the parser can match an edge endpoint to a path node.
+    """
+    props: dict = {"confidence": conf}
+    if relation_id is not None:
+        props["relation_id"] = relation_id
+    return {
+        "id": 1,
+        "label": label,
+        "start_id": _vertex_graphid(subject_entity_id),
+        "end_id": _vertex_graphid(object_entity_id),
+        "properties": props,
+    }
 
 
 def _agtype_nodes(*vertices: dict) -> str:
@@ -404,6 +436,60 @@ class TestRelIdParsing:
         assert paths[0].rel_ids == ()
 
 
+class TestEdgeDirectionCapture:
+    """edge_forward captures TRUE subject→object orientation per hop (2026-06-13).
+
+    The undirected VLE can walk an edge backward; ``relationships(p)`` still
+    carries each edge's real ``start_id``(subject)/``end_id``(object).  The parser
+    compares them to the path-node graphids to record whether each hop was walked
+    forward (subject→object) or reverse.
+    """
+
+    def _run_pairwise(self, a: str, b: str, edge: dict):  # type: ignore[no-untyped-def]
+        from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
+
+        row = (_agtype_nodes(_vertex(a, "A"), _vertex(b, "B")), _agtype_edges(edge))
+        session, _ = _make_session(rows_per_depth=[[row]])
+        engine = AgeGraphPathEngine(_make_factory(session))
+        return asyncio.run(
+            engine.find_paths_between(
+                __import__("uuid").UUID(a),
+                __import__("uuid").UUID(b),
+                max_hops=1,
+                prune_membership=False,
+                limit=5,
+            ),
+        )
+
+    def test_forward_walked_edge_is_forward(self) -> None:
+        """Path order A→B and edge start_id=A → edge_forward[0] is True."""
+        a, b = str(uuid4()), str(uuid4())
+        edge = _directed_edge("ACQUIRED_BY", 0.9, subject_entity_id=a, object_entity_id=b)
+        paths = self._run_pairwise(a, b, edge)
+        assert len(paths) == 1
+        assert paths[0].edge_forward == (True,)
+
+    def test_reverse_walked_edge_is_reverse(self) -> None:
+        """Path order A→B but edge start_id=B (subject) → edge_forward[0] is False.
+
+        The classic inverted ACQUIRED_BY: traversal walked Informatica→Salesforce
+        while the stored edge is Salesforce(subject)→Informatica(object).
+        """
+        a, b = str(uuid4()), str(uuid4())
+        # Subject is B (the node we ARRIVE at), object is A (the node we leave).
+        edge = _directed_edge("ACQUIRED_BY", 0.9, subject_entity_id=b, object_entity_id=a)
+        paths = self._run_pairwise(a, b, edge)
+        assert len(paths) == 1
+        assert paths[0].edge_forward == (False,)
+
+    def test_missing_start_end_defaults_forward(self) -> None:
+        """Legacy agtype without start_id/end_id → forward default (back-compat)."""
+        a, b = str(uuid4()), str(uuid4())
+        paths = self._run_pairwise(a, b, _edge("ACQUIRED_BY", 0.9))
+        assert len(paths) == 1
+        assert paths[0].edge_forward == (True,)
+
+
 class TestGucAppliedToQuery:
     def test_guc_applied_to_query_session_scoped(self) -> None:
         """The hygiene GUCs are emitted as session-scoped SET on the SAME session.
@@ -500,6 +586,33 @@ class TestPortContract:
             edge_confs=(0.9,),
         )
         assert legacy.rel_ids == ()
+
+    def test_raw_path_edge_forward_defaults_empty(self) -> None:
+        """RawPath.edge_forward defaults empty; edge_forward_at defaults forward."""
+        from knowledge_graph.application.ports.graph_path_engine import RawPath, edge_forward_at
+
+        legacy = RawPath(
+            node_ids=("a", "b", "c"),
+            node_names=("A", "B", "C"),
+            node_types=("company", "company", "company"),
+            rel_types=("ACQUIRED_BY", "SUPPLIER_OF"),
+            edge_confs=(0.9, 0.8),
+        )
+        assert legacy.edge_forward == ()
+        # Out-of-range / empty → forward (the pre-fix node[i]→node[i+1] default).
+        assert edge_forward_at(legacy.edge_forward, 0) is True
+        assert edge_forward_at(legacy.edge_forward, 1) is True
+
+        explicit = RawPath(
+            node_ids=("a", "b"),
+            node_names=("A", "B"),
+            node_types=("company", "company"),
+            rel_types=("ACQUIRED_BY",),
+            edge_confs=(0.9,),
+            edge_forward=(False,),
+        )
+        assert explicit.edge_forward == (False,)
+        assert edge_forward_at(explicit.edge_forward, 0) is False
 
     def test_age_engine_implements_port(self) -> None:
         from knowledge_graph.application.ports.graph_path_engine import GraphPathEngine

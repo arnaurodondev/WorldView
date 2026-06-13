@@ -37,10 +37,19 @@ class PathEdgePublic(BaseModel):
 
     ``confidence`` is always in [0.0, 1.0] — enforced by the domain entity
     ``PathEdge.__post_init__`` before reaching the API layer.
+
+    ``forward`` exposes the edge's traversal orientation (edge-directionality
+    fix, 2026-06-13): ``True`` = the edge was walked subject→object (the
+    preceding path node is the relation subject); ``False`` = walked
+    object→subject (REVERSE) so the frontend should swap/flip the arrow to render
+    true subject→object for asymmetric relation types.  Additive + optional
+    (default ``None``) so old clients and pre-fix NULL DB rows serialise cleanly
+    (NFR-4 back-compat, R11).
     """
 
     relation_type: str
     confidence: float
+    forward: bool | None = None
 
 
 class PathInsightPublic(BaseModel):

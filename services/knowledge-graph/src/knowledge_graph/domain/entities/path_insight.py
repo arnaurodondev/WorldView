@@ -41,10 +41,19 @@ class PathEdge:
     """A directed relation edge between two consecutive path nodes.
 
     Invariant: ``0.0 <= confidence <= 1.0``.
+
+    ``forward`` records this edge's traversal orientation relative to its stored
+    ``subject → object`` direction (edge-directionality fix, 2026-06-13).  When
+    ``True`` the edge was walked subject→object, so the path node *before* it is
+    the relation subject.  When ``False`` the undirected traversal walked it
+    object→subject (REVERSE), so the displayed endpoints must be swapped to read
+    in true subject→object order for asymmetric relation types.  Defaults to
+    ``True`` for back-compat with rows/callers that predate the fix.
     """
 
     relation_type: str
     confidence: float
+    forward: bool = True
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.confidence <= 1.0):

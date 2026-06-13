@@ -399,3 +399,33 @@ class TestPathInsightRepository:
         assert len(results) == 1
         assert isinstance(results[0], PathInsight)
         assert results[0].hop_count == 2
+
+
+class TestEdgeForwardRoundTrip:
+    """_edges_to_json / _parse_edges persist + restore the ``forward`` flag."""
+
+    def test_forward_roundtrips_through_json(self) -> None:
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+        from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+            _edges_to_json,
+            _parse_edges,
+        )
+
+        edges = (
+            PathEdge(relation_type="ACQUIRED_BY", confidence=0.9, forward=False),
+            PathEdge(relation_type="COMPETES_WITH", confidence=0.8, forward=True),
+        )
+        restored = _parse_edges(_edges_to_json(edges))
+        assert [e.forward for e in restored] == [False, True]
+
+    def test_legacy_row_without_forward_defaults_true(self) -> None:
+        """Rows persisted before the fix have no ``forward`` key → default True."""
+        import json
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+            _parse_edges,
+        )
+
+        legacy = json.dumps([{"relation_type": "ACQUIRED_BY", "confidence": 0.9}])
+        restored = _parse_edges(legacy)
+        assert restored[0].forward is True

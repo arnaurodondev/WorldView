@@ -40,3 +40,27 @@ class TestMembershipRelations:
         assert MEMBERSHIP_RELATIONS.isdisjoint(TRAVERSABLE_RELATIONS)
         # A known traversable label is present.
         assert "PARTNER_OF" in TRAVERSABLE_RELATIONS
+
+
+class TestSymmetricRelations:
+    def test_symmetric_relations_frozen(self) -> None:
+        """SYMMETRIC_RELATIONS is exactly the 2 direction-agnostic AGE labels."""
+        from knowledge_graph.domain.constants import SYMMETRIC_RELATIONS
+
+        assert isinstance(SYMMETRIC_RELATIONS, frozenset)
+        assert SYMMETRIC_RELATIONS == {"PARTNER_OF", "COMPETES_WITH"}
+        for label in SYMMETRIC_RELATIONS:
+            assert label == label.upper()
+
+    def test_symmetric_subset_of_age_labels(self) -> None:
+        """Both symmetric labels exist in the AGE edge-label whitelist."""
+        from knowledge_graph.domain.constants import SYMMETRIC_RELATIONS
+        from knowledge_graph.infrastructure.workers.age_sync_worker import _VALID_EDGE_LABELS
+
+        assert SYMMETRIC_RELATIONS <= _VALID_EDGE_LABELS
+
+    def test_symmetric_disjoint_from_membership(self) -> None:
+        """Symmetric and membership relations do not overlap."""
+        from knowledge_graph.domain.constants import MEMBERSHIP_RELATIONS, SYMMETRIC_RELATIONS
+
+        assert SYMMETRIC_RELATIONS.isdisjoint(MEMBERSHIP_RELATIONS)

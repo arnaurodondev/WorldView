@@ -165,6 +165,7 @@ class GetEntityPathsUseCase:
                         PathEdgePublic(
                             relation_type=edge.relation_type,
                             confidence=edge.confidence,
+                            forward=edge.forward,
                         )
                         for edge in path.path_edges
                     ],

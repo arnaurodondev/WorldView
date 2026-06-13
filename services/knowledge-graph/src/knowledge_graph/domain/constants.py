@@ -46,6 +46,28 @@ MEMBERSHIP_RELATIONS: frozenset[str] = frozenset(
     },
 )
 
+# ── Symmetric relations (direction-agnostic, 2026-06-13) ──────────────────────
+#
+# Uppercase AGE edge-label strings (same label space as MEMBERSHIP_RELATIONS).
+# For these two relation types ``(A, type, B)`` means exactly the same thing as
+# ``(B, type, A)`` — "A partners with B" ⇔ "B partners with A".  All other 30
+# active relation types are ASYMMETRIC: reversing subject/object inverts the
+# meaning (e.g. ``ACQUIRED_BY``, ``SUPPLIER_OF``, ``SUBSIDIARY_OF``).
+#
+# Why this matters for traversal rendering (edge-directionality fix, see
+# docs/audits/2026-06-13-edge-directionality-investigation.md): the undirected
+# VLE traversal can walk an edge BACKWARD relative to its stored direction.  For
+# ASYMMETRIC edges the renderer must present the hop in TRUE subject→object order
+# (swap the displayed endpoints when the edge was reverse-walked).  For SYMMETRIC
+# edges no swap is needed — either orientation reads correctly.
+SYMMETRIC_RELATIONS: frozenset[str] = frozenset(
+    {
+        "PARTNER_OF",  # "A partners with B" ⇔ "B partners with A"
+        "COMPETES_WITH",  # "A competes with B" ⇔ "B competes with A"
+    },
+)
+
 __all__ = [
     "MEMBERSHIP_RELATIONS",
+    "SYMMETRIC_RELATIONS",
 ]

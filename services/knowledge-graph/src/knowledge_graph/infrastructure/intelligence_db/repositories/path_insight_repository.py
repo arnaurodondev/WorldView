@@ -41,7 +41,11 @@ def _nodes_to_json(nodes: tuple[PathNode, ...]) -> str:
 
 
 def _edges_to_json(edges: tuple[PathEdge, ...]) -> str:
-    return json.dumps([{"relation_type": e.relation_type, "confidence": e.confidence} for e in edges])
+    # ``forward`` persists per-edge traversal orientation so rendering stays
+    # correct after a read-back without re-traversing the graph (2026-06-13).
+    return json.dumps(
+        [{"relation_type": e.relation_type, "confidence": e.confidence, "forward": e.forward} for e in edges]
+    )
 
 
 def _parse_nodes(raw: object) -> tuple[PathNode, ...]:
@@ -62,6 +66,10 @@ def _parse_edges(raw: object) -> tuple[PathEdge, ...]:
         PathEdge(
             relation_type=str(item["relation_type"]),
             confidence=float(item["confidence"]),
+            # ``forward`` is absent in rows persisted before the directionality
+            # fix (2026-06-13) → default True (forward), matching the pre-fix
+            # node[i]→node[i+1] assumption (R11 forward-compat read).
+            forward=bool(item.get("forward", True)),
         )
         for item in data
     )

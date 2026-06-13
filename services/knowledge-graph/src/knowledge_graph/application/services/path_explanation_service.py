@@ -166,6 +166,8 @@ class PathExplanationService:
         """
         from prompts.knowledge.alias import sanitize_description  # type: ignore[import-untyped]
 
+        from knowledge_graph.domain.constants import SYMMETRIC_RELATIONS
+
         if not path_nodes:
             return ""
 
@@ -176,11 +178,28 @@ class PathExplanationService:
         end_name = sanitized_names[-1] if len(sanitized_names) > 1 else start_name
         hop_count = len(path_edges)
 
-        # Build a human-readable path chain: "A --[rel]--> B --[rel]--> C".
+        # Build a human-readable path chain in TRUE subject→object order.
+        #
+        # The graph traversal is UNDIRECTED (edge-directionality fix, 2026-06-13),
+        # so an edge may have been walked AGAINST its stored subject→object
+        # direction.  ``edge.forward is False`` marks such a reverse-walked hop.
+        # For ASYMMETRIC relation types (30 of 32, e.g. ACQUIRED_BY, SUPPLIER_OF)
+        # we SWAP the displayed endpoints so the arrow always reads
+        # ``subject --[rel]--> object`` (the true stored fact) rather than the
+        # path-walk order — otherwise the LLM narrates an inverted, confidently
+        # wrong story.  For SYMMETRIC types (PARTNER_OF, COMPETES_WITH) the swap
+        # is unnecessary (both orientations mean the same thing) — left as-is.
         chain_parts: list[str] = []
         for i, edge in enumerate(path_edges):
-            from_name = sanitized_names[i] if i < len(sanitized_names) else "unknown"
-            to_name = sanitized_names[i + 1] if (i + 1) < len(sanitized_names) else "unknown"
+            walk_from = sanitized_names[i] if i < len(sanitized_names) else "unknown"
+            walk_to = sanitized_names[i + 1] if (i + 1) < len(sanitized_names) else "unknown"
+            is_symmetric = (edge.relation_type or "").upper() in SYMMETRIC_RELATIONS
+            if edge.forward or is_symmetric:
+                from_name, to_name = walk_from, walk_to
+            else:
+                # Reverse-walked asymmetric edge: swap so subject (true start_id)
+                # leads and object (true end_id) follows.
+                from_name, to_name = walk_to, walk_from
             # Sanitize relation_type as well — defensive (§12 defence-in-depth).
             safe_rel = sanitize_description(edge.relation_type or "")
             chain_parts.append(f"{from_name} --[{safe_rel}]--> {to_name}")

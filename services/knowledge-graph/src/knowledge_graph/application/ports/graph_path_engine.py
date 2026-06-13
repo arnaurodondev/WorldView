@@ -33,7 +33,17 @@ class RawPath:
 
     All data required for scoring is pre-extracted so Python scoring code never
     needs to re-query the DB.  Nodes are listed in path order (start → … → end);
-    each edge ``i`` connects ``node_ids[i] → node_ids[i + 1]``.
+    each edge ``i`` connects ``node_ids[i] → node_ids[i + 1]`` in *path-walk*
+    order.
+
+    **Walk order ≠ stored direction.**  The discovery query is an *undirected*
+    variable-length-edge traversal (``-[*L..L]-``), so an edge may be walked
+    AGAINST its stored ``subject → object`` direction.  ``edge_forward[i]`` records
+    whether edge ``i`` was traversed FORWARD (path node ``i`` is the edge's
+    subject/``start_id`` → ``node_ids[i]`` is the relation subject) or REVERSE
+    (path node ``i`` is the edge's object/``end_id``).  Renderers MUST use this to
+    present each hop in TRUE subject→object order for asymmetric relations; the
+    weirdness/path scorers are direction-agnostic and ignore it.
     """
 
     # entity_id values for each node in order (start → ... → end)
@@ -51,10 +61,28 @@ class RawPath:
     # without re-querying the graph.  Defaults to empty for legacy callers /
     # rows where the edge carried no relation_id property (PLAN-0112 T-2-01).
     rel_ids: tuple[UUID, ...] = field(default_factory=tuple)
+    # Per-edge traversal orientation, aligned with ``rel_types`` (len = hop_count).
+    # ``edge_forward[i] is True``  → edge i walked subject→object (path node i is
+    #                                the stored relation subject).
+    # ``edge_forward[i] is False`` → edge i walked object→subject (reverse).
+    # Defaults to empty for legacy callers / rows that predate the directionality
+    # fix (2026-06-13); consumers treat a missing entry as forward (back-compat).
+    edge_forward: tuple[bool, ...] = field(default_factory=tuple)
 
     @property
     def hop_count(self) -> int:
         return len(self.rel_types)
+
+
+def edge_forward_at(edge_forward: tuple[bool, ...], index: int) -> bool:
+    """Return the per-edge orientation at ``index``, defaulting to forward.
+
+    ``RawPath.edge_forward`` is empty for legacy callers / pre-fix rows, so any
+    out-of-range index is treated as FORWARD (the pre-directionality-fix
+    assumption ``node[i] → node[i + 1]``).  Shared by both scorers so the default
+    is defined in exactly one place.
+    """
+    return edge_forward[index] if index < len(edge_forward) else True
 
 
 class GraphPathEngine(ABC):
@@ -121,4 +149,5 @@ class GraphPathEngine(ABC):
 __all__ = [
     "GraphPathEngine",
     "RawPath",
+    "edge_forward_at",
 ]
