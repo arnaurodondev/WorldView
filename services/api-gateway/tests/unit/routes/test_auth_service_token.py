@@ -154,6 +154,41 @@ async def test_service_token_happy_path_mints_jwt() -> None:
     assert claims["service_name"] == "nlp-pipeline-price-impact"
 
 
+@pytest.mark.asyncio
+async def test_service_token_brief_scheduler_allowed() -> None:
+    """rag-chat morning-brief scheduler identity is allow-listed → 200 (BP-303 variant).
+
+    REGRESSION: the brief pre-generation worker mints a service JWT with
+    ``service_name="rag-chat-brief-scheduler"`` (the default in
+    ``S9ServiceJwtMinter``). That identity was missing from
+    ``_ALLOWED_SERVICE_NAMES`` even though the shared secret matched, so every
+    scheduled brief generation got 401 on the mint → ``internal_jwt=None`` →
+    ALL upstream calls (S1/S3/S5/S6/S7) returned 401 → the brief's "Market
+    Snapshot" section degraded to "Market data unavailable" on every overnight
+    /weekend run. Adding the identity to the allow-list is the fix.
+    """
+    app = _make_app(service_account_token="shared-secret-xyz")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/internal/v1/service-token",
+            json={"service_name": "rag-chat-brief-scheduler", "secret": "shared-secret-xyz"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    claims = jwt.decode(
+        resp.json()["access_token"],
+        app.state.rsa_public_key,
+        algorithms=["RS256"],
+        audience="worldview-internal",
+        options={"require": ["iss", "sub", "exp"]},
+        issuer="worldview-gateway",
+    )
+    assert claims["sub"] == "service:rag-chat-brief-scheduler"
+    assert claims["service_name"] == "rag-chat-brief-scheduler"
+
+
 # ── Failure paths ────────────────────────────────────────────────────────────
 
 

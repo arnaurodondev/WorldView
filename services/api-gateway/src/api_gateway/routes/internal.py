@@ -67,6 +67,15 @@ async def get_jwks(request: Request) -> JSONResponse:
 _ALLOWED_SERVICE_NAMES: frozenset[str] = frozenset(
     {
         "nlp-pipeline-price-impact",
+        # PLAN-0094 W2 / BP-303 variant: the rag-chat morning-brief
+        # pre-generation scheduler mints a service JWT so its overnight
+        # batch can authenticate to S1/S3/S5/S6/S7 (portfolio, market-data,
+        # alerts, news, events). Without this entry every scheduled brief
+        # failed every upstream call with 401 — the Market Snapshot section
+        # degraded to "Market data unavailable" on every weekend/overnight
+        # run (the recurring symptom). S9ServiceJwtMinter defaults its
+        # ``service_name`` to this exact value; keep the two in lock-step.
+        "rag-chat-brief-scheduler",
     }
 )
 
