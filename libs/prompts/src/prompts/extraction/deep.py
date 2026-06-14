@@ -6,14 +6,17 @@ from prompts._base import PromptTemplate
 
 DEEP_EXTRACTION = PromptTemplate(
     name="deep_extraction",
-    version="1.4",
+    version="1.5",
     description=(
         "Structured financial intelligence extraction prompt for DeepSeek-V4-Flash / "
         "OpenAI-compatible models. Extracts events, claims, and relations from a document passage. "
         "v1.3: added few-shot examples for relations + inline predicate descriptions to reduce "
         "employs/has_executive confusion and improve direction accuracy. "
         "v1.4: added 5 new financial predicates (appointed_as, divested_from, downgraded_by, "
-        "filed_lawsuit_against, reported_revenue_of) — PLAN-0089 Lever-4 taxonomy expansion."
+        "filed_lawsuit_against, reported_revenue_of) — PLAN-0089 Lever-4 taxonomy expansion. "
+        "v1.5: per-fact temporal validity — relations may carry an optional valid_to "
+        "(ISO date the relationship ended, copied verbatim from the text; null otherwise) "
+        "that drives bitemporal step-decay in the knowledge graph — PLAN-0109 W5."
     ),
     template=(
         "You are a financial intelligence extraction engine. Your task is to extract "
@@ -81,7 +84,10 @@ DEEP_EXTRACTION = PromptTemplate(
         "  'Apple named Tim Cook CEO' → subject='Apple', predicate='appointed_as', object='Tim Cook'\n"
         "  The person is ALWAYS the object. The company is ALWAYS the subject.\n\n"
         "DATES: valid_from / valid_to must be ISO-8601 (YYYY-MM-DD) copied verbatim from the "
-        "text. If no date appears in the text, set to null. Never estimate or calculate a date.\n\n"
+        "text. If no date appears in the text, set to null. Never estimate or calculate a date.\n"
+        "RELATION valid_to: for a relation, set valid_to ONLY when the text states the "
+        "relationship ENDED (e.g. 'stepped down in 2023', 'sold its stake in March 2024', "
+        "'until 2021'). Otherwise set it to null. Never infer an end date that is not stated.\n\n"
         "NUMERICAL VALUES: financial figures (percentages, amounts, counts) must appear "
         "verbatim in the document. Never extrapolate or round. Use evidence_text to quote "
         "the exact sentence.\n\n"
@@ -118,7 +124,7 @@ DEEP_EXTRACTION = PromptTemplate(
         '  "claims": [{{"entity_ref": "...", "claim_type": "...", "polarity":'
         ' "positive|negative|neutral|mixed", "confidence": 0.0, "evidence_text": "..."}}],\n'
         '  "relations": [{{"subject_ref": "...", "predicate": "...", "object_ref": "...",'
-        ' "confidence": 0.0, "evidence_text": "..."}}]\n'
+        ' "confidence": 0.0, "evidence_text": "...", "valid_to": "YYYY-MM-DD|null"}}]\n'
         "}}\n\n"
         "Document:\n{text}\n\n"
         "Return the JSON object above. Each array may be empty if nothing qualifies. "

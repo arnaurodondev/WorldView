@@ -23,6 +23,7 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -225,3 +226,44 @@ class TestConcurrentCreateOrGet:
         was_created_flags = [r[1] for r in results]
         assert was_created_flags.count(True) == 1, f"Expected exactly one winner, got was_created={was_created_flags}"
         assert was_created_flags.count(False) == 4
+
+
+class TestPatchMetadata:
+    """``patch_metadata`` shallow-merges into ``canonical_entities.metadata`` (JSONB).
+
+    BP-637 / PLAN-0103 W19: FundamentalsRefreshWorker calls this to mirror the
+    EODHD GICS sector + industry into ``metadata``. The method was missing from
+    the repository, so the worker crashed every cycle with ``AttributeError:
+    'CanonicalEntityRepository' object has no attribute 'patch_metadata'``,
+    aborting the run before any embedding write — leaving the
+    ``fundamentals_ohlcv`` embedding view empty (0 rows embedded).
+    """
+
+    async def test_issues_jsonb_merge_update(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        repo = CanonicalEntityRepository(session)
+        await repo.patch_metadata(_EXISTING_ENTITY_ID, {"sector": "Technology", "industry": "Software"})
+
+        assert session.execute.await_count == 1
+        sql_text = str(session.execute.call_args_list[0].args[0])
+        # JSONB shallow-merge — preserves keys not present in the patch.
+        assert (
+            "metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)" in sql_text
+        ), f"Expected JSONB shallow-merge UPDATE; got:\n{sql_text}"
+        assert "WHERE entity_id = :entity_id" in sql_text
+        params = session.execute.call_args_list[0].args[1]
+        assert params["entity_id"] == str(_EXISTING_ENTITY_ID)
+        # patch is JSON-serialised so the ``::jsonb`` cast parses it.
+        assert json.loads(params["patch"]) == {"sector": "Technology", "industry": "Software"}
+
+    async def test_empty_patch_is_noop(self) -> None:
+        """No DB round-trip when the patch is empty (nothing to merge)."""
+        session = AsyncMock()
+        session.execute = AsyncMock()
+
+        repo = CanonicalEntityRepository(session)
+        await repo.patch_metadata(_EXISTING_ENTITY_ID, {})
+
+        session.execute.assert_not_awaited()

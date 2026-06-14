@@ -46,6 +46,7 @@ TOPICS=(
     "intelligence.contradiction.v1:12:1"
     "relation.type.proposed.v1:4:1"
     "entity.canonical.created.v1:12:1"
+    "entity.refresh.v1:6:1"
     "alert.delivered.v1:12:1"
     "market.prediction.v1:8:1"
     "kg.dead-letter.v1:12:1"

@@ -27,8 +27,8 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        # v1.4: 5 new financial predicates added (PLAN-0089 Lever-4 taxonomy expansion)
-        assert DEEP_EXTRACTION.version == "1.4"
+        # v1.5: per-fact relation valid_to for bitemporal step-decay (PLAN-0109 W5)
+        assert DEEP_EXTRACTION.version == "1.5"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):

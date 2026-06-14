@@ -21,7 +21,7 @@ import asyncio
 import json
 import time
 from datetime import timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -111,7 +111,7 @@ _BACKOFF_STAGE_7D_S = 604800
 # The worker bumps ``fundamentals_refresh_failed_total{error_kind=...}`` so
 # ops dashboards can spot contract drift between market-data and the narrative
 # builder immediately — this is the F-DB-005 bug class.
-class FundamentalsRefreshError(str, Enum):
+class FundamentalsRefreshError(StrEnum):
     """Structured failure reasons for FundamentalsRefreshWorker.
 
     Members:
@@ -984,7 +984,7 @@ ON CONFLICT DO NOTHING
             # ETF" bucket, so an equity with a real GICS sector is always
             # bucketed under that sector, never under the ETF catch-all.
             metadata_patch["asset_class"] = "Equity"
-            await entity_repo.patch_metadata(entity_id, metadata_patch)  # type: ignore[attr-defined]
+            await entity_repo.patch_metadata(entity_id, metadata_patch)
 
         # --- is_in_sector ---
         if sector_name:

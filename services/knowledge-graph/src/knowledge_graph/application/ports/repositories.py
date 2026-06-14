@@ -137,6 +137,7 @@ class RelationRepositoryPort(ABC):
         decay_class: str,
         decay_alpha: float,
         base_confidence: float,
+        valid_to: datetime | None = None,
     ) -> UUID: ...
 
     @abstractmethod

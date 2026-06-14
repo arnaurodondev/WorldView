@@ -135,6 +135,8 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
                     "evidence_text": {"type": "string"},
                     "entity_provisional": {"type": "boolean"},
                     "provisional_queue_id": {"type": ["string", "null"]},
+                    # PLAN-0109 W5: optional per-fact end-of-validity date (ISO).
+                    "valid_to": {"type": ["string", "null"]},
                 },
                 "required": ["subject_ref", "predicate", "object_ref", "confidence"],
             },

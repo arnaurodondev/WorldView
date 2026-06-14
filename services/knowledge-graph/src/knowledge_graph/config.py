@@ -110,6 +110,22 @@ class Settings(BaseSettings):
     confidence_corroboration_min_temporal_weight: float = 0.1
     confidence_contradiction_top_k: int = 3
 
+    # PLAN-0109 W1 — Beta / subjective-logic confidence backbone (v2).
+    # When True the worker uses ``compute_confidence_beta`` (prior from
+    # base_confidence, graded source trust, extraction confidence, per-mode decay
+    # floor, uncertainty) instead of the v1 bounded-additive formula above.
+    # Rolled out behind a flag; v1 stays as the fallback.
+    confidence_formula_v2: bool = False  # KNOWLEDGE_GRAPH_CONFIDENCE_FORMULA_V2
+    confidence_prior_strength: float = 2.0  # kappa - prior pseudo-count weight
+    confidence_signal_decay_floor: float = 0.1  # TEMPORAL_CLAIM floor as evidence decays
+    confidence_default_source_trust: float = 0.5  # fallback when source_type ∉ source_trust_weights
+    # PLAN-0109 W6 - Beta calibration P = sigmoid(a*ln(s) + b*ln(1-s) + c). Defaults
+    # are the identity map (P = s); an operator sets fitted (a,b,c) from
+    # scripts/fit_confidence_calibration.py after building a labelled set.
+    confidence_calibration_a: float = 1.0
+    confidence_calibration_b: float = -1.0
+    confidence_calibration_c: float = 0.0
+
     # Worker intervals (seconds)
     # FIX-LIVE-GG (2026-05-25, INV-LIVE-GG cluster 2): lowered SummaryWorker,
     # EmbeddingRefresh and FundamentalsRefresh intervals to drain the

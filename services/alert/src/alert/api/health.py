@@ -44,12 +44,33 @@ async def readyz(request: Request) -> Response:
         checks["alert_db"] = "error"
         ok = False
 
-    # 2. Kafka (check producer metadata — lightweight)
+    # 2. Kafka — list cluster metadata via a *fresh, short-lived* AdminClient.
+    #
+    # BP-350 history: we previously reused a single long-lived confluent_kafka
+    # Producer (app.state.kafka_health_producer) for this check and kept bumping
+    # its handshake/socket timeouts (2s→5s→8s→30s). That never fixed the real
+    # failure mode: once librdkafka's background thread on that one handle wedges
+    # into a `_TRANSPORT` (Broker transport failure) backoff state, the handle
+    # never self-heals, so `list_topics()` returns the same transport error
+    # forever even though the broker is perfectly healthy. The service then sat
+    # UNHEALTHY for ~45h while a brand-new producer in the same container could
+    # list topics in ~0.1s.
+    #
+    # Fix: create a throwaway AdminClient per check. It is cheap (~0.1s), gets a
+    # fresh broker connection every time, and therefore self-heals the instant
+    # the broker is reachable. The 3s timeout stays well inside the Docker
+    # healthcheck window so a slow probe can still report "degraded" instead of
+    # blowing the healthcheck's own timeout.
     try:
-        producer = request.app.state.kafka_health_producer
-        # list_topics — initial connection establishment can take 3-4s on cold start;
-        # 5s gives enough headroom without blocking health checks too long (BP-350)
-        await asyncio.get_running_loop().run_in_executor(None, lambda: producer.list_topics(timeout=8))
+        bootstrap = request.app.state.kafka_bootstrap_servers
+
+        def _list_topics() -> object:
+            from confluent_kafka.admin import AdminClient  # type: ignore[import-untyped]
+
+            client = AdminClient({"bootstrap.servers": bootstrap})
+            return client.list_topics(timeout=3)
+
+        await asyncio.get_running_loop().run_in_executor(None, _list_topics)
         checks["kafka"] = "ok"
     except Exception:
         _log.warning("readyz_kafka_failed", exc_info=True)  # type: ignore[no-any-return]

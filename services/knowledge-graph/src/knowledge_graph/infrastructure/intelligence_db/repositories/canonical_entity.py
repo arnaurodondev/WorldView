@@ -158,6 +158,35 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         row = result.fetchone()
         return UUID(str(row[0])) if row else None
 
+    async def patch_metadata(self, entity_id: UUID, patch: dict[str, object]) -> None:
+        """Shallow-merge ``patch`` into ``canonical_entities.metadata`` (JSONB).
+
+        Existing keys are overwritten by ``patch`` keys; all other keys are
+        preserved. No-op when ``patch`` is empty. Does NOT commit — the caller
+        owns the surrounding transaction (the fundamentals-refresh worker writes
+        the metadata patch and the sector relation in the same unit of work).
+
+        PLAN-0103 W19 / BP-637: FundamentalsRefreshWorker mirrors the EODHD GICS
+        sector + industry into ``metadata`` so the rag-chat risk aggregator and
+        the ``/internal/v1/sectors`` endpoint (which read ``metadata->>'sector'``)
+        resolve the value. The call site shipped but this method was missing from
+        the repository, so the worker crashed every cycle with ``AttributeError``
+        and the ``fundamentals_ohlcv`` embedding view stayed empty. Mirrors
+        ``EntityRepository.update_metadata``.
+        """
+        if not patch:
+            return
+        import json
+
+        await self._session.execute(
+            text("""
+UPDATE canonical_entities
+SET metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)
+WHERE entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id), "patch": json.dumps(patch)},
+        )
+
     async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
         """Find entity by ticker symbol (case-insensitive exact match).
 

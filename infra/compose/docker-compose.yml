@@ -1984,9 +1984,12 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz')"]
+      # /readyz makes a 3s Kafka AdminClient metadata call plus DB/Valkey/S1
+      # checks; give the probe a 10s budget so a transiently slow check reports
+      # "degraded" (503) rather than the Docker probe itself timing out (BP-350).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz', timeout=9)"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       start_period: 30s
       retries: 3
     restart: unless-stopped

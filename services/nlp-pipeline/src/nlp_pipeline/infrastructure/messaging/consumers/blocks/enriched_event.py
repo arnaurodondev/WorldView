@@ -301,6 +301,10 @@ def _build_raw_relations(
                 # persisted in nlp_db (legacy topic removed in PLAN-0057 D-1),
                 # so KG mints the backing claims row itself (graph_write).
                 "chunk_id": _match_chunk_id(evidence_text, chunks),
+                # PLAN-0109 W5: optional per-fact end-of-validity date the LLM
+                # extracted from the text (ISO string or None). Drives bitemporal
+                # step-decay in the knowledge graph (relations.valid_to).
+                "valid_to": rel_d.get("valid_to"),
             }
         )
     return result

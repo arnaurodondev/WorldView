@@ -91,6 +91,9 @@ class RawRelation:
     claim_id: UUID | None = None
     chunk_id: UUID | None = None
     evidence_text: str | None = None
+    # PLAN-0109 W5: optional per-fact end-of-validity date extracted by the LLM.
+    # Stored on relations.valid_to → drives bitemporal step-decay (W3).
+    valid_to: datetime | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -594,6 +597,7 @@ async def materialize_graph(
                 decay_class=decay_class or "DURABLE",
                 decay_alpha=decay_alpha if decay_alpha is not None else 0.000950,
                 base_confidence=base_confidence if base_confidence is not None else rel.extraction_confidence,
+                valid_to=rel.valid_to,
             )
             relation_ids.append(str(relation_id))
         else:

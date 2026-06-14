@@ -513,6 +513,8 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     # PLAN-0062 F-019: cap pathological evidence text length.
                     evidence_text=_truncate_text_field(d.get("evidence_text"), field_name="evidence_text"),
+                    # PLAN-0109 W5: per-fact end-of-validity date (None when not stated).
+                    valid_to=_parse_dt_optional(d.get("valid_to")),
                 ),
             )
         # PLAN-0062 F-021: split into typed handlers — drop the ``data=`` echo
@@ -601,3 +603,19 @@ def _parse_dt(value: Any) -> datetime:
         except ValueError:
             pass
     return datetime.now(tz=UTC)
+
+
+def _parse_dt_optional(value: Any) -> datetime | None:
+    """Parse an ISO date/datetime string → tz-aware datetime, or ``None``.
+
+    PLAN-0109 W5: unlike :func:`_parse_dt`, returns ``None`` (NOT now) when the
+    value is absent or unparseable — used for ``valid_to``, where absence means
+    "no known end" and must never be coerced to the current time (which would
+    expire the fact immediately under bitemporal step-decay).
+    """
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip()).replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    return None

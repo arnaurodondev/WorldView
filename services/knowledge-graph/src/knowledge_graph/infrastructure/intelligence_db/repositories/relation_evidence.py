@@ -218,10 +218,15 @@ FOR UPDATE SKIP LOCKED
         limit: int = 500,
     ) -> list[dict[str, object]]:
         """Fetch all (processed + unprocessed) raw evidence rows for a relation triple."""
+        # PLAN-0109 W1: source_type / source_name are now selected so the v2
+        # confidence backbone can (a) look up graded trust from source_trust_weights
+        # and (b) count distinct real sources for corroboration (the worker used to
+        # hardcode both to "unknown", collapsing the diversity bonus).
         result = await self._session.execute(
             text("""
 SELECT raw_id, extraction_confidence, source_trust_weight,
-       evidence_date, is_backfill, source_document_id, evidence_text
+       evidence_date, is_backfill, source_document_id, evidence_text,
+       source_type, source_name
 FROM relation_evidence_raw
 WHERE subject_entity_id = :subject
   AND object_entity_id  = :object
@@ -247,6 +252,8 @@ LIMIT :limit
                 "is_backfill": bool(r[4]),
                 "source_document_id": UUID(str(r[5])),
                 "evidence_text": r[6],
+                "source_type": r[7],
+                "source_name": r[8],
             }
             for r in rows
         ]

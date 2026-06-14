@@ -133,30 +133,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_manager = ConnectionManager(metrics=app.state.metrics)
     app.state.ws_manager = ws_manager
 
-    # 8. Kafka health producer (lightweight — for /readyz Kafka connectivity check)
-    from confluent_kafka import Producer as _KafkaProducer  # type: ignore[import-untyped]
-
-    kafka_health_producer = _KafkaProducer(
-        {
-            "bootstrap.servers": settings.kafka_bootstrap_servers,
-            # Larger socket timeout so the background connect thread succeeds before
-            # list_topics(timeout=8) fires on the first /readyz call (BP-350).
-            "socket.timeout.ms": "30000",
-            "message.timeout.ms": "30000",
-            # BP-350 follow-up (2026-06-09): under broker contention the
-            # ApiVersionRequest handshake exceeds the 10s rdkafka default and
-            # logs `ApiVersionRequest failed: Local: Timed out` every few
-            # minutes (alert-service only; other services produce far more
-            # rarely and never hit this). Raising the handshake budget to 30s
-            # gives the broker enough slack without affecting the steady-state
-            # produce path. The setting is scoped to this single health-check
-            # producer — the BaseKafkaProducer used by the outbox keeps its
-            # own (faster) defaults.
-            "socket.connection.setup.timeout.ms": "30000",
-            "api.version.request.timeout.ms": "30000",
-        }
-    )
-    app.state.kafka_health_producer = kafka_health_producer
+    # 8. Kafka readiness check config (for /readyz).
+    #
+    # We deliberately do NOT keep a long-lived producer/admin handle for the
+    # health check. A single reused librdkafka handle can wedge permanently in a
+    # `_TRANSPORT` backoff state and never self-heal, which kept this service
+    # UNHEALTHY for ~45h even though the broker was fine (BP-350). Instead the
+    # /readyz handler spins up a throwaway AdminClient per check using the
+    # bootstrap servers stored here — cheap (~0.1s) and self-healing.
+    app.state.kafka_bootstrap_servers = settings.kafka_bootstrap_servers
 
     log.info("service_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield

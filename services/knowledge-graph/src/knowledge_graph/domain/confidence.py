@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from knowledge_graph.domain.models import ConfidenceComponents
 
 if TYPE_CHECKING:
+    from knowledge_graph.domain.calibration import BetaCalibrator
     from knowledge_graph.domain.enums import SemanticMode
 
 # Default formula constants (overridden by Settings in application layer)
@@ -52,6 +53,14 @@ class EvidenceInput:
     source_type: str  # e.g. "sec_10k"
     source_name: str  # e.g. "Apple Inc."
     evidence_date: datetime
+    # PLAN-0109 W1: the LLM's own confidence in this extraction. Folded into the
+    # evidence mass in the Beta/subjective-logic backbone. Defaults to 1.0 so the
+    # legacy v1 formula (which ignores it) is unaffected.
+    extraction_confidence: float = 1.0
+    # PLAN-0109 W4: syndication-cluster key (e.g. a hash of the normalised evidence
+    # text). Evidence pieces sharing a key are reprints of the same story and count
+    # ONCE in the support mass. ``None`` → the piece is treated as independent.
+    dedup_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -256,3 +265,127 @@ def _compute_contradiction(
 
     top_k_sum = sum(sorted(decayed_strengths, reverse=True)[:top_k])
     return min(cap, top_k_sum)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0109 W1 — Beta / subjective-logic confidence backbone (v2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BetaConfidence:
+    """Result of the Beta / subjective-logic confidence backbone.
+
+    ``final``       — projected probability (posterior mean), in [0, 1].
+    ``uncertainty`` — subjective-logic uncertainty mass ``u`` in [0, 1]; shrinks
+                      as more (fresher, more-trusted) evidence accumulates. This
+                      is the thin-node signal the old additive formula lacked.
+    ``support_mass`` / ``contradiction_mass`` — accumulated R / S (diagnostics).
+    """
+
+    final: float
+    uncertainty: float
+    support_mass: float
+    contradiction_mass: float
+
+
+def _is_signal(semantic_mode: SemanticMode) -> bool:
+    """True for TEMPORAL_CLAIM (signal) facts; False for RELATION_STATE (stateful)."""
+    return str(getattr(semantic_mode, "value", semantic_mode)).upper() == "TEMPORAL_CLAIM"
+
+
+def compute_confidence_beta(
+    evidence: list[EvidenceInput],
+    contradictions: list[ContradictionInput],
+    decay_alpha: float,
+    semantic_mode: SemanticMode,
+    base_confidence: float,
+    *,
+    now: datetime | None = None,
+    prior_strength: float = 2.0,
+    signal_decay_floor: float = 0.1,
+    valid_to: datetime | None = None,
+    calibrator: BetaCalibrator | None = None,
+) -> BetaConfidence:
+    """Compute relation confidence as a Beta / subjective-logic posterior (PLAN-0109).
+
+    Accumulate a decay-weighted, source-trust-weighted *evidence mass*::
+
+        m_g = d_g * source_trust_g * extraction_conf_g          (per evidence g)
+        R   = sum(m_g)  (support)      S = sum(decayed contradiction strengths)
+        a0, b0 = kappa * prior , kappa * (1 - prior)            (prior pseudo-counts)
+        final = (a0 + R) / (a0 + b0 + R + S)                    (posterior mean)
+        u     = (a0 + b0) / (a0 + b0 + R + S)                   (uncertainty)
+
+    Per-semantic-mode decay floor (PLAN-0109):
+    - RELATION_STATE (stateful): prior = ``base_confidence``; evidence does NOT
+      decay (``d_g = 1``) — the fact holds at full strength while valid. Once its
+      validity window closes (``valid_to`` is set and ``now > valid_to``) it has
+      expired: evidence mass steps to zero and it drops to ``signal_decay_floor``
+      (PLAN-0109 W3 bitemporal step decay).
+    - TEMPORAL_CLAIM (signal): prior = ``signal_decay_floor`` (low); evidence
+      decays absolutely (``d_g = exp(-alpha*age)``) so confidence relaxes to the floor.
+
+    Unlike the v1 additive formula, decay multiplies each mass (it does not cancel
+    in a normalised average), independent corroboration has natural diminishing
+    returns (no 0.20 cap), and the predicate prior + per-evidence extraction
+    confidence + graded source trust all enter the score.
+    """
+    if now is None:
+        now = datetime.now(tz=UTC)
+
+    is_signal = _is_signal(semantic_mode)
+    # PLAN-0109 W3: a stateful fact whose validity window has closed
+    # (now > valid_to) is no longer true — step its evidence mass to zero so it
+    # drops to the low floor (a former CEO is not "still the CEO").
+    expired = (not is_signal) and valid_to is not None and now > valid_to
+
+    prior_belief = signal_decay_floor if (is_signal or expired) else base_confidence
+    prior_belief = min(0.999, max(0.001, prior_belief))
+    a0 = prior_strength * prior_belief
+    b0 = prior_strength * (1.0 - prior_belief)
+
+    # PLAN-0109 W4: cluster syndicated reprints. Evidence sharing a ``dedup_key``
+    # (identical normalised text — the same wire story republished by many outlets)
+    # contributes ONCE, at the cluster's best (highest-mass) member, so corroboration
+    # reflects INDEPENDENT sources rather than copy count. Keyless pieces are
+    # independent and summed individually.
+    support_mass = 0.0
+    cluster_best: dict[str, float] = {}
+    for e in evidence:
+        if expired:
+            d = 0.0  # validity window closed — no surviving evidence mass (step)
+        elif is_signal:
+            d = _temporal_weight(_days_since(e.evidence_date, now), decay_alpha)
+        else:
+            d = 1.0  # stateful holds at full strength while valid
+        st = min(1.0, max(0.0, e.source_weight))
+        ec = min(1.0, max(0.0, e.extraction_confidence))
+        mass = d * st * ec
+        if e.dedup_key is None:
+            support_mass += mass
+        else:
+            cluster_best[e.dedup_key] = max(cluster_best.get(e.dedup_key, 0.0), mass)
+    support_mass += sum(cluster_best.values())
+
+    contradiction_mass = 0.0
+    for c in contradictions:
+        d = _temporal_weight(_days_since(c.detected_at, now), decay_alpha)
+        contradiction_mass += min(1.0, max(0.0, c.strength)) * d
+
+    total = a0 + b0 + support_mass + contradiction_mass
+    if total < 1e-12:
+        return BetaConfidence(prior_belief, 1.0, 0.0, 0.0)
+
+    final = min(1.0, max(0.0, (a0 + support_mass) / total))
+    uncertainty = (a0 + b0) / total
+    # PLAN-0109 W6: map the raw posterior to a calibrated P(true). No-op (identity)
+    # until an operator supplies fitted Beta-calibration parameters.
+    if calibrator is not None:
+        final = calibrator.apply(final)
+    return BetaConfidence(
+        final=final,
+        uncertainty=uncertainty,
+        support_mass=support_mass,
+        contradiction_mass=contradiction_mass,
+    )
