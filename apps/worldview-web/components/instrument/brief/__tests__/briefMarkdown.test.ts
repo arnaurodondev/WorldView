@@ -44,6 +44,15 @@ describe("stripCitationMarkers", () => {
     // [2026] is 4 digits — must survive (date-like bracket content).
     expect(stripCitationMarkers("- [2026] guidance")).toBe("- [2026] guidance");
   });
+
+  it("removes uppercase [N#] tokens (v4.x morning/instrument style)", () => {
+    // 2026-06-14 user report: literal "[N2]"/"[N10]"/"[N12]" leaked into briefs.
+    expect(
+      stripCitationMarkers("Beijing's demand [N2] adds risk [N10][N12]."),
+    ).toBe("Beijing's demand adds risk.");
+    // Mixed prefixes in one string are all stripped.
+    expect(stripCitationMarkers("a [c6] b [N7] c [3]")).toBe("a b c");
+  });
 });
 
 describe("parseInstrumentBrief", () => {

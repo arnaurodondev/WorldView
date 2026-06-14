@@ -30,16 +30,26 @@
 /**
  * stripCitationMarkers — remove inline citation tokens from brief text.
  *
- * Handles BOTH token styles the S8 prompts have emitted:
+ * Handles ALL token styles the S8 prompts have emitted across versions:
  *   - `[c12]` — instrument-brief style (citation id prefixed with "c")
- *   - `[12]`  — legacy/morning-brief style (bare index, capped at 2 digits
- *               to avoid eating real bracketed numbers like "[2026]")
+ *   - `[N12]` — v4.0+ morning/instrument style (uppercase "N" prefix). Added
+ *               2026-06-14 after users reported literal "[N2]"/"[N10]"/"[N12]"
+ *               leaking into the rendered brief text.
+ *   - `[12]`  — legacy bare-index style
+ *
+ * WHY the `\d{1,2}` digit cap (1–2 digits, NOT `\d+`): a bare 4-digit bracket
+ * like `[2026]` is a YEAR (content), not a citation — capping at two digits
+ * keeps it intact. The live v4.x briefs cite at most ~50 sources, so every
+ * real marker is 1–2 digits (`[N1]`…`[N50]`); the cap loses nothing. Other
+ * content-bearing brackets are preserved for the same structural reason —
+ * dates like `[2026-06-30]` contain a `-` and tags like `[Q stale]` contain a
+ * space, neither of which matches `[<optional c/N><1–2 digits>]`.
  *
  * Leading whitespace before a token is consumed too, so "fact. [c1][c2]"
  * collapses to "fact." (no dangling double-spaces).
  */
 export function stripCitationMarkers(text: string): string {
-  return text.replace(/\s*\[c?\d{1,2}\]/g, "");
+  return text.replace(/\s*\[(?:c|N)?\d{1,2}\]/g, "");
 }
 
 export interface ParsedBrief {

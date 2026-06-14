@@ -295,6 +295,38 @@ export function MorningBriefCard() {
       .trim();
   }
 
+  // User report 2026-06-14: the live v4.x morning brief leaks cryptic inline
+  // citation markers — uppercase ``[N2]``, ``[N10]``, ``[N12]`` — into the
+  // narrative/summary text (e.g. "…unwind $2B Manus deal after Beijing's
+  // demand [N2]"). Users have no idea what "[N2]" means, and unlike the chat
+  // surface there is NO inline footnote index on the dashboard that maps N→
+  // article (provenance is served instead by the "Top Stories" chip strip and
+  // the StructuredBrief per-bullet citation chips). So these markers are pure
+  // visual noise here — STRIP them.
+  //
+  // WHY this also lives in MorningBriefCard (not only StructuredBrief): the
+  // live v4.x morning brief returns its whole body in ``narrative`` with an
+  // EMPTY ``sections[]``, so the card renders the raw markdown via ReactMarkdown
+  // (collapsed + narrative-fallback paths) and NEVER goes through StructuredBrief
+  // — which is the only place that previously stripped ``[N#]``. That left the
+  // markers leaking on the dashboard. Mirror the same strip the LeadProse /
+  // BriefBulletItem renderers in StructuredBrief.tsx already apply.
+  //
+  // WHY ``\[c?\d+\]`` (digits only): real content-bearing brackets the brief
+  // legitimately emits — date ranges like ``[2026-06-30]`` (contains ``-``) and
+  // freshness tags like ``[Q stale]`` (contains a space) — do NOT match
+  // ``[<optional c/N><digits>]`` and are therefore preserved untouched.
+  function stripCitationMarkers(text: string): string {
+    return text
+      // ``[cN]`` (v3.0 marker form) and ``[N#]`` (v4.0+ marker form). The
+      // leading ``\s*`` eats the space before the marker so "demand [N2]"
+      // collapses cleanly to "demand".
+      .replace(/\s*\[(?:c|N)\d+\]/g, "")
+      // Collapse any double-spaces left between two now-removed markers.
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+  }
+
   // W4 fix (user report 2026-06-12): the live v4.2 morning brief returns its
   // whole body in `narrative` as markdown — `summary`/`summary_paragraph` and
   // the structured `sections[]` are all empty (the backend's citation-aware
@@ -318,12 +350,18 @@ export function MorningBriefCard() {
       .trim();
   }
 
+  // Strip order: citation markers FIRST (so "demand [N2] ." → "demand ."),
+  // then the stale-metadata / details-wrapper cleanups, which already collapse
+  // residual double-spaces. Applied to all three text sources because any of
+  // them can carry the leaked [N#] markers depending on the brief format.
   const safeNarrative = stripDetailsWrapper(
-    stripStaleMetadata(brief?.narrative?.trim() ?? ""),
+    stripStaleMetadata(stripCitationMarkers(brief?.narrative?.trim() ?? "")),
   );
-  const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
+  const safeSummary = stripStaleMetadata(
+    stripCitationMarkers(brief?.summary?.trim() ?? ""),
+  );
   const safeSummaryParagraph = stripStaleMetadata(
-    brief?.summary_paragraph?.trim() ?? "",
+    stripCitationMarkers(brief?.summary_paragraph?.trim() ?? ""),
   );
   if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
     // Round 1 foundation: NAMED empty state — icon + headline + last-attempt
