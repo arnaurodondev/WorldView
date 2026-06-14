@@ -22,6 +22,7 @@ import pytest
 from nlp_pipeline.application.blocks.learned_routing import (
     LearnedRouter,
     map_p_yield_to_tier,
+    subtitle_from_lede,
 )
 from nlp_pipeline.domain.enums import RoutingTier
 
@@ -295,7 +296,9 @@ async def test_shadow_path_leaves_actual_tier_unchanged(tmp_path: Path) -> None:
     consumer._settings = SimpleNamespace(learned_router_mode="shadow")  # type: ignore[attr-defined]
     consumer._learned_router = router  # type: ignore[attr-defined]
 
-    await consumer._run_learned_router_shadow(routing_decision=decision, doc_title="Some title")
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="Some title", lede="Some lede sentence."
+    )
 
     # The actual tier (controls processing) is UNCHANGED.
     assert decision.routing_tier == RoutingTier.MEDIUM
@@ -330,9 +333,104 @@ async def test_shadow_noop_when_mode_off(tmp_path: Path) -> None:
     consumer._settings = SimpleNamespace(learned_router_mode="off")  # type: ignore[attr-defined]
     consumer._learned_router = router  # type: ignore[attr-defined]
 
-    await consumer._run_learned_router_shadow(routing_decision=decision, doc_title="t")
+    await consumer._run_learned_router_shadow(routing_decision=decision, doc_title="t", lede="l")
 
     assert decision.learned_tier is None
     assert decision.learned_router_mode is None
     # Router was never invoked.
     assert embedder.calls == []
+
+
+# ── subtitle_from_lede parity (PLAN-0111 #33) ─────────────────────────────────
+# These cases pin the runtime replica to the dataset definition in
+# scripts/eval/routing_classifier_dataset.py::_subtitle_from_lede. If that
+# function ever changes, BOTH must change together — a divergence reintroduces
+# the train/serve skew documented in the 2026-06-13 audit.
+
+
+def test_subtitle_from_lede_none_and_empty() -> None:
+    """None / empty / blank ledes collapse to the empty string."""
+    assert subtitle_from_lede(None) == ""
+    assert subtitle_from_lede("") == ""
+
+
+def test_subtitle_from_lede_collapses_whitespace_short() -> None:
+    """A short lede is returned with all whitespace runs collapsed to single spaces."""
+    assert subtitle_from_lede("  Apple   beat\n\tearnings.  ") == "Apple beat earnings."
+
+
+def test_subtitle_from_lede_long_cuts_at_sentence_boundary() -> None:
+    """Over 300 chars: cut at the last '. ' found in head[:300] when that index > 60."""
+    # A first sentence that lands its ". " well past char 60 (so the > 60 guard
+    # passes), followed by a long tail that pushes the total over 300 chars.
+    first = "Lam Research raised its full-year revenue and margin target after the strong quarter. "
+    assert first.index(". ") > 60  # guard: boundary must be beyond char 60
+    long = first + ("filler word " * 40)  # well over 300 chars total
+    out = subtitle_from_lede(long)
+    # Cut at the last ". " within the first 300 chars -> keeps the first sentence.
+    assert out == "Lam Research raised its full-year revenue and margin target after the strong quarter."
+    assert out.endswith(".")
+    assert len(out) <= 300
+
+
+def test_subtitle_from_lede_long_hard_cut_when_no_early_boundary() -> None:
+    """Over 300 chars with no '. ' boundary beyond char 60: hard-cut at 300."""
+    long = "x" * 500  # no sentence boundary at all
+    out = subtitle_from_lede(long)
+    assert out == "x" * 300
+    assert len(out) == 300
+
+
+def test_subtitle_from_lede_json_envelope_passes_through_collapsed() -> None:
+    """A JSON-envelope chunk-0 (the ~71% case) is NOT parsed/cleaned — only whitespace-collapsed.
+
+    Faithful reproduction: training used the raw first-chunk envelope as the
+    lede, so the runtime path must too (cleaning it would create a NEW skew).
+    """
+    envelope = '{"date": "2026-06-01",\n  "title": "Acme beats",\n  "body": "..."}'
+    out = subtitle_from_lede(envelope)
+    # Whitespace collapsed, braces/quotes/keys untouched (short -> returned as-is).
+    assert out == '{"date": "2026-06-01", "title": "Acme beats", "body": "..."}'
+
+
+@pytest.mark.asyncio
+async def test_shadow_passes_nonempty_subtitle_when_lede_present(tmp_path: Path) -> None:
+    """When a lede is supplied, the shadow router embeds 'title\\nsubtitle' (not title-only).
+
+    This is the core train/serve-parity assertion: the embedder must receive the
+    lede-derived subtitle appended to the title.
+    """
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from nlp_pipeline.domain.models import RoutingDecision
+    from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+        ArticleProcessingConsumer,
+    )
+
+    router, embedder = _make_router(tmp_path, p_yield=0.70)
+    decision = RoutingDecision(
+        decision_id=UUID("00000000-0000-0000-0000-000000000040"),
+        doc_id=UUID("00000000-0000-0000-0000-000000000041"),
+        routing_tier=RoutingTier.LIGHT,
+        composite_score=0.3,
+        feature_scores={"source_reliability": 0.8, "recency": 0.6, "document_type": 0.7},
+    )
+
+    consumer = ArticleProcessingConsumer.__new__(ArticleProcessingConsumer)
+    consumer._settings = SimpleNamespace(learned_router_mode="shadow")  # type: ignore[attr-defined]
+    consumer._learned_router = router  # type: ignore[attr-defined]
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision,
+        doc_title="Lam Research analyst target",
+        lede="  Analysts raised the price target on strong demand.  ",
+    )
+
+    # Exactly one embed call; the text is 'title\nsubtitle' with the lede
+    # whitespace-collapsed (NOT title-only). This proves the skew is closed.
+    assert len(embedder.calls) == 1
+    embedded_texts, _dims = embedder.calls[0]
+    assert embedded_texts == ["Lam Research analyst target\nAnalysts raised the price target on strong demand."]
+    # And the proposal was stamped (mid p_yield -> MEDIUM here).
+    assert decision.learned_p_yield == pytest.approx(0.70)

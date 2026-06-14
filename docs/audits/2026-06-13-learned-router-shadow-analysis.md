@@ -56,3 +56,37 @@ After the fix: redeploy shadow, re-accumulate ~24h, re-check the distribution, *
 
 ## Status
 Held in SHADOW. No live flip. Tasks: #31 (shadow deploy + analysis) done; new fix task blocks #32.
+
+## Post-fix update (2026-06-14, PLAN-0111 task #33 / C-6b)
+
+Option A applied: `subtitle_from_lede` replicated verbatim from the C-3 dataset into
+`services/nlp-pipeline/.../application/blocks/learned_routing.py`; the shadow call was MOVED to
+after `run_embeddings_block` (safe — Sub-Plan B made chunk embedding universal, so routing only
+needs to precede extraction) and now feeds the RAW first-chunk lede (chunk_index asc, first
+non-null) as the subtitle. Image rebuilt `--no-cache` + force-recreated; model still loads
+(`learned_router_loaded`, 15,006 training rows).
+
+**Offline reproduction over all 469 shadow docs** (same committed joblib + real EmbeddingGemma
+adapter, structured features from `feature_scores_json` in meta order):
+
+| | DEEP | MEDIUM | LIGHT |
+|---|---|---|---|
+| Learned proposed (pre-fix, title-only) | 0% | 19.8% | 80.2% |
+| **Learned proposed (post-fix, title+lede)** | **10.6%** | **73.1%** | **16.3%** |
+
+- The deep→light collapse is gone; the distribution is now a healthy mix.
+- **Skew closed (live≡offline):** offline title-only ≡ stored live `learned_p_yield` on every
+  sampled doc (`match_title_only=True`), confirming the live path had no other bug. Adding the lede
+  lifts p_yield +0.18–0.35 (e.g. 0.398→0.750, 0.414→0.639, 0.261→0.556), matching the §"Root cause"
+  table above. The live container runs byte-identical code, so the fixed live path equals the
+  post-fix column.
+- Stays SHADOW; C-7 (cascade) + C-8 (live flip) await a clean 24h re-accumulation.
+
+**Flagged follow-up (chunk-0 JSON envelope):** for ~71% of docs the first chunk is a JSON envelope
+(`{"date":..., "title":..., ...}`) rather than clean body text. The fix faithfully reproduces
+training (which used the same raw envelope), so it is correct — but the envelope-as-chunk-0 itself
+pollutes the BGE retrieval index (post-Sub-Plan-B universal embedding) and makes training ledes
+degenerate. Warrants its own task: fix chunking so chunk 0 is clean body, then retrain the router on
+clean ledes.
+
+Offline re-validation harness committed at `scripts/eval/_check_learned_router_parity.py`.

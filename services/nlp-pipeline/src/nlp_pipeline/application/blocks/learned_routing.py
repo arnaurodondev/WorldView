@@ -82,6 +82,42 @@ class LearnedRoutingResult:
     in_ambiguous_band: bool
 
 
+def subtitle_from_lede(lede: str | None, max_chars: int = 300) -> str:
+    """Derive a subtitle/lede string from the first chunk text.
+
+    PLAN-0111 #33 (train/serve parity). This is a VERBATIM replica of
+    ``scripts/eval/routing_classifier_dataset.py::_subtitle_from_lede`` — the
+    function the C-3 training dataset used to build the ``subtitle`` field from
+    each doc's first chunk. The service cannot import from ``scripts/eval`` (not
+    a package on the container PYTHONPATH), so it is duplicated here.
+
+    IMPORTANT — keep this byte-for-byte identical to the dataset definition. The
+    learned router was trained on ``embed(title + "\\n" + subtitle)`` where
+    ``subtitle`` came from THIS exact transform applied to the doc's first chunk
+    (``SELECT chunk_text FROM chunks WHERE doc_id=... AND chunk_text IS NOT NULL
+    ORDER BY chunk_index LIMIT 1``). Any divergence reintroduces train/serve skew
+    (the 24h shadow over-suppression documented in
+    ``docs/audits/2026-06-13-learned-router-shadow-analysis.md``).
+
+    NOTE (do NOT "clean" the lede): for ~71% of docs the first chunk is a JSON
+    envelope (``{"date":..., "title":..., ...}``) rather than clean body text.
+    Training used that raw envelope as the lede, so to MATCH training we must
+    feed the SAME raw first-chunk text — parsing/cleaning it here would create a
+    NEW skew. Faithful reproduction is the goal. (The envelope-as-chunk-0 issue
+    is itself a flagged follow-up: fix chunking so chunk 0 is clean body, then
+    retrain the router on clean ledes — out of scope for #33.)
+    """
+    if not lede:
+        return ""
+    text = " ".join(lede.split())  # collapse whitespace
+    if len(text) <= max_chars:
+        return text
+    # cut at the last sentence boundary before max_chars, else hard-cut
+    head = text[:max_chars]
+    dot = head.rfind(". ")
+    return head[: dot + 1] if dot > 60 else head
+
+
 def map_p_yield_to_tier(p_yield: float, thr_extract: float, thr_deep: float) -> RoutingTier:
     """Map a calibrated P(yield) to a routing tier (PLAN-0111 C-2 mapping).
 

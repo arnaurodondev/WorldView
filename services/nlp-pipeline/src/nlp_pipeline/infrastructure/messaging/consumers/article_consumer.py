@@ -759,10 +759,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         *,
         routing_decision: RoutingDecision,
         doc_title: str | None,
+        lede: str | None,
     ) -> None:
         """Compute the learned-router SHADOW proposal and attach it to the decision.
 
-        PLAN-0111 C-6. This NEVER changes the processing path: it only
+        PLAN-0111 C-6 (call site moved + lede wired in #33). This NEVER changes
+        the processing path: it only
 
           1. calls ``LearnedRouter.propose`` (best-effort — returns None on
              failure) to get a calibrated P(yield) + proposed tier,
@@ -773,11 +775,34 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
              (static) tier with the proposed tier, and
           4. increments the {actual_tier, proposed_tier} Prometheus counter.
 
+        TRAIN/SERVE PARITY (PLAN-0111 #33 — fixes the skew diagnosed in
+        ``docs/audits/2026-06-13-learned-router-shadow-analysis.md``):
+        the model was trained on ``embed(title + "\\n" + subtitle)`` where
+        ``subtitle`` is the article LEDE (the doc's first chunk text, run through
+        ``subtitle_from_lede``). The original C-6 wiring ran this BEFORE chunking
+        and so had no lede available — it passed ``subtitle=None`` and embedded
+        the TITLE ALONE. That fed the model half its expected input and caused
+        systematic over-suppression (24h shadow: 0% DEEP proposed, 80% LIGHT,
+        5.3% agreement). We now run this AFTER ``run_embeddings_block`` produces
+        chunks and pass the real first-chunk ``lede`` as the subtitle.
+
+        WHY running post-chunking is safe: Sub-Plan B made chunk embedding
+        UNIVERSAL (every non-SUPPRESS tier is embedded regardless of routing
+        tier), so the routing gate no longer needs to run before embedding — it
+        only needs to precede EXTRACTION (Block 8). Moving the call after Block 7
+        is therefore behaviour-preserving for the static (deployed) router while
+        finally giving the shadow router the lede it was trained on.
+
+        ``lede`` is the RAW first-chunk text (caller picks chunk_index ascending,
+        first non-null) — deliberately NOT cleaned, see ``subtitle_from_lede``.
+
         Everything is inside a broad try/except: the learned router is a passive
         observer and a failure here must not fail the article. The mode is always
         recorded (even on failure) so a NULL learned_tier with a non-NULL mode is
         distinguishable from "router was off entirely".
         """
+        from nlp_pipeline.application.blocks.learned_routing import subtitle_from_lede
+
         mode = self._settings.learned_router_mode
         if mode == "off" or self._learned_router is None:
             return
@@ -794,12 +819,17 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             # values already computed by the static router (same source). We pass
             # the whole feature_scores dict; LearnedRouter picks the trained
             # subset (source_reliability, recency, document_type) in order.
-            # No subtitle is available at this point in the pipeline, so the
-            # classifier text is the title alone (the exporter's text builder and
-            # LearnedRouter._build_text both handle an empty subtitle identically).
+            #
+            # The subtitle is the article LEDE (first chunk text) put through the
+            # SAME transform the training dataset used (subtitle_from_lede). This
+            # closes the train/serve skew — see method docstring + the 2026-06-13
+            # audit. ``lede`` is None only when the doc produced no chunks (e.g.
+            # empty body); then subtitle_from_lede("") -> "" and propose falls
+            # back to title-only, matching training rows with an empty lede.
+            subtitle = subtitle_from_lede(lede)
             result = await self._learned_router.propose(
                 title=doc_title,
-                subtitle=None,
+                subtitle=subtitle,
                 structured_features=routing_decision.feature_scores,
             )
             if result is None:
@@ -929,16 +959,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             tier_light=self._settings.routing_tier_light,
         )
 
-        # ── PLAN-0111 C-6: learned-router SHADOW comparison ──────────────────
-        # The static weighted-sum tier above CONTROLS processing. When the
-        # learned router is enabled we ALSO compute a *proposed* tier and attach
-        # it (+ p_yield + mode) onto the routing_decision so persist_artifacts
-        # writes it to routing_decisions. This is strictly observational in
-        # shadow mode and is wrapped so any failure is non-fatal to the article.
-        await self._run_learned_router_shadow(
-            routing_decision=routing_decision,
-            doc_title=doc_title,
-        )
+        # NOTE (PLAN-0111 #33): the learned-router SHADOW comparison USED to run
+        # here (before chunking) but with no lede available, which fed the model
+        # title-only input and caused train/serve skew. It now runs AFTER
+        # run_embeddings_block so it can pass the real first-chunk lede as the
+        # subtitle the model was trained on. The static router below still
+        # controls processing; the shadow only needs to precede extraction.
 
         initial_path = apply_suppression_gate(routing_decision)
 
@@ -963,6 +989,34 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 for c in chunks
             ]
         s6_embeddings_created_total.inc(len(chunk_embs) + len(section_embs))
+
+        # ── PLAN-0111 C-6 / #33: learned-router SHADOW comparison ────────────
+        # MOVED here (post-chunking) so the shadow router can be fed the SAME
+        # lede the C-3 dataset trained on, closing the train/serve skew. The
+        # static weighted-sum tier (computed above) still CONTROLS processing;
+        # the shadow only attaches a *proposed* tier (+ p_yield + mode) onto the
+        # routing_decision for persist_artifacts to write. Strictly observational
+        # in shadow mode and wrapped so any failure is non-fatal to the article.
+        #
+        # LEDE SELECTION — must mirror the dataset SQL exactly:
+        #   SELECT chunk_text FROM chunks
+        #   WHERE doc_id=... AND chunk_text IS NOT NULL
+        #   ORDER BY chunk_index LIMIT 1
+        # The in-memory `chunks` returned by run_embeddings_block are domain
+        # `Chunk` objects whose `.text` maps to the persisted `chunk_text` column
+        # and whose `.chunk_index` maps to `chunk_index`. They are produced in
+        # section order, so the first chunk with the minimum chunk_index AND
+        # non-empty text is the same row the DB query would return (in the normal
+        # single-leading-chunk case this is simply chunks[0]). We pick it with a
+        # stable min() over (chunk_index) restricted to non-empty text so we
+        # never accidentally hand the model an empty lede.
+        _lede_chunks = [c for c in chunks if c.text and c.text.strip()]
+        _lede = min(_lede_chunks, key=lambda c: c.chunk_index).text if _lede_chunks else None
+        await self._run_learned_router_shadow(
+            routing_decision=routing_decision,
+            doc_title=doc_title,
+            lede=_lede,
+        )
 
         # Blocks 8-10 + atomic DB write with D-004 dual-session ordering.
         # ALL repositories are constructed here (in article_consumer namespace)
