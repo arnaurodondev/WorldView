@@ -56,6 +56,7 @@ _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
         "product",
         "index",
         "exchange",  # FR-12: stock exchanges / trading venues (NYSE, NASDAQ, LSE)
+        "organization",  # FR-12: tickerless private companies / agencies / non-profits / institutions
         "currency",
         "unknown",
     },
@@ -96,15 +97,23 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "enterprise": "financial_instrument",
     "firm": "financial_instrument",
     "business": "financial_instrument",
-    # 'organization'/'organisation' → 'unknown': too broad to safely assume FI;
-    # covers regulators, NGOs, non-profits. The prompt fix (F-009) prevents the
-    # LLM from emitting these; alias is the safety net for legacy/fallback data.
-    # Migration 0039 established this mapping — do not promote to financial_instrument.
-    "organization": "unknown",
-    "organisation": "unknown",
-    "inst": "financial_instrument",
-    "institution": "financial_instrument",
-    "regulator": "unknown",  # regulators (SEC, Fed) are not financial instruments
+    # 'organization'/'organisation' → 'organization' (FR-12 / migration 0055):
+    # there is now a dedicated canonical type for tickerless companies, agencies,
+    # NGOs, and non-profits, so we map to it directly instead of dumping to
+    # 'unknown'. The ENTITY_PROFILE prompt v2.2 also emits 'organization' for these.
+    "organization": "organization",
+    "organisation": "organization",
+    # 'inst'/'institution' → 'organization': an institution (university, research
+    # firm, agency) is an organisation, NOT a tradeable instrument (FR-12).
+    "inst": "organization",
+    "institution": "organization",
+    "regulator": "organization",  # regulators (SEC, Fed) are organisations, not instruments
+    "agency": "organization",  # government agencies / bodies
+    "nonprofit": "organization",
+    "non_profit": "organization",
+    "foundation": "organization",
+    "ngo": "organization",
+    "university": "organization",
     # country/location → place (migration 0039 §2b; GLiNER uses 'location' not 'country')
     "country": "place",
     "nation": "place",

@@ -69,6 +69,29 @@ class TestEntityProfile:
         result = ENTITY_PROFILE.render(name="Nvidia shares", entity_class="company")
         assert "generic market PHRASE is NOT a distinct entity" in result
 
+    def test_v22_has_organization_type(self) -> None:
+        # FR-12 (v2.2): 'organization' must be an explicit allowed type so private
+        # companies / agencies / non-profits are not forced into financial_instrument.
+        result = ENTITY_PROFILE.render(name="SpaceX", entity_class="company")
+        assert "organization" in result
+        # The enum line must list organization between exchange and currency.
+        assert "exchange |" in result and "organization" in result and "currency |" in result
+        # organization exemplars present (private co, agency, university, foundation).
+        assert "SpaceX" in result and "Anthropic" in result and "Foundation" in result
+
+    def test_v22_financial_instrument_requires_ticker(self) -> None:
+        # FR-12 (v2.2): financial_instrument is tightened to TRADEABLE-with-ticker;
+        # a private company with no ticker is organization, not financial_instrument.
+        result = ENTITY_PROFILE.render(name="SpaceX", entity_class="company")
+        assert "NEVER 'financial_instrument'" in result
+        assert "almost certainly 'organization'" in result
+
+    def test_v22_company_no_longer_in_do_not_use_excludes_organization(self) -> None:
+        # 'organization' was removed from the "Do NOT use" list (now canonical).
+        result = ENTITY_PROFILE.render(name="x", entity_class="y")
+        # The "Do NOT use" line must NOT forbid 'organization' anymore.
+        assert "Do NOT use 'company', 'country'," in result
+
 
 class TestAliasGeneration:
     """ALIAS_GENERATION v2.0 (PLAN-0057 Wave C-4 / F-MAJOR-09).
@@ -161,9 +184,10 @@ class TestAliasGeneration:
 
 class TestVersions:
     def test_all_versions_are_semver(self) -> None:
-        # RELATION_SUMMARY at v1.0; ENTITY_PROFILE bumped to v2.1 in FR-12 (added
-        # 'exchange' type + exchange/index, country/currency, and entity-vs-phrase
-        # disambiguation rules); ALIAS_GENERATION bumped to v2.0 in PLAN-0057 Wave C-4.
+        # RELATION_SUMMARY at v1.0; ENTITY_PROFILE bumped to v2.2 in FR-12 (added
+        # 'organization' type for tickerless private companies/agencies/non-profits,
+        # on top of the v2.1 'exchange' type + disambiguation rules);
+        # ALIAS_GENERATION bumped to v2.0 in PLAN-0057 Wave C-4.
         assert RELATION_SUMMARY.version == "1.0"
-        assert ENTITY_PROFILE.version == "2.1"
+        assert ENTITY_PROFILE.version == "2.2"
         assert ALIAS_GENERATION.version == "2.0"

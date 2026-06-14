@@ -55,6 +55,16 @@ pytestmark = pytest.mark.unit
         ("Apple shares", "unknown", "phrase_suffix"),
         ("Microsoft Stock", "unknown", "phrase_suffix"),
         ("Nvidia equity", "unknown", "phrase_suffix"),
+        # FR-12: high-confidence org markers -> organization
+        ("Duke Energy Foundation", "organization", "organization"),
+        ("MIT Media Institute", "organization", "organization"),
+        ("Stanford University", "organization", "organization"),
+        ("Andreessen Horowitz Ventures", "organization", "organization"),
+        ("Sequoia Capital Partners", "organization", "organization"),
+        ("Acme Buyout LLC", "organization", "organization"),
+        ("Foobar GmbH", "organization", "organization"),
+        ("Securities and Exchange Commission", "organization", "organization"),
+        ("World Wildlife Charity", "organization", "organization"),
     ],
 )
 def test_deterministic_hits(name: str, expected_type: str, expected_rule: str) -> None:
@@ -68,18 +78,22 @@ def test_deterministic_hits(name: str, expected_type: str, expected_rule: str) -
 @pytest.mark.parametrize(
     "name",
     [
-        "SpaceX",  # private company — ambiguous, needs LLM
+        # Private companies / orgs with NO high-confidence marker — these carry no
+        # Foundation/Institute/LLC/agency token, so the deterministic pass cannot
+        # safely re-type them and MUST defer to the LLM stage.
+        "SpaceX",
         "Anthropic",
         "Zacks",
-        "Duke Energy Foundation",
         "Hankook Tire",
         "Y Combinator",
         "Federal Reserve Bank of Dallas",
         "Etihad Airways",
+        "Stripe",
+        "OpenAI",
     ],
 )
 def test_deterministic_defers_ambiguous(name: str) -> None:
-    """Private companies / orgs are ambiguous — deferred to the LLM stage."""
+    """Private companies / orgs with no clear marker are deferred to the LLM stage."""
     assert classify_deterministic("e1", name) is None
 
 
@@ -110,11 +124,15 @@ def test_fund_beats_phrase_suffix() -> None:
         ("Place", "place"),
         ("macro indicator", "macro_indicator"),
         ("company", "financial_instrument"),  # alias
-        ("organization", "unknown"),  # alias
+        ("organization", "organization"),  # FR-12 / migration 0055: now canonical
+        ("organisation", "organization"),  # alias
+        ("regulator", "organization"),  # alias (SEC, Fed)
         ("country", "place"),  # alias
         ("commodity", "product"),  # alias
         ("ETF", "index"),  # alias
-        ("foundation", "unknown"),  # alias
+        ("foundation", "organization"),  # FR-12 alias
+        ("university", "organization"),  # FR-12 alias
+        ("nonprofit", "organization"),  # FR-12 alias
     ],
 )
 def test_normalize_llm_type_valid(raw: str, expected: str) -> None:
@@ -155,6 +173,103 @@ def test_parse_llm_retype_confirms_instrument_is_noop() -> None:
 
 def test_parse_llm_retype_missing_type_unchanged() -> None:
     assert parse_llm_retype("e1", "X", {"canonical_name": "X"}) is None
+
+
+def test_parse_llm_retype_organization() -> None:
+    """FR-12: the LLM may now return 'organization' for a tickerless private co."""
+    r = parse_llm_retype("e1", "SpaceX", {"entity_type": "organization"})
+    assert r is not None and r.new_type == "organization" and r.rule == "llm"
+
+
+# ── Valid-type set (must mirror DB CHECK post migration 0055) ─────────────────
+
+
+def test_valid_entity_types_has_organization_and_13_values() -> None:
+    """The script's valid-type set must match the 13-value DB CHECK (migration 0055)."""
+    assert "organization" in mod._VALID_ENTITY_TYPES
+    assert "exchange" in mod._VALID_ENTITY_TYPES
+    assert len(mod._VALID_ENTITY_TYPES) == 13
+
+
+# ── LLM stage rework — production request shape ───────────────────────────────
+
+
+def test_run_llm_stage_uses_full_production_output_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reworked LLM stage must mirror the production extract_entity_profile shape.
+
+    The original mis-wiring passed a truncated ``{"entity_type": "string"}``
+    output_schema (which did not match what ENTITY_PROFILE asks the model to
+    return, so entity_type came back missing → 0 re-types).  The rework must pass
+    the FULL profile schema, the full prompt, and the injection-safe context, and
+    parse entity_type from the returned dict.  We stub the DeepSeek adapter so no
+    network call happens.
+    """
+    import asyncio as _asyncio
+
+    captured: dict[str, object] = {}
+
+    class _FakeOutput:
+        def __init__(self, result: dict[str, object]) -> None:
+            self.result = result
+
+    class _FakeAdapter:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        async def extract(self, inp: object):  # type: ignore[no-untyped-def]
+            captured["output_schema"] = inp.output_schema  # type: ignore[attr-defined]
+            captured["prompt"] = inp.prompt  # type: ignore[attr-defined]
+            captured["context"] = inp.context  # type: ignore[attr-defined]
+            return _FakeOutput({"entity_type": "organization"})
+
+        async def aclose(self) -> None:
+            return None
+
+    # Provide an API key so the stage proceeds, and stub the adapter + the heavy
+    # ml_clients / prompts imports the stage performs lazily.
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "test-key")
+
+    import types as _types
+
+    fake_adapters = _types.ModuleType("ml_clients.adapters.deepseek_extraction")
+    fake_adapters.DeepSeekExtractionAdapter = _FakeAdapter  # type: ignore[attr-defined]
+
+    @dataclass
+    class _ExtractionInput:
+        prompt: str
+        context: str
+        output_schema: dict[str, str]
+        model_id: str
+
+    fake_dc = _types.ModuleType("ml_clients.dataclasses")
+    fake_dc.ExtractionInput = _ExtractionInput  # type: ignore[attr-defined]
+
+    class _FakePrompt:
+        def render(self, *, name: str, entity_class: str) -> str:
+            return f"PROMPT for {name} ({entity_class})"
+
+    fake_prompt_mod = _types.ModuleType("prompts.knowledge.entity_profile")
+    fake_prompt_mod.ENTITY_PROFILE = _FakePrompt()  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "ml_clients.adapters.deepseek_extraction", fake_adapters)
+    monkeypatch.setitem(sys.modules, "ml_clients.dataclasses", fake_dc)
+    monkeypatch.setitem(sys.modules, "prompts.knowledge.entity_profile", fake_prompt_mod)
+
+    cand = Candidate("a1", "SpaceX", "Rocket company")
+    planned = _asyncio.run(mod._run_llm_stage([cand], batch_size=1))
+
+    # The reworked stage produced a re-type from the parsed entity_type.
+    assert len(planned) == 1 and planned[0].new_type == "organization"
+    # It sent the FULL production output_schema (not the truncated single-field one).
+    assert captured["output_schema"] == {
+        "canonical_name": "string",
+        "entity_type": "string",
+        "ticker": "string|null",
+        "isin": "string|null",
+        "aliases": "list[string]",
+    }
+    # Injection-safe context wrapping mirrors the production path.
+    assert captured["context"] == "<article_context>Rocket company</article_context>"
 
 
 # ── DB plumbing against a fake connection ─────────────────────────────────────

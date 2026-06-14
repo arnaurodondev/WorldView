@@ -9,6 +9,29 @@ is unchanged.
 
 ## entity_profile
 
+### 2.2 — 2026-06-13 (FR-12 tickerless-org mis-typing prevention)
+
+- **Added `organization` as an allowed `entity_type`** — a company / agency /
+  non-profit / institution that is NOT a tradeable instrument and has no ticker
+  (private companies like SpaceX/Anthropic, government bodies like the SEC/Fed,
+  universities & research firms like MIT/Zacks/Y Combinator, foundations & NGOs
+  like the Duke Energy Foundation). Previously these had no home in the taxonomy
+  and were forced into `financial_instrument` (the dominant tickerless-FI
+  mistype) or fell through to `unknown`. Paired with intelligence-migrations
+  0055, which extends `ck_canonical_entities_entity_type` to 13 values.
+- **Tightened the `financial_instrument` definition** to "a TRADEABLE security
+  with a ticker (publicly-listed companies)" — it no longer says "companies"
+  unqualified, which had taught the model to type any company as an instrument.
+- **Added a disambiguation rule (#3):** `financial_instrument` only for tradeable
+  securities/tickers; a private company with no confident ticker is
+  `organization`, not `financial_instrument`. (The old phrase rule is now #4.)
+- **Removed `organization` from the "Do NOT use" list** (it is now canonical);
+  reworded the `company` guidance to route to `financial_instrument` (with
+  ticker) vs `organization` (without).
+- **Impact:** changes the type distribution of newly-minted provisional entities;
+  pairs with `provisional_enrichment_core.py` (organization added to the valid
+  set + alias map) and the reprofile backfill.
+
 ### 2.1 — 2026-06-13 (FR-12 hub mis-typing prevention)
 
 - **Added `exchange` as an allowed `entity_type`** (NYSE, NASDAQ, LSE, Euronext,

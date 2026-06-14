@@ -783,10 +783,12 @@ class TestEntityTypeNormalisation:
         repos.canonical_create_or_get.assert_awaited_once()
 
     async def test_uppercase_entity_type_normalised(self) -> None:
-        """entity_type='ORGANIZATION' → alias-mapped to 'unknown' (BP-523).
+        """entity_type='ORGANIZATION' → alias-mapped to 'organization' (FR-12 / migration 0055).
 
-        Migration 0039 remaps 'organization' → 'unknown' in the DB.  The code
-        must apply the same mapping so no CheckViolationError occurs at insert time.
+        Migration 0055 added a dedicated ``organization`` canonical type for
+        tickerless private companies / agencies / non-profits.  The code lower-cases
+        + alias-maps so 'ORGANIZATION' resolves to 'organization' (no longer dumped
+        to 'unknown').  This is the case-normalisation + valid-type regression.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -796,16 +798,16 @@ class TestEntityTypeNormalisation:
         with _patch_persist_repos(repos):
             await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Fed", profile=profile)
 
-        # No warning logged — ORGANIZATION is in the alias map (→ 'unknown').
+        # No warning logged — 'organization' is now a valid canonical type.
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('unknown') was actually passed to
-        # entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
+        # Verify that the alias-mapped entity_type ('organization') was actually passed
+        # to entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"Expected alias-mapped entity_type='unknown' (BP-523), got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'unknown'."
+        assert call_kwargs["entity_type"] == "organization", (
+            f"Expected alias-mapped entity_type='organization' (FR-12), got {call_kwargs['entity_type']!r}. "
+            "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'organization'."
         )
 
     async def test_alias_corp_WITH_ticker_maps_to_financial_instrument(self) -> None:
@@ -919,6 +921,54 @@ class TestEntityTypeNormalisation:
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert call_kwargs["entity_type"] == "exchange"
 
+    async def test_organization_entity_type_is_valid(self) -> None:
+        """FR-12 / migration 0055: 'organization' is a valid entity_type (passes through)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "SpaceX",
+            "entity_type": "organization",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "organization"
+
+    async def test_foundation_alias_maps_to_organization(self) -> None:
+        """FR-12: a 'foundation'-class tickerless mention maps to 'organization'."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "Duke Energy Foundation",
+            "entity_type": "foundation",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Duke Energy Foundation",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "organization"
+
     async def test_unknown_entity_type_defaults_to_unknown(self) -> None:
         """entity_type='conglomerate' → invalid; stored as 'unknown' with warning (BP-523).
 
@@ -961,11 +1011,12 @@ class TestEntityTypeNormalisation:
             "Ensure the fallback block sets entity_type = 'unknown', not 'other'."
         )
 
-    async def test_organization_mention_class_resolves_to_unknown(self) -> None:
-        """BP-523: 'organization' mention class must produce entity_type='unknown'.
+    async def test_organization_mention_class_resolves_to_organization(self) -> None:
+        """FR-12 / migration 0055: 'organization' mention class → entity_type='organization'.
 
-        Migration 0039 maps 'organization' → 'unknown' in the DB CHECK constraint.
-        The code must do the same so no CheckViolationError fires at insert time.
+        Supersedes BP-523 (which mapped 'organization' → 'unknown' because no
+        dedicated type existed).  Migration 0055 added the ``organization`` value to
+        the DB CHECK constraint, so the alias map now routes to it directly.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -983,14 +1034,15 @@ class TestEntityTypeNormalisation:
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organization' must map to 'unknown'; got {call_kwargs['entity_type']!r}"
+            call_kwargs["entity_type"] == "organization"
+        ), f"FR-12: 'organization' must map to 'organization'; got {call_kwargs['entity_type']!r}"
 
-    async def test_british_spelling_organisation_resolves_to_unknown(self) -> None:
-        """BP-523: British-spelling 'organisation' alias must also resolve to 'unknown'.
+    async def test_british_spelling_organisation_resolves_to_organization(self) -> None:
+        """FR-12 / migration 0055: British-spelling 'organisation' → 'organization'.
 
         Some LLM variants return 'organisation' (British English); the alias map
-        must route this correctly so the DB CHECK constraint is never violated.
+        must normalise it to the canonical American-spelled ``organization`` value
+        so the DB CHECK constraint is never violated.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -1013,8 +1065,8 @@ class TestEntityTypeNormalisation:
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organisation' (British spelling) must map to 'unknown'; got {call_kwargs['entity_type']!r}"
+            call_kwargs["entity_type"] == "organization"
+        ), f"FR-12: 'organisation' (British spelling) must map to 'organization'; got {call_kwargs['entity_type']!r}"
 
     async def test_fully_invalid_type_fallback_is_unknown_not_other(self) -> None:
         """BP-523: the invalid-type fallback must be 'unknown', not 'other'.

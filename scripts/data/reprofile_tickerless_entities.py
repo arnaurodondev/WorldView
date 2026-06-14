@@ -21,13 +21,21 @@ THIS script handles the REMAINING fuzzy bulk via a two-stage pipeline:
        • price literals ("$135", "RMB49", "US$15.20")                       -> unknown
        • obvious ETFs / funds ("... ETF", "... Index Fund")                 -> index
        • obvious index baskets ("S&P 500", "Nasdaq Composite", "... Index") -> index
+       • high-confidence org markers ("... Foundation", "... Institute",
+         "... University", "... Ventures", "... LLC", "... Inc" w/o ticker,
+         agencies / non-profits)                                            -> organization
 
-  2. LLM PASS (DeepSeek V4 Flash via the existing DeepInfra extraction adapter)
-     for the ambiguous remainder — feeds name + any description context through
-     the ENTITY_PROFILE v2.1 prompt, parses + validates the returned type
-     against the 12 canonical values, and UPDATEs entity_type.  Anything that
-     fails parse/validate is left UNCHANGED (never crash, never write an invalid
-     type — the CHECK constraint would reject it).
+  2. LLM PASS — uses the SAME profiling path production uses
+     (``provisional_enrichment_core.extract_entity_profile``): the DeepInfra
+     extraction client (DeepSeek V4 Flash), the FULL ENTITY_PROFILE v2.2 prompt,
+     and the FULL output_schema (canonical_name/entity_type/ticker/isin/aliases).
+     The original version of this script passed a TRUNCATED output_schema
+     (``{"entity_type": "string"}``) which does not match what the prompt asks
+     the model to return — it must mirror the production request shape so the
+     model reliably emits ``entity_type``.  The returned type is parsed +
+     validated against the 13 canonical values (post migration 0055) and the
+     entity_type is UPDATEd.  Anything that fails parse/validate is left UNCHANGED
+     (never crash, never write an invalid type — the CHECK constraint rejects it).
 
 SAFETY / DISCIPLINE:
   • DRY-RUN by DEFAULT.  Prints the deterministic re-types it WOULD apply and the
@@ -76,7 +84,7 @@ _LLM_MODEL_ID = os.environ.get("KG_REPROFILE_MODEL_ID", "deepseek-ai/DeepSeek-V4
 _LLM_PROVIDER = "deepinfra"
 _LLM_BASE_URL = os.environ.get("KG_REPROFILE_BASE_URL", "https://api.deepinfra.com/v1/openai")
 
-# The 12 canonical entity_type values (post migration 0053).  MUST mirror the DB
+# The 13 canonical entity_type values (post migration 0055).  MUST mirror the DB
 # CHECK constraint ``ck_canonical_entities_entity_type`` exactly — a value not in
 # this set is rejected by the DB, so the LLM-result validator forces "leave
 # unchanged" rather than risk a constraint violation.
@@ -92,6 +100,7 @@ _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
         "product",
         "index",
         "exchange",
+        "organization",  # FR-12 / migration 0055: tickerless private cos / agencies / non-profits
         "currency",
         "unknown",
     }
@@ -109,12 +118,18 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "business": "financial_instrument",
     "fund": "index",  # a fund/ETF is a basket -> index (closest canonical bucket)
     "etf": "index",
-    "organization": "unknown",
-    "organisation": "unknown",
-    "regulator": "unknown",
-    "nonprofit": "unknown",
-    "non_profit": "unknown",
-    "foundation": "unknown",
+    # FR-12 / migration 0055: tickerless companies / agencies / NGOs now have a
+    # dedicated canonical type.  Mirrors provisional_enrichment_core's alias map.
+    "organization": "organization",
+    "organisation": "organization",
+    "regulator": "organization",
+    "agency": "organization",
+    "nonprofit": "organization",
+    "non_profit": "organization",
+    "foundation": "organization",
+    "ngo": "organization",
+    "institution": "organization",
+    "university": "organization",
     "country": "place",
     "nation": "place",
     "region": "place",
@@ -175,6 +190,16 @@ _PURE_PHRASE_NAMES: frozenset[str] = frozenset(
         "notes",
         "warrants",
         "options",
+        # Bare org-suffix words with no qualifier denote no distinct entity — they
+        # must be caught here (rule 1) BEFORE the FR-12 organization rule so a lone
+        # "Holdings" / "Capital" is 'unknown', not 'organization'.
+        "holdings",
+        "holding",
+        "capital",
+        "ventures",
+        "partners",
+        "associates",
+        "group",
     }
 )
 
@@ -199,6 +224,40 @@ _FUND_RE = re.compile(r"\b(etf|index fund|mutual fund|trust fund)\b", re.IGNOREC
 _INDEX_RE = re.compile(
     r"(s&p\s?\d{2,4}|nasdaq composite|dow jones|russell\s?\d{3,4}|"
     r"ftse\s?\d{2,4}|nikkei|hang seng|\bindex$|composite index)",
+    re.IGNORECASE,
+)
+
+# FR-12 — high-confidence ORGANISATION name signals -> ``organization``.
+# A tickerless row whose name contains an unambiguous organisation marker
+# (foundation, institute, university, ventures, capital, holdings, a private-co
+# suffix like LLC/Inc/Ltd, or a clear agency/non-profit token) is almost
+# certainly a private company / agency / non-profit / institution, NOT a
+# tradeable instrument.  The markers are deliberately CONSERVATIVE — they only
+# fire on tokens that essentially never appear in a generic finance phrase or a
+# price literal, so the LLM never wastes a call on these obvious cases.
+#
+# WORD-BOUNDARY matters: "foundation"/"institute"/"university"/"ventures"/
+# "capital"/"holdings"/"holding"/"associates"/"partners"/"laboratories"/"labs"/
+# "council"/"commission"/"agency"/"bureau"/"authority"/"committee"/"federation"/
+# "foundation"/"trust" (as an org, not a fund), plus the private-company legal
+# suffixes that the FR-11 dedup does NOT strip (llc / inc / incorporated /
+# corporation / ltd / limited / gmbh / s.a. / plc) when there is no ticker.
+# CONSERVATIVE: only markers that almost never denote a publicly-tradeable
+# security.  Generic corporate legal forms (holdings/plc/ltd/limited/incorporated/
+# gmbh/s.a./partners/associates) are DELIBERATELY EXCLUDED — many tickerless
+# PUBLIC companies carry them (e.g. "Alkane Resources Limited", "Active Energy
+# Group PLC"), so those fall through to the LLM, which (with ENTITY_PROFILE v2.2)
+# distinguishes tradeable company (financial_instrument) from private org.
+_ORGANIZATION_RE = re.compile(
+    r"\b("
+    r"foundation|institute|institution|university|college|"
+    r"ventures|venture\s+capital|capital\s+partners|capital\s+management|"
+    r"laboratories|"
+    r"council|commission|\bagency\b|bureau|authority|committee|"
+    r"federation|consortium|alliance|coalition|society|"
+    r"non-?profit|nonprofit|\bngo\b|charity|"
+    r"\bllc\b|\bl\.l\.c\.|\bgmbh\b"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -248,6 +307,17 @@ def classify_deterministic(entity_id: str, canonical_name: str) -> Retype | None
     #    was already caught by rule 1 and a real one-word company is not hit.
     if " " in norm and _PHRASE_SUFFIX_RE.search(norm):
         return Retype(entity_id, canonical_name, "financial_instrument", "unknown", "phrase_suffix")
+
+    # 6. High-confidence ORGANISATION name signal               -> organization
+    #    Foundation / Institute / University / Ventures / Capital / Holdings /
+    #    LLC / Inc-private / agency / non-profit markers.  Runs LAST among the
+    #    deterministic rules — AFTER the fund/index rules so an "X Capital ETF"
+    #    lands as index (fund), not organization, and AFTER the phrase rules so
+    #    "Holdings" alone (a pure generic phrase, rule 1) is not mistaken for an
+    #    org.  These markers essentially never appear in a real tradeable-ticker
+    #    instrument name, so the re-type is high-confidence.
+    if _ORGANIZATION_RE.search(norm):
+        return Retype(entity_id, canonical_name, "financial_instrument", "organization", "organization")
 
     # Ambiguous — defer to the LLM stage.
     return None
@@ -338,12 +408,27 @@ async def _run_llm_stage(
     candidates: list[Candidate],
     batch_size: int,
 ) -> list[Retype]:
-    """Call DeepSeek V4 Flash for each ambiguous candidate; return planned re-types.
+    """Call the PRODUCTION profiling path for each ambiguous candidate; return re-types.
 
-    Instantiates the existing ``DeepSeekExtractionAdapter`` directly (same client
-    the live enrichment path uses) bounded by an ``asyncio.Semaphore`` so at most
-    ``batch_size`` calls are in flight.  A failed/empty call leaves the row
-    unchanged (``parse_llm_retype`` returns None).  Only reached on ``--apply``.
+    REWORK (FR-12 follow-up): this stage now mirrors the EXACT request shape the
+    live enrichment path uses in
+    ``provisional_enrichment_core.extract_entity_profile``:
+
+      • the DeepInfra extraction client (``DeepSeekExtractionAdapter`` — DeepSeek
+        V4 Flash, the same client the ``FallbackChainClient`` primary slot wraps),
+      • the FULL ``ENTITY_PROFILE`` v2.2 prompt rendered with the same
+        ``entity_class`` the worker passes,
+      • the FULL ``output_schema`` (canonical_name / entity_type / ticker / isin /
+        aliases) — the previous version sent a TRUNCATED ``{"entity_type":
+        "string"}`` schema that did NOT match what the prompt asks the model to
+        return, which is why entity_type came back missing and 0 rows re-typed,
+      • the same injection-safe ``<article_context>...</article_context>`` wrapping.
+
+    Parsing then mirrors ``persist_enrichment``: pull ``entity_type`` from the
+    returned dict and alias-map + validate it against the 13 canonical values
+    (``parse_llm_retype`` → ``normalize_llm_type``).  Calls are bounded by an
+    ``asyncio.Semaphore`` so at most ``batch_size`` are in flight.  A failed/empty
+    call leaves the row unchanged.  Only reached on ``--apply``.
     """
     api_key = os.environ.get("KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY") or os.environ.get("DEEPINFRA_API_KEY")
     if not api_key:
@@ -369,12 +454,19 @@ async def _run_llm_stage(
     )
 
     async def _classify_one(c: Candidate) -> Retype | None:
-        # Same prompt + injection-safe context wrapping the live path uses.
+        # Build the request EXACTLY as the production path does (full schema +
+        # injection-safe context wrapping); see extract_entity_profile().
         context = f"<article_context>{(c.description or '')[:500]}</article_context>"
         inp = ExtractionInput(
             prompt=ENTITY_PROFILE.render(name=c.canonical_name, entity_class="financial_instrument"),
             context=context,
-            output_schema={"entity_type": "string"},
+            output_schema={
+                "canonical_name": "string",
+                "entity_type": "string",
+                "ticker": "string|null",
+                "isin": "string|null",
+                "aliases": "list[string]",
+            },
             model_id=_LLM_MODEL_ID,
         )
         try:
