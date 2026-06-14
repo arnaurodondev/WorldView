@@ -34,10 +34,15 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery, useState for tab toggle, useRouter for nav.
+// WHY "use client": uses useInfiniteQuery/useQuery (data), useState (tab
+// toggle), useRouter (nav), useRef + useEffect (IntersectionObserver sentinel).
 
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQuery,
+  useInfiniteQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
@@ -56,14 +61,24 @@ import { TrendingUp } from "lucide-react";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Mover } from "@/types/api";
+import type { Mover, TopMoversResponse } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type MoverType = "gainers" | "losers";
 
-/** How many rows we request per side. 10 fills the Row-3 cell without scroll. */
-const MOVERS_LIMIT = 10;
+/**
+ * MOVERS_PAGE_SIZE — block size for the infinite-scroll movers list.
+ *
+ * W4 pagination (user report 2026-06-12 "display in blocks of 30"): the MARKET
+ * movers list now paginates the universe-wide leaderboard in blocks of 30 via
+ * `useInfiniteQuery` + an IntersectionObserver sentinel — the SAME pattern as
+ * PredictionMarketsWidget. The S9 `/v1/market/top-movers` endpoint supports
+ * `limit` + `offset` (see lib/api/dashboard.ts getTopMovers), so each scroll
+ * fetches the next 30 movers of the sorted universe. Previously the list was
+ * hard-capped at 10 with no way to see deeper movers.
+ */
+const MOVERS_PAGE_SIZE = 30;
 
 /** Sparkline window — Round 1 spec: 5 trading days of closes per row. */
 const SPARKLINE_DAYS = 5;
@@ -74,27 +89,92 @@ export function TopMovers() {
   const { accessToken } = useAuth();
   const [type, setType] = useState<MoverType>("gainers");
 
-  // ── Movers query (per active tab) ─────────────────────────────────────────
+  // ── Movers query (per active tab, paginated) ──────────────────────────────
   // WHY fetch only the ACTIVE tab (not both): switching tabs is the explicit
   // user intent to see the other side; fetching the inactive side up-front
-  // doubles network cost for a view the user may never open. The hydrator
-  // seeds BOTH sides from the bundle anyway, so in practice the first tab
-  // switch is usually a cache hit.
+  // doubles network cost for a view the user may never open.
+  //
+  // W4 PAGINATION: replaces the single capped-at-10 `useQuery` with
+  // `useInfiniteQuery` so the trader can scroll past the first block into the
+  // deeper leaderboard. Each page is `MOVERS_PAGE_SIZE` movers fetched via the
+  // endpoint's `offset` param (same pattern as PredictionMarketsWidget).
+  //
+  // HYDRATION NOTE: the previous `useQuery` key matched DashboardBundleHydrator's
+  // seed (qk.dashboard.topMovers({type, limit:10, period:"1D"})) so the MARKET
+  // tab rendered from the cold-start bundle without a fetch. An infinite query
+  // stores `InfiniteData<TopMoversResponse>` under a DIFFERENT key shape, so the
+  // flat seed no longer matches and the first page is fetched here on mount
+  // (one request). The hydrator is owned by another surface — if the cold-start
+  // saving is wanted back, it should seed the infinite-query first page under
+  // this key; documented as a follow-up (see FINAL REPORT).
   // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    // WHY this exact key shape: must match DashboardBundleHydrator's
-    // setQueryData key so the bundle-seeded cache is actually read here.
-    queryKey: qk.dashboard.topMovers({ type, limit: MOVERS_LIMIT, period: "1D" }),
-    queryFn: () => createGateway(accessToken).getTopMovers(type, MOVERS_LIMIT),
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<
+    TopMoversResponse,
+    Error,
+    InfiniteData<TopMoversResponse>,
+    readonly unknown[],
+    number
+  >({
+    // WHY a dedicated infinite key (not qk.dashboard.topMovers): the cached
+    // shape is now InfiniteData, distinct from the flat seed — a separate key
+    // namespace avoids ever reading the flat hydrator seed as if it were paged.
+    queryKey: ["dashboard-top-movers-infinite", type],
+    queryFn: ({ pageParam }) =>
+      createGateway(accessToken).getTopMovers(type, MOVERS_PAGE_SIZE, "1D", pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      // WHY length-based: the S3 movers payload has no `total`, so we infer
+      // "more pages exist" from a FULL last page. A short page = the end of the
+      // (finite) universe. `offset` for the next page is the count loaded so far.
+      const loaded = allPages.reduce((n, p) => n + p.movers.length, 0);
+      return lastPage.movers.length === MOVERS_PAGE_SIZE ? loaded : undefined;
+    },
     enabled: !!accessToken,
     // WHY 60s: market movers are a macro view, not a real-time tick feed.
+    // (refetchInterval re-fetches ALL loaded pages — acceptable for the 1-3
+    // pages a trader typically scrolls; deeper pages age out via gcTime.)
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
 
-  // WHY useMemo: `?? []` would mint a fresh array reference each render and
-  // invalidate the downstream id-list memo (same pattern as PreMarketMovers).
-  const movers: Mover[] = useMemo(() => data?.movers ?? [], [data]);
+  // WHY useMemo: flattening `?? []` would mint a fresh array reference each
+  // render and invalidate the downstream id-list memo (PreMarketMovers pattern).
+  const movers: Mover[] = useMemo(
+    () => data?.pages.flatMap((p) => p.movers) ?? [],
+    [data],
+  );
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ────────────────────────
+  // Same pattern as PredictionMarketsWidget: a 1px div after the last row
+  // inside the SAME overflow-y-auto tab panel; when it becomes half-visible we
+  // pull the next page. The guard on !isFetchingNextPage prevents duplicate
+  // parallel fetches if the sentinel lingers in view during a fetch.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          void fetchNextPage();
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    // Disconnect on cleanup so the observer can't fetch a stale query after
+    // unmount (dashboard navigation) or after the active tab switches.
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Stable id list for the two batch lookups below.
   const moverIds = useMemo(
@@ -234,21 +314,46 @@ export function TopMovers() {
               </div>
             )}
 
-            {/* Data rows */}
-            {!isLoading && !isError && (
-              <div className="divide-y divide-border/30">
-                {movers.map((mover) => (
-                  <MoverRow
-                    key={mover.instrument_id}
-                    // WHY spread with price patch: see priceByInstrumentId WHY.
-                    mover={{
-                      ...mover,
-                      price: priceByInstrumentId.get(mover.instrument_id) ?? mover.price,
-                    }}
-                    sparkline={sparkSeries?.[mover.instrument_id]}
+            {/* Data rows + infinite-scroll sentinel (W4 pagination) */}
+            {!isLoading && !isError && movers.length > 0 && (
+              <>
+                <div className="divide-y divide-border/30">
+                  {movers.map((mover) => (
+                    <MoverRow
+                      key={mover.instrument_id}
+                      // WHY spread with price patch: see priceByInstrumentId WHY.
+                      mover={{
+                        ...mover,
+                        price: priceByInstrumentId.get(mover.instrument_id) ?? mover.price,
+                      }}
+                      sparkline={sparkSeries?.[mover.instrument_id]}
+                    />
+                  ))}
+                </div>
+
+                {/* Infinite-scroll sentinel — 1px tall (h-px) so it never shifts
+                    layout but is still intersectable inside the overflow-y-auto
+                    panel; rendered ONLY while more pages exist so the observer
+                    naturally stops at the end of the universe. Only the ACTIVE
+                    Radix tab panel is mounted, so the single `sentinelRef`
+                    attaches to the visible side's sentinel. */}
+                {hasNextPage && (
+                  <div
+                    ref={sentinelRef}
+                    data-testid="top-movers-sentinel"
+                    className="h-px"
+                    aria-hidden
                   />
-                ))}
-              </div>
+                )}
+
+                {/* In-flight indicator for the next page — keeps the bottom edge
+                    truthful while rows stream in (no spinner: §6.2 static rule). */}
+                {isFetchingNextPage && (
+                  <div className="flex h-[22px] items-center justify-center">
+                    <span className="text-[10px] text-muted-foreground-dim">loading more…</span>
+                  </div>
+                )}
+              </>
             )}
           </TabsContent>
         ))}

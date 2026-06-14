@@ -34,7 +34,9 @@
 "use client";
 // WHY "use client": uses useQuery, useQueries, useState, useRouter.
 
-import { useMemo, useState } from "react";
+// W4 pagination: useRef/useEffect added for the IntersectionObserver sentinel
+// that windows the gainers/losers columns in blocks of 30 (client-side).
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Briefcase } from "lucide-react";
@@ -60,6 +62,19 @@ import { cn } from "@/lib/utils";
 import { formatPrice } from "@/lib/format";
 
 type Period = "1D" | "1W" | "1M";
+
+/**
+ * PAGE_SIZE — block size for the client-side infinite-scroll window.
+ *
+ * W4 pagination (user report 2026-06-12 "display in blocks of 30"): the
+ * gainers/losers columns previously hard-capped each side at 5 with no way to
+ * see the rest of a larger book's movers. They now reveal in blocks of 30 per
+ * side via an IntersectionObserver sentinel inside the panel's own scroll area
+ * (same windowing pattern as WatchlistQuickViewWidget — the holdings list is
+ * already fetched in ONE response, so this windows a client-side array rather
+ * than paging the server).
+ */
+const PAGE_SIZE = 30;
 
 /**
  * HoldingsMover — internal row shape. Same general layout as the watchlist
@@ -203,20 +218,63 @@ export function HoldingsMoversWidget() {
     });
   }, [movers]);
 
-  const gainers = useMemo(
-    () =>
-      sorted
-        .filter((m) => m.changePct != null && m.changePct > 0)
-        .slice(0, 5),
+  // W4 pagination: keep the FULL ranked gainers/losers (no longer .slice(0,5))
+  // so deeper movers stay available; the visible slice is windowed below.
+  const allGainers = useMemo(
+    () => sorted.filter((m) => m.changePct != null && m.changePct > 0),
     [sorted],
+  );
+  const allLosers = useMemo(
+    () => sorted.filter((m) => m.changePct != null && m.changePct < 0),
+    [sorted],
+  );
+
+  // ── Infinite-scroll window state (W4 pagination) ──────────────────────────
+  // visibleCount grows by PAGE_SIZE per sentinel intersection and applies to
+  // BOTH columns symmetrically (the scroll area is shared). hasMore is true
+  // while either side still has rows beyond the window.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const hasMore =
+    visibleCount < allGainers.length || visibleCount < allLosers.length;
+
+  // WHY reset on the data identity changing: switching portfolio or period
+  // rebuilds the movers — rewind the window so the user starts at the top of
+  // the new list instead of mid-scroll. Keyed on lengths + first ids (cheap).
+  const moversIdentity =
+    `${period}:${allGainers.length}:${allLosers.length}:` +
+    `${allGainers[0]?.instrumentId ?? ""}:${allLosers[0]?.instrumentId ?? ""}`;
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [moversIdentity]);
+
+  const gainers = useMemo(
+    () => allGainers.slice(0, visibleCount),
+    [allGainers, visibleCount],
   );
   const losers = useMemo(
-    () =>
-      sorted
-        .filter((m) => m.changePct != null && m.changePct < 0)
-        .slice(0, 5),
-    [sorted],
+    () => allLosers.slice(0, visibleCount),
+    [allLosers, visibleCount],
   );
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ───────────────────────
+  // A 1px row after the columns inside the shared overflow-auto container;
+  // scrolling it into view reveals the next PAGE_SIZE rows in both columns.
+  // Purely client-side — the holdings array is already fully fetched.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore) {
+          setVisibleCount((c) => c + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore]);
 
   // ── 7. Loading composition ──────────────────────────────────────────────
   const periodDataLoading =
@@ -283,8 +341,9 @@ export function HoldingsMoversWidget() {
         </div>
       )}
 
-      {/* Content */}
-      <div className="flex min-h-0 flex-1 overflow-auto">
+      {/* Content — W4: flex-COL so the two-column row + the infinite-scroll
+          sentinel stack vertically inside the shared overflow-auto scroll area. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {/* ── Error state ────────────────────────────────────────────────── */}
         {/* WHY min-h-[140px]: 5 rows × h-7 (28px) = 140px; prevents the
             widget from collapsing when the portfolio fetch fails cold. */}
@@ -386,36 +445,66 @@ export function HoldingsMoversWidget() {
 
         {!isError && !noPortfolio && !noHoldings && !isLoading && (gainers.length > 0 || losers.length > 0) && (
           <>
-            <div className="flex-1 divide-y divide-border/30">
-              {gainers.map((m) => (
-                <MoverRow
-                  key={`g-${m.instrumentId}`}
-                  mover={m}
-                  side="gainer"
-                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
-                />
-              ))}
-              {gainers.length === 0 && (
-                <div className="px-2">
-                  <InlineEmptyState message="No gainers" />
-                </div>
-              )}
+            {/* Two-column row (gainers | losers) — wrapped so the sentinel below
+                spans the full width beneath both columns. */}
+            <div className="flex">
+              <div className="flex-1 divide-y divide-border/30">
+                {gainers.map((m) => (
+                  <MoverRow
+                    key={`g-${m.instrumentId}`}
+                    mover={m}
+                    side="gainer"
+                    onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                  />
+                ))}
+                {gainers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No gainers" />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
+                {losers.map((m) => (
+                  <MoverRow
+                    key={`l-${m.instrumentId}`}
+                    mover={m}
+                    side="loser"
+                    onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                  />
+                ))}
+                {losers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No losers" />
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
-              {losers.map((m) => (
-                <MoverRow
-                  key={`l-${m.instrumentId}`}
-                  mover={m}
-                  side="loser"
-                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
-                />
-              ))}
-              {losers.length === 0 && (
-                <div className="px-2">
-                  <InlineEmptyState message="No losers" />
+
+            {/* ── Infinite-scroll sentinel + footer (W4 pagination) ──────────
+                The 1px sentinel sits beneath both columns inside the SAME
+                overflow-auto scroll area; scrolling toward it reveals the next
+                PAGE_SIZE rows in both columns. The caption tells the user how
+                many of each side are shown; when everything is revealed the
+                sentinel is gone and the caption reads "all shown". */}
+            {hasMore ? (
+              <div
+                ref={sentinelRef}
+                data-testid="holdings-movers-sentinel"
+                className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim"
+                aria-hidden
+              >
+                <span className="font-mono tabular-nums">
+                  {Math.min(visibleCount, allGainers.length)}/{allGainers.length} ·{" "}
+                  {Math.min(visibleCount, allLosers.length)}/{allLosers.length} · scroll for more
+                </span>
+              </div>
+            ) : (
+              (allGainers.length > PAGE_SIZE || allLosers.length > PAGE_SIZE) && (
+                <div className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
+                  <span className="font-mono tabular-nums">all shown</span>
                 </div>
-              )}
-            </div>
+              )
+            )}
           </>
         )}
       </div>
