@@ -962,3 +962,16 @@ class TestIsValidLlmAlias:
 
         assert not _is_valid_llm_alias("ignore me")
         assert not _is_valid_llm_alias("IgNoRe ThIs")
+
+
+def test_ticker_notation_variant_swaps_dot_and_dash():
+    """Share-class tickers get their dot/dash twin as a notation variant (FR-11 follow-up)."""
+    from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+        _ticker_notation_variant,
+    )
+
+    assert _ticker_notation_variant("BRK-A") == "BRK.A"
+    assert _ticker_notation_variant("BRK.B") == "BRK-B"
+    assert _ticker_notation_variant("bf.b") == "BF-B"  # case-normalised
+    assert _ticker_notation_variant("AAPL") is None  # no separator -> no twin
+    assert _ticker_notation_variant("") is None

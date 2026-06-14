@@ -95,6 +95,29 @@ def _is_valid_llm_alias(alias: str) -> bool:
     return all(stop not in upper for stop in _LLM_ALIAS_STOPWORDS)
 
 
+def _ticker_notation_variant(ticker: str) -> str | None:
+    """Return the dot/dash notation variant of a share-class ticker, or None.
+
+    Share-class tickers are written inconsistently across data sources — dash
+    (``BRK-A``) vs dot (``BRK.A``).  market_data instruments + canonical_entities
+    were deduped to a single survivor whose *primary* ticker notation differs by
+    class (e.g. ``BRK-A`` for Class A, ``BRK.B`` for Class B — see FR-11 / the
+    instrument dedup), so we deliberately do NOT rewrite the primary ticker.
+    Instead we register the OTHER notation as a mechanical TICKER alias so a news
+    mention using either form resolves to the one canonical via the provisional
+    path's alias dedup — preventing a re-minted notation-twin canonical.
+
+    Returns the swapped form (``-``<->``.``) when exactly one separator is present
+    and the swap actually changes the string; otherwise None.
+    """
+    t = ticker.upper().strip()
+    if "-" in t and "." not in t:
+        return t.replace("-", ".")
+    if "." in t and "-" not in t:
+        return t.replace(".", "-")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Minimal no-op UoW (same pattern as existing consumers)
 # ---------------------------------------------------------------------------
@@ -377,9 +400,21 @@ WHERE entity_id = :entity_id
             if ticker:
                 t = str(ticker).upper()
                 await _try_insert_alias(t, t, "TICKER")
+                # Register the dot/dash notation twin as a TICKER alias so a news
+                # mention in the OTHER notation resolves to this one canonical
+                # (prevents a re-minted notation-twin — the market-data instrument
+                # dedup + UNIQUE(isin,exchange) stops it on the instrument side; this
+                # closes the news/provisional re-mint path). Does NOT change the
+                # primary ticker (survivor notation differs by share class).
+                variant = _ticker_notation_variant(t)
+                if variant:
+                    await _try_insert_alias(variant, variant, "TICKER")
                 if exchange:
                     exc_ticker = f"{exchange}:{ticker}".upper()
                     await _try_insert_alias(exc_ticker, exc_ticker, "TICKER")
+                    if variant:
+                        exc_variant = f"{exchange}:{variant}".upper()
+                        await _try_insert_alias(exc_variant, exc_variant, "TICKER")
 
             if isin:
                 i = str(isin).upper()
