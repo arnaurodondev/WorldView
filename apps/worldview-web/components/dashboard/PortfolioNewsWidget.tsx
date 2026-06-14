@@ -150,19 +150,37 @@ export function PortfolioNewsWidget() {
   }, [holdingsResp]);
 
   // ── 2. Per-holding entity list (drives the news fan-out) ────────────────
-  // We pair each holding's entity_id with its ticker so that, after we fetch
-  // each entity's news, we can stamp the article with the OWNING ticker for
-  // the per-ticker dropdown filter (the per-entity feed doesn't carry a
+  // We pair each holding's NEWS entity id with its ticker so that, after we
+  // fetch each entity's news, we can stamp the article with the OWNING ticker
+  // for the per-ticker dropdown filter (the per-entity feed doesn't carry a
   // primary_entity_symbol the way the global feed does).
+  //
+  // ── W4 ROOT-CAUSE FIX (2026-06-14, "no portfolio news" report) ──────────
+  // We fan out on `h.instrument_id`, NOT `h.entity_id`. Per knowledge-graph
+  // M-017 (and PRD-0089 F2), for a TRADABLE security the canonical entity id
+  // that news is tagged to IS the instrument_id — the same id the Instrument
+  // page's News tab and `/v1/instruments/{ticker}/page-bundle` use to resolve
+  // `/v1/news/entity/{id}`. The `entity_id` column on the S1 holdings payload
+  // is stale seed data (`11111111-000X-…`) that 404s in the graph and carries
+  // ZERO articles, so the previous fan-out on `h.entity_id` returned 0 for
+  // every holding → the widget showed "No recent news" despite 10 well-known
+  // holdings. Live verification 2026-06-14: `/v1/news/entity/<instrument_id>`
+  // returns 278 (AAPL) / 292 (TSLA) / 515 (NVDA) articles, while
+  // `/v1/news/entity/<entity_id 11111111-…>` returns 0 and the entity 404s.
+  // We fall back to `entity_id` only if a holding somehow lacks an
+  // instrument_id (defensive; never observed for tradable demo holdings).
   const holdingEntities = useMemo(() => {
     const seen = new Set<string>();
     const out: { entityId: string; ticker: string }[] = [];
     for (const h of holdingsResp?.holdings ?? []) {
-      // Skip holdings with no resolved entity_id (brokerage imports awaiting
-      // enrichment) — we have no entity feed to call for them.
-      if (!h.entity_id || seen.has(h.entity_id)) continue;
-      seen.add(h.entity_id);
-      out.push({ entityId: h.entity_id, ticker: h.ticker ?? "" });
+      // The canonical news entity for a tradable holding is its instrument_id
+      // (M-017). Fall back to the legacy entity_id only when no instrument_id
+      // is present (brokerage imports awaiting enrichment).
+      const newsEntityId = h.instrument_id || h.entity_id;
+      // Skip holdings with no resolvable id — we have no feed to call.
+      if (!newsEntityId || seen.has(newsEntityId)) continue;
+      seen.add(newsEntityId);
+      out.push({ entityId: newsEntityId, ticker: h.ticker ?? "" });
     }
     return out;
   }, [holdingsResp]);

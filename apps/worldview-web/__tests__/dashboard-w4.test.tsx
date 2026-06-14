@@ -238,7 +238,7 @@ describe("PortfolioNewsWidget — portfolio-scoped (per-holding) news", () => {
 
     // A portfolio-relevant headline (tied to a held entity) appears.
     await waitFor(() => {
-      expect(screen.getByText("Headline for ent-0")).toBeInTheDocument();
+      expect(screen.getByText("Headline for ins-0")).toBeInTheDocument();
     });
     // getEntityNews was called once per holding (3), and the GLOBAL feed
     // getTopNews was NOT used as the source.
@@ -276,10 +276,12 @@ describe("PortfolioNewsWidget — portfolio-scoped (per-holding) news", () => {
 
     render(<PortfolioNewsWidget />, { wrapper });
 
-    // The ent-0 (NVDA) article renders with a NVDA ticker badge that links to
-    // the instrument page.
+    // The first holding's (NVDA) article renders with a NVDA ticker badge that
+    // links to the instrument page. NOTE: the widget fans out on instrument_id
+    // (ins-N) per M-017 — holdings' entity_id is stale orphan seed data — so the
+    // mock keys the headline on the instrument_id.
     await waitFor(() => {
-      expect(screen.getByText("Headline for ent-0")).toBeInTheDocument();
+      expect(screen.getByText("Headline for ins-0")).toBeInTheDocument();
     });
     const badges = screen.getAllByTestId("portfolio-news-ticker-badge");
     const labels = badges.map((b) => b.textContent);
