@@ -39,6 +39,32 @@ is unchanged.
 
 ## instrument_briefing
 
+### 4.2 — 2026-06-14 (definition-first Entity Overview ordering)
+
+- **Enforced Definition-first ordering in the Entity Overview section.** In live
+  tests the LLM opened "Entity Overview" with financial metrics (market cap, P/E,
+  revenue) even though the `Definition (business identity)` KG description was
+  available. v4.2 adds an explicit `## Entity Overview Section — MANDATORY
+  ORDERING` rule that prescribes a three-step sequence: (1) OPEN with the
+  Definition — first sentence states what the company IS in plain language, drawn
+  from the KG `definition` description and cited; (2) LAYER the narrative —
+  competitive position / AI/EV/sector exposure from the `Background thematic
+  context`, with its staleness caveat; (3) SUPPORT with fundamentals — market
+  cap, revenue, ratios as supporting evidence only, never the opening line.
+- **Explicitly forbids opening Entity Overview with financial metrics.** The new
+  rule reads: "DO NOT open Entity Overview with a stock price, market cap, P/E
+  ratio, or any other financial metric — these belong to 'Price & Fundamentals',
+  not the overview." This redirects metric-first behaviour observed in live briefs
+  without removing any financial content from the brief.
+- **Staleness caveat for narrative preserved.** The `MUST NOT present as a current
+  catalyst` instruction from v4.1 is retained unchanged; the new ordering rule
+  adds a `[staleness caveat if narrative is >1 week old]` hint alongside it.
+- **No other section changes.** LEAD/DETAILS structure, citation rules, style,
+  and all other section specs are unchanged.
+- **Impact:** flips the content hash; Entity Overview opening sentence now
+  describes the business before any financial metric. The 100% citation gate is
+  unaffected — both Definition and narrative items carry `[cN]` markers.
+
 ### 4.1 — 2026-06-14 (PLAN-0107 follow-up — brief vector descriptions, P1)
 
 - **Fed two KG "vector" descriptions into the instrument brief's entity context.**

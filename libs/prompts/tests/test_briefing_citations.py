@@ -9,9 +9,10 @@ every bullet. These tests verify that:
     stripped as orphans and morning-brief per-bullet citations never
     resolved. v4.7 standardises on [cN] across the citation rules, the
     summary directive, and both few-shot examples.
-  * INSTRUMENT_BRIEFING v4.0 continues to use the legacy [cN] marker form +
-    the LEAD/DETAILS template (PLAN-0062-W4); the instrument brief is a
-    separate pipeline and was not part of the PLAN-0103 W2 cleanup.
+  * INSTRUMENT_BRIEFING v4.2 continues to use the [cN] marker form +
+    the LEAD/DETAILS template (PLAN-0062-W4); additionally enforces a
+    definition-first Entity Overview ordering so the model opens with the
+    business identity (KG Definition) before any financial metrics appear.
 """
 
 from __future__ import annotations
@@ -106,7 +107,8 @@ class TestMorningBriefingCitationInstructions:
 
 
 class TestInstrumentBriefingCitationInstructions:
-    """INSTRUMENT_BRIEFING v4.0 must instruct the LLM to embed [cN] markers."""
+    """INSTRUMENT_BRIEFING v4.2 must instruct the LLM to embed [cN] markers
+    and enforce definition-first Entity Overview ordering."""
 
     def _render(self) -> str:
         return INSTRUMENT_BRIEFING.render(
@@ -128,21 +130,58 @@ class TestInstrumentBriefingCitationInstructions:
         result = self._render()
         assert "## LEAD" in result
 
-    def test_version_is_at_least_400(self) -> None:
-        """INSTRUMENT_BRIEFING must remain ≥ v4.0 (LEAD + [cN] gate, PLAN-0062-W4).
+    def test_version_is_42(self) -> None:
+        """INSTRUMENT_BRIEFING must be exactly v4.2 (definition-first Entity Overview).
 
-        Bumped to 4.1 by the PLAN-0107 follow-up (entity definition + narrative
-        context); the LEAD/citation contract this suite guards is unchanged.
+        v4.0: LEAD + [cN] gate (PLAN-0062-W4).
+        v4.1: KG definition + narrative context (PLAN-0107 follow-up).
+        v4.2: definition-FIRST ordering for Entity Overview — the model must open
+              the Overview with the business identity (Definition), not financials.
+        Pinning the exact version catches accidental rollback or drift.
         """
-        major, minor = (int(p) for p in INSTRUMENT_BRIEFING.version.split(".")[:2])
-        assert (major, minor) >= (4, 0)
+        assert INSTRUMENT_BRIEFING.version == "4.2"
 
     def test_documents_entity_definition_and_narrative(self) -> None:
-        """v4.1 must instruct the model on the KG definition + background narrative."""
+        """v4.1+ must instruct the model on the KG definition + background narrative."""
         result = self._render()
         # Definition framing for the Entity Overview.
         assert "Definition (business identity)" in result
         # Background narrative with the staleness caveat (must not be a catalyst).
         assert "Background thematic context" in result
         assert "STALE" in result
-        assert "MUST NOT present it as a current" in result
+        assert "MUST NOT present" in result
+
+    def test_entity_overview_definition_first_ordering(self) -> None:
+        """v4.2 must mandate definition-first ordering in the Entity Overview section.
+
+        WHY: In live tests the LLM opened Entity Overview with financial metrics
+        (market cap, P/E, revenue) even though the KG Definition was available.
+        v4.2 adds an explicit MANDATORY ORDERING rule so the model:
+          1. OPENS with the Definition (business identity in plain language).
+          2. LAYERS the narrative (thematic/sector/competitive context).
+          3. SUPPORTS with fundamentals — as evidence, not the lead.
+        These assertions pin the new ordering contract so a future edit cannot
+        silently revert to the metric-first pattern (R19).
+        """
+        result = self._render()
+        # The mandatory ordering section heading must be present.
+        assert "Entity Overview Section — MANDATORY ORDERING" in result
+        # The three-step sequence must be spelled out.
+        assert "OPEN with the Definition" in result
+        assert "LAYER the narrative" in result
+        assert "SUPPORT with fundamentals" in result
+        # The explicit anti-pattern prohibition must be present.
+        assert "DO NOT open Entity Overview with a stock price" in result
+        # Fundamentals must be labelled as supporting evidence, not the lead.
+        assert "EVIDENCE, not the lead" in result
+
+    def test_entity_overview_narrative_staleness_caveat_preserved(self) -> None:
+        """v4.2 must retain the v4.1 staleness caveat for the background narrative.
+
+        The narrative is regenerated weekly; presenting it as a current catalyst
+        is a factual-accuracy hazard. This test guards the caveat from being
+        accidentally dropped when the ordering language was strengthened.
+        """
+        result = self._render()
+        assert "MUST NOT present" in result
+        assert "current catalyst" in result

@@ -14,6 +14,12 @@ VERSION HISTORY
         them for the "what this company is / why it matters" framing, with an
         explicit caveat that the background narrative may be ~1 week+ stale and
         must NOT be presented as a current catalyst.
+- 4.2 — Definition-first Entity Overview ordering: strengthened the Entity
+        Overview section guidance so the model OPENS with the Definition
+        (business identity), THEN layers the narrative's thematic context
+        (competitive position, AI/EV/sector exposure), and ONLY THEN references
+        fundamentals as supporting evidence — not as the opening. Fundamentals
+        remain cited in the body; they are not the lead sentence of the Overview.
 """
 
 from __future__ import annotations
@@ -22,13 +28,13 @@ from prompts._base import PromptTemplate
 
 INSTRUMENT_BRIEFING = PromptTemplate(
     name="instrument_briefing",
-    # Bumped 4.0 → 4.1: PLAN-0107 follow-up — entity definition + narrative context.
-    version="4.1",
+    # Bumped 4.1 → 4.2: definition-first Entity Overview ordering.
+    version="4.2",
     description=(
-        "Institutional-grade entity briefing v4.1 — LEAD + DETAILS with [cN] "
+        "Institutional-grade entity briefing v4.2 — LEAD + DETAILS with [cN] "
         "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4) "
-        "+ KG definition/narrative context for the 'what this company is' framing "
-        "(PLAN-0107 follow-up)"
+        "+ KG definition/narrative context with definition-FIRST Entity Overview "
+        "ordering (fundamentals as supporting evidence, not the lead)"
     ),
     template=(
         "You are a senior equity research associate writing a one-page briefing for a "
@@ -69,15 +75,31 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "## Using Entity Definition & Background Context\n"
         "The <entity_context> block may include two knowledge-graph descriptions:\n"
         "- 'Definition (business identity)': what the company IS — its core business, "
-        "products, and markets. Use this to frame the 'Entity Overview' section so the "
-        "reader knows what this company is and why it matters.\n"
+        "products, and markets. This is the AUTHORITATIVE source for the opening of the "
+        "'Entity Overview' section. The FIRST sentence of Entity Overview MUST be drawn "
+        "from this Definition: state the company's core business in plain language before "
+        "any financial metrics appear.\n"
         "- 'Background thematic context': competitive position, secular themes "
-        "(e.g. AI/EV exposure), and strategic positioning. This is BACKGROUND only and "
-        "may be up to ~1 week (or more) STALE — it is NOT recent news. You MAY use it to "
-        "frame why a development matters, but you MUST NOT present it as a current "
-        "catalyst, a today event, or a recent change. Recent catalysts come ONLY from "
-        "the news and events blocks.\n"
+        "(e.g. AI/EV exposure), and strategic positioning. Use this as the SECOND layer "
+        "of the Entity Overview — after the Definition has established what the company "
+        "IS, the narrative explains why it matters (thematic tailwinds, sector exposure, "
+        "competitive moat). This is BACKGROUND only and may be up to ~1 week (or more) "
+        "STALE — it is NOT recent news. You MUST NOT present it as a current catalyst, "
+        "a today event, or a recent change. Recent catalysts come ONLY from the news and "
+        "events blocks.\n"
         "Both items are cited like any other context item using their [cN] marker.\n\n"
+        "## Entity Overview Section — MANDATORY ORDERING\n"
+        "The 'Entity Overview' section in ## DETAILS MUST follow this sequence:\n"
+        "  1. OPEN with the Definition: one sentence stating what the company IS and "
+        "what it does (drawn from 'Definition (business identity)'). [cN required]\n"
+        "  2. LAYER the narrative: one bullet on thematic context — competitive position, "
+        "AI/EV/sector exposure, strategic moat (drawn from 'Background thematic context'). "
+        "[cN required; add staleness caveat if narrative is >1 week old]\n"
+        "  3. SUPPORT with fundamentals: remaining bullets may reference market cap, "
+        "revenue, or key ratios as supporting evidence for the business profile. "
+        "Fundamentals are EVIDENCE, not the lead.\n"
+        "DO NOT open Entity Overview with a stock price, market cap, P/E ratio, or any "
+        "other financial metric — these belong to 'Price & Fundamentals', not the overview.\n\n"
         "## Briefing Sections in ## DETAILS\n"
         "Include sections for: Entity Overview, Price & Fundamentals, Recent Developments, "
         "Key Events, Entity Relationships. Skip any section where context is empty.\n"
