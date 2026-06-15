@@ -20,6 +20,7 @@ Processing:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -50,6 +51,7 @@ def _utc_iso_now() -> str:
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
     from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
@@ -151,6 +153,11 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         session_factory:  async_sessionmaker for intelligence_db.
         llm_client:       FallbackChainClient for alias generation + embedding.
         definition_worker: DefinitionRefreshWorker to trigger definition embed.
+        narrative_use_case: Optional GenerateNarrativeUseCase to kick off
+                            create-time narrative generation for newly-minted
+                            entities (2026-06-14 P2 — empty-entity-descriptions
+                            investigation).  When None the trigger is skipped and
+                            narratives rely solely on the periodic worker (13D-3).
         dedup_client:     Optional Valkey dedup client.
 
     """
@@ -161,6 +168,7 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         definition_worker: DefinitionRefreshWorker | None = None,
+        narrative_use_case: GenerateNarrativeUseCase | None = None,
         *,
         dedup_client: Any | None = None,
     ) -> None:
@@ -168,6 +176,15 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         self._sf = session_factory
         self._llm = llm_client
         self._def_worker = definition_worker
+        # 2026-06-14 P2: create-time narrative trigger.  Optional so existing
+        # callers / tests that don't wire it keep working unchanged.  Fired
+        # fire-and-forget (background task) for brand-new mints so the consumer
+        # critical path stays responsive — the use case is itself idempotent
+        # (snapshot-hash check) and BP-114-safe (template fallback, never empty).
+        self._narrative_use_case = narrative_use_case
+        # Track background narrative tasks so they aren't garbage-collected mid-flight
+        # (asyncio only holds a weak reference to a bare create_task() result).
+        self._narrative_tasks: set[asyncio.Task[Any]] = set()
         self._dedup_client = dedup_client
         self._dedup_prefix = f"kg:inst:{config.group_id}"
 
@@ -250,6 +267,12 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             # only (the BP-124 path).
             existing = await entity_repo.get(instrument_id)
             entity_id: UUID
+            # 2026-06-14 P2: only kick off the create-time narrative trigger on a
+            # FIRST-time canonical enrichment (brand-new mint OR upsert-after-
+            # discover).  Plain replays (entity exists and is already enriched)
+            # return early below and never reach the trigger.  The flag defaults
+            # to False and is flipped True on the two first-enrichment paths.
+            narrative_eligible = False
             if existing:
                 metadata_existing = existing.get("metadata") or {}
                 needs_enrichment = isinstance(metadata_existing, dict) and bool(
@@ -282,6 +305,10 @@ WHERE entity_id = :entity_id
                     )
                     # Continue to step 2 (alias enrichment) using existing entity_id
                     entity_id = instrument_id
+                    # Upsert-after-discover is a first-time enrichment of a
+                    # placeholder canonical → narrative is absent, so it is
+                    # eligible for the create-time trigger.
+                    narrative_eligible = True
                 else:
                     entity_id_existing: UUID = existing["entity_id"]  # type: ignore[assignment]
                     # Re-trigger embedding if entity exists but definition embedding
@@ -335,6 +362,9 @@ WHERE entity_id = :entity_id
                     isin=isin,
                     exchange=exchange,
                 )
+                # Brand-new canonical → narrative is absent, eligible for the
+                # create-time trigger (2026-06-14 P2).
+                narrative_eligible = True
 
             # Continue with steps 2..5 below for BOTH the brand-new path and the
             # UPSERT-after-discover path so that the rich alias suite is inserted
@@ -467,12 +497,68 @@ WHERE entity_id = :entity_id
         if description and self._def_worker:
             await self._def_worker.refresh_for_entity(entity_id, description)
 
+        # Step 6 (2026-06-14 P2): create-time narrative trigger.  Mirrors the
+        # definition embed above (Step 5) so a newly-minted instrument gets its
+        # `narrative` source_text promptly instead of waiting up to a full
+        # periodic-worker cycle (Worker 13D-3).  Only fires on first-time
+        # enrichment paths (brand-new mint / upsert-after-discover) — see the
+        # `narrative_eligible` flag.  Fire-and-forget so the LLM call never
+        # blocks the consumer critical path; the use case is idempotent
+        # (snapshot-hash skip) and BP-114-safe (template fallback, never empty),
+        # so a replay that slips through or an LLM failure cannot corrupt state.
+        if narrative_eligible and self._narrative_use_case is not None:
+            self._kick_off_narrative(entity_id)
+
         logger.info(  # type: ignore[no-any-return]
             "instrument_entity_created",
             instrument_id=str(instrument_id),
             entity_id=str(entity_id),
             canonical_name=canonical_name,
         )
+
+    def _kick_off_narrative(self, entity_id: UUID) -> None:
+        """Schedule background create-time narrative generation for *entity_id*.
+
+        Runs the narrative use case as a detached asyncio task so the consumer's
+        critical path (commit + next poll) is never blocked by the LLM call.
+        The task result/exception is consumed in ``_run_narrative`` so failures
+        are logged and swallowed (BP-114) rather than crashing the consumer or
+        surfacing as an un-awaited-task warning.
+        """
+        task = asyncio.create_task(self._run_narrative(entity_id))
+        # Hold a strong reference until the task finishes; asyncio only keeps a
+        # weak ref, so without this the task could be GC'd before completion.
+        self._narrative_tasks.add(task)
+        task.add_done_callback(self._narrative_tasks.discard)
+
+    async def _run_narrative(self, entity_id: UUID) -> None:
+        """Execute the narrative use case for a new entity, swallowing failures.
+
+        Idempotency, retry, and template fallback all live inside
+        ``GenerateNarrativeUseCase.execute`` — this wrapper only guards against
+        the use case raising (network error, DB hiccup) so a single bad entity
+        never crashes the consumer process.  Uses the ``INITIAL`` reason to
+        distinguish create-time generation from the weekly PERIODIC_REFRESH.
+        """
+        if self._narrative_use_case is None:  # pragma: no cover — guarded by caller
+            return
+        try:
+            generated = await self._narrative_use_case.execute(
+                entity_id=entity_id,
+                tenant_id=None,
+                reason="INITIAL",
+            )
+            logger.info(  # type: ignore[no-any-return]
+                "instrument_consumer_narrative_triggered",
+                entity_id=str(entity_id),
+                generated=generated,
+            )
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "instrument_consumer_narrative_trigger_failed",
+                entity_id=str(entity_id),
+                error=str(exc),
+            )
 
     async def _create_new_canonical(
         self,

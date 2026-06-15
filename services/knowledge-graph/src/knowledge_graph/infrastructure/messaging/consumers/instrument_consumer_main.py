@@ -65,7 +65,10 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, read_factory = _build_factories(settings)
+    # Read-replica factory for the narrative use case's READ session (R27).  Falls
+    # back to the write factory when no replica is configured.
+    _read_factory = read_factory if read_factory is not None else write_factory
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
     # FallbackChainClient with no adapters — ML calls return None (graceful no-op)
@@ -88,6 +91,60 @@ async def main() -> None:
         embedding_model_id=settings.embedding_model_id,
     )
 
+    # 2026-06-14 P2: build the narrative use case so newly-minted instruments get
+    # their `narrative` source_text at create-time instead of waiting up to a full
+    # Worker 13D-3 cycle.  Construction mirrors the scheduler factory
+    # (infrastructure/scheduler/scheduler.py): a dedicated DeepInfra chat client
+    # bypasses the JSON-mode extraction path (which forces template-v1 for ~97% of
+    # entities), and concrete repo classes are injected to honour R12 (no infra
+    # imports inside the application-layer use case).  Wrapped defensively so a
+    # missing API key or import error never blocks the consumer from starting —
+    # it simply falls back to the periodic worker.
+    narrative_use_case = None
+    try:
+        from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
+        from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+            NarrativeRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository
+
+        narrative_model_id = getattr(
+            settings,
+            "narrative_llm_model_id",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        )
+        narrative_chat_client = None
+        try:
+            api_key = settings.deepinfra_api_key.get_secret_value()
+        except Exception:
+            api_key = ""
+        if api_key:
+            from knowledge_graph.infrastructure.llm.narrative_chat import DeepInfraNarrativeChatClient
+
+            narrative_chat_client = DeepInfraNarrativeChatClient(
+                api_key=api_key,
+                model_id=narrative_model_id,
+                base_url=getattr(
+                    settings,
+                    "deepinfra_extraction_base_url",
+                    "https://api.deepinfra.com/v1/openai",
+                ),
+            )
+
+        narrative_use_case = GenerateNarrativeUseCase(
+            write_session_factory=write_factory,
+            read_session_factory=_read_factory,
+            narrative_llm_model_id=narrative_model_id,
+            llm_client=llm_client,  # may degrade to template-v1 if chat client absent
+            narrative_repo_class=NarrativeRepository,
+            outbox_repo_class=OutboxRepository,
+            narrative_chat_client=narrative_chat_client,
+        )
+        log.info("instrument_consumer_narrative_trigger_enabled", chat_client=bool(narrative_chat_client))
+    except Exception as exc:
+        log.warning("instrument_consumer_narrative_trigger_disabled", error=str(exc))
+        narrative_use_case = None
+
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=f"{settings.kafka_consumer_group}-instrument",
@@ -98,6 +155,7 @@ async def main() -> None:
         session_factory=write_factory,
         llm_client=llm_client,
         definition_worker=definition_worker,
+        narrative_use_case=narrative_use_case,
         dedup_client=valkey,
     )
 
