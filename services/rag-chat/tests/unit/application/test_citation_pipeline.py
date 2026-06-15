@@ -375,6 +375,201 @@ class TestMaterializeBriefCitations:
             assert len(cit.snippet) <= 400
 
 
+# ── KG definition/narrative as citable sources (PLAN-0107 follow-up) ──────────
+
+
+class TestKGDescriptionCitations:
+    """The instrument-brief KG definition + narrative must become citable [cN].
+
+    Root cause this guards: previously ``materialize_brief_citations`` only
+    numbered news/events/alerts, so an Entity Overview bullet grounded on the
+    KG definition/narrative had no valid [cN] to cite and was dropped as uncited
+    by ``backfill_uncited_bullets`` — the Overview rendered with 0 bullets.
+    """
+
+    def _instrument_ctx(
+        self,
+        *,
+        articles: int = 2,
+        events: int = 1,
+        description: str | None = "Apple designs and sells consumer electronics, software, and services.",
+        narrative: str | None = "Competes with Samsung and Google; growing AI and services exposure.",
+    ) -> object:
+        """Build a REAL BriefingContext instrument ctx (not a MagicMock).
+
+        We use real domain objects so the strict ``isinstance(EntityGraphSnapshot)``
+        guard in materialize_brief_citations activates (MagicMock ctx would be
+        excluded — that exclusion is the morning-brief safety property).
+        """
+        from datetime import UTC, datetime
+        from uuid import uuid4
+
+        from rag_chat.application.models.briefing_context import (
+            BriefingContext,
+            EntityGraphSnapshot,
+            EventSummary,
+            NewsArticleSummary,
+        )
+        from rag_chat.domain.enums import BriefingType
+
+        news = [
+            NewsArticleSummary(
+                article_id=uuid4(),
+                title=f"Apple headline {i}",
+                url=f"https://news.example.com/{i}",
+            )
+            for i in range(articles)
+        ]
+        evs = [
+            EventSummary(
+                event_id=uuid4(),
+                event_type="EARNINGS",
+                subject_entity_id=uuid4(),
+                event_text=f"Apple event {i}",
+                extraction_confidence=0.9,
+            )
+            for i in range(events)
+        ]
+        eg = EntityGraphSnapshot(
+            entity_id="ent-apple",
+            canonical_name="Apple Inc.",
+            entity_type="company",
+            ticker="AAPL",
+            description=description,
+            relationships=[],
+        )
+        return BriefingContext(
+            briefing_type=BriefingType.INSTRUMENT,
+            entity_id="ent-apple",
+            news_articles=news,
+            active_alerts=[],
+            quotes={},
+            recent_events=evs,
+            entity_graph=eg,
+            entity_narrative=narrative,
+            gathered_at=datetime.now(tz=UTC),
+        )
+
+    def test_definition_and_narrative_appended_after_news_events(self) -> None:
+        """KG definition + narrative get the NEXT [cN] indices after news+events."""
+        ctx = self._instrument_ctx(articles=2, events=1)
+        cits = _materialize_brief_citations(ctx)
+        # 2 news (c1,c2) + 1 event (c3) + definition (c4) + narrative (c5)
+        assert len(cits) == 5
+        assert cits[0].source_type == "article"
+        assert cits[1].source_type == "article"
+        assert cits[2].source_type == "event"
+        # definition + narrative are last, carry the human KG labels
+        assert cits[3].title == "Entity definition (KG)"
+        assert "consumer electronics" in cits[3].snippet
+        assert cits[4].title == "Thematic context (KG)"
+        assert "Samsung" in cits[4].snippet
+        # narrative snippet carries the staleness caveat
+        assert "not a recent catalyst" in cits[4].snippet
+
+    def test_formatter_advertises_same_indices_as_resolver(self) -> None:
+        """The [cN] the formatter prints == the index the parser resolves (no mismatch)."""
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            BriefContextFormatter,
+        )
+
+        ctx = self._instrument_ctx(articles=2, events=1)
+        formatter = BriefContextFormatter()
+        entity_text = formatter.format_entity_context(ctx)
+        # Definition advertised at [c4], narrative at [c5] (after 2 news + 1 event).
+        assert "[c4] Definition (business identity)" in entity_text
+        assert "[c5] Background thematic context" in entity_text
+
+        # The parser resolves those exact markers to the KG citations.
+        cits = _materialize_brief_citations(ctx)
+        assert cits[3].title == "Entity definition (KG)"  # index 3 == [c4]
+        assert cits[4].title == "Thematic context (KG)"  # index 4 == [c5]
+
+    def test_overview_bullet_citing_definition_is_not_dropped(self) -> None:
+        """An Entity Overview bullet citing the definition [c4] survives backfill."""
+        ctx = self._instrument_ctx(articles=2, events=1)
+        cits = _materialize_brief_citations(ctx)
+        # LLM output: Entity Overview opens from the definition [c4] + narrative [c5].
+        markdown = (
+            "## LEAD\n"
+            "Apple is a consumer-electronics leader. [c4]\n\n"
+            "---\n\n"
+            "## DETAILS\n"
+            "### Entity Overview\n"
+            "- Apple designs and sells consumer electronics and services. [c4]\n"
+            "- Strong AI and services thematic exposure versus Samsung and Google. [c5]\n"
+        )
+        _lead, _lead_cits, sections = _parse_sections_with_citations(markdown, cits)
+        sections = _backfill_uncited_bullets(sections, cits)
+        # The Entity Overview section survived with BOTH bullets (not dropped).
+        assert len(sections) == 1
+        assert sections[0].title == "Entity Overview"
+        assert len(sections[0].bullets) == 2
+        # The bullets resolved to the KG citations.
+        assert sections[0].bullets[0].citations[0].title == "Entity definition (KG)"
+        assert sections[0].bullets[1].citations[0].title == "Thematic context (KG)"
+
+    def test_definition_only_when_narrative_absent(self) -> None:
+        """Missing narrative → only the definition citation is appended (no gap)."""
+        ctx = self._instrument_ctx(articles=1, events=0, narrative=None)
+        cits = _materialize_brief_citations(ctx)
+        # 1 news (c1) + definition (c2); no narrative citation.
+        assert len(cits) == 2
+        assert cits[1].title == "Entity definition (KG)"
+        # Formatter advertises the definition at [c2] (after the single news item).
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            BriefContextFormatter,
+        )
+
+        entity_text = BriefContextFormatter().format_entity_context(ctx)
+        assert "[c2] Definition (business identity)" in entity_text
+        assert "Background thematic context" not in entity_text
+
+
+# ── morning-brief numbering must NOT regress ──────────────────────────────────
+
+
+class TestMorningNumberingUnchanged:
+    """Morning-brief contexts (no entity_graph / narrative) must be byte-identical.
+
+    The KG-citation addition is guarded by ``isinstance(EntityGraphSnapshot)`` +
+    ``isinstance(str)`` so morning ctx (and MagicMock ctx) never gain KG items.
+    """
+
+    def _morning_ctx(self) -> object:
+        from unittest.mock import MagicMock
+
+        a = MagicMock()
+        a.article_id = "art-1"
+        a.title = "Morning headline"
+        a.summary = "Summary."
+        a.url = "https://x/1"
+        a.published_at = None
+        a.display_relevance_score = None
+        ev = MagicMock()
+        ev.event_id = "evt-1"
+        ev.event_type = "MACRO"
+        ev.event_text = "CPI print."
+        ev.event_date = None
+        ctx = MagicMock()
+        ctx.news_articles = [a]
+        ctx.recent_events = [ev]
+        ctx.active_alerts = []
+        # MagicMock auto-attributes: entity_graph + entity_narrative are Mocks,
+        # NOT EntityGraphSnapshot / str — so they are excluded by the guards.
+        return ctx
+
+    def test_morning_ctx_gets_no_kg_citations(self) -> None:
+        """A morning-style MagicMock ctx yields ONLY news + event citations."""
+        ctx = self._morning_ctx()
+        cits = _materialize_brief_citations(ctx)
+        assert len(cits) == 2
+        assert cits[0].source_type == "article"
+        assert cits[1].source_type == "event"
+        # No KG label leaked in.
+        assert all(c.title not in ("Entity definition (KG)", "Thematic context (KG)") for c in cits)
+
+
 # ── _backfill_uncited_bullets ─────────────────────────────────────────────────
 
 

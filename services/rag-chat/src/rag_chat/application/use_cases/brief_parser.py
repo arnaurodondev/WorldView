@@ -667,6 +667,60 @@ class BriefParser:
                 )
             )
 
+        # 4. KG vector descriptions (instrument brief only) — definition then
+        #    narrative. These are appended AFTER news/events/alerts so the
+        #    existing news/event citation numbering is UNCHANGED; the KG items
+        #    simply take the NEXT [cN] indices. ``format_entity_context`` numbers
+        #    them with exactly the same offset (news+events+alerts) via the shared
+        #    ``kg_description_offset`` helper, so the markers the LLM emits resolve
+        #    here to these BriefCitation objects.
+        #
+        #    GUARD: we add these ONLY for a real instrument context — i.e. an
+        #    ``EntityGraphSnapshot`` with a non-empty string ``description`` and/or
+        #    a non-empty string ``entity_narrative``. Morning-brief contexts (and
+        #    MagicMock-shaped unit-test ctx where these are auto-Mocks, not str)
+        #    are excluded, so morning-brief numbering is byte-identical.
+        #
+        #    WHY source_type="event": BriefCitation.source_type is a closed Literal
+        #    {"article","event","alert"}; the KG descriptions are non-clickable
+        #    reference items (like events), so we reuse "event" rather than widen
+        #    the wire contract + frontend Literal. The human label in ``title``
+        #    ("Entity definition (KG)" / "Thematic context (KG)") carries the
+        #    provenance for the citation chip.
+        from rag_chat.application.models.briefing_context import (
+            EntityGraphSnapshot as _EntityGraphSnapshot,
+        )
+
+        eg = getattr(ctx, "entity_graph", None)
+        if isinstance(eg, _EntityGraphSnapshot):
+            description = eg.description
+            if isinstance(description, str) and description.strip():
+                snippet = f"{_Fmt._KG_DEFINITION_LABEL}: {description}"[:400]
+                citations.append(
+                    BriefCitation(
+                        document_id=f"kg-definition:{eg.entity_id}",
+                        snippet=snippet,
+                        url=None,
+                        source_type="event",
+                        title=_Fmt._KG_DEFINITION_LABEL,
+                    )
+                )
+        narrative = getattr(ctx, "entity_narrative", None)
+        if isinstance(narrative, str) and narrative.strip():
+            # Carry the staleness note INTO the snippet so the resolved chip
+            # also reads "not a recent catalyst" (mirrors the in-prompt caveat).
+            snippet = f"{_Fmt._KG_NARRATIVE_STALENESS}: {narrative}"[:400]
+            entity_id = getattr(eg, "entity_id", None) if eg is not None else None
+            citations.append(
+                BriefCitation(
+                    document_id=f"kg-narrative:{entity_id}",
+                    snippet=snippet,
+                    url=None,
+                    source_type="event",
+                    title=_Fmt._KG_NARRATIVE_LABEL,
+                )
+            )
+
         return citations
 
     def _parse_detail_sections_with_citations(

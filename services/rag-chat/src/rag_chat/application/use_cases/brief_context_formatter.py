@@ -592,6 +592,53 @@ class BriefContextFormatter:
 
     # ── Instrument brief ───────────────────────────────────────────────────────
 
+    # PLAN-0107 follow-up (KG vector descriptions as citable sources):
+    # The instrument-brief "Entity Overview" must OPEN from the KG ``definition``
+    # and layer the ``narrative``. For the LLM to write a *grounded, cited*
+    # Overview bullet, those two items need real ``[cN]`` citation indices — the
+    # same indices the parser's ``materialize_brief_citations`` will resolve.
+    #
+    # These two human-facing labels are the single source of truth shared by the
+    # formatter (prompt side) and the parser (resolver side). Keep them in sync.
+    _KG_DEFINITION_LABEL: str = "Entity definition (KG)"
+    _KG_NARRATIVE_LABEL: str = "Thematic context (KG)"
+    # Staleness caveat carried INTO the narrative citation snippet so the
+    # resolved chip in the UI also signals "not a recent catalyst" (mirrors the
+    # in-prompt caveat the LLM sees).
+    _KG_NARRATIVE_STALENESS: str = (
+        "Background thematic context (may be up to ~1 week old; not a recent catalyst)"
+    )
+
+    @staticmethod
+    def kg_description_offset(ctx: Any) -> int:
+        """Return the [cN] base offset at which KG definition/narrative are numbered.
+
+        The instrument-brief citation ordering is news → events → (alerts) →
+        KG descriptions. So the KG definition/narrative occupy the indices that
+        come AFTER every news + event (+ alert) citation. Both the prompt-side
+        formatter (``format_entity_context``) and the parser-side resolver
+        (``materialize_brief_citations``) MUST agree on this number, so it lives
+        in ONE place (input/lookup-mismatch is the silent-drop bug class we are
+        fixing — see MEMORY ``feedback_prompt_input_mismatch``).
+
+        The counts mirror ``materialize_brief_citations`` EXACTLY:
+          * news  = ``len(_ordered_news(ctx))`` (deduped + capped)
+          * events = ``len(recent_events[:6])``
+          * alerts = ``len(active_alerts[:5])`` (instrument briefs have none)
+
+        Defensive: when ``recent_events`` / ``active_alerts`` are not real lists
+        (e.g. MagicMock-shaped ctx in unit tests), they contribute 0 — so the
+        offset degrades gracefully rather than crashing on a Mock ``len()``.
+        """
+        if ctx is None:
+            return 0
+        news_count = len(BriefContextFormatter._ordered_news(ctx))
+        recent_events = getattr(ctx, "recent_events", None)
+        events_count = len(recent_events[:6]) if isinstance(recent_events, list) else 0
+        active_alerts = getattr(ctx, "active_alerts", None)
+        alerts_count = len(active_alerts[:5]) if isinstance(active_alerts, list) else 0
+        return news_count + events_count + alerts_count
+
     def format_entity_context(self, ctx: Any) -> str:
         """Format the center entity's identity for an instrument brief.
 
@@ -621,15 +668,29 @@ class BriefContextFormatter:
         ]
         if eg.ticker:
             lines.append(f"Ticker: {eg.ticker}")
+        # ── KG vector descriptions as CITABLE sources (PLAN-0107 follow-up) ──
+        # The definition + narrative are numbered with real [cN] markers so the
+        # LLM can ANCHOR a grounded Entity Overview bullet on them. The markers
+        # MUST match the indices the parser's materialize_brief_citations will
+        # assign — both derive from ``kg_description_offset(ctx)`` so prompt and
+        # resolver agree (no input/lookup mismatch → no silent bullet drop).
+        #
+        # Ordering after the news/event/alert citations: definition first, then
+        # narrative. We bump the running index only for items actually present so
+        # a missing definition doesn't leave a gap before the narrative.
+        offset = self.kg_description_offset(ctx)
+        cn = offset
         # definition — business identity (what the company IS).
         description = getattr(eg, "description", None)
         if description:
-            lines.append(f"Definition (business identity): {description}")
+            cn += 1
+            lines.append(f"[c{cn}] Definition (business identity): {description}")
         # narrative — thematic context; explicitly flagged as potentially stale.
         narrative = getattr(ctx, "entity_narrative", None)
         if narrative:
+            cn += 1
             lines.append(
-                "Background thematic context (may be up to ~1 week old; "
+                f"[c{cn}] Background thematic context (may be up to ~1 week old; "
                 f"not a recent catalyst): {narrative}"
             )
         return "\n".join(lines)

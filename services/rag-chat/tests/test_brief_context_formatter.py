@@ -259,6 +259,40 @@ def test_format_entity_context_renders_definition_and_narrative() -> None:
     assert "Samsung" in result
 
 
+def test_format_entity_context_emits_cn_markers_after_news_events() -> None:
+    """PLAN-0107 follow-up: definition/narrative carry [cN] markers numbered AFTER
+    news + events so the LLM can cite them and the parser resolves them."""
+    formatter = _make_formatter()
+    eg = MagicMock()
+    eg.canonical_name = "Apple Inc."
+    eg.entity_type = "company"
+    eg.ticker = "AAPL"
+    eg.description = "Apple designs consumer electronics."
+
+    ctx = MagicMock()
+    ctx.entity_graph = eg
+    ctx.entity_narrative = "Competes with Samsung; AI exposure."
+    # 3 news + 2 events → KG definition at [c6], narrative at [c7].
+    ctx.news_articles = [MagicMock(title=f"n{i}", display_relevance_score=0.0) for i in range(3)]
+    ctx.recent_events = [MagicMock() for _ in range(2)]
+    ctx.active_alerts = []
+
+    result = formatter.format_entity_context(ctx)
+    assert "[c6] Definition (business identity)" in result
+    assert "[c7] Background thematic context" in result
+
+
+def test_kg_description_offset_mirrors_citation_counts() -> None:
+    """kg_description_offset = news + events + alerts counts (instrument has no alerts)."""
+    formatter = _make_formatter()
+    ctx = MagicMock()
+    ctx.news_articles = [MagicMock(title=f"n{i}", display_relevance_score=0.0) for i in range(4)]
+    ctx.recent_events = [MagicMock() for _ in range(3)]
+    ctx.active_alerts = []
+    # 4 news + 3 events + 0 alerts = 7.
+    assert formatter.kg_description_offset(ctx) == 7
+
+
 def test_format_entity_context_omits_narrative_when_absent() -> None:
     """definition present but narrative None → only the definition line is added."""
     formatter = _make_formatter()
