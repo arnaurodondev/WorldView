@@ -58,6 +58,39 @@ class S3Client(BaseUpstreamClient):
         """
         return await self._get(f"/api/v1/quotes/{instrument_id}")
 
+    async def get_sector_returns(self, period: str = "1D") -> dict[str, float]:
+        """GET /api/v1/market/sector-returns → ``{sector_name: change_fraction}``.
+
+        PRD-0030 causal-attribution slice (P1).  The market-data heatmap
+        endpoint returns ``{"sectors": [{"name": "...", "change_pct": 0.34}, …]}``
+        where ``change_pct`` is a PERCENT number (0.34 = +0.34%).  We normalise
+        it to a FRACTION (0.0034) so it matches the convention used elsewhere in
+        the brief (``sector_performance`` is rendered with ``{:+.1%}``), and key
+        the result by sector name for a per-holding lookup.
+
+        Returns ``{}`` on timeout, HTTP error, or a malformed payload — the
+        gatherer then simply skips per-holding sector attribution (R9 safe
+        degradation), never crashing the brief.
+        """
+        raw = await self._get("/api/v1/market/sector-returns", params={"period": period})
+        sectors = raw.get("sectors", []) if isinstance(raw, dict) else []
+        if not isinstance(sectors, list):
+            return {}
+        result: dict[str, float] = {}
+        for row in sectors:
+            if not isinstance(row, dict):
+                continue
+            name = row.get("name")
+            change = row.get("change_pct")
+            if not name or change is None:
+                continue
+            try:
+                # change_pct is a percent number (0.34 → +0.34%); store as fraction.
+                result[str(name)] = float(change) / 100.0
+            except (TypeError, ValueError):
+                continue
+        return result
+
     async def find_instrument_by_ticker(self, ticker: str) -> UUID | None:
         """GET /api/v1/instruments/lookup?symbol={ticker} → instrument UUID or None.
 

@@ -3,10 +3,12 @@
 WHY THESE TESTS: The 100% citation gate requires the LLM receives explicit
 citation-marker numbering instructions so it can embed stable markers in
 every bullet. These tests verify that:
-  * MORNING_BRIEFING v4.1 uses the [N#] marker form (PLAN-0103 W2 cleanup —
-    the legacy [c#] form went away when the contradictory v3.0 LEAD/DETAILS
-    template was removed). The brief parser still consumes both forms for
-    historical-record compatibility, but the prompt should only mandate one.
+  * MORNING_BRIEFING v4.7 uses the [cN] marker form (PRD-0030 fix). The
+    prior [N#] convention (v4.1-v4.6) was a latent bug: the brief parser's
+    resolver ``_CN_CITATION_RE`` only matches [cN], so [N#] markers were
+    stripped as orphans and morning-brief per-bullet citations never
+    resolved. v4.7 standardises on [cN] across the citation rules, the
+    summary directive, and both few-shot examples.
   * INSTRUMENT_BRIEFING v4.0 continues to use the legacy [cN] marker form +
     the LEAD/DETAILS template (PLAN-0062-W4); the instrument brief is a
     separate pipeline and was not part of the PLAN-0103 W2 cleanup.
@@ -20,7 +22,7 @@ from prompts.briefing.morning import MORNING_BRIEFING
 
 
 class TestMorningBriefingCitationInstructions:
-    """MORNING_BRIEFING v4.1 must instruct the LLM to embed [N#] markers."""
+    """MORNING_BRIEFING v4.7 must instruct the LLM to embed [cN] markers."""
 
     def _render(self) -> str:
         return MORNING_BRIEFING.render(
@@ -34,12 +36,11 @@ class TestMorningBriefingCitationInstructions:
         )
 
     def test_contains_marker_instruction(self) -> None:
-        """v4.1 mandates the [N#] marker format (the legacy [c#] form is gone)."""
+        """v4.7 mandates the [cN] marker format (the only form the resolver maps)."""
         result = self._render()
-        # v4.1 uses [N1]/[N2]/[N3] (matches the 6-section "News That Matters"
-        # spec). The legacy [c#] form was deleted alongside the LEAD/DETAILS
-        # template as part of the PLAN-0103 W2 contradiction cleanup.
-        assert "[N1]" in result and "[N2]" in result
+        # PRD-0030: [cN] is the resolvable form (brief_parser._CN_CITATION_RE).
+        # The prior [N#] form was an unresolvable orphan — see module docstring.
+        assert "[c1]" in result and "[c2]" in result
 
     def test_lead_block_removed_in_v41(self) -> None:
         """v4.1 deleted the legacy ## LEAD / ## DETAILS template (PLAN-0103 W2)."""
@@ -55,17 +56,16 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_46(self) -> None:
-        """MORNING_BRIEFING bumped to v4.5 for PLAN-0103 W11 (adaptive Summary length).
+    def test_version_is_47(self) -> None:
+        """MORNING_BRIEFING bumped to v4.7 for PRD-0030 (causal-attribution slice).
 
-        v4.3 added few-shot examples; v4.4 split the single 250-word cap into
-        a 50-word Summary cap + a 700-word Details cap with per-section
-        guidance (BP-630); v4.5 replaces the fixed 50-word Summary cap with
-        ADAPTIVE length (target ~100w, 30-200w bands keyed off portfolio
-        breadth + market activity) to fix truncation on large books / very
-        active days. Asserting the current version pins prompt drift.
+        v4.7 adds the per-holding DRIVER ATTRIBUTION ladder (entity news →
+        sector/peer → macro → "idiosyncratic — no identifiable driver"),
+        forbids speculative filler, documents the new ``related:``/``sector:``
+        context shape, and switches citation markers from the unresolvable
+        [N#] form to [cN]. Asserting the current version pins prompt drift.
         """
-        assert MORNING_BRIEFING.version == "4.6"
+        assert MORNING_BRIEFING.version == "4.7"
 
     def test_contains_few_shot_examples(self) -> None:
         """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""
@@ -128,6 +128,21 @@ class TestInstrumentBriefingCitationInstructions:
         result = self._render()
         assert "## LEAD" in result
 
-    def test_version_is_400(self) -> None:
-        """INSTRUMENT_BRIEFING must be bumped to v4.0 for PLAN-0062-W4."""
-        assert INSTRUMENT_BRIEFING.version == "4.0"
+    def test_version_is_at_least_400(self) -> None:
+        """INSTRUMENT_BRIEFING must remain ≥ v4.0 (LEAD + [cN] gate, PLAN-0062-W4).
+
+        Bumped to 4.1 by the PLAN-0107 follow-up (entity definition + narrative
+        context); the LEAD/citation contract this suite guards is unchanged.
+        """
+        major, minor = (int(p) for p in INSTRUMENT_BRIEFING.version.split(".")[:2])
+        assert (major, minor) >= (4, 0)
+
+    def test_documents_entity_definition_and_narrative(self) -> None:
+        """v4.1 must instruct the model on the KG definition + background narrative."""
+        result = self._render()
+        # Definition framing for the Entity Overview.
+        assert "Definition (business identity)" in result
+        # Background narrative with the staleness caveat (must not be a catalyst).
+        assert "Background thematic context" in result
+        assert "STALE" in result
+        assert "MUST NOT present it as a current" in result

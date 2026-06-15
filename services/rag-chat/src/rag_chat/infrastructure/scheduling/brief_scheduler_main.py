@@ -181,6 +181,16 @@ async def _run_loop(settings: Settings) -> None:
         base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds
     )
 
+    # PLAN-0107 follow-up (brief vector descriptions, P1): intelligence client for
+    # the entity narrative used by instrument briefs. WHY api_gateway_url: the
+    # intelligence endpoints are S9-proxied (R14/R7 — auth + rate limiting).
+    from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
+
+    s7_intel = S7IntelligenceClient(
+        base_url=settings.api_gateway_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
+
     context_gatherer = BriefingContextGatherer(
         s1=s1,
         s3=s3,
@@ -190,6 +200,7 @@ async def _run_loop(settings: Settings) -> None:
         use_service_endpoint=True,
         market_tape=market_tape_client,
         earnings_calendar=earnings_calendar_client,
+        s7_intelligence=s7_intel,
     )
     llm_chain = _build_llm_chain(settings, valkey)
 

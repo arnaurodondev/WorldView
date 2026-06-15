@@ -6,6 +6,14 @@ VERSION HISTORY
 - 4.0 — PLAN-0062 Wave 4 (T-W4-B-01): added LEAD block + [cN] citation markers
         for deterministic bullet-level citations (the 100% citation gate).
         Context items numbered [c1], [c2], … so the LLM has stable indices.
+- 4.1 — PLAN-0107 follow-up (brief vector descriptions, P1): the entity_context
+        block now carries two KG "vector" descriptions — `Definition` (business
+        identity, what the company IS) and `Background thematic context` (the KG
+        `narrative`: competitors, AI/EV exposure, strategic position). Added the
+        "Using Entity Definition & Background Context" guidance so the model uses
+        them for the "what this company is / why it matters" framing, with an
+        explicit caveat that the background narrative may be ~1 week+ stale and
+        must NOT be presented as a current catalyst.
 """
 
 from __future__ import annotations
@@ -14,11 +22,13 @@ from prompts._base import PromptTemplate
 
 INSTRUMENT_BRIEFING = PromptTemplate(
     name="instrument_briefing",
-    # Bumped 3.0 → 4.0 as part of PLAN-0062 Wave 4 citation-first redesign.
-    version="4.0",
+    # Bumped 4.0 → 4.1: PLAN-0107 follow-up — entity definition + narrative context.
+    version="4.1",
     description=(
-        "Institutional-grade entity briefing v4.0 — LEAD + DETAILS with [cN] "
-        "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4)"
+        "Institutional-grade entity briefing v4.1 — LEAD + DETAILS with [cN] "
+        "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4) "
+        "+ KG definition/narrative context for the 'what this company is' framing "
+        "(PLAN-0107 follow-up)"
     ),
     template=(
         "You are a senior equity research associate writing a one-page briefing for a "
@@ -55,6 +65,19 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "  Do not elaborate on supply chain or strategic implications beyond explicit evidence.\n"
         "- NO TRAINING DATA: Never use pre-training knowledge to supply prices, earnings,\n"
         "  guidance, or events not in the context blocks.\n\n"
+        # ── Entity definition + narrative usage ────────────────────────────────
+        "## Using Entity Definition & Background Context\n"
+        "The <entity_context> block may include two knowledge-graph descriptions:\n"
+        "- 'Definition (business identity)': what the company IS — its core business, "
+        "products, and markets. Use this to frame the 'Entity Overview' section so the "
+        "reader knows what this company is and why it matters.\n"
+        "- 'Background thematic context': competitive position, secular themes "
+        "(e.g. AI/EV exposure), and strategic positioning. This is BACKGROUND only and "
+        "may be up to ~1 week (or more) STALE — it is NOT recent news. You MAY use it to "
+        "frame why a development matters, but you MUST NOT present it as a current "
+        "catalyst, a today event, or a recent change. Recent catalysts come ONLY from "
+        "the news and events blocks.\n"
+        "Both items are cited like any other context item using their [cN] marker.\n\n"
         "## Briefing Sections in ## DETAILS\n"
         "Include sections for: Entity Overview, Price & Fundamentals, Recent Developments, "
         "Key Events, Entity Relationships. Skip any section where context is empty.\n"

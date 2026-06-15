@@ -611,8 +611,17 @@ class BriefParser:
 
         citations: list[BriefCitation] = []
 
-        # 1. News articles (up to 8, matches _format_news cap)
-        for a in (ctx.news_articles or [])[:8]:
+        # 1. News articles — MUST mirror format_news ordering exactly so [cN]
+        #    markers resolve to the right source (PRD-0030 P0). Previously this
+        #    used a raw ``[:8]`` slice while format_news deduped + capped at
+        #    get_news_limit() (12); the two diverged whenever a duplicate sat in
+        #    the first 8 raw items, mis-resolving citations. We now share
+        #    BriefContextFormatter._ordered_news (dedupe + get_news_limit()).
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            BriefContextFormatter as _Fmt,
+        )
+
+        for a in _Fmt._ordered_news(ctx):
             title_part = (a.title or "")[:240]
             summary_part = (a.summary or "")[:160] if hasattr(a, "summary") and a.summary else ""
             snippet = (f"{title_part} — {summary_part}" if summary_part else title_part)[:400]

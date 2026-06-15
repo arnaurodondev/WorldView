@@ -137,8 +137,9 @@ class TestMorningBriefing:
         # truncating News and Portfolio bullets at 250 words.
         assert "Your Portfolio Today 3-6 bullets" in result
         assert "News That Matters To You 3-5 bullets" in result
-        # Citations must use [N#] form; the legacy [c1] form is gone in v4.1+.
-        assert "[N1]" in result and "[N2]" in result
+        # Citations must use [cN] form (PRD-0030 v4.7): the only marker form the
+        # backend resolver maps to a source; the prior [N#] form was orphaned.
+        assert "[c1]" in result and "[c2]" in result
         # v4.1 deletions: the legacy LEAD/DETAILS template + 4/4 caps must be gone.
         # Negative assertions guard against accidental v4.0 regression.
         assert "## LEAD" not in result, "v4.2 must not re-introduce the legacy ## LEAD block"
@@ -153,9 +154,9 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.6 release: "Tape" → "Market Snapshot"
-        # rename + soft bullet caps (30-50w target, up to 100w when needed).
-        assert MORNING_BRIEFING.version == "4.6"
+        # Version constant must reflect the v4.7 release: PRD-0030 causal-
+        # attribution ladder + forbidden filler + [N#]→[cN] marker fix.
+        assert MORNING_BRIEFING.version == "4.7"
 
     def test_v45_few_shot_examples_present(self) -> None:
         """v4.3 must embed BOTH few-shot examples (rich + quiet day).

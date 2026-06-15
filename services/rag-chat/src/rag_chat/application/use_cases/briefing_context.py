@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from rag_chat.infrastructure.clients.s5_client import S5Client
     from rag_chat.infrastructure.clients.s6_client import S6Client
     from rag_chat.infrastructure.clients.s7_client import S7Client
+    from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -82,12 +83,20 @@ class BriefingContextGatherer:
         use_service_endpoint: bool = False,
         market_tape: MarketTapeClient | None = None,
         earnings_calendar: EarningsCalendarClient | None = None,
+        s7_intelligence: S7IntelligenceClient | None = None,
     ) -> None:
         self._s1 = s1
         self._s3 = s3
         self._s5 = s5
         self._s6 = s6
         self._s7 = s7
+        # PLAN-0107 follow-up (brief vector descriptions, P1): the S7 intelligence
+        # client exposes the per-entity ``narrative`` (LLM thematic context). It is
+        # kw-only optional so the long list of existing test fixtures and the
+        # alternate (worker) wiring keep working unchanged; when None the gatherer
+        # simply skips the narrative call and ``entity_narrative`` stays None
+        # (R9 safe degradation — the formatter renders nothing).
+        self._s7_intelligence = s7_intelligence
         # PLAN-0102 W3 follow-up (T-W3-FU-01): tape + earnings calendar are
         # kw-only optionals so the long list of existing test fixtures and
         # the brief-scheduler wiring keep working unchanged. When None, the
@@ -291,6 +300,32 @@ class BriefingContextGatherer:
         held_entity_ids: set[str] = set()
         if portfolio_snapshot is not None:
             held_entity_ids = {str(h.entity_id) for h in portfolio_snapshot.holdings if h.entity_id}
+
+        # ── PRD-0030 P0: per-holding attributed news ─────────────────────────
+        # ROOT CAUSE (design report): the global /news/top feed carries NO
+        # primary_entity_id for any article, so the LLM could never link a
+        # holding's price move to a specific story and fell back to fabricated
+        # "no direct news; momentum-driven" guesses.  We now fan out the SAME
+        # entity-articles call the instrument brief already uses across the
+        # held tickers, MERGE those articles into ``news_articles`` (so they
+        # get a stable [cN] citation index via the existing format_news /
+        # materialize_brief_citations path), and record a ``news_by_holding``
+        # map (ticker → article_ids) so the formatter can render each holding
+        # line with its attributed sources inline.  Merged articles are
+        # PREPENDED so they fall inside the citation window (materialize caps
+        # at 8, format at 12) ahead of the generic global feed.
+        news_by_holding: dict[str, list[str]] = {}
+        if portfolio_snapshot is not None and portfolio_snapshot.holdings:
+            per_holding_articles, news_by_holding = await self._fetch_per_holding_news(portfolio_snapshot)
+            if per_holding_articles:
+                # De-dup by article_id against the global feed (an entity story
+                # may already be in /news/top) so we don't double-count; keep
+                # the per-holding copy (it carries sentiment + attribution).
+                global_ids = {str(a.article_id) for a in per_holding_articles}
+                news_articles = per_holding_articles + [
+                    a for a in news_articles if str(a.article_id) not in global_ids
+                ]
+
         news_articles = _score_news_by_overlap(news_articles, held_entity_ids, self._NEWS_OVERLAP_MULTIPLIER)
 
         # PLAN-0102 W3 follow-up (T-W3-FU-01): real tape + earnings calendar
@@ -309,11 +344,21 @@ class BriefingContextGatherer:
         # be resolved (we need the user_id + held entity_ids).
         portfolio_pnl_snapshot: PortfolioPnLSnapshot | None = None
         sector_exposure: SectorExposure | None = None
+        sector_by_holding: dict[str, tuple[str, float]] = {}
         if portfolio_snapshot is not None:
             portfolio_pnl_snapshot, sector_exposure = await self._fetch_pnl_and_sectors(
                 user_id=user_id,
                 portfolio_snapshot=portfolio_snapshot,
             )
+            # ── PRD-0030 P1: per-holding sector + sector return ───────────────
+            # Build {ticker: (sector_label, sector_return_fraction)} so the
+            # formatter can render a GROUNDED fallback ("tracking Financial
+            # Services +0.34%") when a holding has no direct news, instead of
+            # the old generic "financials tracking the broader market" guess.
+            # Combines the per-entity sector labels (S7) with the live heatmap
+            # sector returns (S3 /market/sector-returns).  R9: any failure
+            # leaves the map empty and the formatter omits the sector clause.
+            sector_by_holding = await self._fetch_sector_by_holding(portfolio_snapshot)
 
         # PLAN-0102 W1 T-W1-01: build a MarketOverview that the formatter can
         # actually render. ``indices`` carries SPY/QQQ/VIX (the tape) and
@@ -374,6 +419,8 @@ class BriefingContextGatherer:
             sector_exposure=sector_exposure,
             market_tape=market_tape,
             earnings_calendar=earnings_calendar,
+            news_by_holding=news_by_holding,
+            sector_by_holding=sector_by_holding,
         )
 
     # ── Instrument briefing context ──────────────────────────────────────────
@@ -434,8 +481,22 @@ class BriefingContextGatherer:
         # source_types excludes news (those are covered by _fetch_entity_articles).
         coros.append(self._fetch_entity_chunks(entity_id, entity_graph.canonical_name))
 
+        # PLAN-0107 follow-up (brief vector descriptions, P1): fetch the KG
+        # ``narrative`` (LLM thematic context — competitors, AI/EV exposure,
+        # strategic position) in parallel with the rest of the batch. Optional
+        # client: when not wired we append an empty coroutine so the unpack below
+        # keeps a fixed shape and ``entity_narrative`` stays None (R9).
+        coros.append(self._fetch_entity_narrative(entity_id))
+
         results = await asyncio.gather(*coros, return_exceptions=True)
-        quote_result, fundamentals_result, articles_result, events_result, chunks_result = results
+        (
+            quote_result,
+            fundamentals_result,
+            articles_result,
+            events_result,
+            chunks_result,
+            narrative_result,
+        ) = results
 
         # ── 4. Map results ───────────────────────────────────────────────────
         quote: QuoteSummary | None = None
@@ -484,6 +545,13 @@ class BriefingContextGatherer:
         else:
             relevant_chunks = chunks_result  # type: ignore[assignment]
 
+        # R9 safe degradation: narrative fetch failure → None, no crash.
+        entity_narrative: str | None = None
+        if isinstance(narrative_result, BaseException):
+            log.warning("briefing_narrative_failed", entity_id=entity_id, error=str(narrative_result))
+        else:
+            entity_narrative = narrative_result  # type: ignore[assignment]
+
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_instrument(
             entity_id=entity_id,
@@ -494,6 +562,7 @@ class BriefingContextGatherer:
             quotes=quotes,
             recent_events=events,
             relevant_chunks=relevant_chunks,
+            entity_narrative=entity_narrative,
             gathered_at=datetime.now(tz=UTC),
         )
 
@@ -588,7 +657,7 @@ class BriefingContextGatherer:
         )
         return _map_news_articles(raw.get("articles", []))
 
-    async def _fetch_entity_articles(self, entity_id: str) -> list[NewsArticleSummary]:
+    async def _fetch_entity_articles(self, entity_id: str, limit: int = 30) -> list[NewsArticleSummary]:
         """GET /api/v1/entities/{entity_id}/briefing-articles from S6.
 
         Uses the /briefing-articles path (not /articles) to bypass the watchlist
@@ -597,12 +666,154 @@ class BriefingContextGatherer:
         entity regardless of watchlist membership.
 
         PLAN-0049 T-C-3-04: ``limit`` raised from 10 → 30 (matches _fetch_top_news).
+        PRD-0030 P0: ``limit`` is now a parameter so the morning-brief
+        per-holding fan-out can request a small slice (e.g. 4) per ticker
+        while the instrument brief keeps the full 30.
         """
         raw = await self._s6._get(
             f"/api/v1/entities/{entity_id}/briefing-articles",
-            params={"limit": 30},
+            params={"limit": limit},
         )
         return _map_news_articles(raw.get("articles", []))
+
+    # PRD-0030 P0: per-holding fan-out tuning. We fetch a small slice per
+    # ticker (the move's most likely driver lives in the freshest, most
+    # relevant 1-3 stories) and only keep stories within the recency window
+    # so a stale analyst note isn't presented as today's catalyst.
+    # The recency window is env-overridable (RAG_CHAT_BRIEF_HOLDING_NEWS_HOURS)
+    # because the right value depends on news cadence: 24-72h is the defensible
+    # "recent catalyst" band for a daily brief; the default is 72h (3 trading
+    # days). Bounded by max-holdings so a 50-name book doesn't issue 50 calls.
+    _PER_HOLDING_ARTICLE_LIMIT: int = 4
+    _PER_HOLDING_MAX_HOLDINGS: int = 15
+
+    @staticmethod
+    def _per_holding_recency_hours() -> int:
+        """Resolved per-holding news recency window in hours (default 72)."""
+        import os
+
+        raw = os.environ.get("RAG_CHAT_BRIEF_HOLDING_NEWS_HOURS")
+        if raw:
+            try:
+                return int(raw)
+            except ValueError:
+                pass
+        return 72
+
+    async def _fetch_per_holding_news(
+        self,
+        portfolio_snapshot: PortfolioSnapshot,
+    ) -> tuple[list[NewsArticleSummary], dict[str, list[str]]]:
+        """Fan out ``_fetch_entity_articles`` across held tickers (PRD-0030 P0).
+
+        Returns ``(merged_articles, news_by_holding)`` where:
+          * ``merged_articles`` is the flat de-duplicated list of all
+            per-holding articles (highest-relevance copy wins on collision),
+            to be prepended into ``ctx.news_articles``.
+          * ``news_by_holding`` maps ``ticker → [article_id, …]`` so the
+            formatter can render each holding's attributed sources inline.
+
+        R9 safe degradation: a per-entity call that fails or returns empty is
+        skipped; the holding simply gets no ``related:`` line and falls back
+        to the sector / idiosyncratic ladder in the prompt.
+        """
+        # Only holdings that carry BOTH an entity_id (to query S6) and a ticker
+        # (the formatter's lookup key) participate. Bounded by max-holdings.
+        holdings = [h for h in portfolio_snapshot.holdings if h.entity_id and h.ticker][
+            : self._PER_HOLDING_MAX_HOLDINGS
+        ]
+        if not holdings:
+            return [], {}
+
+        cutoff = datetime.now(tz=UTC) - timedelta(hours=self._per_holding_recency_hours())
+
+        async def _one(entity_id: str) -> list[NewsArticleSummary]:
+            try:
+                async with timed_upstream_call("s6_entity_articles"):
+                    arts = await self._fetch_entity_articles(entity_id, limit=self._PER_HOLDING_ARTICLE_LIMIT * 2)
+                # Recency filter: keep undated articles (defensive — the feed
+                # occasionally omits published_at) and those inside the window.
+                fresh = [a for a in arts if a.published_at is None or a.published_at >= cutoff]
+                return fresh[: self._PER_HOLDING_ARTICLE_LIMIT]
+            except Exception as exc:
+                log.warning("briefing_per_holding_news_failed", entity_id=entity_id, error=str(exc))
+                return []
+
+        results = await asyncio.gather(*[_one(str(h.entity_id)) for h in holdings])
+
+        merged: list[NewsArticleSummary] = []
+        seen_ids: set[str] = set()
+        news_by_holding: dict[str, list[str]] = {}
+        for holding, arts in zip(holdings, results, strict=True):
+            ticker = holding.ticker or ""
+            if not arts:
+                continue
+            ids_for_holding: list[str] = []
+            for a in arts:
+                aid = str(a.article_id)
+                ids_for_holding.append(aid)
+                if aid not in seen_ids:
+                    seen_ids.add(aid)
+                    merged.append(a)
+            if ids_for_holding:
+                news_by_holding[ticker] = ids_for_holding
+        return merged, news_by_holding
+
+    async def _fetch_sector_by_holding(
+        self,
+        portfolio_snapshot: PortfolioSnapshot,
+    ) -> dict[str, tuple[str, float]]:
+        """Build ``{ticker: (sector_label, sector_return_fraction)}`` (PRD-0030 P1).
+
+        Joins per-entity sector labels (S7 ``/internal/v1/entities/sectors``)
+        with the live sector-return heatmap (S3 ``/market/sector-returns``).
+        A holding only appears in the result when BOTH its sector label AND
+        that sector's return are known — otherwise the formatter would print
+        a sector clause with no number.  R9 safe degradation: any upstream
+        failure leaves the map empty and the formatter omits the clause.
+        """
+        entity_ids: list[UUID] = [h.entity_id for h in portfolio_snapshot.holdings if h.entity_id is not None]
+        if not entity_ids:
+            return {}
+
+        # ── S7 per-entity sector labels ─────────────────────────────────────
+        sector_by_entity: dict[UUID, str] = {}
+        try:
+            async with timed_upstream_call("sectors_by_holding") as outcome:
+                raw_sectors = await self._s7.get_sectors_for_entities(entity_ids)
+                if not raw_sectors:
+                    outcome.mark_empty()
+                for eid, label in raw_sectors.items():
+                    if label.sector:
+                        sector_by_entity[eid] = label.sector
+        except Exception as exc:
+            log.warning("briefing_sector_by_holding_labels_failed", error=str(exc))
+            return {}
+
+        # ── S3 sector-return heatmap ────────────────────────────────────────
+        sector_returns: dict[str, float] = {}
+        try:
+            async with timed_upstream_call("sector_returns") as outcome:
+                sector_returns = await self._s3.get_sector_returns(period="1D")
+                if not sector_returns:
+                    outcome.mark_empty()
+        except Exception as exc:
+            log.warning("briefing_sector_returns_failed", error=str(exc))
+            return {}
+
+        # ── Join: ticker → (sector, return) where both are known ────────────
+        result: dict[str, tuple[str, float]] = {}
+        for holding in portfolio_snapshot.holdings:
+            if holding.entity_id is None or not holding.ticker:
+                continue
+            sector = sector_by_entity.get(holding.entity_id)
+            if sector is None:
+                continue
+            ret = sector_returns.get(sector)
+            if ret is None:
+                continue
+            result[holding.ticker] = (sector, ret)
+        return result
 
     async def _fetch_events(
         self,
@@ -759,6 +970,33 @@ class BriefingContextGatherer:
             log.warning("briefing_earnings_calendar_failed", error=str(exc))
             return None
 
+    async def _fetch_entity_narrative(self, entity_id: str) -> str | None:
+        """Fetch the KG ``narrative`` (LLM thematic context) for an entity.
+
+        PLAN-0107 follow-up (brief vector descriptions, P1). Calls the S7
+        intelligence client's ``get_narrative`` (S9-proxied
+        ``GET /api/v1/entities/{id}/narratives``). The narrative is generated on
+        a weekly (Sunday) cadence — it names competitors, AI/EV exposure, and
+        strategic position, but can be 1 week+ stale, so the prompt frames it as
+        background thematic context (not a recent catalyst).
+
+        Returns the narrative text, or None when the client isn't wired, the
+        entity has no narrative yet, or the upstream call fails (R9). Wrapped in
+        a broad try/except because this runs inside ``asyncio.gather`` — but
+        ``return_exceptions=True`` would also catch it; the local guard simply
+        lets us log with entity context and keep the rest of the batch clean.
+        """
+        if self._s7_intelligence is None:
+            return None
+        try:
+            result = await self._s7_intelligence.get_narrative(UUID(entity_id))
+        except Exception as exc:  # — R9: never let narrative break the brief
+            log.warning("briefing_narrative_fetch_error", entity_id=entity_id, error=str(exc))
+            return None
+        if result is None or not result.content:
+            return None
+        return str(result.content).strip() or None
+
     async def _fetch_entity_chunks(
         self,
         entity_id: str,
@@ -845,11 +1083,20 @@ class BriefingContextGatherer:
                 },
             )
 
+        # PLAN-0107 follow-up: the KG ``definition`` description rides on the
+        # center node as ``EntityPublic.description`` (S7 ``_entity_summary``
+        # serialises it). It was already in the payload but never threaded into
+        # the brief context — pick it up here so the formatter can render the
+        # real "what this company is" overview instead of a name/type stub.
+        description_raw = center_node.get("description")
+        description = str(description_raw).strip() if description_raw else None
+
         return EntityGraphSnapshot(
             entity_id=entity_id,
             canonical_name=center_node.get("canonical_name", "Unknown"),
             entity_type=center_node.get("entity_type", "unknown"),
             ticker=center_node.get("ticker"),
+            description=description or None,
             relationships=relationships,
         )
 
@@ -1095,6 +1342,9 @@ def _map_news_articles(raw_articles: list[dict[str, Any]] | Any) -> list[NewsArt
                     ),
                     primary_entity_id=_safe_uuid(a.get("primary_entity_id")),
                     primary_entity_name=a.get("primary_entity_name"),
+                    # PRD-0030 P0: coarse sentiment for the per-holding
+                    # ``related:`` line (None when the feed omits it).
+                    sentiment=(str(a["sentiment"]) if a.get("sentiment") else None),
                 ),
             )
         except (KeyError, ValueError, TypeError):

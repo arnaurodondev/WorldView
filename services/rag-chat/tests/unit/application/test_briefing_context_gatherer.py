@@ -147,6 +147,29 @@ def _make_s7(
     return s7
 
 
+def _make_s7_intel(
+    narrative: str | None = None,
+    fail: bool = False,
+) -> MagicMock:
+    """Create a mock S7IntelligenceClient with a configurable narrative response.
+
+    PLAN-0107 follow-up (brief vector descriptions, P1). ``get_narrative`` returns
+    a ``NarrativeResult``-shaped object whose ``.content`` carries the thematic
+    paragraph; None when the entity has no narrative. ``fail=True`` makes the call
+    raise so the gatherer's R9 safe-degradation path can be exercised.
+    """
+    intel = MagicMock()
+    if fail:
+        intel.get_narrative = AsyncMock(side_effect=RuntimeError("S7 intel down"))
+    elif narrative is None:
+        intel.get_narrative = AsyncMock(return_value=None)
+    else:
+        result = MagicMock()
+        result.content = narrative
+        intel.get_narrative = AsyncMock(return_value=result)
+    return intel
+
+
 def _sample_portfolio() -> PortfolioContext:
     """Create a sample portfolio context for testing."""
     return PortfolioContext(
@@ -268,6 +291,9 @@ def _sample_graph() -> EgocentricGraph:
                 "canonical_name": "Apple Inc.",
                 "entity_type": "company",
                 "ticker": "AAPL",
+                # PLAN-0107 follow-up: KG `definition` description rides on the
+                # center node as EntityPublic.description.
+                "description": "Apple Inc. designs and sells consumer electronics, software, and services.",
             },
             {
                 "entity_id": "00000000-0000-0000-0000-000000000002",
@@ -439,6 +465,78 @@ async def test_gather_instrument_full() -> None:
     assert ctx.fundamentals.data["pe_ratio"] == 25.0
     assert len(ctx.news_articles) == 1
     assert len(ctx.recent_events) == 1
+    # PLAN-0107 follow-up: the KG `definition` description threads through from
+    # the center node onto the entity_graph snapshot.
+    assert ctx.entity_graph.description is not None
+    assert "consumer electronics" in ctx.entity_graph.description
+
+
+# ── Test: Instrument — KG definition + narrative (PLAN-0107 follow-up) ───────
+
+
+async def test_gather_instrument_includes_definition_and_narrative() -> None:
+    """definition (center-node description) + narrative (S7 intelligence) populate ctx."""
+    graph = _sample_graph()
+    s7_intel = _make_s7_intel(
+        narrative="Apple competes with Samsung and Google; expanding AI and services revenue."
+    )
+    gatherer = BriefingContextGatherer(
+        s1=_make_s1(),
+        s3=_make_s3(instrument_id=_INSTRUMENT_ID),
+        s5=_make_s5(),
+        s6=_make_s6(),
+        s7=_make_s7(graph=graph),
+        s7_intelligence=s7_intel,
+    )
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    # definition
+    assert ctx.entity_graph is not None
+    assert ctx.entity_graph.description is not None
+    assert "consumer electronics" in ctx.entity_graph.description
+    # narrative
+    assert ctx.entity_narrative is not None
+    assert "Samsung" in ctx.entity_narrative
+    s7_intel.get_narrative.assert_awaited_once()
+
+
+async def test_gather_instrument_narrative_absent_when_no_intel_client() -> None:
+    """No intelligence client wired → entity_narrative is None (definition still set)."""
+    graph = _sample_graph()
+    gatherer = BriefingContextGatherer(
+        s1=_make_s1(),
+        s3=_make_s3(instrument_id=_INSTRUMENT_ID),
+        s5=_make_s5(),
+        s6=_make_s6(),
+        s7=_make_s7(graph=graph),
+        # s7_intelligence omitted (defaults to None)
+    )
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    assert ctx.entity_narrative is None
+    # definition still threads through independently of the narrative client.
+    assert ctx.entity_graph is not None
+    assert ctx.entity_graph.description is not None
+
+
+async def test_gather_instrument_narrative_degrades_on_failure() -> None:
+    """S7 intelligence call failure → entity_narrative None, no crash (R9)."""
+    graph = _sample_graph()
+    s7_intel = _make_s7_intel(fail=True)
+    gatherer = BriefingContextGatherer(
+        s1=_make_s1(),
+        s3=_make_s3(instrument_id=_INSTRUMENT_ID),
+        s5=_make_s5(),
+        s6=_make_s6(),
+        s7=_make_s7(graph=graph),
+        s7_intelligence=s7_intel,
+    )
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    assert ctx.entity_narrative is None
+    # The rest of the context is still assembled.
+    assert ctx.entity_graph is not None
+    assert ctx.entity_graph.canonical_name == "Apple Inc."
 
 
 # ── Test: Instrument — no ticker (non-financial entity) ─────────────────────
@@ -979,4 +1077,144 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # readers; raised Details cap 700→1200 with soft 30-50w bullets (up to 100w
     # when context demands depth) so the LLM can give a full causal explanation
     # without bumping the per-bullet word ceiling.
-    assert MORNING_BRIEFING.version == "4.6", MORNING_BRIEFING.version
+    # PRD-0030 bumped 4.6 → 4.7: per-holding DRIVER ATTRIBUTION ladder (entity
+    # news → sector/peer → macro → "idiosyncratic — no identifiable driver"),
+    # forbade speculative filler, and switched citation markers [N#] → [cN]
+    # (the only form the backend resolver maps to a source).
+    assert MORNING_BRIEFING.version == "4.7", MORNING_BRIEFING.version
+    # PRD-0030: the attribution ladder + the forbidden-filler rule must be present.
+    assert "idiosyncratic — no identifiable driver" in body
+    assert "momentum-driven" in body  # named in the FORBIDDEN list
+    assert "Driver Attribution" in body
+
+
+# ── PRD-0030 causal-attribution slice (P0/P1) — gatherer helpers ──────────────
+
+
+def _snapshot_for(holdings: list[tuple[str, str]]):
+    """Build a PortfolioSnapshot from (ticker, entity_id) tuples."""
+    from rag_chat.application.models.briefing_context import (
+        HoldingItem,
+        PortfolioSnapshot,
+    )
+
+    items = [
+        HoldingItem(
+            ticker=t,
+            entity_id=UUID(eid),
+            canonical_name=t,
+            quantity=Decimal("10"),
+            current_weight=0.1,
+        )
+        for (t, eid) in holdings
+    ]
+    return PortfolioSnapshot(
+        user_id=UUID(_USER_ID),
+        holdings=items,
+        watchlist=[],
+        total_positions=len(items),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_per_holding_news_fans_out_and_maps_ids() -> None:
+    """_fetch_per_holding_news queries each holding and maps ticker → article_ids."""
+    # S6._get is called once per holding with the briefing-articles path.
+    tsla_articles = {
+        "articles": [
+            {
+                "article_id": "019e0000-0000-7000-8000-00000000a001",
+                "title": "ASML weighs Musk Terafab talks",
+                "sentiment": "negative",
+                "display_relevance_score": 0.8,
+                "published_at": datetime.now(tz=UTC).isoformat(),
+            }
+        ]
+    }
+    googl_articles = {
+        "articles": [
+            {
+                "article_id": "019e0000-0000-7000-8000-00000000b001",
+                "title": "Piper Sandler raises Alphabet PT",
+                "sentiment": "positive",
+                "display_relevance_score": 0.74,
+                "published_at": datetime.now(tz=UTC).isoformat(),
+            }
+        ]
+    }
+    s6 = MagicMock()
+    s6._get = AsyncMock(side_effect=[tsla_articles, googl_articles])
+    gatherer = BriefingContextGatherer(
+        s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock()
+    )
+    snapshot = _snapshot_for(
+        [
+            ("TSLA", "01900000-0000-7000-8000-000000001004"),
+            ("GOOGL", "01900000-0000-7000-8000-000000001003"),
+        ]
+    )
+
+    merged, news_by_holding = await gatherer._fetch_per_holding_news(snapshot)
+
+    assert news_by_holding["TSLA"] == ["019e0000-0000-7000-8000-00000000a001"]
+    assert news_by_holding["GOOGL"] == ["019e0000-0000-7000-8000-00000000b001"]
+    titles = {a.title for a in merged}
+    assert "ASML weighs Musk Terafab talks" in titles
+    assert "Piper Sandler raises Alphabet PT" in titles
+    # sentiment must round-trip onto the model for the formatter's related: line.
+    assert any(a.sentiment == "positive" for a in merged)
+
+
+@pytest.mark.asyncio
+async def test_fetch_per_holding_news_degrades_on_failure() -> None:
+    """A per-holding S6 failure is swallowed (R9) — that holding simply has no news."""
+    s6 = MagicMock()
+    s6._get = AsyncMock(side_effect=RuntimeError("S6 down"))
+    gatherer = BriefingContextGatherer(
+        s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock()
+    )
+    snapshot = _snapshot_for([("TSLA", "01900000-0000-7000-8000-000000001004")])
+    merged, news_by_holding = await gatherer._fetch_per_holding_news(snapshot)
+    assert merged == []
+    assert news_by_holding == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_sector_by_holding_joins_labels_and_returns() -> None:
+    """_fetch_sector_by_holding joins S7 sector labels with the S3 heatmap returns."""
+    from rag_chat.application.ports.upstream_clients import SectorLabel
+
+    jpm_eid = UUID("01900000-0000-7000-8000-000000001008")
+    s7 = MagicMock()
+    s7.get_sectors_for_entities = AsyncMock(
+        return_value={jpm_eid: SectorLabel(entity_id=jpm_eid, sector="Financial Services")}
+    )
+    s3 = MagicMock()
+    s3.get_sector_returns = AsyncMock(return_value={"Financial Services": 0.0034})
+    gatherer = BriefingContextGatherer(
+        s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7
+    )
+    snapshot = _snapshot_for([("JPM", str(jpm_eid))])
+
+    result = await gatherer._fetch_sector_by_holding(snapshot)
+    assert result == {"JPM": ("Financial Services", 0.0034)}
+
+
+@pytest.mark.asyncio
+async def test_fetch_sector_by_holding_omits_when_return_unknown() -> None:
+    """A holding whose sector has no heatmap return is omitted (no clause without a number)."""
+    from rag_chat.application.ports.upstream_clients import SectorLabel
+
+    eid = UUID("01900000-0000-7000-8000-000000001008")
+    s7 = MagicMock()
+    s7.get_sectors_for_entities = AsyncMock(
+        return_value={eid: SectorLabel(entity_id=eid, sector="Financial Services")}
+    )
+    s3 = MagicMock()
+    s3.get_sector_returns = AsyncMock(return_value={"Technology": 0.01})  # no Financials key
+    gatherer = BriefingContextGatherer(
+        s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7
+    )
+    snapshot = _snapshot_for([("JPM", str(eid))])
+    result = await gatherer._fetch_sector_by_holding(snapshot)
+    assert result == {}

@@ -167,6 +167,23 @@ class BriefContextFormatter:
     single object and tests can exercise formatting logic in isolation.
     """
 
+    # ── Citation-order helper (PRD-0030 P0) ────────────────────────────────────
+
+    @staticmethod
+    def _ordered_news(ctx: Any) -> list[Any]:
+        """Return the news list in CANONICAL citation order (deduped + limited).
+
+        ``format_news`` numbers articles [c1], [c2], … by iterating this exact
+        sequence, so any code that needs to resolve an article_id → its [cN]
+        index (the PRD-0030 per-holding ``related:`` line) MUST use the same
+        ordering.  Centralising it here guarantees the holding-line citation
+        markers point at the same source the LLM sees under that number.
+        """
+        if ctx is None or not getattr(ctx, "news_articles", None):
+            return []
+        deduped = _dedupe_news(list(ctx.news_articles))
+        return deduped[: get_news_limit()]
+
     # ── Portfolio / morning brief ──────────────────────────────────────────────
 
     def format_portfolio_morning(self, ctx: Any) -> str:
@@ -222,6 +239,30 @@ class BriefContextFormatter:
                 # "(sector unknown)" rather than guessing.
                 sector_by_entity[pnl_row.entity_id] = ("", 0.0)
 
+        # ── PRD-0030 P0/P1: per-holding causal-attribution lookups ───────────
+        # news_by_holding: ticker → [article_id, …]; we resolve each id to its
+        # [cN] index in the SAME ordered list format_news numbers from, so a
+        # holding line can cite the exact source the LLM sees under that
+        # number.  sector_by_holding: ticker → (sector_label, return_fraction)
+        # for the grounded sector fallback when a holding has no direct news.
+        # WHY isinstance(dict) guards: unit-test ctx objects are MagicMocks, so
+        # a bare ``getattr(ctx, "news_by_holding", None)`` returns a truthy Mock
+        # whose ``.get()`` yields un-unpackable Mocks. Only the real dict shapes
+        # (populated by the gatherer) activate the per-holding attribution path;
+        # everything else degrades to no extra lines (R9) — mirrors the existing
+        # ``portfolio_pnl`` isinstance pattern above.
+        _raw_nbh = getattr(ctx, "news_by_holding", None)
+        news_by_holding: dict[str, list[str]] = _raw_nbh if isinstance(_raw_nbh, dict) else {}
+        _raw_sbh = getattr(ctx, "sector_by_holding", None)
+        sector_by_holding: dict[str, tuple[str, float]] = _raw_sbh if isinstance(_raw_sbh, dict) else {}
+        # Build the [cN] index only when we actually have per-holding data to
+        # render (avoids iterating a MagicMock news_articles in legacy tests).
+        cite_index: dict[str, tuple[int, Any]] = {}
+        if news_by_holding:
+            ordered_news = self._ordered_news(ctx)
+            # article_id → (1-based [cN] index, NewsArticleSummary)
+            cite_index = {str(a.article_id): (i + 1, a) for i, a in enumerate(ordered_news)}
+
         lines: list[str] = []
 
         # ── A) Real P&L block (preferred) ────────────────────────────────────
@@ -234,17 +275,9 @@ class BriefContextFormatter:
                 # Sign + value formatting — "+1.45%" / "-0.32%" / "+$280" / "-$112"
                 sign_pct = "+" if pct >= 0 else ""
                 sign_dollar = "+" if pnl_dollar >= 0 else ""
-                # Sector tag — look up via shared sector_exposure when present.
-                sector_tag = ""
-                if sector_exposure is not None and row.entity_id is not None:
-                    # The exposure is keyed by sector label, not entity_id, so we
-                    # don't have a direct entity→sector link without re-fetching.
-                    # Mark unknown explicitly; the LLM sees the aggregate footer.
-                    sector_tag = ""
                 line = f"  - {symbol} {sign_pct}{pct:.2f}% pre-mkt — {sign_dollar}${abs(pnl_dollar):,.0f}"
-                if sector_tag:
-                    line += f" ({sector_tag})"
                 lines.append(line)
+                lines.extend(self._holding_attribution_lines(symbol, news_by_holding, cite_index, sector_by_holding))
         elif p.holdings:
             # Legacy fallback when P&L call failed.
             lines.append(f"Holdings ({p.total_positions} positions):")
@@ -252,6 +285,10 @@ class BriefContextFormatter:
                 name = h.canonical_name or h.ticker or "Unknown"
                 weight = f"{h.current_weight:.1%}" if h.current_weight else "N/A"
                 lines.append(f"  - {name}: {h.quantity} units, weight {weight}")
+                if h.ticker:
+                    lines.extend(
+                        self._holding_attribution_lines(h.ticker, news_by_holding, cite_index, sector_by_holding)
+                    )
 
         # ── B) Footer: total P&L + top sector exposure ──────────────────────
         if pnl is not None and (pnl.total_overnight_pnl_usd or pnl.total_overnight_pnl_pct):
@@ -280,6 +317,62 @@ class BriefContextFormatter:
                 lines.append(f"  - {name}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _holding_attribution_lines(
+        symbol: str,
+        news_by_holding: dict[str, list[str]],
+        cite_index: dict[str, tuple[int, Any]],
+        sector_by_holding: dict[str, tuple[str, float]],
+    ) -> list[str]:
+        """Build the indented ``related:`` / ``sector:`` lines for one holding (PRD-0030).
+
+        Renders, beneath a holding's price line, the GROUNDED causal signals
+        the gatherer attached so the LLM can attribute the move instead of
+        guessing:
+
+          * ``related:`` one line per attributed article that resolved to a
+            [cN] citation index, e.g.
+            ``related: [c3] Piper Sandler raises Alphabet PT (positive, rel 74%)``.
+            Articles that fell outside the citation window (no [cN]) are
+            skipped — the formatter never invents a marker the parser can't
+            resolve (guardrail: every attribution cites a fed item).
+          * ``sector:`` the holding's sector + overnight return, e.g.
+            ``sector: Financial Services +0.34%`` — a grounded fallback the
+            prompt's attribution ladder uses when no direct news exists.
+
+        When BOTH are empty the holding gets no extra lines, and the prompt's
+        ladder makes the LLM emit "idiosyncratic — no identifiable driver".
+        """
+        out: list[str] = []
+        # ── related: attributed news with resolved [cN] markers ──────────────
+        article_ids = news_by_holding.get(symbol, [])
+        for aid in article_ids:
+            resolved = cite_index.get(aid)
+            if resolved is None:
+                # Article dropped out of the deduped+limited citation window —
+                # skip rather than emit a marker the parser can't resolve.
+                continue
+            cn, article = resolved
+            title = (getattr(article, "title", "") or "").strip()
+            if not title:
+                continue
+            sentiment = getattr(article, "sentiment", None)
+            rel = getattr(article, "display_relevance_score", 0.0) or 0.0
+            tags: list[str] = []
+            if sentiment:
+                tags.append(str(sentiment))
+            if rel:
+                tags.append(f"rel {rel:.0%}")
+            tag_str = f" ({', '.join(tags)})" if tags else ""
+            out.append(f"      related: [c{cn}] {title}{tag_str}")
+        # ── sector: grounded fallback signal (always shown when known) ───────
+        sector_info = sector_by_holding.get(symbol)
+        if sector_info is not None:
+            sector_label, sector_ret = sector_info
+            sign = "+" if sector_ret >= 0 else ""
+            out.append(f"      sector: {sector_label} {sign}{sector_ret * 100.0:.2f}%")
+        return out
+
     # ── News / events / alerts ─────────────────────────────────────────────────
 
     def format_news(self, ctx: Any, citation_offset: int = 0) -> str:
@@ -298,10 +391,12 @@ class BriefContextFormatter:
             return ""
         # PLAN-0099 Wave B: dedupe first (so syndicated copies don't crowd
         # out distinct signals), then truncate to the env-var limit.
-        deduped = _dedupe_news(list(ctx.news_articles))
-        limit = get_news_limit()
+        # PRD-0030 P0: numbering MUST come from the shared ``_ordered_news``
+        # so a holding line's ``related: [cN]`` marker resolves to the SAME
+        # article the LLM sees here under [cN] (single source of ordering).
+        ordered = self._ordered_news(ctx)
         lines: list[str] = []
-        for i, a in enumerate(deduped[:limit]):
+        for i, a in enumerate(ordered):
             cn = f"[c{citation_offset + i + 1}]"
             date_str = a.published_at.strftime("%Y-%m-%d") if a.published_at else "unknown date"
             score = f" (relevance: {a.display_relevance_score:.0%})" if a.display_relevance_score else ""
@@ -498,7 +593,25 @@ class BriefContextFormatter:
     # ── Instrument brief ───────────────────────────────────────────────────────
 
     def format_entity_context(self, ctx: Any) -> str:
-        """Format the center entity's basic info for an instrument brief."""
+        """Format the center entity's identity for an instrument brief.
+
+        PLAN-0107 follow-up (brief vector descriptions, P1): previously this was a
+        ~3-line name/type/ticker stub. We now also render two KG "vector"
+        descriptions when present:
+
+        * ``definition`` — the business-identity paragraph (what the company IS),
+          already carried on the egocentric graph center node as
+          ``entity_graph.description``. ~60 tokens.
+        * ``narrative`` — the LLM-generated thematic paragraph (competitors,
+          AI/EV exposure, strategic position), fetched from S7's intelligence
+          endpoint into ``ctx.entity_narrative``. Generated weekly (Sunday) so it
+          can be 1 week+ stale — labelled "Background thematic context (may be up
+          to ~1 week old; not a recent catalyst)" so the prompt/LLM never presents
+          it as breaking news. ~130 tokens.
+
+        Both are omitted (no placeholder lines) when absent — the prompt instructs
+        the model to write from structured fundamentals + news in that case.
+        """
         if ctx is None or ctx.entity_graph is None:
             return ""
         eg = ctx.entity_graph
@@ -508,6 +621,17 @@ class BriefContextFormatter:
         ]
         if eg.ticker:
             lines.append(f"Ticker: {eg.ticker}")
+        # definition — business identity (what the company IS).
+        description = getattr(eg, "description", None)
+        if description:
+            lines.append(f"Definition (business identity): {description}")
+        # narrative — thematic context; explicitly flagged as potentially stale.
+        narrative = getattr(ctx, "entity_narrative", None)
+        if narrative:
+            lines.append(
+                "Background thematic context (may be up to ~1 week old; "
+                f"not a recent catalyst): {narrative}"
+            )
         return "\n".join(lines)
 
     @staticmethod

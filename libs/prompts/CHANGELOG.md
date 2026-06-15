@@ -7,6 +7,68 @@ traceable. Content hashes are computed automatically from the template body
 (`PromptTemplate.content_hash`); a body edit flips the hash even if the version
 is unchanged.
 
+## morning_briefing
+
+### 4.7 — 2026-06-14 (PRD-0030 causal-attribution slice, P2)
+
+- **Added a per-holding DRIVER ATTRIBUTION ladder.** The prior brief restated
+  price moves the user can already see and filled the "why" gap with fabricated
+  guesses ("TSLA +3.17% — no direct news; momentum-driven move"). v4.7 makes the
+  LLM walk a ladder per holding: (1) ENTITY NEWS — attribute to a fed
+  `related: [cN]` story and cite it; (2) SECTOR/PEER — attribute to the fed
+  `sector:` line with hedged language; (3) MACRO/EVENT — attribute to a fed
+  macro print; (4) IDIOSYNCRATIC — only when NEITHER a `related:` nor a
+  `sector:` line exists, write exactly "idiosyncratic — no identifiable driver".
+- **Forbade speculative filler.** "momentum-driven", "may be riding", "no
+  catalyst confirmed", and generic "tracking the broader market" are now
+  explicitly banned; ungrounded moves must read "idiosyncratic".
+- **Documented the new per-holding context shape.** The gatherer
+  (`briefing_context.py`, PRD-0030 P0/P1) now fans out the per-entity articles
+  call across holdings and joins per-holding sector returns from the market
+  heatmap; the formatter renders `related: [cN] <headline> (sentiment, rel%)`
+  and `sector: <Sector> +X.XX%` lines beneath each holding's price.
+- **Marker-convention fix [N#] → [cN]** (correctness, not cosmetic). The backend
+  resolver `brief_parser._CN_CITATION_RE` only matches `[cN]`; the prior prompt
+  instructed `[N#]`, so morning-brief per-bullet citations were stripped as
+  orphans and never resolved to a source. v4.7 standardises on `[cN]` in the
+  citation rules, the summary directive, and both few-shot examples.
+- **Impact:** flips the content hash; holding lines now carry grounded,
+  resolvable citations instead of unresolved guesses. The
+  `rag_citation_accuracy_24h` judge will validate that the new attributions are
+  grounded in the cited snippet.
+
+## instrument_briefing
+
+### 4.1 — 2026-06-14 (PLAN-0107 follow-up — brief vector descriptions, P1)
+
+- **Fed two KG "vector" descriptions into the instrument brief's entity context.**
+  The KG stores three per-entity descriptions in
+  `intelligence_db.entity_embedding_state.source_text` keyed by `view_type`. v4.1
+  surfaces two of them in the `<entity_context>` block:
+  - `Definition (business identity)` — the `definition` view (what the company
+    IS). Already returned to rag-chat on the egocentric graph's center node as
+    `EntityPublic.description`; previously the "Entity Overview" section was
+    written from a ~3-line name/type/ticker stub and never used it. Now threaded
+    through `EntityGraphSnapshot.description` → `format_entity_context`.
+  - `Background thematic context` — the `narrative` view (LLM-generated:
+    competitors, AI/EV exposure, strategic position). Fetched in parallel inside
+    `gather_instrument_context` via `S7IntelligenceClient.get_narrative` into the
+    new `BriefingContext.entity_narrative` slot.
+  - The `fundamentals_ohlcv` view is intentionally NOT added — it is redundant
+    with the brief's existing structured fundamentals.
+- **Added "Using Entity Definition & Background Context" guidance.** The model is
+  instructed to use the definition for the "what this company is / why it matters"
+  framing of the Entity Overview, and to treat the narrative as BACKGROUND only.
+- **Staleness caveat for the narrative.** The narrative is regenerated on a weekly
+  (Sunday) cadence, so it can be ~1 week+ stale. Both the formatter label and the
+  prompt explicitly flag it as "may be up to ~1 week old; not a recent catalyst"
+  so the LLM never presents it as a current catalyst / today event. Recent
+  catalysts come only from the news + events blocks.
+- **Impact:** flips the content hash; the Entity Overview section is now written
+  from real KG identity + thematic context instead of a 3-line stub. Both items
+  are cited via their `[cN]` markers like any other context item, preserving the
+  100% bullet-level citation gate. No backend schema or API changes.
+
 ## entity_profile
 
 ### 2.2 — 2026-06-13 (FR-12 tickerless-org mis-typing prevention)

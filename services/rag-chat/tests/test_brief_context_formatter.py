@@ -220,14 +220,61 @@ def test_format_entity_context_with_data() -> None:
     eg.canonical_name = "Apple Inc."
     eg.entity_type = "company"
     eg.ticker = "AAPL"
+    # No KG vector descriptions for this baseline case.
+    eg.description = None
 
     ctx = MagicMock()
     ctx.entity_graph = eg
+    ctx.entity_narrative = None
 
     result = formatter.format_entity_context(ctx)
     assert "Apple Inc." in result
     assert "company" in result
     assert "AAPL" in result
+    # Without definition/narrative no extra lines are emitted (no placeholders).
+    assert "Definition" not in result
+    assert "Background thematic context" not in result
+
+
+def test_format_entity_context_renders_definition_and_narrative() -> None:
+    """PLAN-0107: definition + narrative are rendered with the staleness caveat."""
+    formatter = _make_formatter()
+    eg = MagicMock()
+    eg.canonical_name = "Apple Inc."
+    eg.entity_type = "company"
+    eg.ticker = "AAPL"
+    eg.description = "Apple designs consumer electronics, software, and services."
+
+    ctx = MagicMock()
+    ctx.entity_graph = eg
+    ctx.entity_narrative = "Competes with Samsung and Google; growing AI and services exposure."
+
+    result = formatter.format_entity_context(ctx)
+    # definition framing
+    assert "Definition (business identity)" in result
+    assert "consumer electronics" in result
+    # narrative WITH explicit staleness caveat so the LLM won't treat it as a catalyst
+    assert "Background thematic context" in result
+    assert "not a recent catalyst" in result
+    assert "Samsung" in result
+
+
+def test_format_entity_context_omits_narrative_when_absent() -> None:
+    """definition present but narrative None → only the definition line is added."""
+    formatter = _make_formatter()
+    eg = MagicMock()
+    eg.canonical_name = "Apple Inc."
+    eg.entity_type = "company"
+    eg.ticker = "AAPL"
+    eg.description = "Apple designs consumer electronics."
+
+    ctx = MagicMock()
+    ctx.entity_graph = eg
+    ctx.entity_narrative = None
+
+    result = formatter.format_entity_context(ctx)
+    assert "Definition (business identity)" in result
+    assert "Background thematic context" not in result
 
 
 # ── 6. test_format_market_context_included ────────────────────────────────────
@@ -755,3 +802,137 @@ def test_format_earnings_calendar_renders_event_in_window() -> None:
     ctx_far.gathered_at = datetime.now(tz=UTC)
     assert formatter.format_earnings_calendar(ctx_far) == "", "out-of-window event leaked through"
     _ = date  # silence unused-import linter on platforms where the import is needed only above
+
+
+# ── PRD-0030 causal-attribution slice (P0/P1) ─────────────────────────────────
+#
+# These tests use REAL BriefingContext model objects (not MagicMock) so the
+# isinstance(dict) guards in format_portfolio_morning activate the per-holding
+# attribution path. They verify:
+#   - a holding's ``related: [cN]`` line resolves to the SAME [cN] index that
+#     format_news assigns (citation integrity guardrail);
+#   - the sector fallback renders "sector: <Sector> +X.XX%";
+#   - a holding with NEITHER news NOR sector gets NO extra line (so the prompt
+#     ladder emits "idiosyncratic" — the formatter does not fabricate one);
+#   - an article in news_by_holding that falls OUTSIDE the citation window is
+#     skipped rather than emitting an unresolvable marker.
+
+
+def _news(article_id: str, title: str, *, sentiment: str | None = None, rel: float = 0.7):
+    from datetime import UTC, datetime
+    from uuid import UUID
+
+    from rag_chat.application.models.briefing_context import NewsArticleSummary
+
+    return NewsArticleSummary(
+        article_id=UUID(article_id),
+        title=title,
+        url=None,
+        published_at=datetime(2026, 6, 14, tzinfo=UTC),
+        display_relevance_score=rel,
+        sentiment=sentiment,
+    )
+
+
+def _real_morning_ctx(*, holdings, news_articles, news_by_holding, sector_by_holding):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import UUID
+
+    from rag_chat.application.models.briefing_context import (
+        BriefingContext,
+        HoldingItem,
+        PortfolioSnapshot,
+    )
+
+    holding_items = [
+        HoldingItem(
+            ticker=t,
+            entity_id=UUID(eid),
+            canonical_name=t,
+            quantity=Decimal("10"),
+            current_weight=0.1,
+        )
+        for (t, eid) in holdings
+    ]
+    portfolio = PortfolioSnapshot(
+        user_id=UUID("01900000-0000-7000-8000-000000000010"),
+        holdings=holding_items,
+        watchlist=[],
+        total_positions=len(holding_items),
+    )
+    return BriefingContext.for_morning(
+        user_id=UUID("01900000-0000-7000-8000-000000000010"),
+        tenant_id=UUID("01900000-0000-7000-8000-000000000001"),
+        portfolio=portfolio,
+        news_articles=news_articles,
+        active_alerts=[],
+        quotes={},
+        recent_events=[],
+        gathered_at=datetime.now(tz=UTC),
+        news_by_holding=news_by_holding,
+        sector_by_holding=sector_by_holding,
+    )
+
+
+def test_holding_news_attribution_renders_resolvable_cn() -> None:
+    """A holding's related: line cites the SAME [cN] index format_news assigns."""
+    formatter = _make_formatter()
+    a1 = _news("019e0000-0000-7000-8000-00000000a001", "Piper Sandler raises Alphabet PT", sentiment="positive")
+    a2 = _news("019e0000-0000-7000-8000-00000000a002", "Generic market wrap", sentiment="neutral", rel=0.5)
+    ctx = _real_morning_ctx(
+        holdings=[("GOOGL", "01900000-0000-7000-8000-000000001003")],
+        news_articles=[a1, a2],
+        news_by_holding={"GOOGL": ["019e0000-0000-7000-8000-00000000a001"]},
+        sector_by_holding={},
+    )
+    portfolio_text = formatter.format_portfolio_morning(ctx)
+    news_text = formatter.format_news(ctx)
+    # The related line for GOOGL must reference [c1] (a1 is first in ordered news)
+    assert "related: [c1] Piper Sandler raises Alphabet PT (positive, rel 70%)" in portfolio_text
+    # And format_news must number that SAME article as [c1] — citation integrity.
+    assert "[c1] [2026-06-14] Piper Sandler raises Alphabet PT" in news_text
+
+
+def test_holding_sector_fallback_renders_when_no_news() -> None:
+    """With no related news but a sector signal, the holding gets a sector: line."""
+    formatter = _make_formatter()
+    ctx = _real_morning_ctx(
+        holdings=[("JPM", "01900000-0000-7000-8000-000000001008")],
+        news_articles=[_news("019e0000-0000-7000-8000-00000000b001", "Unrelated story")],
+        news_by_holding={},  # JPM has no attributed news
+        sector_by_holding={"JPM": ("Financial Services", 0.0034)},
+    )
+    portfolio_text = formatter.format_portfolio_morning(ctx)
+    assert "sector: Financial Services +0.34%" in portfolio_text
+    assert "JPM" in portfolio_text
+
+
+def test_holding_idiosyncratic_when_no_news_and_no_sector() -> None:
+    """A holding with neither news nor sector gets NO extra attribution line."""
+    formatter = _make_formatter()
+    ctx = _real_morning_ctx(
+        holdings=[("AAPL", "01900000-0000-7000-8000-000000001001")],
+        news_articles=[],
+        news_by_holding={},
+        sector_by_holding={},
+    )
+    portfolio_text = formatter.format_portfolio_morning(ctx)
+    # The formatter does NOT fabricate a driver — no related:/sector: lines.
+    assert "related:" not in portfolio_text
+    assert "sector:" not in portfolio_text
+
+
+def test_holding_news_outside_citation_window_is_skipped() -> None:
+    """An attributed article that falls outside the deduped+limited window emits no marker."""
+    formatter = _make_formatter()
+    # Give AAPL an article_id that is NOT present in news_articles at all → it
+    # cannot resolve to a [cN] index, so the formatter must skip it (no orphan).
+    ctx = _real_morning_ctx(
+        holdings=[("AAPL", "01900000-0000-7000-8000-000000001001")],
+        news_articles=[_news("019e0000-0000-7000-8000-00000000c001", "Some other story")],
+        news_by_holding={"AAPL": ["019e0000-0000-7000-8000-0000deadbeef"]},  # not in news_articles
+        sector_by_holding={},
+    )
+    portfolio_text = formatter.format_portfolio_morning(ctx)
+    assert "related:" not in portfolio_text  # unresolvable id skipped, no fake marker

@@ -673,6 +673,7 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     from rag_chat.infrastructure.clients.s5_client import S5Client
     from rag_chat.infrastructure.clients.s6_client import S6Client
     from rag_chat.infrastructure.clients.s7_client import S7Client
+    from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
 
     s1 = S1Client(
         base_url=settings.s1_base_url,
@@ -685,6 +686,13 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
     s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
+    # PLAN-0107 follow-up (brief vector descriptions, P1): intelligence client for
+    # the entity narrative. WHY api_gateway_url (not s7_base_url): the intelligence
+    # endpoints are S9-proxied (R14/R7 — auth + rate limiting); S7 direct bypasses them.
+    s7_intel = S7IntelligenceClient(
+        base_url=settings.api_gateway_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
 
     # PLAN-0102 W3 follow-up (T-W3-FU-01): wire the new tape + earnings
     # adapters. Both target the same market-data base URL as S3Client
@@ -706,6 +714,9 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
         s7=s7,
         market_tape=market_tape_client,
         earnings_calendar=earnings_calendar_client,
+        # PLAN-0107 follow-up: thread the S9-proxied intelligence client so the
+        # instrument brief can fetch the entity narrative (thematic context).
+        s7_intelligence=s7_intel,
     )
 
     # D-R4-004 (PLAN-0087, 2026-05-09): brief_archive was previously NOT
