@@ -14,11 +14,22 @@
  * DATA SOURCE: institutionalData from useFinancialsSidebarData →
  *   qk.instruments.institutionalHolders → S9 GET /v1/fundamentals/{id}/institutional-holders.
  * DESIGN REFERENCE: docs/designs/0089/06-instrument-financials.md §4.6
+ *
+ * WAVE-4 ENHANCEMENT (de-static-ify): every column header is now click-to-sort
+ * via useSortableRows + SortableHeaderCell. The default order stays "top 10 by
+ * shares held" (the endpoint's natural ranking), but an analyst can instantly
+ * re-rank by % Held, Value, or Change ("who's BUYING / SELLING the most?") —
+ * the first question a reader asks of an ownership table. This required
+ * promoting the file to a client component (sort state lives in the hook).
  */
 
-// WHY no "use client": pure presentational — no hooks, no browser APIs.
+"use client";
+// WHY "use client" (changed): useSortableRows uses useState/useMemo for the
+// interactive column sort, which must run in the browser.
 
 import { PanelHeader } from "./PanelHeader";
+import { SortableHeaderCell } from "./SortableHeaderCell";
+import { useSortableRows, type SortAccessor } from "./useSortableRows";
 import { formatMarketCap, formatPercent } from "@/lib/utils";
 import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
@@ -88,6 +99,21 @@ function fmtChange(change: number | null | undefined): string {
   return change > 0 ? `+${abs}` : change < 0 ? `-${abs}` : abs;
 }
 
+// ── Sort wiring ───────────────────────────────────────────────────────────────
+// Column keys must match the SortableHeaderCell usages below. The HOLDER column
+// sorts alphabetically (text); the four numeric columns sort by magnitude.
+type HolderSortKey = "name" | "shares" | "percent" | "value" | "change";
+
+// Per-column value extractors. Numbers compare numerically; name compares
+// case-insensitively (handled inside the hook's comparator).
+const ACCESSORS: Record<HolderSortKey, SortAccessor<EohdHolder>> = {
+  name: (h) => h.name ?? null,
+  shares: (h) => h.currentShares ?? null,
+  percent: (h) => h.currentPercent ?? null,
+  value: (h) => h.currentValue ?? null,
+  change: (h) => h.change ?? null,
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function InstitutionalHoldersTable({
@@ -95,11 +121,21 @@ export function InstitutionalHoldersTable({
 }: InstitutionalHoldersTableProps) {
   const holders = extractHolders(institutionalData);
 
+  // Sortable rows. No initialSort → keep the endpoint's "top 10 by shares"
+  // order until the user clicks a header. Name defaults to ascending (A→Z);
+  // numeric columns default to descending (biggest-first = what "sort by
+  // shares" means to a reader).
+  const { sortedRows, sort, toggleSort } = useSortableRows<EohdHolder, HolderSortKey>({
+    rows: holders,
+    accessors: ACCESSORS,
+    defaultDirections: { name: "asc" },
+  });
+
   return (
     <div data-table-grid className="border-t border-border">
       {/* Wave-2 redesign: shared PanelHeader (24px accent-bar band) — every
           Financials panel carries identical chrome now (scope item 1). */}
-      <PanelHeader label="INSTITUTIONAL HOLDERS" meta="top 10 by shares held" />
+      <PanelHeader label="INSTITUTIONAL HOLDERS" meta="top 10 · click a column to sort" />
 
       {holders.length === 0 ? (
         <div className="text-[11px] text-muted-foreground px-2 py-2">
@@ -108,16 +144,17 @@ export function InstitutionalHoldersTable({
       ) : (
         <table className="w-full text-[11px] font-mono" role="table" aria-label="Institutional holders">
           <thead>
+            {/* Wave-4: headers are now click-to-sort (SortableHeaderCell). */}
             <tr className="h-[22px]">
-              <th scope="col" className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Holder</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Shares</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal whitespace-nowrap">% Held</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Value</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Change</th>
+              <SortableHeaderCell label="Holder" align="left" active={sort.key === "name"} direction={sort.direction} onSort={() => toggleSort("name")} className="text-left" />
+              <SortableHeaderCell label="Shares" align="right" active={sort.key === "shares"} direction={sort.direction} onSort={() => toggleSort("shares")} />
+              <SortableHeaderCell label="% Held" align="right" active={sort.key === "percent"} direction={sort.direction} onSort={() => toggleSort("percent")} className="whitespace-nowrap" />
+              <SortableHeaderCell label="Value" align="right" active={sort.key === "value"} direction={sort.direction} onSort={() => toggleSort("value")} />
+              <SortableHeaderCell label="Change" align="right" active={sort.key === "change"} direction={sort.direction} onSort={() => toggleSort("change")} />
             </tr>
           </thead>
           <tbody className="divide-y divide-border/30">
-            {holders.map((h, i) => (
+            {sortedRows.map((h, i) => (
               <tr key={i} className="h-[22px] hover:bg-muted/20 transition-colors">
                 <td className="px-2 text-[11px] text-foreground truncate max-w-[140px]">
                   {h.name ?? "—"}

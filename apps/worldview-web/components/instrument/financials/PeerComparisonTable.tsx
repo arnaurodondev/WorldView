@@ -35,6 +35,8 @@
 import { useRouter } from "next/navigation";
 
 import { PanelHeader } from "./PanelHeader";
+import { SortableHeaderCell } from "./SortableHeaderCell";
+import { useSortableRows, type SortAccessor } from "./useSortableRows";
 import { usePeers, type PeerRowV2 } from "./usePeers";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatMarketCap, formatPercent, formatPercentDirect, formatPrice } from "@/lib/utils";
@@ -58,15 +60,30 @@ export interface PeerComparisonTableProps {
 // Widths: ticker 64 / name flexible / last 72 / day% 64 / mcap 80 / pe 56 / 1y 64.
 const GRID_TEMPLATE = "grid-cols-[64px_minmax(80px,1fr)_72px_64px_80px_56px_64px]";
 
-const COLS = [
-  { key: "ticker", label: "TICKER", align: "left" as const },
-  { key: "name", label: "NAME", align: "left" as const },
-  { key: "last", label: "LAST", align: "right" as const },
-  { key: "day", label: "DAY %", align: "right" as const },
-  { key: "mcap", label: "MKT CAP", align: "right" as const },
-  { key: "pe", label: "P/E", align: "right" as const },
-  { key: "ret1y", label: "1Y RET", align: "right" as const },
+// Wave-4: every column is sortable. `key` doubles as the SortableHeaderCell
+// key and the accessor key below — one source of truth so they can't drift.
+type PeerSortKey = "ticker" | "name" | "last" | "day" | "mcap" | "pe" | "ret1y";
+
+const COLS: Array<{ key: PeerSortKey; label: string; align: "left" | "right" }> = [
+  { key: "ticker", label: "TICKER", align: "left" },
+  { key: "name", label: "NAME", align: "left" },
+  { key: "last", label: "LAST", align: "right" },
+  { key: "day", label: "DAY %", align: "right" },
+  { key: "mcap", label: "MKT CAP", align: "right" },
+  { key: "pe", label: "P/E", align: "right" },
+  { key: "ret1y", label: "1Y RET", align: "right" },
 ];
+
+// Value extractors for sorting the PEER rows (self stays pinned, see below).
+const PEER_ACCESSORS: Record<PeerSortKey, SortAccessor<PeerRowV2>> = {
+  ticker: (p) => p.ticker ?? null,
+  name: (p) => p.name ?? null,
+  last: (p) => p.last_price ?? null,
+  day: (p) => p.change_pct ?? null,
+  mcap: (p) => p.market_cap ?? null,
+  pe: (p) => p.pe_ratio ?? null,
+  ret1y: (p) => p.return_1y ?? null,
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -117,6 +134,19 @@ export function PeerComparisonTable({
   const router = useRouter();
   const peersQuery = usePeers(instrumentId);
 
+  // Wave-4: sort ONLY the peer rows. The subject ("self") row stays PINNED at
+  // the top regardless of sort — a relative-value board exists to compare
+  // peers *against* the subject, so the subject must always be the anchor the
+  // eye returns to (the same reason it carries the ◆ marker + highlight). The
+  // default order is the endpoint's market-cap ranking until a header click.
+  const peerRowsRaw = peersQuery.data?.peers ?? [];
+  const { sortedRows: sortedPeers, sort, toggleSort } = useSortableRows<PeerRowV2, PeerSortKey>({
+    rows: peerRowsRaw,
+    accessors: PEER_ACCESSORS,
+    // Text columns sort A→Z first; the numeric value/price/% columns biggest-first.
+    defaultDirections: { ticker: "asc", name: "asc" },
+  });
+
   // Cold first fetch → shape-matched skeleton: header band + 9 row bars
   // (self + 8 peers) at the 22px row rhythm so the panel doesn't jump when
   // data lands (DESIGN_SYSTEM §6.2 — skeletons mirror the final layout).
@@ -132,10 +162,11 @@ export function PeerComparisonTable({
   }
 
   const selfRow = fundamentals ? buildSelfRow(fundamentals, quote) : null;
-  const peerRows = peersQuery.data?.peers ?? [];
+  // Pin self first, then the SORTED peers (self is excluded from the sort).
+  const peerRows = peerRowsRaw;
   const allRows: Array<PeerRowV2 & { isSelf: boolean }> = [
     ...(selfRow ? [{ ...selfRow, isSelf: true }] : []),
-    ...peerRows.map((p) => ({ ...p, isSelf: false })),
+    ...sortedPeers.map((p) => ({ ...p, isSelf: false })),
   ];
 
   if (allRows.length === 0) {
@@ -162,17 +193,21 @@ export function PeerComparisonTable({
         }
       />
 
-      {/* Column headers — same grid template as data rows (alignment lock). */}
-      <div className={`grid ${GRID_TEMPLATE} border-b border-border bg-background/60`}>
+      {/* Column headers — same grid template as data rows (alignment lock).
+          Wave-4: each header is now click-to-sort (SortableHeaderCell, div
+          mode for this CSS-grid layout). Sorting re-ranks the PEER rows; the
+          subject row stays pinned on top. */}
+      <div className={`grid ${GRID_TEMPLATE} border-b border-border bg-background/60`} role="row">
         {COLS.map((col) => (
-          <div
+          <SortableHeaderCell
             key={col.key}
-            className={`flex h-[22px] items-center px-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70 ${
-              col.align === "right" ? "justify-end" : ""
-            }`}
-          >
-            {col.label}
-          </div>
+            as="div"
+            label={col.label}
+            align={col.align}
+            active={sort.key === col.key}
+            direction={sort.direction}
+            onSort={() => toggleSort(col.key)}
+          />
         ))}
       </div>
 

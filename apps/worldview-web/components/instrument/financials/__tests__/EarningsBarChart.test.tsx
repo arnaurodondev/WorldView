@@ -1,22 +1,24 @@
 /**
  * components/instrument/financials/__tests__/EarningsBarChart.test.tsx
  *
- * WHY THIS EXISTS (PLAN-0090 T-E-02): the EarningsBarChart is the dual-bar
- * (actual vs estimate) EPS-history widget on the Financials tab (PRD-0088
- * §6.8, T-C-02). It is hand-rolled SVG (no recharts) so the only test that
- * matters at the unit level is: "Does it mount and render the SVG with the
- * right number of bar groups?"
+ * WHY THIS EXISTS (Wave-4 chart rebuild): the EarningsBarChart is the dual-bar
+ * (actual vs estimate) EPS-history widget on the Financials tab. It was
+ * rebuilt from a hand-rolled <svg> to a recharts <ComposedChart> to gain a
+ * labelled Y axis, per-bar value labels, a trajectory line, and a hover
+ * tooltip (the old SVG was static and unreadable).
  *
- *   1. The chart's <svg data-testid="earnings-bar-chart"> renders when data
- *      arrives — the empty branch returns null which would surface as a
- *      regression.
- *   2. Each FY emits one <text> label inside the SVG so 4-records → 4 FY
- *      labels.
+ * ── HOW WE TEST RECHARTS UNDER JSDOM ──
+ * recharts sizes its inner SVG from the container's measured width, but jsdom
+ * reports width 0 and the project's ResizeObserver stub never fires — so a
+ * real ResponsiveContainer renders an EMPTY svg (no bars/labels/axis ticks).
+ * This is the same reason SectorAllocationDonut.test asserts on legend DOM
+ * rather than SVG slices. We therefore MOCK ResponsiveContainer to a
+ * fixed-size wrapper so the chart's children (axes, bars, tooltip plumbing)
+ * actually render and we can assert on stable structural DOM.
  *
- * WHY no pixel-coord assertions: this test runs in jsdom where SVG geometry
- * (BBox, getComputedStyle) is unreliable. We assert on what's stable —
- * presence + count of structural children. Visual regressions belong in the
- * Playwright suite.
+ * The assertions deliberately target STABLE DOM (the named panel, the legend,
+ * the chart svg, the FY axis labels, and the empty-state branch) rather than
+ * pixel geometry. Visual regressions belong in the Playwright suite.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -50,6 +52,31 @@ vi.mock("@/lib/gateway", () => ({
   },
 }));
 
+// Force recharts' ResponsiveContainer to a fixed 480x168 box so its children
+// render in jsdom (where measured width is 0). We import the real module and
+// override only that one export.
+vi.mock("recharts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("recharts")>();
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactNode }) =>
+      // recharts' chart children read width/height from the *parent* of the
+      // chart element via context; passing an explicit-size wrapper that
+      // recharts' <Surface> can measure is unreliable, so we render the chart
+      // children inside a div with a deterministic inline size.
+      actual.ResponsiveContainer
+        ? // Use a real container but lock its dimensions.
+          (
+            <div style={{ width: 480, height: 168 }}>
+              <actual.ResponsiveContainer width={480} height={168}>
+                {children as never}
+              </actual.ResponsiveContainer>
+            </div>
+          )
+        : null,
+  };
+});
+
 // eslint-disable-next-line import/first
 import { EarningsBarChart } from "@/components/instrument/financials/EarningsBarChart";
 
@@ -64,15 +91,15 @@ function Wrapper({ children }: { children: ReactNode }) {
 
 /**
  * fourYearEarnings — synthetic earnings-history records. Component reads
- * record.data.{date,epsActual,epsEstimate}; component sorts ascending by
- * date and slices the last 4 so any order is fine.
+ * record.data.{date,epsActual,epsEstimate,surprisePercent}; it sorts ascending
+ * by date and slices the last 6 so any order is fine.
  */
 function fourYearEarnings() {
   const rows = [
-    { date: "2021-12-31", epsActual: 5.61, epsEstimate: 5.40 },
-    { date: "2022-12-31", epsActual: 6.11, epsEstimate: 6.05 },
-    { date: "2023-12-31", epsActual: 6.16, epsEstimate: 6.10 },
-    { date: "2024-12-31", epsActual: 6.75, epsEstimate: 6.70 },
+    { date: "2021-12-31", epsActual: 5.61, epsEstimate: 5.4, surprisePercent: 3.9 },
+    { date: "2022-12-31", epsActual: 6.11, epsEstimate: 6.05, surprisePercent: 1.0 },
+    { date: "2023-12-31", epsActual: 6.16, epsEstimate: 6.1, surprisePercent: 1.0 },
+    { date: "2024-12-31", epsActual: 6.75, epsEstimate: 6.7, surprisePercent: 0.7 },
   ];
   return {
     security_id: "i-test-1",
@@ -96,32 +123,50 @@ beforeEach(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("EarningsBarChart", () => {
-  it("renders the SVG chart with the expected test id when 4 records arrive", async () => {
+  it("renders the named EARNINGS panel + recharts svg when data arrives", async () => {
     mockGateway.getEarningsHistory.mockResolvedValue(fourYearEarnings());
     render(
       <Wrapper>
         <EarningsBarChart instrumentId="i-test-1" />
       </Wrapper>,
     );
-    // The component sets data-testid="earnings-bar-chart" on the <svg>. We
-    // wait for the query to resolve and the chart to mount.
+    // The panel header names the chart (was an orphan SVG before).
     await waitFor(() => {
-      expect(screen.getByTestId("earnings-bar-chart")).toBeInTheDocument();
+      expect(screen.getByText("EARNINGS")).toBeInTheDocument();
     });
+    // recharts attaches our data-testid to the chart root <svg>.
+    expect(screen.getByTestId("earnings-bar-chart")).toBeInTheDocument();
   });
 
-  it("emits one FY label per record (FY21..FY24)", async () => {
+  it("renders a legend naming the ACT / EST / TREND encoding", async () => {
     mockGateway.getEarningsHistory.mockResolvedValue(fourYearEarnings());
     render(
       <Wrapper>
         <EarningsBarChart instrumentId="i-test-1" />
       </Wrapper>,
     );
+    // The legend makes the dual-bar + trend-line encoding explicit instead of
+    // leaving the user to guess (a key readability fix). TREND only shows when
+    // surprise data exists — the fixture supplies it.
+    await waitFor(() => {
+      expect(screen.getByText("ACT")).toBeInTheDocument();
+    });
+    expect(screen.getByText("EST")).toBeInTheDocument();
+    expect(screen.getByText("TREND")).toBeInTheDocument();
+  });
+
+  it("emits the FY axis labels (FY21..FY24) for the four records", async () => {
+    mockGateway.getEarningsHistory.mockResolvedValue(fourYearEarnings());
+    render(
+      <Wrapper>
+        <EarningsBarChart instrumentId="i-test-1" />
+      </Wrapper>,
+    );
+    // XAxis renders each label as an SVG <text>. A future change that
+    // truncates the window would silently drop the oldest FY label.
     await waitFor(() => {
       expect(screen.getByText("FY21")).toBeInTheDocument();
     });
-    // WHY assert each: a future change that truncates to "last 3 FYs" or
-    // accidentally dedupes by year would silently drop the oldest label.
     expect(screen.getByText("FY22")).toBeInTheDocument();
     expect(screen.getByText("FY23")).toBeInTheDocument();
     expect(screen.getByText("FY24")).toBeInTheDocument();
@@ -134,10 +179,10 @@ describe("EarningsBarChart", () => {
         <EarningsBarChart instrumentId="i-test-1" />
       </Wrapper>,
     );
-    // WHY waitFor: query resolves async; we wait until the loading skeleton
-    // is gone (no <svg>, no skeleton) — i.e. the empty branch returned null.
+    // The empty branch returns null — no panel, no chart.
     await waitFor(() => {
-      expect(container.querySelector('[data-testid="earnings-bar-chart"]')).toBeNull();
+      expect(container.querySelector('[data-testid="earnings-panel"]')).toBeNull();
     });
+    expect(screen.queryByText("EARNINGS")).not.toBeInTheDocument();
   });
 });

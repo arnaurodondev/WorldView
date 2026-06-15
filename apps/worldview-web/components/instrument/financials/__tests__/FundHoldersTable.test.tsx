@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { FundHoldersTable } from "@/components/instrument/financials/FundHoldersTable";
 import type { FundamentalsSectionResponse } from "@/types/api";
 
@@ -80,5 +80,54 @@ describe("FundHoldersTable", () => {
     };
     render(<FundHoldersTable fundHoldersData={emptyDict} />);
     expect(screen.getByText(/fund holder data not available/i)).toBeInTheDocument();
+  });
+
+  // ── Wave-4 interactivity: click-to-sort columns ─────────────────────────────
+
+  // Endpoint order (A, B, C) deliberately differs from any single-column sort.
+  const SORT_DATA: FundamentalsSectionResponse = {
+    security_id: "aapl",
+    records: [
+      {
+        id: "r1",
+        security_id: "aapl",
+        section: "fund_holders",
+        period_end: "2026-03-31",
+        period_type: "SNAPSHOT",
+        source: "eodhd",
+        ingested_at: "2026-04-01T00:00:00Z",
+        data: {
+          "0": { name: "AlphaFund", currentShares: 300, totalShares: 300, currentPercent: 9, currentValue: 30, change: 1 },
+          "1": { name: "BetaFund", currentShares: 100, totalShares: 100, currentPercent: 3, currentValue: 10, change: 9 },
+          "2": { name: "GammaFund", currentShares: 200, totalShares: 200, currentPercent: 6, currentValue: 20, change: 5 },
+        },
+      },
+    ],
+  };
+
+  function fundOrder(): string[] {
+    const rows = within(screen.getByRole("table")).getAllByRole("row");
+    return rows
+      .slice(1)
+      .map((r) => within(r).getAllByRole("cell")[0].textContent?.trim() ?? "");
+  }
+
+  it("keeps the endpoint order until a header is clicked", () => {
+    render(<FundHoldersTable fundHoldersData={SORT_DATA} />);
+    expect(fundOrder()).toEqual(["AlphaFund", "BetaFund", "GammaFund"]);
+  });
+
+  it("sorts by Shares descending on the Shares header click", () => {
+    render(<FundHoldersTable fundHoldersData={SORT_DATA} />);
+    fireEvent.click(screen.getByRole("button", { name: /shares/i }));
+    // shares: AlphaFund 300, GammaFund 200, BetaFund 100.
+    expect(fundOrder()).toEqual(["AlphaFund", "GammaFund", "BetaFund"]);
+  });
+
+  it("sorts by Change descending on the Change header click", () => {
+    render(<FundHoldersTable fundHoldersData={SORT_DATA} />);
+    fireEvent.click(screen.getByRole("button", { name: /change/i }));
+    // change: BetaFund 9, GammaFund 5, AlphaFund 1.
+    expect(fundOrder()).toEqual(["BetaFund", "GammaFund", "AlphaFund"]);
   });
 });

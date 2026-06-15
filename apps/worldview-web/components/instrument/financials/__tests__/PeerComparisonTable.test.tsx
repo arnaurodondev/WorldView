@@ -183,4 +183,43 @@ describe("PeerComparisonTable (Wave-2)", () => {
     render(<PeerComparisonTable fundamentals={null} quote={null} instrumentId="i-self" />);
     expect(screen.getByText("No peer data available")).toBeInTheDocument();
   });
+
+  // ── Wave-4 interactivity: click-to-sort peer columns ────────────────────────
+
+  /** Peer tickers in DOM (row) order, EXCLUDING the pinned self row. */
+  function peerTickerOrder(): string[] {
+    return screen
+      .getAllByRole("row")
+      .map((r) => r.dataset.testid)
+      .filter((id): id is string => !!id && id.startsWith("peer-row-") && id !== "peer-row-AAPL")
+      .map((id) => id.replace("peer-row-", ""));
+  }
+
+  it("keeps the subject (AAPL) pinned first even after sorting", () => {
+    renderTable();
+    // Sort by P/E ascending (MSFT has the lowest P/E among peers at 20).
+    const peHeader = screen.getByRole("button", { name: /p\/e/i });
+    fireEvent.click(peHeader); // numeric default = desc
+    fireEvent.click(peHeader); // → asc
+    // Self row is still the FIRST data row regardless of sort.
+    const allRows = screen
+      .getAllByRole("row")
+      .filter((r) => r.dataset.testid?.startsWith("peer-row"));
+    expect(allRows[0]).toBe(screen.getByTestId("peer-row-AAPL"));
+  });
+
+  it("re-ranks the peers by P/E ascending on a header click", () => {
+    renderTable();
+    const peHeader = screen.getByRole("button", { name: /p\/e/i });
+    fireEvent.click(peHeader); // desc
+    fireEvent.click(peHeader); // asc → MSFT(20) first among peers
+    expect(peerTickerOrder()[0]).toBe("MSFT");
+  });
+
+  it("re-ranks the peers by 1Y return descending (NVDA leads, nulls last)", () => {
+    renderTable();
+    // Only NVDA has a non-null return_1y; everyone else is null → bottom.
+    fireEvent.click(screen.getByRole("button", { name: /1y ret/i }));
+    expect(peerTickerOrder()[0]).toBe("NVDA");
+  });
 });
