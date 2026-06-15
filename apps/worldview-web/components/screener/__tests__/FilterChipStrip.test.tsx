@@ -69,6 +69,51 @@ describe("FilterChipStrip", () => {
     expect(screen.getByText(/P\/E < 15/i)).toBeInTheDocument();
   });
 
+  // ── BUGFIX 2026-06-15: Performance + Ownership filters now produce chips ────
+  // WHY: these panel-only sections previously had NO chip representation, so
+  // their active state (and the build-filters.ts ownership fix) was invisible
+  // in the always-on strip. Each must now render a dismissible chip.
+
+  it("renders a chip for an ownership Short % filter (decimal → percent)", () => {
+    render(
+      <FilterChipStrip appliedFilters={makeFilters({ shortPctMin: 0.05 })} onApply={() => {}} />,
+    );
+    // shortPctMin stored as decimal 0.05 → label "SHORT% > 5.0%"
+    expect(screen.getByText(/SHORT% > 5\.0%/i)).toBeInTheDocument();
+  });
+
+  it("renders a chip for an analyst-target ownership filter (compact USD)", () => {
+    render(
+      <FilterChipStrip
+        appliedFilters={makeFilters({ analystTargetPriceMin: 150 })}
+        onApply={() => {}}
+      />,
+    );
+    expect(screen.getByText(/ANALYST TGT > \$150/i)).toBeInTheDocument();
+  });
+
+  it("renders a chip for a Performance return filter (decimal → percent)", () => {
+    render(
+      <FilterChipStrip appliedFilters={makeFilters({ return1mMin: 0.1 })} onApply={() => {}} />,
+    );
+    expect(screen.getByText(/1M RTN > 10\.0%/i)).toBeInTheDocument();
+  });
+
+  it("removing an ownership chip deletes its FilterState key via onApply", () => {
+    vi.useFakeTimers();
+    const onApply = vi.fn();
+    render(
+      <FilterChipStrip appliedFilters={makeFilters({ instOwnPctMin: 0.6 })} onApply={onApply} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /remove filter: INST OWN%/i }));
+    act(() => {
+      vi.advanceTimersByTime(300); // flush the 250ms debounce
+    });
+    expect(onApply).toHaveBeenCalledTimes(1);
+    const next = onApply.mock.calls[0][0] as FilterState;
+    expect(next.instOwnPctMin).toBeUndefined();
+  });
+
   it("renders a chip for a min ROE% filter (decimal to % conversion)", () => {
     // roe stored as decimal: 0.15 = 15%
     render(

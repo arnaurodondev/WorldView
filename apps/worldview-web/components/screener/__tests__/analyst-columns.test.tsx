@@ -248,45 +248,74 @@ describe("active-counts: ownership section (IB-L4)", () => {
 // ── build-filters: L4 field name accuracy ─────────────────────────────────────
 import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
 
-describe("buildScreenerFilters — IB-L4 field names match backend schema", () => {
-  it("maps analystTargetPriceMin → analyst_target_price", () => {
+// BUGFIX 2026-06-15 (screener filter audit): these five Ownership fields are
+// COLUMNS on instrument_fundamentals_snapshot, NOT rows in fundamental_metrics.
+// The original assertions pinned the BROKEN wire shape `{metric: "short_percent"}`
+// which the backend INNER-JOINs against a non-existent metric row → 0 results
+// for the whole section (live-verified). The backend actually parses them as
+// per-filter NAMED siblings (`short_percent_min` / `analyst_target_price_min`,
+// …) — fundamental_metrics.py:64-71,109-110. These assertions now pin that real
+// contract (which live-returns 192/354/248/514/2 rows respectively).
+describe("buildScreenerFilters — IB-L4 ownership fields use backend named-field shape", () => {
+  // Helper: assert NO broken metric-entry exists, and the named field rides on
+  // a carrier filter object.
+  const expectNamedField = (
+    filters: ReturnType<typeof buildScreenerFilters>,
+    brokenMetric: string,
+    namedField: string,
+    value: number,
+  ) => {
+    expect(filters.some((f) => f.metric === brokenMetric)).toBe(false);
+    const holder = filters.find(
+      (f) => (f as Record<string, unknown>)[namedField] !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    expect(holder?.[namedField]).toBe(value);
+  };
+
+  it("maps analystTargetPriceMin → analyst_target_price_min (named field)", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       analystTargetPriceMin: 100,
     });
-    expect(filters.some((f) => f.metric === "analyst_target_price")).toBe(true);
+    expectNamedField(filters, "analyst_target_price", "analyst_target_price_min", 100);
   });
 
-  it("maps analystConsensusMin → analyst_consensus_rating", () => {
+  it("maps analystConsensusMin → analyst_consensus_rating_min (named field)", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       analystConsensusMin: 4,
     });
-    expect(filters.some((f) => f.metric === "analyst_consensus_rating")).toBe(true);
+    expectNamedField(filters, "analyst_consensus_rating", "analyst_consensus_rating_min", 4);
   });
 
-  it("maps insiderNetBuy90dMin → insider_net_buy_90d", () => {
+  it("maps insiderNetBuy90dMin → insider_net_buy_90d_min (named field)", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       insiderNetBuy90dMin: 100_000,
     });
-    expect(filters.some((f) => f.metric === "insider_net_buy_90d")).toBe(true);
+    expectNamedField(filters, "insider_net_buy_90d", "insider_net_buy_90d_min", 100_000);
   });
 
-  it("maps instOwnPctMin → institutional_ownership_pct", () => {
+  it("maps instOwnPctMin → institutional_ownership_pct_min (named field)", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       instOwnPctMin: 0.40,
     });
-    expect(filters.some((f) => f.metric === "institutional_ownership_pct")).toBe(true);
+    expectNamedField(filters, "institutional_ownership_pct", "institutional_ownership_pct_min", 0.4);
   });
 
-  it("maps shortPctMax → short_percent", () => {
+  it("maps shortPctMax → short_percent_max (named field)", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       shortPctMax: 0.05,
     });
-    expect(filters.some((f) => f.metric === "short_percent")).toBe(true);
+    expect(filters.some((f) => f.metric === "short_percent")).toBe(false);
+    const holder = filters.find(
+      (f) => (f as Record<string, unknown>).short_percent_max !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    expect(holder?.short_percent_max).toBe(0.05);
   });
 });
 

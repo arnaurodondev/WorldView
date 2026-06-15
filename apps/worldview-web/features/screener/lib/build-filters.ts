@@ -86,13 +86,70 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "return_3y", f.return3yMin, f.return3yMax);
 
   // ── Analyst / Insider / Ownership (SERVER_SIDE — IB-L4) ──────────────────
-  // WHY analyst_target_price (not analyst_target): matches the exact column name
-  // in instrument_fundamentals_snapshot.
-  pushIfRange(filters, "analyst_target_price", f.analystTargetPriceMin, f.analystTargetPriceMax);
-  pushIfRange(filters, "analyst_consensus_rating", f.analystConsensusMin, f.analystConsensusMax);
-  pushIfRange(filters, "insider_net_buy_90d", f.insiderNetBuy90dMin, f.insiderNetBuy90dMax);
-  pushIfRange(filters, "institutional_ownership_pct", f.instOwnPctMin, f.instOwnPctMax);
-  pushIfRange(filters, "short_percent", f.shortPctMin, f.shortPctMax);
+  // BUGFIX 2026-06-15 (screener filter audit): these five fields are NOT rows
+  // in the ``fundamental_metrics`` table — they are COLUMNS on
+  // ``instrument_fundamentals_snapshot``. Sending them as
+  // ``{metric: "short_percent", min_value: ...}`` made the backend build a
+  // ``WHERE fundamental_metrics.metric = 'short_percent'`` subquery; because no
+  // such metric row exists, the INNER JOIN matched zero instruments and the
+  // ENTIRE Ownership section silently returned 0 results (live-verified:
+  // ``{metric:"short_percent",min_value:0.05}`` → total 0, vs the named-field
+  // form below → total 192). The backend's ``ScreenFilterRequest`` exposes each
+  // snapshot column as a per-filter NAMED sibling of min_value/max_value
+  // (``short_percent_min`` / ``short_percent_max`` etc.) — see
+  // services/market-data/.../api/schemas/fundamental_metrics.py:64-71,109-110
+  // and the ``numeric_snap_filters`` handling in fundamental_metrics_query.py.
+  // This is the SAME trap already documented for the intelligence rollup +
+  // avg_volume_30d blocks below; the merge helper applies the identical pattern.
+  //
+  // WHY merged onto an existing filter (not pushed as a new entry): the named
+  // fields are siblings on a ScreenFilterRequest object, and the backend
+  // collapses each ``*_min``/``*_max`` across all filter entries with the first
+  // non-None value. Attaching them to the first filter (or a synthetic
+  // market_capitalization carrier when none exists) keeps them on the request
+  // without needing a numeric metric range of their own — exactly how the
+  // intelligence + volume blocks attach below.
+  //
+  // WHY a local interface (not new fields on the shared types/api.ts
+  // ScreenerFilter): types/api.ts is shared across surfaces and this sprint runs
+  // several agents concurrently; an additive local intersection type keeps the
+  // change inside the screener surface. The fields serialise identically —
+  // JSON.stringify ignores the nominal type (same precedent as
+  // SnapshotVolumeFields below).
+  interface SnapshotOwnershipFields {
+    analyst_target_price_min?: number;
+    analyst_target_price_max?: number;
+    analyst_consensus_rating_min?: number;
+    analyst_consensus_rating_max?: number;
+    insider_net_buy_90d_min?: number;
+    insider_net_buy_90d_max?: number;
+    institutional_ownership_pct_min?: number;
+    institutional_ownership_pct_max?: number;
+    short_percent_min?: number;
+    short_percent_max?: number;
+  }
+  const own: SnapshotOwnershipFields = {};
+  if (f.analystTargetPriceMin !== undefined) own.analyst_target_price_min = f.analystTargetPriceMin;
+  if (f.analystTargetPriceMax !== undefined) own.analyst_target_price_max = f.analystTargetPriceMax;
+  if (f.analystConsensusMin !== undefined) own.analyst_consensus_rating_min = f.analystConsensusMin;
+  if (f.analystConsensusMax !== undefined) own.analyst_consensus_rating_max = f.analystConsensusMax;
+  if (f.insiderNetBuy90dMin !== undefined) own.insider_net_buy_90d_min = f.insiderNetBuy90dMin;
+  if (f.insiderNetBuy90dMax !== undefined) own.insider_net_buy_90d_max = f.insiderNetBuy90dMax;
+  if (f.instOwnPctMin !== undefined) own.institutional_ownership_pct_min = f.instOwnPctMin;
+  if (f.instOwnPctMax !== undefined) own.institutional_ownership_pct_max = f.instOwnPctMax;
+  if (f.shortPctMin !== undefined) own.short_percent_min = f.shortPctMin;
+  if (f.shortPctMax !== undefined) own.short_percent_max = f.shortPctMax;
+  if (Object.keys(own).length > 0) {
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], ...own };
+    } else {
+      // Synthetic carrier: ScreenFilterRequest requires a ``metric`` (regex
+      // validated), and market_capitalization with no min/max is the canonical
+      // no-op carrier — the backend LEFT JOINs the snapshot directly, so no
+      // numeric bound is applied on the metric itself.
+      filters.push({ metric: "market_capitalization", ...own });
+    }
+  }
 
   // ── Intelligence rollup (SERVER_SIDE — IB-L5) ────────────────────────────
   // WHY merged into ONE filter object (not pushed as separate filters[]

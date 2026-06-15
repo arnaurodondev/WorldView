@@ -169,6 +169,61 @@ const FILTER_FIELDS = [
 // Key union for type safety when reading/writing FilterState
 type FilterFieldId = typeof FILTER_FIELDS[number]["id"];
 
+// ── Chip-only descriptors (BUGFIX 2026-06-15 — usability) ────────────────────
+//
+// WHY A SEPARATE LIST (not added to FILTER_FIELDS): before this, deriveChips
+// walked ONLY the 10 FILTER_FIELDS entries — so a filter set via the
+// ScreenerFilterBar panel for ANY Performance (returns / 52W distance) or
+// Ownership (analyst / insider / institutional / short) field produced NO chip
+// in the always-visible strip. The user got a section count badge but no
+// dismissible "what's active" indication, and the chip strip's contextual
+// Reset button (gated on chips.length > 0) never appeared when only those
+// filters were set. That made the most powerful filters the LEAST visible.
+//
+// These descriptors are consumed by deriveChips ONLY — they are deliberately
+// NOT added to FILTER_FIELDS so the "+ Add filter" quick-add combobox stays a
+// short, curated menu (the panel remains the power-user entry point). Each
+// chip is still individually dismissible because the min/max keys are real
+// FilterState keys handled by the same generic remove() closure below.
+//
+// Unit conventions mirror the panel inputs (decimals for fractions, raw USD
+// for prices) so chip labels read the same as the values the user typed.
+const CHIP_ONLY_FIELDS = [
+  // ── Performance (decimals: 0.124 = +12.4%) ──────────────────────────────
+  { label: "52W↓HIGH", minKey: "dist52wHighPctMin", maxKey: "dist52wHighPctMax", pct: true },
+  { label: "52W↑LOW", minKey: "dist52wLowPctMin", maxKey: "dist52wLowPctMax", pct: true },
+  { label: "1M RTN", minKey: "return1mMin", maxKey: "return1mMax", pct: true },
+  { label: "3M RTN", minKey: "return3mMin", maxKey: "return3mMax", pct: true },
+  { label: "6M RTN", minKey: "return6mMin", maxKey: "return6mMax", pct: true },
+  { label: "YTD RTN", minKey: "returnYtdMin", maxKey: "returnYtdMax", pct: true },
+  { label: "1Y RTN", minKey: "return1yMin", maxKey: "return1yMax", pct: true },
+  { label: "3Y RTN", minKey: "return3yMin", maxKey: "return3yMax", pct: true },
+  // ── Ownership (the section whose filters were silently broken until the
+  //    build-filters.ts named-field fix; chips make the fix observable) ─────
+  { label: "ANALYST TGT", minKey: "analystTargetPriceMin", maxKey: "analystTargetPriceMax", usd: true },
+  { label: "CONSENSUS", minKey: "analystConsensusMin", maxKey: "analystConsensusMax" },
+  { label: "INSIDER 90D", minKey: "insiderNetBuy90dMin", maxKey: "insiderNetBuy90dMax", usd: true },
+  { label: "INST OWN%", minKey: "instOwnPctMin", maxKey: "instOwnPctMax", pct: true },
+  { label: "SHORT%", minKey: "shortPctMin", maxKey: "shortPctMax", pct: true },
+] as const;
+
+/** Format a chip value per its descriptor's unit hint. */
+function formatChipValue(
+  v: number,
+  opts: { pct?: boolean; usd?: boolean },
+): string {
+  if (opts.pct) return `${(v * 100).toFixed(1)}%`;
+  if (opts.usd) {
+    // Compact USD so a $5,000,000 insider flow reads "$5.0M", not a wall of digits.
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(1)}B`;
+    if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+    if (abs >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
+    return `$${v}`;
+  }
+  return `${v}`;
+}
+
 // ── Chip derivation ─────────────────────────────────────────────────────────
 
 /**
@@ -221,6 +276,40 @@ function deriveChips(filters: FilterState): ActiveChip[] {
       chips.push({
         key: `${field.id}-max`,
         label: `${field.label} < ${field.toDisplay(maxVal)}`,
+        remove: (prev) => {
+          const next = { ...prev };
+          delete (next as Record<string, unknown>)[field.maxKey];
+          return next;
+        },
+      });
+    }
+  }
+
+  // ── Chip-only fields (Performance + Ownership) ─────────────────────────────
+  // Same min/max → two-chip pattern as above, but driven by CHIP_ONLY_FIELDS so
+  // panel-set Performance/Ownership filters become visible + dismissible without
+  // adding them to the "+ Add filter" combobox. Each remove() deletes the real
+  // FilterState key, so dismissing a chip re-fires the query through onApply.
+  for (const field of CHIP_ONLY_FIELDS) {
+    const minVal = (filters as unknown as Record<string, unknown>)[field.minKey] as number | undefined;
+    const maxVal = (filters as unknown as Record<string, unknown>)[field.maxKey] as number | undefined;
+
+    if (minVal !== undefined && minVal !== null) {
+      chips.push({
+        key: `${field.minKey}`,
+        label: `${field.label} > ${formatChipValue(minVal, { pct: "pct" in field, usd: "usd" in field })}`,
+        remove: (prev) => {
+          const next = { ...prev };
+          delete (next as Record<string, unknown>)[field.minKey];
+          return next;
+        },
+      });
+    }
+
+    if (maxVal !== undefined && maxVal !== null) {
+      chips.push({
+        key: `${field.maxKey}`,
+        label: `${field.label} < ${formatChipValue(maxVal, { pct: "pct" in field, usd: "usd" in field })}`,
         remove: (prev) => {
           const next = { ...prev };
           delete (next as Record<string, unknown>)[field.maxKey];

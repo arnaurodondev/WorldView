@@ -440,3 +440,110 @@ describe("buildScreenerFilters — avg volume 30d range (Round 2)", () => {
     expect(f.avg_volume_30d_min).toBe(2_000_000);
   });
 });
+
+// ── BUGFIX 2026-06-15: Ownership snapshot-column named-field range ────────────
+//
+// WHY THESE TESTS: the five Ownership-section filters (analyst target/consensus,
+// insider 90d, institutional ownership, short %) are COLUMNS on
+// instrument_fundamentals_snapshot — NOT rows in fundamental_metrics. Before
+// this fix they were emitted as `{metric: "short_percent", min_value: ...}`,
+// which made the backend INNER JOIN on a non-existent metric row and return
+// ZERO results for the whole section (live-verified: total 0). The fix routes
+// them as per-filter NAMED siblings (`short_percent_min` etc.) — the exact
+// same trap + remedy as the IB-L5 + avg_volume_30d blocks above. These tests
+// pin the request shape the backend's ScreenFilterRequest actually parses
+// (fundamental_metrics.py:64-71, 109-110).
+
+describe("buildScreenerFilters — ownership snapshot fields (named-field range)", () => {
+  // Each (FilterState key → backend named field) pair the fix wires up. The
+  // backend matches each pair against an instrument_fundamentals_snapshot
+  // column, so the metric-entry form silently returns 0 rows.
+  const cases: ReadonlyArray<readonly [keyof FilterState, keyof FilterState, string, string, string]> = [
+    ["analystTargetPriceMin", "analystTargetPriceMax", "analyst_target_price_min", "analyst_target_price_max", "analyst_target_price"],
+    ["analystConsensusMin", "analystConsensusMax", "analyst_consensus_rating_min", "analyst_consensus_rating_max", "analyst_consensus_rating"],
+    ["insiderNetBuy90dMin", "insiderNetBuy90dMax", "insider_net_buy_90d_min", "insider_net_buy_90d_max", "insider_net_buy_90d"],
+    ["instOwnPctMin", "instOwnPctMax", "institutional_ownership_pct_min", "institutional_ownership_pct_max", "institutional_ownership_pct"],
+    ["shortPctMin", "shortPctMax", "short_percent_min", "short_percent_max", "short_percent"],
+  ];
+
+  for (const [minKey, maxKey, minField, maxField, metricName] of cases) {
+    it(`${String(minKey)}/${String(maxKey)} → named ${minField}/${maxField}, NOT a {metric:"${metricName}"} entry`, () => {
+      const filters = buildScreenerFilters(
+        makeFilters({ [minKey]: 1, [maxKey]: 2 } as Partial<FilterState>),
+      );
+      // The broken metric-entry shape must NOT be present (it returns 0 rows).
+      expect(findFilter(filters, metricName)).toBeUndefined();
+      // The named fields must ride on a single carrier filter object.
+      const holder = filters.find(
+        (f) => (f as Record<string, unknown>)[minField] !== undefined,
+      ) as Record<string, unknown> | undefined;
+      expect(holder).toBeDefined();
+      expect(holder?.[minField]).toBe(1);
+      expect(holder?.[maxField]).toBe(2);
+    });
+  }
+
+  it("ownership-only request creates the synthetic market_capitalization carrier", () => {
+    // No other range filter is active → a synthetic metric carrier is needed
+    // because ScreenFilterRequest requires `metric` (regex-validated), but it
+    // applies no numeric bound itself (the snapshot column is LEFT-JOINed).
+    const filters = buildScreenerFilters(makeFilters({ shortPctMin: 0.05 }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect((filters[0] as Record<string, unknown>).short_percent_min).toBe(0.05);
+  });
+
+  it("merges onto an existing range filter rather than spawning a new entry", () => {
+    const filters = buildScreenerFilters(
+      makeFilters({ peMin: 10, instOwnPctMin: 0.6 }),
+    );
+    const holder = filters.find(
+      (f) => (f as Record<string, unknown>).institutional_ownership_pct_min !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    // It rode on the pe_ratio filter, not a separate object.
+    expect(holder?.metric).toBe("pe_ratio");
+    expect(holder?.institutional_ownership_pct_min).toBe(0.6);
+  });
+
+  it("sends only the side that is set (min-only / max-only)", () => {
+    const minOnly = buildScreenerFilters(makeFilters({ shortPctMin: 0.02 }));
+    expect((minOnly[0] as Record<string, unknown>).short_percent_min).toBe(0.02);
+    expect((minOnly[0] as Record<string, unknown>).short_percent_max).toBeUndefined();
+
+    const maxOnly = buildScreenerFilters(makeFilters({ shortPctMax: 0.15 }));
+    expect((maxOnly[0] as Record<string, unknown>).short_percent_max).toBe(0.15);
+    expect((maxOnly[0] as Record<string, unknown>).short_percent_min).toBeUndefined();
+  });
+
+  it("emits nothing ownership-related when all inputs are unset", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    const ownershipFields = [
+      "analyst_target_price_min", "analyst_target_price_max",
+      "analyst_consensus_rating_min", "analyst_consensus_rating_max",
+      "insider_net_buy_90d_min", "insider_net_buy_90d_max",
+      "institutional_ownership_pct_min", "institutional_ownership_pct_max",
+      "short_percent_min", "short_percent_max",
+    ];
+    for (const f of filters) {
+      for (const field of ownershipFields) {
+        expect((f as Record<string, unknown>)[field]).toBeUndefined();
+      }
+    }
+  });
+
+  it("composes with intelligence + volume named fields on one carrier", () => {
+    // All three named-field blocks (intel, volume, ownership) merge onto the
+    // same filters[0] carrier — they must compose, not clobber.
+    const filters = buildScreenerFilters(
+      makeFilters({ hasAiBrief: true, avgVolume30dMin: 2_000_000, shortPctMax: 0.1 }),
+    );
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.has_ai_brief).toBe(true);
+    expect(f.avg_volume_30d_min).toBe(2_000_000);
+    expect(f.short_percent_max).toBe(0.1);
+  });
+});
