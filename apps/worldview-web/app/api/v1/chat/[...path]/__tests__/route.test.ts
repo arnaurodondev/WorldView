@@ -94,6 +94,66 @@ describe("chat streaming proxy route", () => {
     expect(text).toBe("event: token\n");
   });
 
+  it("delivers SSE frames INCREMENTALLY — each upstream chunk surfaces as its own read (no buffering)", async () => {
+    // REGRESSION GUARD (chat-streaming verification, 2026-06-15):
+    // The whole reason this route exists is to stream frames the instant S9
+    // emits them. A faithful pass-through must NOT coalesce separately-emitted
+    // upstream chunks into one buffered blob. We model S8's real frame cadence
+    // (status → token → done as DISTINCT enqueues) and assert the consumer
+    // reads them back as DISTINCT chunks in order — proving the body is the
+    // live upstream stream, not an awaited/concatenated copy.
+    vi.stubEnv("API_GATEWAY_URL", "http://gateway:8000");
+
+    const enc = new TextEncoder();
+    // Three frames enqueued as three separate controller.enqueue() calls —
+    // exactly how S8/sse-starlette pushes one event-block at a time.
+    const frames = [
+      "event: status\ndata: {\"step\": \"loading_context\"}\n\n",
+      "event: token\ndata: {\"text\": \"Hello\"}\n\n",
+      "event: done\ndata: {\"type\": \"done\"}\n\n",
+    ];
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const f of frames) controller.enqueue(enc.encode(f));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(upstreamBody, {
+          status: 200,
+          headers: { "content-type": "text/event-stream; charset=utf-8" },
+        }),
+      ),
+    );
+
+    const req = new Request("http://localhost:3001/api/v1/chat/stream", {
+      method: "POST",
+      headers: { authorization: "Bearer tok", "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi", thread_id: "t-1" }),
+    });
+    const res = await POST(req, ctx(["stream"]));
+
+    // Read the response body chunk-by-chunk. A buffering proxy would either
+    // return one combined chunk OR (worse) gzip-wrap it; a streaming proxy
+    // surfaces each enqueued frame as its own read in emission order.
+    expect(res.body).not.toBeNull();
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    const received: string[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received.push(dec.decode(value, { stream: true }));
+    }
+
+    // Each frame arrives as its own read, in order — incremental delivery.
+    expect(received).toEqual(frames);
+    // And the body was never gzip-transformed (no-transform escape hatch).
+    expect(res.headers.get("cache-control")).toBe("no-cache, no-transform");
+  });
+
   it("proxies nested paths (proposals/{id}/confirm) segment-by-segment", async () => {
     vi.stubEnv("API_GATEWAY_URL", "http://gateway:8000");
     const fetchMock = vi
