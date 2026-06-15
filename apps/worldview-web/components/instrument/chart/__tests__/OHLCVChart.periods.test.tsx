@@ -147,14 +147,20 @@ afterEach(() => cleanup());
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("OHLCVChart period selector", () => {
-  it("renders all 6 period pills with 1Y selected by default", async () => {
-    // WAVE-4 (2026-06-12): the default selected period flipped from "1D" (5M
-    // intraday, ~10-30 sparse candles) to "1Y" (daily bars, ~200 visible of
-    // ~500 loaded). The pill set is unchanged; only the default highlight moved.
+  it("renders all 6 backend-supported period pills with 1Y selected by default", async () => {
+    // 2026-06-15 BACKEND-HONEST SET: the pill set changed from
+    // [1D,1W,1M,3M,1Y,5Y] to [1D,5D,1M,3M,6M,1Y]. WHY: 1W (hourly) and 5Y
+    // (weekly) mapped to resolutions the S3 backend barely/never stores — 5Y
+    // rendered an empty chart and 1W only ~10 bars (the reported bugs). They
+    // are replaced by 5D (intraday, dense 5-minute data) and 6M (daily, same
+    // series as 1M/3M/1Y). 1Y remains the dense daily default.
     await act(async () => { renderChart(makeClient()); });
-    for (const p of ["1D", "1W", "1M", "3M", "1Y", "5Y"]) {
+    for (const p of ["1D", "5D", "1M", "3M", "6M", "1Y"]) {
       expect(screen.getByRole("button", { name: p })).toBeInTheDocument();
     }
+    // The dropped periods must NOT be present any more.
+    expect(screen.queryByRole("button", { name: "1W" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "5Y" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "1Y" }).getAttribute("aria-pressed"),
     ).toBe("true");

@@ -21,21 +21,39 @@ import {
 } from "@/components/instrument/chart/chartPeriods";
 
 describe("chartPeriods presets", () => {
-  it("exposes exactly the 6 required periods in display order", () => {
-    expect(CHART_PERIODS).toEqual(["1D", "1W", "1M", "3M", "1Y", "5Y"]);
+  it("exposes exactly the 6 backend-supported periods in display order", () => {
+    // 2026-06-15: the set is now backend-honest — every period maps to a
+    // resolution S3 actually stores. 1W (hourly, sparse) and 5Y (weekly, NOT
+    // stored — rendered empty) are gone; 5D (intraday) and 6M (daily) replace
+    // them. See chartPeriods.ts for the live-verified data-availability table.
+    expect(CHART_PERIODS).toEqual(["1D", "5D", "1M", "3M", "6M", "1Y"]);
   });
 
-  it("1M / 3M / 1Y share one daily-bar cache slot (same timeframe + fetch window)", () => {
-    const m1 = CHART_PERIOD_PRESETS["1M"];
-    const m3 = CHART_PERIOD_PRESETS["3M"];
-    const y1 = CHART_PERIOD_PRESETS["1Y"];
-    // Same timeframe → same qk.instruments.ohlcv(id, tf) cache key.
-    expect(m1.timeframe).toBe("1D");
-    expect(m3.timeframe).toBe("1D");
-    expect(y1.timeframe).toBe("1D");
-    // Same fetch window → identical queryFn params → one shared fetch.
-    expect(m1.fetchDaysBack).toBe(m3.fetchDaysBack);
-    expect(m3.fetchDaysBack).toBe(y1.fetchDaysBack);
+  it("only maps to resolutions the backend actually stores (5M or 1D — never 1H/1W/1M)", () => {
+    // ROOT-CAUSE GUARD: the old 1W→1H and 5Y→1W mappings hit resolutions with
+    // ~10 or ZERO stored bars. Pin that NO period may ever map to those again.
+    const allowed = new Set(["5M", "1D"]);
+    for (const period of CHART_PERIODS) {
+      expect(allowed.has(CHART_PERIOD_PRESETS[period].timeframe)).toBe(true);
+    }
+  });
+
+  it("1M / 3M / 6M / 1Y share one daily-bar cache slot (same timeframe + fetch window)", () => {
+    const daily = ["1M", "3M", "6M", "1Y"] as const;
+    for (const p of daily) {
+      // Same timeframe → same qk.instruments.ohlcv(id, tf) cache key.
+      expect(CHART_PERIOD_PRESETS[p].timeframe).toBe("1D");
+      // Same fetch window → identical queryFn params → one shared fetch.
+      expect(CHART_PERIOD_PRESETS[p].fetchDaysBack).toBe(CHART_PERIOD_PRESETS["1Y"].fetchDaysBack);
+    }
+  });
+
+  it("1D / 5D share one intraday (5M) cache slot (same timeframe + fetch window)", () => {
+    // The two intraday periods must share a slot too — switching 1D↔5D is a
+    // client-side re-window of the same 5-minute series, never a refetch.
+    expect(CHART_PERIOD_PRESETS["1D"].timeframe).toBe("5M");
+    expect(CHART_PERIOD_PRESETS["5D"].timeframe).toBe("5M");
+    expect(CHART_PERIOD_PRESETS["1D"].fetchDaysBack).toBe(CHART_PERIOD_PRESETS["5D"].fetchDaysBack);
   });
 
   it("every preset fetches at least as far back as it shows (no empty window)", () => {
@@ -45,17 +63,12 @@ describe("chartPeriods presets", () => {
     }
   });
 
-  it("intraday periods use intraday resolutions", () => {
-    expect(CHART_PERIOD_PRESETS["1D"].timeframe).toBe("5M");
-    expect(CHART_PERIOD_PRESETS["1W"].timeframe).toBe("1H");
-    expect(CHART_PERIOD_PRESETS["5Y"].timeframe).toBe("1W");
-  });
-
   it("periodStartIso returns a UTC date-only string N days back", () => {
     // Fixed clock so the assertion is deterministic.
     const now = new Date("2026-06-10T12:00:00Z");
-    // 1D preset fetches 3 days back → 2026-06-07.
-    expect(periodStartIso("1D", now)).toBe("2026-06-07");
+    // 1D preset now fetches 8 days back (was 3 — too narrow, landed on sparse
+    // sessions and produced the "~10 bars" bug) → 2026-06-02.
+    expect(periodStartIso("1D", now)).toBe("2026-06-02");
     // Date-only format (stable query-string within a calendar day).
     expect(periodStartIso("1Y", now)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
@@ -90,10 +103,22 @@ describe("chartPeriods presets", () => {
     expect(preset.visibleBars).toBeLessThan(preset.fetchDaysBack);
   });
 
-  it("intraday periods do NOT set visibleBars (they window by trading session)", () => {
-    // 1D / 1W window by time (one session / one week) — a bar-count window
-    // would be wrong there. Only the daily default opts into bar-count windowing.
-    expect(CHART_PERIOD_PRESETS["1D"].visibleBars).toBeUndefined();
-    expect(CHART_PERIOD_PRESETS["1W"].visibleBars).toBeUndefined();
+  it("intraday periods window by BAR COUNT (robust to sparse/irregular sessions)", () => {
+    // 2026-06-15: 1D / 5D now use a bar-COUNT visible window (visibleBars), NOT
+    // a calendar-day window. WHY the change: a day-window can land on a sparse
+    // session (verified live: 11 bars one day, 60 the next) and reproduce the
+    // "~10 bars" bug. A fixed bar count always shows a dense, consistent number
+    // of the most-recent candles regardless of how the sessions fell.
+    expect(CHART_PERIOD_PRESETS["1D"].visibleBars).toBe(80);
+    expect(CHART_PERIOD_PRESETS["5D"].visibleBars).toBe(390);
+  });
+
+  it("EVERY period now declares an explicit visibleBars budget", () => {
+    // The visible-range effect in OHLCVChart prefers visibleBars (exact candle
+    // count) over visibleDays (calendar window). Pin that every period opts in
+    // so none can silently fall back to the day-window class of bug.
+    for (const period of CHART_PERIODS) {
+      expect(CHART_PERIOD_PRESETS[period].visibleBars).toBeGreaterThan(0);
+    }
   });
 });

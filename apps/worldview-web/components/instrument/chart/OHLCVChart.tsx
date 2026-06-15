@@ -426,9 +426,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
               paints in-place with zero shift (ChartSkeleton owns inset-0). */}
           {isLoading && !data && <ChartSkeleton />}
           {/* Empty-state for explicit 0-bar success response (CHART-001).
-              WHY period-aware copy: the default 1D period needs intraday (5-min)
-              bars which sparse instruments may not have — pointing the analyst
-              at the daily-bar periods (1M/3M/1Y) is the actionable next step. */}
+              WHY period-aware copy: the intraday periods (1D/5D → 5-minute bars)
+              may be empty for instruments without recent intraday data — pointing
+              the analyst at the daily-bar periods (1M/3M/6M/1Y), which have the
+              deepest history, is the actionable next step. */}
           {!isLoading && data && data.bars.length === 0 && (
             <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center justify-center" style={{ height: CHART_HEIGHT }}>
               <p className="text-[12px] text-muted-foreground">No price data for the {period} period</p>
