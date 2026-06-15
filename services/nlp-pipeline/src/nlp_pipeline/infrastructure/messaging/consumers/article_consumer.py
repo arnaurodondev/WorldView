@@ -49,7 +49,7 @@ from messaging.kafka.serialization_utils import serialize_confluent_avro  # type
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.embeddings import run_embeddings_block
 from nlp_pipeline.application.blocks.ner import run_ner_block
-from nlp_pipeline.application.blocks.routing import compute_routing_score
+from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES, compute_routing_score
 from nlp_pipeline.application.blocks.sectioning import section_document
 from nlp_pipeline.application.blocks.suppression import (
     apply_suppression_gate,
@@ -57,7 +57,7 @@ from nlp_pipeline.application.blocks.suppression import (
     should_generate_section_embeddings,
     should_run_deep_extraction,
 )
-from nlp_pipeline.domain.enums import ProcessingPath
+from nlp_pipeline.domain.enums import ProcessingPath, RoutingTier
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
@@ -760,8 +760,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         routing_decision: RoutingDecision,
         doc_title: str | None,
         lede: str | None,
+        source_type: str | None = None,
     ) -> None:
-        """Compute the learned-router SHADOW proposal and attach it to the decision.
+        """Compute the learned-router proposal; in LIVE mode let it control routing.
 
         PLAN-0111 C-6 (call site moved + lede wired in #33). This NEVER changes
         the processing path: it only
@@ -851,15 +852,119 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 p_yield=round(result.p_yield, 4),
                 agreement=(actual_tier_value == proposed_tier_value),
                 in_ambiguous_band=result.in_ambiguous_band,
+                cascade_used=result.cascade_used,
+                cascade_relevance=(
+                    round(result.cascade_relevance, 4) if result.cascade_relevance is not None else None
+                ),
                 mode=mode,
             )
             record_learned_router_shadow(actual_tier_value, proposed_tier_value)
-        except Exception:  # — shadow observer must never fail the article
+
+            # ── PLAN-0111 C-8: LIVE control ───────────────────────────────────
+            # In LIVE mode the (post-cascade) learned tier CONTROLS processing.
+            # We achieve this by writing the EFFECTIVE tier onto
+            # ``final_routing_tier`` — the field ``apply_suppression_gate`` and
+            # every downstream gate already read first (``final_routing_tier or
+            # routing_tier``). The STATIC tier stays in ``routing_tier`` so the
+            # two are persisted side-by-side for ongoing comparison.
+            #
+            # In SHADOW / off the learned tier is observational only — we never
+            # touch ``final_routing_tier`` (that is the shadow invariant).
+            if mode == "live":
+                self._apply_live_learned_tier(
+                    routing_decision=routing_decision,
+                    learned_tier=result.proposed_tier,
+                    doc_title=doc_title,
+                    source_type=source_type,
+                )
+        except Exception:  # — observer/live-control must never fail the article
             logger.warning(  # type: ignore[no-any-return]
                 "learned_router_shadow_failed",
                 doc_id=str(routing_decision.doc_id),
                 exc_info=True,
             )
+
+    def _apply_live_learned_tier(
+        self,
+        *,
+        routing_decision: RoutingDecision,
+        learned_tier: RoutingTier,
+        doc_title: str | None,
+        source_type: str | None,
+    ) -> None:
+        """LIVE mode (PLAN-0111 C-8): make the learned tier control processing.
+
+        Writes the EFFECTIVE tier onto ``routing_decision.final_routing_tier``
+        (the field every downstream gate reads first). The STATIC tier remains
+        in ``routing_tier`` for side-by-side comparison.
+
+        Three INVARIANTS are preserved — the learned gate must NOT silently
+        discard high-value documents:
+
+        1. DEGENERATE-INPUT FALLBACK (title-less docs). The learned classifier
+           reads ``title + lede`` and is effectively BLIND without a title:
+           title-less docs (NULL/empty ``title_denorm``) score a near-floor
+           ``p_yield`` (~0.18) and would be dumped to LIGHT. ~111 such docs
+           exist (86 sec_edgar + 25 newsapi); sec_edgar is the corpus's
+           highest-value source. So when the title is missing/blank we DO NOT
+           let the learned tier control — we keep the STATIC tier for that doc
+           (i.e. leave ``final_routing_tier`` unset) and log
+           ``learned_router_titleless_fallback`` so the rate is measurable.
+
+        2. SUPPRESS preservation. The learned classifier never PRODUCES SUPPRESS
+           (``map_p_yield_to_tier`` emits DEEP/MEDIUM/LIGHT only). If the STATIC
+           router suppressed a doc (``routing_tier == SUPPRESS``), live mode does
+           NOT resurrect it — SUPPRESS must still HALT. We leave the static
+           SUPPRESS in place rather than overriding with a learned LIGHT/MEDIUM.
+
+        3. REGULATORY-FILING / AUTHENTICATED-UPLOAD override. Authoritative
+           filings (sec_edgar, sec_8k/10k/10q/def14a, tenant_upload) are forced
+           to at least MEDIUM regardless of the learned score — their value is
+           not captured by the headline the classifier sees. Belt-and-suspenders
+           with #1 for the sec_edgar title-less case.
+        """
+        static_tier = routing_decision.routing_tier
+
+        # INVARIANT 2 — never resurrect a statically-SUPPRESSED doc.
+        if static_tier == RoutingTier.SUPPRESS:
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_live_suppress_preserved",
+                doc_id=str(routing_decision.doc_id),
+            )
+            return  # leave final_routing_tier unset → suppression gate HALTs
+
+        # INVARIANT 1 — title-less docs: the blind gate must NOT decide. Fall
+        # back to the static tier (leave final_routing_tier unset).
+        if not (doc_title or "").strip():
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_titleless_fallback",
+                doc_id=str(routing_decision.doc_id),
+                source_type=source_type,
+                static_tier=static_tier.value,
+                learned_tier=learned_tier.value,
+            )
+            return
+
+        effective_tier = learned_tier
+
+        # INVARIANT 3 — regulatory / authenticated-upload override forces >=MEDIUM.
+        if effective_tier == RoutingTier.LIGHT and source_type in _AUTHORITATIVE_FILING_SOURCES:
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_live_regulatory_override",
+                doc_id=str(routing_decision.doc_id),
+                source_type=source_type,
+                learned_tier=learned_tier.value,
+            )
+            effective_tier = RoutingTier.MEDIUM
+
+        # The learned tier (post-overrides) now CONTROLS processing.
+        routing_decision.final_routing_tier = effective_tier
+        logger.info(  # type: ignore[no-any-return]
+            "learned_router_live_control",
+            doc_id=str(routing_decision.doc_id),
+            static_tier=static_tier.value,
+            effective_tier=effective_tier.value,
+        )
 
     async def _run_pipeline(
         self,
@@ -1016,6 +1121,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             routing_decision=routing_decision,
             doc_title=doc_title,
             lede=_lede,
+            source_type=source_type,
         )
 
         # Blocks 8-10 + atomic DB write with D-004 dual-session ordering.

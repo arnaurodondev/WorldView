@@ -84,6 +84,18 @@ def _write_meta(tmp_path: Path, *, dims: int = 4, thr_extract: float = 0.55, thr
     return path
 
 
+class _StubCascade:
+    """Stub RelevanceCascadeScorer: records calls + returns a fixed relevance."""
+
+    def __init__(self, relevance: float | None) -> None:
+        self._relevance = relevance
+        self.calls: list[tuple[str | None, str | None]] = []
+
+    async def score_relevance(self, *, title: str | None, subtitle: str | None) -> float | None:
+        self.calls.append((title, subtitle))
+        return self._relevance
+
+
 def _make_router(
     tmp_path: Path,
     *,
@@ -92,6 +104,8 @@ def _make_router(
     thr_extract: float = 0.55,
     thr_deep: float = 0.80,
     embedder: Any | None = None,
+    cascade_scorer: Any | None = None,
+    cascade_relevance_cutoff: float = 0.5,
     monkeypatch: pytest.MonkeyPatch | None = None,
 ) -> tuple[LearnedRouter, _StubEmbedder]:
     """Construct a LearnedRouter with a stub model + meta + (stub) embedder.
@@ -107,7 +121,13 @@ def _make_router(
     mp = monkeypatch or pytest.MonkeyPatch()
     mp.setattr(joblib, "load", lambda _path: _StubModel(p_yield))
     # model_path is never actually read (joblib.load is patched), but must be a Path.
-    router = LearnedRouter(stub_embedder, model_path=tmp_path / "x.joblib", meta_path=meta_path)
+    router = LearnedRouter(
+        stub_embedder,
+        model_path=tmp_path / "x.joblib",
+        meta_path=meta_path,
+        cascade_scorer=cascade_scorer,
+        cascade_relevance_cutoff=cascade_relevance_cutoff,
+    )
     return router, stub_embedder
 
 
@@ -434,3 +454,203 @@ async def test_shadow_passes_nonempty_subtitle_when_lede_present(tmp_path: Path)
     assert embedded_texts == ["Lam Research analyst target\nAnalysts raised the price target on strong demand."]
     # And the proposal was stamped (mid p_yield -> MEDIUM here).
     assert decision.learned_p_yield == pytest.approx(0.70)
+
+
+# ── C-7: LLM cascade fires ONLY in-band ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cascade_fires_in_band_and_decides_tier(tmp_path: Path) -> None:
+    """In-band p_yield → cascade is called; relevance >= cutoff → MEDIUM."""
+    # band = [0.45, 0.65]; p_yield 0.50 is in-band.
+    cascade = _StubCascade(relevance=0.8)  # >= 0.5 cutoff → MEDIUM
+    router, _ = _make_router(
+        tmp_path, p_yield=0.50, thr_extract=0.55, thr_deep=0.80, cascade_scorer=cascade, cascade_relevance_cutoff=0.5
+    )
+    result = await router.propose(
+        title="Borderline company news",
+        subtitle="Some lede",
+        structured_features={"source_reliability": 0.5, "recency": 0.5, "document_type": 0.5},
+    )
+    assert result is not None
+    assert result.in_ambiguous_band is True
+    # Cascade fired exactly once with the title + subtitle.
+    assert cascade.calls == [("Borderline company news", "Some lede")]
+    assert result.cascade_used is True
+    assert result.cascade_relevance == pytest.approx(0.8)
+    # relevance 0.8 >= cutoff 0.5 → MEDIUM (overrides the cheap LIGHT-ish band).
+    assert result.proposed_tier == RoutingTier.MEDIUM
+
+
+@pytest.mark.asyncio
+async def test_cascade_relevance_below_cutoff_routes_light(tmp_path: Path) -> None:
+    """In-band, but relevance < cutoff → LIGHT."""
+    cascade = _StubCascade(relevance=0.2)  # < 0.5 cutoff → LIGHT
+    router, _ = _make_router(
+        tmp_path, p_yield=0.60, thr_extract=0.55, thr_deep=0.80, cascade_scorer=cascade, cascade_relevance_cutoff=0.5
+    )
+    result = await router.propose(
+        title="t",
+        subtitle="s",
+        structured_features={"source_reliability": 0.5, "recency": 0.5, "document_type": 0.5},
+    )
+    assert result is not None
+    assert result.cascade_used is True
+    assert result.proposed_tier == RoutingTier.LIGHT
+
+
+@pytest.mark.asyncio
+async def test_cascade_skipped_out_of_band(tmp_path: Path) -> None:
+    """Out-of-band p_yield → cascade is NOT called (cheap majority skips the LLM)."""
+    cascade = _StubCascade(relevance=0.99)
+    # p_yield 0.92 is well above band high (0.65) → out-of-band → DEEP, no cascade.
+    router, _ = _make_router(
+        tmp_path, p_yield=0.92, thr_extract=0.55, thr_deep=0.80, cascade_scorer=cascade, cascade_relevance_cutoff=0.5
+    )
+    result = await router.propose(
+        title="Clear big news",
+        subtitle="lede",
+        structured_features={"source_reliability": 0.9, "recency": 0.8, "document_type": 0.7},
+    )
+    assert result is not None
+    assert result.in_ambiguous_band is False
+    # The LLM was NEVER invoked — this is the cascade's cost guarantee.
+    assert cascade.calls == []
+    assert result.cascade_used is False
+    assert result.cascade_relevance is None
+    assert result.proposed_tier == RoutingTier.DEEP
+
+
+@pytest.mark.asyncio
+async def test_cascade_none_falls_back_to_cheap_tier(tmp_path: Path) -> None:
+    """In-band but cascade returns None (LLM failure) → keep the cheap classifier tier."""
+    cascade = _StubCascade(relevance=None)  # simulated cascade failure
+    router, _ = _make_router(
+        tmp_path, p_yield=0.60, thr_extract=0.55, thr_deep=0.80, cascade_scorer=cascade, cascade_relevance_cutoff=0.5
+    )
+    result = await router.propose(
+        title="t",
+        subtitle="s",
+        structured_features={"source_reliability": 0.5, "recency": 0.5, "document_type": 0.5},
+    )
+    assert result is not None
+    assert cascade.calls != []  # it was attempted
+    assert result.cascade_used is False
+    # Falls back to the cheap classifier's own tier (0.60 >= 0.55 → MEDIUM).
+    assert result.proposed_tier == RoutingTier.MEDIUM
+
+
+# ── C-8: LIVE control + invariants ───────────────────────────────────────────
+
+
+def _bare_consumer(router: Any, mode: str) -> Any:
+    """Build a bare ArticleProcessingConsumer with only the shadow-helper deps."""
+    from types import SimpleNamespace
+
+    from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+        ArticleProcessingConsumer,
+    )
+
+    consumer = ArticleProcessingConsumer.__new__(ArticleProcessingConsumer)
+    consumer._settings = SimpleNamespace(learned_router_mode=mode)  # type: ignore[attr-defined]
+    consumer._learned_router = router  # type: ignore[attr-defined]
+    return consumer
+
+
+def _decision(tier: RoutingTier, *, suffix: int = 50) -> Any:
+    from uuid import UUID
+
+    from nlp_pipeline.domain.models import RoutingDecision
+
+    return RoutingDecision(
+        decision_id=UUID(f"00000000-0000-0000-0000-0000000000{suffix:02d}"),
+        doc_id=UUID(f"00000000-0000-0000-0000-0000000001{suffix:02d}"),
+        routing_tier=tier,
+        composite_score=0.5,
+        feature_scores={"source_reliability": 0.8, "recency": 0.6, "document_type": 0.7},
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_effective_tier_follows_learned(tmp_path: Path) -> None:
+    """LIVE: learned DEEP (out-of-band) overrides static MEDIUM via final_routing_tier."""
+    router, _ = _make_router(tmp_path, p_yield=0.95)  # → DEEP, out-of-band
+    decision = _decision(RoutingTier.MEDIUM, suffix=51)
+    consumer = _bare_consumer(router, "live")
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="A clear headline", lede="lede", source_type="eodhd"
+    )
+
+    # Static tier preserved for comparison; learned tier now CONTROLS via final_routing_tier.
+    assert decision.routing_tier == RoutingTier.MEDIUM
+    assert decision.learned_tier == RoutingTier.DEEP
+    assert decision.final_routing_tier == RoutingTier.DEEP
+
+
+@pytest.mark.asyncio
+async def test_live_suppress_preserved(tmp_path: Path) -> None:
+    """LIVE: a statically-SUPPRESSED doc is NEVER resurrected by the learned tier."""
+    router, _ = _make_router(tmp_path, p_yield=0.95)  # learned would say DEEP
+    decision = _decision(RoutingTier.SUPPRESS, suffix=52)
+    consumer = _bare_consumer(router, "live")
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="A headline", lede="lede", source_type="eodhd"
+    )
+
+    # final_routing_tier left unset → suppression gate still HALTs.
+    assert decision.final_routing_tier is None
+    assert decision.routing_tier == RoutingTier.SUPPRESS
+
+
+@pytest.mark.asyncio
+async def test_live_regulatory_override_forces_medium(tmp_path: Path) -> None:
+    """LIVE: a sec_edgar filing the learned tier dumps to LIGHT is forced to MEDIUM."""
+    router, _ = _make_router(tmp_path, p_yield=0.10)  # learned → LIGHT
+    decision = _decision(RoutingTier.MEDIUM, suffix=53)
+    consumer = _bare_consumer(router, "live")
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="Form 8-K filing", lede="lede", source_type="sec_edgar"
+    )
+
+    # Learned said LIGHT, but the regulatory override forces >=MEDIUM.
+    assert decision.learned_tier == RoutingTier.LIGHT
+    assert decision.final_routing_tier == RoutingTier.MEDIUM
+
+
+@pytest.mark.asyncio
+async def test_live_titleless_doc_falls_back_to_static(tmp_path: Path) -> None:
+    """LIVE: a title-less doc (blind classifier) keeps the STATIC tier, not learned LIGHT."""
+    router, _ = _make_router(tmp_path, p_yield=0.10)  # blind → LIGHT
+    decision = _decision(RoutingTier.DEEP, suffix=54)  # static says DEEP
+    consumer = _bare_consumer(router, "live")
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="   ", lede="lede", source_type="newsapi"
+    )
+
+    # The blind learned LIGHT must NOT control — final_routing_tier left unset so
+    # the static DEEP tier drives processing.
+    assert decision.final_routing_tier is None
+    assert decision.routing_tier == RoutingTier.DEEP
+    # The learned proposal is still recorded for comparison.
+    assert decision.learned_tier == RoutingTier.LIGHT
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_never_sets_final_routing_tier(tmp_path: Path) -> None:
+    """SHADOW: the learned tier is observational — final_routing_tier stays unset."""
+    router, _ = _make_router(tmp_path, p_yield=0.95)  # learned → DEEP
+    decision = _decision(RoutingTier.LIGHT, suffix=55)
+    consumer = _bare_consumer(router, "shadow")
+
+    await consumer._run_learned_router_shadow(
+        routing_decision=decision, doc_title="A headline", lede="lede", source_type="eodhd"
+    )
+
+    # Shadow invariant: effective tier is NOT changed.
+    assert decision.final_routing_tier is None
+    assert decision.routing_tier == RoutingTier.LIGHT
+    assert decision.learned_tier == RoutingTier.DEEP

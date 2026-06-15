@@ -1,4 +1,4 @@
-"""Learned routing classifier — SHADOW-mode inference (PLAN-0111 C-2 / C-6).
+"""Learned routing classifier — inference + cascade (PLAN-0111 C-2 / C-6 / C-7 / C-8).
 
 WHAT THIS IS
 ------------
@@ -10,12 +10,16 @@ an article produces at least one relation / claim / event — directly from an
 features. The ablation (``scripts/eval/routing_classifier_train.py``) showed this
 "set C" model meaningfully out-performs the deployed static rule.
 
-This module is the *runtime inference* component for that model. In this wave it
-runs ONLY in SHADOW mode: it computes a *proposed* tier for every article that
-is logged, counted, and persisted, but it **never** changes which processing path
-the article actually takes (the static router still controls that). Flipping it
-to LIVE and adding the LLM cascade tie-breaker are the NEXT wave — deliberately
-out of scope here.
+This module is the *runtime inference* component for that model. It computes a
+calibrated ``P(yield)`` and maps it to a tier. In SHADOW mode the caller logs the
+proposal without changing routing; in LIVE mode (C-8) the caller lets the
+(post-cascade) tier control processing. C-7 adds the optional LLM cascade
+tiebreak: when ``P(yield)`` is in the ambiguous band an injected
+``RelevanceCascadeScorer`` (the reused Llama-8B relevance model) adjudicates the
+borderline article — out-of-band articles skip the LLM entirely (FrugalGPT /
+learning-to-defer). The SHADOW/LIVE control decision itself lives in the caller
+(``article_consumer._run_learned_router_shadow`` /
+``_apply_live_learned_tier``); this module only produces the proposal.
 
 ARTIFACT
 --------
@@ -59,6 +63,8 @@ from nlp_pipeline.domain.enums import RoutingTier
 if TYPE_CHECKING:
     from ml_clients.adapters.embeddinggemma_router import EmbeddingGemmaRouterAdapter
 
+    from nlp_pipeline.application.blocks.relevance_cascade import RelevanceCascadeScorer
+
 logger = structlog.get_logger()
 
 # Artifact location — co-located with this module inside the package so it ships
@@ -80,6 +86,14 @@ class LearnedRoutingResult:
     p_yield: float
     proposed_tier: RoutingTier
     in_ambiguous_band: bool
+    # PLAN-0111 C-7 cascade outcome. When the article was in-band AND the LLM
+    # cascade fired AND returned a score, ``cascade_used`` is True and
+    # ``cascade_relevance`` holds the Llama-8B relevance probability that
+    # decided the tier. For out-of-band articles (the cheap majority) the
+    # cascade is skipped: ``cascade_used`` is False and ``cascade_relevance`` is
+    # None. ``proposed_tier`` already reflects the cascade decision when used.
+    cascade_used: bool = False
+    cascade_relevance: float | None = None
 
 
 def subtitle_from_lede(lede: str | None, max_chars: int = 300) -> str:
@@ -161,10 +175,18 @@ class LearnedRouter:
         *,
         model_path: Path = _MODEL_PATH,
         meta_path: Path = _META_PATH,
+        cascade_scorer: RelevanceCascadeScorer | None = None,
+        cascade_relevance_cutoff: float = 0.5,
     ) -> None:
         import joblib  # type: ignore[import-untyped]  # local import: heavy, only on this path
 
         self._embedder = embedder
+        # PLAN-0111 C-7: the optional LLM cascade tiebreaker. None → cascade
+        # disabled (the in-band tier comes straight from the cheap classifier,
+        # exactly as C-6/C-6b). When wired, it is invoked ONLY for in-band
+        # articles inside ``propose`` (see the cascade block there).
+        self._cascade_scorer = cascade_scorer
+        self._cascade_relevance_cutoff = float(cascade_relevance_cutoff)
         # Load the calibrated classifier + the feature/threshold contract.
         self._model: Any = joblib.load(model_path)
         meta: dict[str, Any] = json.loads(meta_path.read_text())
@@ -247,7 +269,44 @@ class LearnedRouter:
             p_yield = float(self._model.predict_proba(row)[0, 1])
             tier = map_p_yield_to_tier(p_yield, self._thr_extract, self._thr_deep)
             in_band = self._band_low <= p_yield <= self._band_high
-            return LearnedRoutingResult(p_yield=p_yield, proposed_tier=tier, in_ambiguous_band=in_band)
+
+            # ── PLAN-0111 C-7: LLM cascade tiebreak (in-band ONLY) ────────────
+            # The cheap classifier is genuinely uncertain only in the ambiguous
+            # band. Out-of-band articles (the confident majority) keep the cheap
+            # tier above and SKIP the LLM entirely — that is the cascade's whole
+            # cost rationale (FrugalGPT / learning-to-defer). We escalate ONLY
+            # the in-band slice to the reused Llama-8B relevance scorer.
+            #
+            # COMBINE RULE (documented + explainable):
+            #   in-band → LLM relevance >= cutoff → MEDIUM (worth extracting)
+            #             LLM relevance <  cutoff → LIGHT  (embed only)
+            # A None from the scorer (network error / bad JSON) is a no-op: we
+            # keep the cheap classifier's own tier so a cascade outage never
+            # breaks routing.
+            cascade_used = False
+            cascade_relevance: float | None = None
+            if in_band and self._cascade_scorer is not None:
+                cascade_relevance = await self._cascade_scorer.score_relevance(title=title, subtitle=subtitle)
+                if cascade_relevance is not None:
+                    cascade_used = True
+                    tier = (
+                        RoutingTier.MEDIUM if cascade_relevance >= self._cascade_relevance_cutoff else RoutingTier.LIGHT
+                    )
+                    logger.info(  # type: ignore[no-any-return]
+                        "learned_router_cascade",
+                        p_yield=round(p_yield, 4),
+                        cascade_relevance=round(cascade_relevance, 4),
+                        cutoff=self._cascade_relevance_cutoff,
+                        cascade_tier=tier.value,
+                    )
+
+            return LearnedRoutingResult(
+                p_yield=p_yield,
+                proposed_tier=tier,
+                in_ambiguous_band=in_band,
+                cascade_used=cascade_used,
+                cascade_relevance=cascade_relevance,
+            )
         except Exception as exc:  # — shadow must never break the pipeline
             # Any failure (network, sklearn, malformed input) is swallowed: this
             # is a passive observer. Log once at warning so it is visible without

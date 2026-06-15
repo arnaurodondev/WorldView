@@ -191,13 +191,39 @@ class Settings(BaseSettings):
     #   "shadow" — the learned router computes a proposed tier on every article
     #              (logged + persisted + counted) but NEVER changes the processing
     #              path; the static router still controls everything.
-    #   "live"   — RESERVED for the next wave (the learned tier controls
-    #              processing). NOT implemented here; treated like "shadow" until
-    #              the LLM cascade lands, so a premature flip cannot silently
-    #              change routing behaviour.
+    #   "live"   — the (post-cascade) learned tier CONTROLS processing
+    #              (PLAN-0111 C-8). The learned tier is written to
+    #              ``final_routing_tier`` so the suppression gate + downstream
+    #              embedding/extraction blocks read it. The STATIC tier is still
+    #              computed + persisted (in ``routing_tier``) for ongoing
+    #              comparison. SUPPRESS still HALTs and the regulatory-filing /
+    #              authenticated-upload override still forces at least MEDIUM.
     # Default "off" so the feature is opt-in per environment via
-    # NLP_PIPELINE_LEARNED_ROUTER_MODE; docker.env sets it to "shadow".
+    # NLP_PIPELINE_LEARNED_ROUTER_MODE; docker.env sets it to "live".
     learned_router_mode: Literal["off", "shadow", "live"] = "off"
+
+    # ── Learned-router LLM CASCADE (PLAN-0111 C-7) ───────────────────────────
+    # FrugalGPT / learning-to-defer cascade: when the calibrated P(yield) lands
+    # in the AMBIGUOUS band [thr_extract-0.10, thr_extract+0.10] the cheap
+    # embedding classifier is UNCERTAIN. Rather than commit to a coin-flip, we
+    # escalate ONLY that uncertain slice (~14% of articles per the 24h shadow) to
+    # the existing small generative relevance scorer (the Llama-3.1-8B
+    # title-relevance model reused from ``ArticleRelevanceScoringWorker``) for a
+    # tiebreak. Documents OUTSIDE the band skip the LLM entirely — that is the
+    # whole point: cheap majority, LLM only on the genuinely-borderline minority.
+    #
+    # When False (default) the router behaves exactly as C-6/C-6b: the in-band
+    # tier comes straight from ``map_p_yield_to_tier`` with no LLM call. Gate it
+    # ON per environment via NLP_PIPELINE_LEARNED_ROUTER_CASCADE; docker.env
+    # enables it. The cascade only adds latency/cost on the in-band slice.
+    learned_router_cascade: bool = False
+
+    # Decision cutoff for the cascade tiebreak (PLAN-0111 C-7). When an in-band
+    # article is escalated to the Llama-8B relevance scorer, an LLM relevance
+    # probability >= this value routes the article to MEDIUM (worth extracting);
+    # below it routes to LIGHT. 0.5 is the natural midpoint of the [0,1]
+    # relevance scale the scorer emits — documented + tunable without a rebuild.
+    learned_router_cascade_relevance_cutoff: float = 0.5
 
     # Entity resolution thresholds (PRD §6.7 Block 9)
     entity_resolution_auto_resolve_threshold: float = 0.72  # auto-resolve above this

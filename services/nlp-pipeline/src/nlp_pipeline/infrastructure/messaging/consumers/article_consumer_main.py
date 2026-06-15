@@ -274,8 +274,44 @@ async def main() -> None:
                 # Generous timeout; the adapter wraps it in httpx.Timeout (BP-235).
                 timeout=30.0,
             )
-            learned_router = LearnedRouter(router_embedder)
-            log.info("learned_router_enabled", mode=settings.learned_router_mode)
+
+            # PLAN-0111 C-7: the LLM cascade tiebreaker, wired ONLY when
+            # NLP_PIPELINE_LEARNED_ROUTER_CASCADE is on. It REUSES the existing
+            # Llama-3.1-8B relevance scorer (same model id + prompt as
+            # ArticleRelevanceScoringWorker) — no new model. It fires only on the
+            # in-band slice inside LearnedRouter.propose.
+            cascade_scorer = None
+            if settings.learned_router_cascade:
+                from nlp_pipeline.application.blocks.relevance_cascade import (
+                    RelevanceCascadeScorer,
+                )
+
+                _relevance_key = settings.relevance_scoring_api_key.get_secret_value()
+                cascade_api_key = _relevance_key or _extraction_api_key
+                cascade_scorer = RelevanceCascadeScorer(
+                    api_key=cascade_api_key,
+                    base_url=settings.relevance_scoring_api_base_url,
+                    # Reuse the SAME relevance model id (Llama-3.1-8B-Turbo).
+                    model_id=settings.relevance_scoring_api_model_id,
+                    timeout_seconds=15.0,
+                    usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
+                )
+                log.info(
+                    "learned_router_cascade_enabled",
+                    model_id=settings.relevance_scoring_api_model_id,
+                    cutoff=settings.learned_router_cascade_relevance_cutoff,
+                )
+
+            learned_router = LearnedRouter(
+                router_embedder,
+                cascade_scorer=cascade_scorer,
+                cascade_relevance_cutoff=settings.learned_router_cascade_relevance_cutoff,
+            )
+            log.info(
+                "learned_router_enabled",
+                mode=settings.learned_router_mode,
+                cascade=settings.learned_router_cascade,
+            )
         else:
             log.warning(
                 "learned_router_mode_set_but_no_api_key",
