@@ -101,6 +101,26 @@ _BACKOFF_STAGE_1H_S = 3600
 _BACKOFF_STAGE_1D_S = 86400
 _BACKOFF_STAGE_7D_S = 604800
 
+# ── 2026-06-14 (empty-entity-descriptions P0): instrument-lookup-miss long-defer ──
+#
+# RC1: KG holds ~2,202 ticker'd FI entities but market-data only has ~646
+# instruments, so ~1,268 entities fail ``_resolve_instrument_id`` (no symbol
+# match) on EVERY 5-min cycle. Previously a lookup miss returned a
+# ``narrative=None`` result with ``failure_reason="instrument_lookup_failed"``
+# which (a) escalated the Valkey backoff one stage (1h→1d→7d) and (b) hit the
+# ``narrative is None`` Phase-3 branch that ``continue``s WITHOUT advancing
+# ``next_refresh_at`` — so the row stayed due and re-failed forever, producing
+# ``refreshed: 0, backoff_escalations: 1268`` every cycle.
+#
+# A missing market-data instrument is a DATA-AVAILABILITY gap, not a transient
+# error: it will not self-heal within the 1h-7d backoff window. So instead of
+# escalating, we push ``next_refresh_at`` 30 days forward (same cadence as a
+# successful refresh). If the instrument is later ingested into market-data, the
+# row becomes due again in ≤30 days and succeeds. Transient/other failures
+# (HTTP 4xx/5xx, transport, missing sections) keep the existing
+# escalate-and-retry-sooner behaviour.
+_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS = 30
+
 
 # ── F-DB-005 (2026-05-28): structured error classes ──────────────────────────
 #
@@ -413,13 +433,22 @@ class FundamentalsRefreshWorker:
                             "backoff_active_seconds": _backoff_s,
                         }
 
-                    # Resolve ticker → market-data instrument_id
-                    _instrument_id = await self._resolve_instrument_id(http, _ticker_str)
+                    # Resolve ticker → market-data instrument_id.
+                    # 2026-06-14 P0: distinguish a GENUINE miss (no instrument in
+                    # market-data — a stable data-availability gap) from a
+                    # TRANSIENT lookup failure (transport error / 5xx). Only a
+                    # genuine miss triggers the 30-day long-defer; transient
+                    # failures keep the existing escalate-and-retry-sooner path
+                    # so a brief market-data outage does not defer everything.
+                    _instrument_id, _lookup_transient = await self._resolve_instrument_id_with_status(
+                        http, _ticker_str
+                    )
                     if _instrument_id is None:
                         logger.debug(  # type: ignore[no-any-return]
                             "fundamentals_refresh_instrument_not_found",
                             entity_id=str(_entity_id),
                             ticker=_ticker_str,
+                            transient=_lookup_transient,
                         )
                         return {
                             "entity_id": _entity_id,
@@ -433,6 +462,14 @@ class FundamentalsRefreshWorker:
                             # ingested" case (~99% of dev failures) from a
                             # downstream fundamentals failure.
                             "failure_reason": "instrument_lookup_failed",
+                            # 2026-06-14 P0: only a GENUINE miss (not a transient
+                            # transport/5xx error) marks the row for the 30-day
+                            # long-defer. A genuine miss is a data-availability
+                            # gap that won't self-heal in 1h — escalating it
+                            # churned 1,268 entities every cycle (RC1). A
+                            # transient lookup error leaves this False so the
+                            # existing backoff-escalation path still retries soon.
+                            "instrument_lookup_miss": not _lookup_transient,
                         }
 
                     # Fetch earnings, profile, and fundamentals narrative in parallel.
@@ -513,6 +550,10 @@ class FundamentalsRefreshWorker:
                         # market-data failure category to Phase 3 so the
                         # warning event names the actual cause.
                         "failure_reason": res.get("failure_reason"),
+                        # 2026-06-14 P0: propagate the lookup-miss marker so
+                        # Phase 3 long-defers (30d) instead of leaving the row
+                        # due, and the post-commit step skips backoff escalation.
+                        "instrument_lookup_miss": res.get("instrument_lookup_miss", False),
                     },
                 )
 
@@ -629,6 +670,35 @@ class FundamentalsRefreshWorker:
                             ticker=result["ticker"],
                             failure_reason=reason,
                         )
+
+                        # ── 2026-06-14 P0: instrument-lookup miss → long defer ──
+                        # The ticker resolved to no market-data instrument. This
+                        # is a data-availability gap, not a transient error, so
+                        # push next_refresh_at 30 days forward instead of leaving
+                        # the row due (which previously re-failed every 5-min
+                        # cycle for ~1,268 entities — RC1). Idempotent: the upsert
+                        # just rewrites next_refresh_at; source_text/embedding stay
+                        # untouched. The post-commit step skips escalation for
+                        # these (see ``instrument_lookup_miss`` guard below).
+                        if result.get("instrument_lookup_miss"):
+                            await emb_repo.upsert(
+                                entity_id,
+                                VIEW_FUNDAMENTALS,
+                                embedding=None,
+                                model_id=None,
+                                source_text=None,
+                                source_hash=None,
+                                next_refresh_at=utc_now()
+                                + timedelta(days=_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS),
+                            )
+                            logger.info(  # type: ignore[no-any-return]
+                                "fundamentals_refresh_instrument_lookup_long_defer",
+                                entity_id=str(entity_id),
+                                ticker=result["ticker"],
+                                reason="instrument_not_in_market_data",
+                                defer_days=_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS,
+                            )
+                            continue
                         continue  # Don't update next_refresh_at — will retry next cycle
 
                     # When embedding fails (e.g. transient DeepInfra error), retry
@@ -669,6 +739,14 @@ class FundamentalsRefreshWorker:
                 _ticker_for_backoff = str(result["ticker"])
                 if result.get("backoff_active_seconds"):
                     # Skipped this cycle — backoff already in flight, do nothing.
+                    continue
+                if result.get("instrument_lookup_miss"):
+                    # 2026-06-14 P0: ticker has no market-data instrument. We
+                    # already pushed next_refresh_at 30 days forward in Phase 3,
+                    # so do NOT escalate the Valkey backoff (the 1h→1d→7d ladder
+                    # is for transient errors; escalating here is what produced
+                    # the perpetual 1,268-per-cycle storm — RC1). Leave any
+                    # existing backoff key to expire on its own TTL.
                     continue
                 if result["narrative"] is None:
                     new_seconds = await self._escalate_backoff(_ticker_for_backoff)
@@ -1267,13 +1345,57 @@ ON CONFLICT DO NOTHING
         Old (broken):  /api/v1/instruments/symbol/{ticker}  → 404 always
         New (correct): /api/v1/instruments/lookup?symbol={ticker}
         """
-        data = await self._fetch_json(http, f"{self._market_data_url}/api/v1/instruments/lookup?symbol={ticker}")
-        if data is None:
-            return None
+        instrument_id, _transient = await self._resolve_instrument_id_with_status(http, ticker)
+        return instrument_id
+
+    async def _resolve_instrument_id_with_status(
+        self,
+        http: httpx.AsyncClient,
+        ticker: str,
+    ) -> tuple[UUID | None, bool]:
+        """Resolve ticker → instrument_id, distinguishing *genuine miss* from *transient error*.
+
+        2026-06-14 P0 (RC1): the 30-day long-defer must only apply when the
+        ticker GENUINELY has no market-data instrument (a stable data-availability
+        gap), NOT when the lookup itself failed transiently (transport error,
+        5xx). Otherwise a brief market-data outage would silently defer every
+        entity by 30 days.
+
+        Returns:
+            (instrument_id, transient):
+              - (UUID, False)  — resolved successfully.
+              - (None, False)  — genuine miss: lookup returned a payload (HTTP 200)
+                                 with no usable ``id``, or market-data answered 4xx.
+              - (None, True)   — transient: transport error or 5xx; caller should
+                                 keep the existing escalate-and-retry-sooner path.
+        """
+        url = f"{self._market_data_url}/api/v1/instruments/lookup?symbol={ticker}"
         try:
-            return UUID(str(data["id"]))
-        except (KeyError, ValueError):
-            return None
+            resp = await http.get(url)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_instrument_lookup_transport_error",
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None, True  # transient — do NOT long-defer
+
+        status = resp.status_code
+        if status == 200:
+            try:
+                data = resp.json()
+            except Exception:
+                # 200 but unparsable body → treat as a genuine miss (not retryable).
+                return None, False
+            try:
+                return UUID(str(data["id"])), False
+            except (KeyError, ValueError, TypeError):
+                return None, False  # genuine miss — no usable id in the payload
+        if 500 <= status < 600:
+            # Server-side problem — transient, keep retrying on the backoff ladder.
+            return None, True
+        # 4xx (incl. 404): market-data positively has no such instrument → genuine miss.
+        return None, False
 
     @staticmethod
     async def _fetch_json(http: httpx.AsyncClient, url: str, ticker: str | None = None) -> dict[str, Any] | None:

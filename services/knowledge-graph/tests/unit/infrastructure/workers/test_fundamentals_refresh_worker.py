@@ -647,3 +647,138 @@ class TestBatchEmbedding:
         assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
         # All 3 entities have narratives → 3 upserts.
         assert emb_repo.upsert.await_count == 3
+
+
+# ── 2026-06-14 P0: instrument-lookup-miss long-defer (empty-descriptions RC1) ──
+
+
+class _FakeValkey:
+    """Minimal in-memory Valkey double recording escalation/reset calls."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.set_calls: list[tuple[str, str]] = []
+        self.delete_calls: list[str] = []
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.store[key] = value
+        self.set_calls.append((key, value))
+
+    async def delete(self, key: str) -> None:
+        self.delete_calls.append(key)
+        self.store.pop(key, None)
+
+
+class TestInstrumentLookupMissLongDefer:
+    """RC1: a ticker with no market-data instrument must be long-deferred (30d),
+    NOT escalated on the 1h→1d→7d backoff ladder every cycle."""
+
+    def test_lookup_miss_sets_30day_defer_and_no_escalation(self) -> None:
+        """instrument lookup 404 → upsert with next_refresh_at ≈ +30d, Valkey NOT escalated."""
+        from datetime import datetime, timedelta
+
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "BTC.USD",
+                "canonical_name": "Bitcoin",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        # instruments/lookup returns 404 → _resolve_instrument_id returns None.
+        lookup_resp = MagicMock()
+        lookup_resp.status_code = 404
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(return_value=lookup_resp)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+        llm.embed = AsyncMock(return_value=[])
+
+        valkey = _FakeValkey()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(
+                sf,
+                llm,
+                "http://market-data:8003",
+                http_client=http_client,
+                valkey_client=valkey,  # type: ignore[arg-type]
+            )
+            asyncio.run(worker.run())
+
+        # Phase 3 upsert was called once to push next_refresh_at ~30 days out.
+        emb_repo.upsert.assert_awaited_once()
+        call = emb_repo.upsert.call_args
+        next_at = call.kwargs.get("next_refresh_at")
+        assert next_at is not None, "lookup miss must advance next_refresh_at (not leave it due)"
+        delta = next_at - datetime.now(tz=UTC)
+        assert timedelta(days=29) < delta < timedelta(days=31), (
+            f"lookup miss should defer ~30 days, got {delta}"
+        )
+
+        # Critical RC1 assertion: the Valkey backoff was NOT escalated.
+        assert valkey.set_calls == [], "lookup miss must NOT escalate the Valkey backoff (RC1 storm)"
+
+    def test_transient_http_error_still_escalates(self) -> None:
+        """Instrument resolves but fundamentals fetch fails (HTTP 503) → escalate backoff,
+        do NOT long-defer (transient errors keep the existing retry-sooner behaviour)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "AAPL",
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000009001")
+        lookup_resp = MagicMock()
+        lookup_resp.status_code = 200
+        lookup_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        # All non-lookup calls (fundamentals/earnings/profile) return 503.
+        err_resp = MagicMock()
+        err_resp.status_code = 503
+        err_resp.json = MagicMock(return_value={})
+
+        def _route_get(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return lookup_resp
+            return err_resp
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route_get)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+        llm.embed = AsyncMock(return_value=[])
+
+        valkey = _FakeValkey()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(
+                sf,
+                llm,
+                "http://market-data:8003",
+                http_client=http_client,
+                valkey_client=valkey,  # type: ignore[arg-type]
+            )
+            asyncio.run(worker.run())
+
+        # Transient failure: narrative is None but it's NOT a lookup miss, so the
+        # backoff IS escalated (one set call to the 1h stage) and there is no
+        # 30-day defer upsert.
+        assert len(valkey.set_calls) == 1, "transient HTTP error must still escalate the backoff"
+        emb_repo.upsert.assert_not_awaited()
