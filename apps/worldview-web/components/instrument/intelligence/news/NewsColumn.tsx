@@ -41,7 +41,22 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
     });
 
   // Flatten paginated pages for render.
-  const articles = data?.pages.flatMap((p) => p.articles) ?? [];
+  const allArticles = data?.pages.flatMap((p) => p.articles) ?? [];
+
+  // ── Sentiment filter (CLIENT-SIDE — BUG FIX 2026-06-15) ──────────────────
+  // WHY client-side: S6's entity-articles endpoint has NO sentiment query
+  // param (only start_date/end_date/order_by/limit/offset). But every
+  // RankedArticle carries a categorical `sentiment` field, so we can narrow
+  // the already-fetched feed locally. Previously the sentiment pills changed
+  // the query key (forcing a refetch) but the refetch returned the SAME rows
+  // — the pills were a visual no-op. Now they actually hide non-matching rows.
+  //
+  // NOTE the time-range filter is handled UPSTREAM (useEntityNewsInfinite maps
+  // it to start_date, a real backend narrowing); only sentiment is local.
+  const articles =
+    sentiment == null
+      ? allArticles
+      : allArticles.filter((a) => a.sentiment === sentiment);
 
   // IntersectionObserver sentinel — fires when the bottom enters view.
   const sentinelRef = useRef<HTMLDivElement | null>(null);

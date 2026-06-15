@@ -156,3 +156,67 @@ describe("NewsColumn per-section error state", () => {
     expect(screen.getByText("Loaded headline survives the failed refetch")).toBeInTheDocument();
   });
 });
+
+// ── Sentiment filter — CLIENT-SIDE narrowing (BUG FIX 2026-06-15) ────────────
+//
+// S6's entity-articles endpoint has NO sentiment query param, so the sentiment
+// pills filter the ALREADY-FETCHED feed locally on each article's `sentiment`
+// field. Before the fix the pills changed the query key (forcing a refetch
+// that returned the SAME rows) but never hid anything — a visual no-op. These
+// tests pin that an active sentiment pill actually narrows the rendered rows.
+
+describe("NewsColumn sentiment filter (client-side)", () => {
+  const mkArticle = (id: string, title: string, sentiment: string | null) => ({
+    article_id: id,
+    title,
+    source: "wire",
+    published_at: "2026-06-14T00:00:00Z",
+    sentiment,
+    url: `https://example.com/${id}`,
+  });
+
+  beforeEach(() => {
+    mockNewsHook.state = {
+      ...mockNewsHook.state,
+      data: {
+        pages: [
+          {
+            articles: [
+              mkArticle("a1", "Bullish chip demand", "positive"),
+              mkArticle("a2", "Margins under pressure", "negative"),
+              mkArticle("a3", "Steady guidance", "neutral"),
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+    } as never;
+  });
+
+  it("shows all articles when no sentiment pill is active", () => {
+    render(<NewsColumn entityId="ent-001" />);
+    expect(screen.getByText("Bullish chip demand")).toBeInTheDocument();
+    expect(screen.getByText("Margins under pressure")).toBeInTheDocument();
+    expect(screen.getByText("Steady guidance")).toBeInTheDocument();
+  });
+
+  it("hides non-matching articles when a sentiment pill is active", () => {
+    render(<NewsColumn entityId="ent-001" />);
+    // Activate the POS pill via the NewsFilters strip.
+    fireEvent.click(screen.getByRole("button", { name: "POS" }));
+    // Only the positive article survives the client-side filter.
+    expect(screen.getByText("Bullish chip demand")).toBeInTheDocument();
+    expect(screen.queryByText("Margins under pressure")).toBeNull();
+    expect(screen.queryByText("Steady guidance")).toBeNull();
+  });
+
+  it("re-shows all articles when the active pill is toggled off", () => {
+    render(<NewsColumn entityId="ent-001" />);
+    const neg = screen.getByRole("button", { name: "NEG" });
+    fireEvent.click(neg); // activate
+    expect(screen.queryByText("Bullish chip demand")).toBeNull();
+    fireEvent.click(neg); // toggle off (Bloomberg convention)
+    expect(screen.getByText("Bullish chip demand")).toBeInTheDocument();
+    expect(screen.getByText("Margins under pressure")).toBeInTheDocument();
+  });
+});

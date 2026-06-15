@@ -545,11 +545,35 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // scoping. Using a separate endpoint (not a query param) keeps the
         // two search strategies cleanly separated on the backend. The request
         // body includes entity_id so S8 can pre-filter its vector search.
+        // ── Endpoint + body selection (tab-local wiring fix, intelligence tab) ──
+        // BUG (2026-06-15, intelligence-tab chat): the entity branch previously
+        // posted `{ message }` to the SYNC `/api/v1/chat/entity-context`
+        // endpoint. That was broken on BOTH axes and produced a hard
+        // 400 "question cannot be empty" for every entity (NVDA/TSLA included —
+        // it was NOT the known AAPL market-data gap):
+        //   1. WRONG FIELD: S8's EntityContextChatRequest (and S9's pre-proxy
+        //      validation) require `question`, NOT `message`. The main chat
+        //      schema uses `message`; the entity-context schema diverges and
+        //      uses `question`. Sending `message` → S9 sees an empty `question`
+        //      → 400 before the request ever reaches S8.
+        //   2. WRONG ENDPOINT: `/api/v1/chat/entity-context` is the SYNC JSON
+        //      endpoint (returns one `{answer: ...}` blob). This hook parses an
+        //      SSE event stream, so even a 200 would never render. The SSE
+        //      sibling is `/api/v1/chat/entity-context/stream`, which emits the
+        //      identical event frames (status/thinking/tool_call/tool_result/
+        //      token/done) the main `/chat/stream` path already parses below —
+        //      verified live: NVDA streams token-by-token through this path.
+        // The MAIN chat path (`entityId` unset) is untouched: same `/chat/stream`
+        // endpoint, same `message` field the sibling verified working.
         const chatEndpoint = entityId
-          ? "/api/v1/chat/entity-context"
+          ? "/api/v1/chat/entity-context/stream"
           : "/api/v1/chat/stream";
-        const chatBody: Record<string, unknown> = { message: question, thread_id: threadId };
-        if (entityId) chatBody.entity_id = entityId;
+        // WHY the field name is endpoint-dependent: the two backend schemas use
+        // different field names by design (main=`message`, entity-context=
+        // `question`). We name the field to match the endpoint we're hitting.
+        const chatBody: Record<string, unknown> = entityId
+          ? { question, thread_id: threadId, entity_id: entityId }
+          : { message: question, thread_id: threadId };
 
         const response = await fetch(chatEndpoint, {
           method: "POST",

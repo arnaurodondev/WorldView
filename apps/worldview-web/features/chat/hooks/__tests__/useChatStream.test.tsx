@@ -260,6 +260,65 @@ describe("useChatStream", () => {
     expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
   });
 
+  // ── Regression: entity-context wire format (intelligence-tab chat fix) ────
+  //
+  // BUG (2026-06-15): when `entityId` is set (the intelligence-tab chat panel),
+  // the hook previously posted `{ message }` to the SYNC `/api/v1/chat/
+  // entity-context` endpoint. Both were wrong and the panel hard-failed with
+  // a 400 "question cannot be empty" for EVERY entity (NVDA/TSLA included — it
+  // was NOT the known AAPL data gap):
+  //   - the entity-context schema requires `question`, NOT `message`;
+  //   - the SSE-parsing hook must target the `/stream` sibling endpoint, not
+  //     the sync JSON one.
+  // This test locks the corrected wire contract so a future refactor of the
+  // shared body-building block cannot silently re-break the entity panel
+  // while leaving the (separately tested) main-chat path green.
+  it("entity-context wire format: streams /entity-context/stream with `question` + entity_id", async () => {
+    const frames = [
+      'event: token\r\ndata: {"text": "NVDA "}\r\n\r\n',
+      'event: token\r\ndata: {"text": "news"}\r\n\r\n',
+      'event: done\r\ndata: {"type": "done"}\r\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    // Set entityId → activates the entity-context branch of the hook.
+    const entityId = "01900000-0000-7000-8000-000000001006"; // NVDA
+    const { result } = renderHook(() => useChatStream({ ...args, entityId }));
+
+    await act(async () => {
+      await result.current.send("What's the latest news?");
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    // MUST hit the SSE streaming endpoint (not the sync JSON one).
+    expect(url).toBe("/api/v1/chat/entity-context/stream");
+    expect(init.method).toBe("POST");
+    // MUST send `question` (entity-context schema), NOT `message`, plus the
+    // entity_id so S8 can scope retrieval.
+    const parsedBody = JSON.parse(init.body as string);
+    expect(parsedBody).toEqual({
+      question: "What's the latest news?",
+      thread_id: "thread-abc",
+      entity_id: entityId,
+    });
+    expect(parsedBody.message).toBeUndefined();
+    // Stream finalizes into an assistant message just like the main path.
+    expect(result.current.streaming).toBeNull();
+    const assistant = (result.current.localMessages as Array<{ role: string; content: string }>).find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toBe("NVDA news");
+  });
+
   // ── Regression: CRLF wire format (QA Wave-3 closeout, 2026-06-11) ─────────
   //
   // sse-starlette (S8) terminates every SSE line with \r\n. The hook splits
