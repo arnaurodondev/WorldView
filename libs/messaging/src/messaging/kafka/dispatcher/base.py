@@ -43,6 +43,7 @@ import contextlib
 import dataclasses
 import random
 import socket
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -380,12 +381,63 @@ class BaseOutboxDispatcher(ABC):
         Args:
             result: The failed :class:`DeliveryResult`.
         """
+        # Visibility hardening (BP outbox-dispatcher-wedged-producer):
+        # ``str(exc)`` is EMPTY for several exceptions we care about — most
+        # notably ``asyncio.TimeoutError`` (its ``__str__`` returns ``""``).
+        # A wedged producer therefore logged ``error: ""`` for ~23h and the
+        # outage was invisible. Always include the exception *type name* and
+        # ``repr`` so a TimeoutError can never hide again.
+        err = result.error
         logger.error(
             "outbox_delivery_failed",
             record_id=result.record_id,
             topic=result.topic,
-            error=str(result.error),
+            error_type=type(err).__name__ if err is not None else "None",
+            error_repr=repr(err) if err is not None else None,
+            error=str(err) if err is not None else "",
         )
+
+    # ── Producer recovery ─────────────────────────────────────────────────────
+
+    def _reset_producer(self) -> None:
+        """Discard the cached Kafka producer so the next dispatch rebuilds it.
+
+        The rdkafka producer is lazily built and cached on the subclass as
+        ``self._producer`` (the shared convention across all dispatcher
+        subclasses). After a transient broker blip the cached producer can
+        enter an unrecoverable state where every ``produce()``/``flush()``
+        times out *forever* — there is no built-in reconnect. Nulling the
+        cache forces :meth:`get_producer` to build a fresh producer on the
+        next attempt, which re-establishes the broker connection.
+
+        We best-effort ``flush`` (short timeout) the old producer to drain any
+        in-flight messages, but swallow ALL errors on teardown: a broken
+        producer will frequently raise/hang here, and recovery must never be
+        blocked by cleanup. If the subclass does not use the ``_producer``
+        attribute convention this is a safe no-op.
+        """
+        producer = getattr(self, "_producer", None)
+        if producer is None:
+            return
+        # Best-effort drain; never let teardown block or raise.
+        with contextlib.suppress(Exception):
+            flush = getattr(producer, "flush", None)
+            if callable(flush):
+                flush(0)  # non-blocking flush; we are discarding the producer
+        with contextlib.suppress(Exception):
+            self._producer = None  # type: ignore[attr-defined]
+        logger.warning("outbox_producer_reset", reason="delivery_failure")
+
+    @staticmethod
+    def _is_broken_producer_error(error: BaseException | None) -> bool:
+        """Return True when *error* signals the producer should be rebuilt.
+
+        A delivery ``asyncio.TimeoutError`` (an alias of ``TimeoutError`` on
+        Python 3.11+) means the produce/flush/ack never completed, which is
+        the signature of a wedged cached producer. We rebuild the producer for
+        these so the next attempt reconnects.
+        """
+        return isinstance(error, TimeoutError)
 
     # ── Core dispatch logic ───────────────────────────────────────────────────
 
@@ -469,6 +521,15 @@ class BaseOutboxDispatcher(ABC):
 
             with contextlib.suppress(Exception):
                 self._metrics.kafka_messages_produced_total.labels(topic=record.topic).inc()
+            # P3 staleness signal (BP outbox-dispatcher-wedged-producer): record
+            # the wall-clock time of the last successful delivery so an alert can
+            # fire when ``time() - <gauge> > 30 min`` (the symptom a wedged
+            # producer would otherwise hide). Fail-open: an absent gauge (older
+            # ServiceMetrics) or a metric error must never break dispatch.
+            with contextlib.suppress(Exception):
+                gauge = getattr(self._metrics, "outbox_last_delivery_timestamp", None)
+                if gauge is not None:
+                    gauge.set(time.time())
             logger.info(
                 "outbox_record_published",
                 record_id=record.id,
@@ -476,8 +537,18 @@ class BaseOutboxDispatcher(ABC):
                 topic=record.topic,
             )
         else:
+            # Producer recovery (BP outbox-dispatcher-wedged-producer): a
+            # delivery TimeoutError is the signature of a cached producer stuck
+            # in an unrecoverable broken state. Discard it so the next attempt
+            # rebuilds a fresh producer and reconnects to the broker — without
+            # this, every subsequent produce() times out forever.
+            if self._is_broken_producer_error(delivery_error):
+                self._reset_producer()
             await uow.outbox.increment_attempts(record.id)
             new_attempts = record.attempts + 1
+            # Surface the exception *type name* (not just ``str``, which is empty
+            # for TimeoutError) so the failure is never invisible in logs.
+            error_type = type(delivery_error).__name__ if delivery_error is not None else "None"
             if new_attempts >= self._config.max_attempts:
                 await uow.outbox.move_to_dead_letter(record.id)
                 self._metrics.outbox_dispatch_errors_total.inc()
@@ -485,6 +556,8 @@ class BaseOutboxDispatcher(ABC):
                     "outbox_record_dead_lettered",
                     record_id=record.id,
                     attempts=new_attempts,
+                    error_type=error_type,
+                    error_repr=repr(delivery_error) if delivery_error is not None else None,
                     topic=record.topic,
                 )
             else:
@@ -493,7 +566,9 @@ class BaseOutboxDispatcher(ABC):
                     "outbox_record_dispatch_failed",
                     record_id=record.id,
                     attempts=new_attempts,
-                    error=str(delivery_error),
+                    error_type=error_type,
+                    error_repr=repr(delivery_error) if delivery_error is not None else None,
+                    error=str(delivery_error) if delivery_error is not None else "",
                     topic=record.topic,
                 )
 
