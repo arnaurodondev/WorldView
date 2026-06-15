@@ -546,11 +546,15 @@ class BriefingContextGatherer:
             relevant_chunks = chunks_result  # type: ignore[assignment]
 
         # R9 safe degradation: narrative fetch failure → None, no crash.
+        # _fetch_entity_narrative returns a (text, generated_at) tuple — the
+        # timestamp is threaded through so the formatter can apply a
+        # deterministic staleness caveat (brief-quality eval BUG 3).
         entity_narrative: str | None = None
+        entity_narrative_generated_at: str | None = None
         if isinstance(narrative_result, BaseException):
             log.warning("briefing_narrative_failed", entity_id=entity_id, error=str(narrative_result))
-        else:
-            entity_narrative = narrative_result  # type: ignore[assignment]
+        elif narrative_result is not None:
+            entity_narrative, entity_narrative_generated_at = narrative_result  # type: ignore[misc]
 
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_instrument(
@@ -563,6 +567,7 @@ class BriefingContextGatherer:
             recent_events=events,
             relevant_chunks=relevant_chunks,
             entity_narrative=entity_narrative,
+            entity_narrative_generated_at=entity_narrative_generated_at,
             gathered_at=datetime.now(tz=UTC),
         )
 
@@ -970,7 +975,7 @@ class BriefingContextGatherer:
             log.warning("briefing_earnings_calendar_failed", error=str(exc))
             return None
 
-    async def _fetch_entity_narrative(self, entity_id: str) -> str | None:
+    async def _fetch_entity_narrative(self, entity_id: str) -> tuple[str | None, str | None] | None:
         """Fetch the KG ``narrative`` (LLM thematic context) for an entity.
 
         PLAN-0107 follow-up (brief vector descriptions, P1). Calls the S7
@@ -980,9 +985,12 @@ class BriefingContextGatherer:
         strategic position, but can be 1 week+ stale, so the prompt frames it as
         background thematic context (not a recent catalyst).
 
-        Returns the narrative text, or None when the client isn't wired, the
-        entity has no narrative yet, or the upstream call fails (R9). Wrapped in
-        a broad try/except because this runs inside ``asyncio.gather`` — but
+        Returns a ``(narrative_text, generated_at_iso)`` tuple, or None when the
+        client isn't wired, the entity has no narrative yet, or the upstream call
+        fails (R9). The ``generated_at`` element (from ``NarrativeResult``) lets
+        the formatter apply a DETERMINISTIC staleness caveat (brief-quality eval
+        BUG 3) rather than leaving it to LLM discretion. Wrapped in a broad
+        try/except because this runs inside ``asyncio.gather`` — but
         ``return_exceptions=True`` would also catch it; the local guard simply
         lets us log with entity context and keep the rest of the batch clean.
         """
@@ -995,7 +1003,10 @@ class BriefingContextGatherer:
             return None
         if result is None or not result.content:
             return None
-        return str(result.content).strip() or None
+        text = str(result.content).strip() or None
+        if text is None:
+            return None
+        return text, getattr(result, "generated_at", None)
 
     async def _fetch_entity_chunks(
         self,

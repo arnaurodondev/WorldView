@@ -20,6 +20,21 @@ VERSION HISTORY
         (competitive position, AI/EV/sector exposure), and ONLY THEN references
         fundamentals as supporting evidence — not as the opening. Fundamentals
         remain cited in the body; they are not the lead sentence of the Overview.
+- 4.3 — Brief-quality eval 2026-06-14 fixes (BUG 2 + BUG 3):
+          (BUG 2) The model used to echo the literal ``[fundamentals_context]``
+          placeholder as a "citation" on Price & Fundamentals bullets; the parser
+          stripped that non-numeric token, leaving those bullets uncited, so the
+          whole Price & Fundamentals section was DROPPED in every served brief.
+          The fundamentals block is now a CITABLE structured-data source: the
+          formatter advertises its real [cN] index inside <fundamentals_context>
+          and the parser resolves it. v4.3 instructs the model to cite that real
+          [cN] on Price & Fundamentals bullets and FORBIDS emitting
+          ``[fundamentals_context]`` (or any ``[*_context]`` token) as a marker.
+          (BUG 3) The staleness caveat for the background narrative is now
+          injected DETERMINISTICALLY by the formatter (a ``CAVEAT:`` clause on
+          the narrative context line) when the narrative is >7 days old, so the
+          caveat no longer depends on LLM discretion; v4.3 instructs the model to
+          surface that caveat verbatim when present.
 """
 
 from __future__ import annotations
@@ -28,13 +43,17 @@ from prompts._base import PromptTemplate
 
 INSTRUMENT_BRIEFING = PromptTemplate(
     name="instrument_briefing",
-    # Bumped 4.1 → 4.2: definition-first Entity Overview ordering.
-    version="4.2",
+    # Bumped 4.2 → 4.3: fundamentals-as-citable-source (BUG 2) + deterministic
+    # narrative staleness caveat (BUG 3).
+    version="4.3",
     description=(
-        "Institutional-grade entity briefing v4.2 — LEAD + DETAILS with [cN] "
+        "Institutional-grade entity briefing v4.3 — LEAD + DETAILS with [cN] "
         "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4) "
         "+ KG definition/narrative context with definition-FIRST Entity Overview "
-        "ordering (fundamentals as supporting evidence, not the lead)"
+        "ordering (fundamentals as supporting evidence, not the lead); Price & "
+        "Fundamentals bullets cite the structured fundamentals snapshot's real "
+        "[cN] (no [fundamentals_context] token); narrative staleness caveat "
+        "surfaced deterministically from the formatter."
     ),
     template=(
         "You are a senior equity research associate writing a one-page briefing for a "
@@ -62,7 +81,12 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "marker referencing the context item(s) it draws from.\n"
         "The ## LEAD sentence must also end with [cN] marker(s).\n"
         "Use only citation numbers that exist in the context (i.e. ≤ total items).\n"
-        "Do NOT use [N] (letter N) — only numbered markers like [c1], [c2], etc.\n\n"
+        "Do NOT use [N] (letter N) — only numbered markers like [c1], [c2], etc.\n"
+        "NEVER emit a bracketed prompt-variable name (e.g. [fundamentals_context], "
+        "[news_context], [entity_context]) as a citation — these are NOT citation "
+        "markers and the backend discards them. Cite ONLY real [cN] numbers.\n"
+        "The <fundamentals_context> block names the exact [cN] marker to use for "
+        "Price & Fundamentals bullets — use that number, not the block's tag.\n\n"
         # ── Institutional rules ────────────────────────────────────────────────
         "## Additional Rules for Institutional Use\n"
         "- STALENESS: If a price or quote is more than 1 trading day old, prepend '[STALE N days]'.\n"
@@ -94,7 +118,9 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "what it does (drawn from 'Definition (business identity)'). [cN required]\n"
         "  2. LAYER the narrative: one bullet on thematic context — competitive position, "
         "AI/EV/sector exposure, strategic moat (drawn from 'Background thematic context'). "
-        "[cN required; add staleness caveat if narrative is >1 week old]\n"
+        "[cN required]. If that context line carries a 'CAVEAT:' clause (the backend "
+        "injects one deterministically when the narrative is stale), you MUST surface "
+        "that caveat in your bullet (e.g. note it is background, not a recent catalyst).\n"
         "  3. SUPPORT with fundamentals: remaining bullets may reference market cap, "
         "revenue, or key ratios as supporting evidence for the business profile. "
         "Fundamentals are EVIDENCE, not the lead.\n"
@@ -104,7 +130,12 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "Include sections for: Entity Overview, Price & Fundamentals, Recent Developments, "
         "Key Events, Entity Relationships. Skip any section where context is empty.\n"
         "NEVER use 'REMOVED', 'N/A', or any placeholder as a section heading."
-        " If you would omit a section, simply omit it — do not include the heading at all.\n\n"
+        " If you would omit a section, simply omit it — do not include the heading at all.\n"
+        "## Price & Fundamentals — CITATION\n"
+        "When <fundamentals_context> is non-empty it carries the metrics AND the exact "
+        "[cN] marker to cite. Write each Price & Fundamentals bullet as prose from those "
+        "metrics and END it with that real [cN] marker. Do NOT write "
+        "'[fundamentals_context]'. If <fundamentals_context> is empty, omit the section.\n\n"
         "## Style\n"
         "- Declarative sentences only (no 'may', 'could', 'suggests', 'appears')\n"
         "- No investment advice or buy/sell/hold language\n"

@@ -515,6 +515,18 @@ class GenerateBriefingUseCase:
         if summary_paragraph is not None and post_summary_content and summary is None:
             narrative = post_summary_content
 
+        # Brief-quality eval BUG 5: the displayed narrative keeps singular [cN]
+        # markers (the frontend resolves them into chips) but MUST NOT carry an
+        # unresolvable range marker like [c13-c20] — the frontend resolver only
+        # matches a single [cN], so a range would leak as a dangling token. Strip
+        # range markers from the final narrative (the structured-section path
+        # strips them too, but the v4.x morning brief has no ``---`` divider so it
+        # renders this raw narrative directly). Applied AFTER the post-Summary
+        # overwrite above so the chosen narrative variant is always cleaned.
+        from rag_chat.application.use_cases.brief_parser import _CN_RANGE_MARKER_RE
+
+        narrative = _CN_RANGE_MARKER_RE.sub("", narrative)
+
         # ── 4d. PLAN-0103 W6 (v4.3): defensive section + summary injection ────
         # The v4.3 prompt teaches the desired shape via few-shot examples but
         # we cannot RELY on the LLM emitting all 6 sections + ``## Summary``
@@ -729,7 +741,13 @@ class GenerateBriefingUseCase:
         fundamentals_text = _formatter.format_fundamentals(ctx)
         # WHY citation offsets: instrument brief uses news + events only (no alerts).
         # news = [c1..cN], events = [c(N+1)..].
-        news_count_inst = len((ctx.news_articles or [])[:8]) if ctx else 0
+        # Brief-quality eval BUG 1: the events offset MUST equal the number of
+        # news citations the LLM actually sees, which is the deduped+capped
+        # ``_ordered_news`` list (NOT a raw ``[:8]`` slice). The old ``[:8]``
+        # diverged from format_news (deduped+get_news_limit()) whenever dedupe
+        # dropped an item or the list exceeded 8 — mis-numbering every event +
+        # the trailing KG definition/narrative citations.
+        news_count_inst = len(_formatter._ordered_news(ctx)) if ctx else 0
         news_text = _formatter.format_news(ctx, citation_offset=0)
         events_text = _formatter.format_events(ctx, citation_offset=news_count_inst)
         relationships_text = _formatter.format_relationships(ctx)

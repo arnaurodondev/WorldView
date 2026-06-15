@@ -1081,11 +1081,17 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # news → sector/peer → macro → "idiosyncratic — no identifiable driver"),
     # forbade speculative filler, and switched citation markers [N#] → [cN]
     # (the only form the backend resolver maps to a source).
-    assert MORNING_BRIEFING.version == "4.7", MORNING_BRIEFING.version
+    # Brief-quality eval bumped 4.7 → 4.8: sentiment-SIGN + same-holding gate on
+    # driver attribution (BUG 4) and no [cN] on the Market Snapshot tape line +
+    # singular-marker-only rule (BUG 5).
+    assert MORNING_BRIEFING.version == "4.8", MORNING_BRIEFING.version
     # PRD-0030: the attribution ladder + the forbidden-filler rule must be present.
     assert "idiosyncratic — no identifiable driver" in body
     assert "momentum-driven" in body  # named in the FORBIDDEN list
     assert "Driver Attribution" in body
+    # Brief-quality eval BUG 4/5: sign gate + tape-line no-citation rule present.
+    assert "SIGN MATCH" in body
+    assert "carries NO [cN]" in body or "carry NO [cN]" in body
 
 
 # ── PRD-0030 causal-attribution slice (P0/P1) — gatherer helpers ──────────────

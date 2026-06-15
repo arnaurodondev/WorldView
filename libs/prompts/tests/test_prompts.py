@@ -154,9 +154,10 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.7 release: PRD-0030 causal-
-        # attribution ladder + forbidden filler + [N#]→[cN] marker fix.
-        assert MORNING_BRIEFING.version == "4.7"
+        # Version constant must reflect the v4.8 release: brief-quality eval
+        # BUG 4 (sentiment-sign + same-holding attribution gate) + BUG 5
+        # (no [cN] on the tape line; singular markers only).
+        assert MORNING_BRIEFING.version == "4.8"
 
     def test_v45_few_shot_examples_present(self) -> None:
         """v4.3 must embed BOTH few-shot examples (rich + quiet day).

@@ -602,12 +602,66 @@ class BriefContextFormatter:
     # formatter (prompt side) and the parser (resolver side). Keep them in sync.
     _KG_DEFINITION_LABEL: str = "Entity definition (KG)"
     _KG_NARRATIVE_LABEL: str = "Thematic context (KG)"
+    # Brief-quality eval BUG 2: fundamentals are STRUCTURED context (not a news
+    # source), but the prompt requires every bullet to carry a [cN] marker. Make
+    # the fundamentals snapshot a real (non-clickable) citation so the LLM can
+    # cite it instead of echoing the literal ``[fundamentals_context]`` token
+    # (which the parser stripped → the Price & Fundamentals bullets lost their
+    # only citation and were dropped). This label is the single source of truth
+    # shared by the formatter (advertises the [cN]) and the parser (resolves it).
+    _FUNDAMENTALS_LABEL: str = "Fundamentals snapshot (structured data)"
     # Staleness caveat carried INTO the narrative citation snippet so the
     # resolved chip in the UI also signals "not a recent catalyst" (mirrors the
     # in-prompt caveat the LLM sees).
     _KG_NARRATIVE_STALENESS: str = (
         "Background thematic context (may be up to ~1 week old; not a recent catalyst)"
     )
+    # Brief-quality eval BUG 3: narrative age (in days) beyond which the
+    # formatter injects an EXPLICIT staleness caveat into the narrative context
+    # line, deterministically — the prior prompt-only "add a caveat if >1 week"
+    # was LLM-discretionary and fired only 2/5.
+    _NARRATIVE_STALE_DAYS: int = 7
+
+    @staticmethod
+    def _narrative_caveat(generated_at: str | None) -> str | None:
+        """Return an explicit staleness-caveat sentence when the narrative is stale.
+
+        Brief-quality eval BUG 3 (deterministic staleness). ``generated_at`` is
+        the ISO-8601 timestamp at which S7 produced the narrative (threaded onto
+        ``ctx.entity_narrative_generated_at``).
+
+        Rules:
+          * When the timestamp parses and the age exceeds ``_NARRATIVE_STALE_DAYS``
+            (7 days), return a dated caveat naming the age (e.g.
+            ``"This thematic context is ~25 days old (generated 2026-05-21) and is
+            NOT a recent catalyst."``).
+          * When the timestamp is ABSENT or unparseable, return an UNCONDITIONAL
+            caveat (safer than an intermittent one — we cannot prove freshness).
+          * When the narrative is fresh (≤ threshold) return ``None`` (no caveat).
+
+        The caveat text is injected into the narrative context line by
+        ``format_entity_context`` so its presence never depends on the LLM.
+        """
+        from datetime import UTC, datetime
+
+        if not generated_at:
+            # No timestamp → cannot prove freshness → caveat unconditionally.
+            return "This thematic context may be stale and is NOT a recent catalyst."
+        # Parse the ISO-8601 timestamp tolerantly (accept a trailing 'Z').
+        try:
+            ts = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        except ValueError:
+            return "This thematic context may be stale and is NOT a recent catalyst."
+        # Normalise to tz-aware UTC so the subtraction never raises.
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        age_days = (datetime.now(tz=UTC) - ts).days
+        if age_days > BriefContextFormatter._NARRATIVE_STALE_DAYS:
+            return (
+                f"This thematic context is ~{age_days} days old "
+                f"(generated {ts.date().isoformat()}) and is NOT a recent catalyst."
+            )
+        return None
 
     @staticmethod
     def kg_description_offset(ctx: Any) -> int:
@@ -621,10 +675,19 @@ class BriefContextFormatter:
         in ONE place (input/lookup-mismatch is the silent-drop bug class we are
         fixing — see MEMORY ``feedback_prompt_input_mismatch``).
 
-        The counts mirror ``materialize_brief_citations`` EXACTLY:
+        The counts mirror ``materialize_brief_citations`` AND ``format_events``
+        EXACTLY (brief-quality eval BUG 1 — offset mismatch). Before this fix,
+        ``format_events`` advertised up to ``get_events_limit()`` (10) events to
+        the LLM as ``[c8]..[c17]``, while this helper + ``materialize`` capped
+        events at a hardcoded ``[:6]``, so the KG definition was advertised at
+        ``news+6+1`` — an index that COLLIDED with a real event citation the LLM
+        already saw under that number. The LLM then cited the KG markers but they
+        resolved to events. Single source of truth: every place that counts /
+        builds events uses ``get_events_limit()`` so the KG definition/narrative
+        land at the FIRST free index after every displayed event.
           * news  = ``len(_ordered_news(ctx))`` (deduped + capped)
-          * events = ``len(recent_events[:6])``
-          * alerts = ``len(active_alerts[:5])`` (instrument briefs have none)
+          * events = ``len(recent_events[:get_events_limit()])``
+          * alerts = ``len(active_alerts[:get_alerts_limit()])`` (instrument briefs have none)
 
         Defensive: when ``recent_events`` / ``active_alerts`` are not real lists
         (e.g. MagicMock-shaped ctx in unit tests), they contribute 0 — so the
@@ -634,10 +697,49 @@ class BriefContextFormatter:
             return 0
         news_count = len(BriefContextFormatter._ordered_news(ctx))
         recent_events = getattr(ctx, "recent_events", None)
-        events_count = len(recent_events[:6]) if isinstance(recent_events, list) else 0
+        events_count = len(recent_events[: get_events_limit()]) if isinstance(recent_events, list) else 0
         active_alerts = getattr(ctx, "active_alerts", None)
-        alerts_count = len(active_alerts[:5]) if isinstance(active_alerts, list) else 0
+        alerts_count = len(active_alerts[: get_alerts_limit()]) if isinstance(active_alerts, list) else 0
         return news_count + events_count + alerts_count
+
+    @staticmethod
+    def _kg_items_count(ctx: Any) -> int:
+        """Number of KG citation items (definition + narrative) appended for ``ctx``.
+
+        Mirrors the append logic in both ``format_entity_context`` and
+        ``materialize_brief_citations``: a definition item when ``entity_graph
+        .description`` is a non-empty string, a narrative item when
+        ``entity_narrative`` is a non-empty string. Used to compute the
+        fundamentals citation index (which sits AFTER the KG items).
+        """
+        count = 0
+        eg = getattr(ctx, "entity_graph", None) if ctx is not None else None
+        description = getattr(eg, "description", None) if eg is not None else None
+        if isinstance(description, str) and description.strip():
+            count += 1
+        narrative = getattr(ctx, "entity_narrative", None) if ctx is not None else None
+        if isinstance(narrative, str) and narrative.strip():
+            count += 1
+        return count
+
+    @staticmethod
+    def fundamentals_citation_index(ctx: Any) -> int | None:
+        """Return the 1-based [cN] index of the fundamentals snapshot citation.
+
+        Brief-quality eval BUG 2. The fundamentals snapshot is appended to the
+        citation list AFTER news → events → alerts → KG definition/narrative, so
+        its index is ``kg_description_offset(ctx) + _kg_items_count(ctx) + 1``.
+        Returns ``None`` when there are no fundamentals to cite (so the formatter
+        renders no marker and the parser adds no citation).
+        """
+        if ctx is None:
+            return None
+        fundamentals = getattr(ctx, "fundamentals", None)
+        data = getattr(fundamentals, "data", None) if fundamentals is not None else None
+        if not isinstance(data, dict) or not data:
+            return None
+        base = BriefContextFormatter.kg_description_offset(ctx)
+        return base + BriefContextFormatter._kg_items_count(ctx) + 1
 
     def format_entity_context(self, ctx: Any) -> str:
         """Format the center entity's identity for an instrument brief.
@@ -686,12 +788,18 @@ class BriefContextFormatter:
             cn += 1
             lines.append(f"[c{cn}] Definition (business identity): {description}")
         # narrative — thematic context; explicitly flagged as potentially stale.
+        # Brief-quality eval BUG 3: the staleness caveat is now injected
+        # DETERMINISTICALLY by the formatter (based on the narrative's
+        # generated_at age) so its presence never depends on LLM discretion.
         narrative = getattr(ctx, "entity_narrative", None)
         if narrative:
             cn += 1
+            generated_at = getattr(ctx, "entity_narrative_generated_at", None)
+            caveat = self._narrative_caveat(generated_at)
+            caveat_str = f" CAVEAT: {caveat}" if caveat else ""
             lines.append(
                 f"[c{cn}] Background thematic context (may be up to ~1 week old; "
-                f"not a recent catalyst): {narrative}"
+                f"not a recent catalyst): {narrative}{caveat_str}"
             )
         return "\n".join(lines)
 
@@ -776,7 +884,22 @@ class BriefContextFormatter:
         for key, label in verbatim_fields.items():
             if key in data:
                 lines.append(f"- **{label}**: {data[key]}")
-        return "\n".join(lines) if lines else ""
+        if not lines:
+            return ""
+        # Brief-quality eval BUG 2: advertise the [cN] index of the fundamentals
+        # snapshot citation so the LLM cites a RESOLVABLE marker on every Price &
+        # Fundamentals bullet — instead of echoing the literal
+        # ``[fundamentals_context]`` token (which the parser stripped, leaving
+        # the bullet uncited → the whole section was dropped). The index is
+        # appended by ``materialize_brief_citations`` after the KG items.
+        cn = self.fundamentals_citation_index(ctx)
+        if cn is not None:
+            header = (
+                f"(Cite the Price & Fundamentals bullets you write from this block "
+                f"with the marker [c{cn}].)"
+            )
+            return header + "\n" + "\n".join(lines)
+        return "\n".join(lines)
 
     def format_relationships(self, ctx: Any) -> str:
         """Format entity relationships from the knowledge graph as a markdown table."""

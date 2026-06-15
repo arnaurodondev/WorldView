@@ -970,3 +970,57 @@ def test_holding_news_outside_citation_window_is_skipped() -> None:
     )
     portfolio_text = formatter.format_portfolio_morning(ctx)
     assert "related:" not in portfolio_text  # unresolvable id skipped, no fake marker
+
+
+# ── Brief-quality eval 2026-06-14 — BUG 3 deterministic staleness caveat ──────
+
+
+def _entity_ctx_with_narrative(generated_at: str | None) -> MagicMock:
+    """MagicMock ctx with a definition + narrative + narrative timestamp."""
+    eg = MagicMock()
+    eg.canonical_name = "Apple Inc."
+    eg.entity_type = "company"
+    eg.ticker = "AAPL"
+    eg.description = "Apple designs consumer electronics."
+    ctx = MagicMock()
+    ctx.entity_graph = eg
+    ctx.entity_narrative = "Apple is a leading AI/consumer-electronics platform."
+    ctx.entity_narrative_generated_at = generated_at
+    # Keep offset helpers happy — real lists, not Mocks.
+    ctx.news_articles = []
+    ctx.recent_events = []
+    ctx.active_alerts = []
+    return ctx
+
+
+def test_bug3_staleness_caveat_present_when_narrative_old() -> None:
+    """BUG 3: a 25-day-old narrative gets a deterministic CAVEAT in the context line."""
+    from datetime import UTC, datetime, timedelta
+
+    formatter = _make_formatter()
+    old_ts = (datetime.now(tz=UTC) - timedelta(days=25)).isoformat()
+    ctx = _entity_ctx_with_narrative(old_ts)
+    result = formatter.format_entity_context(ctx)
+    assert "CAVEAT:" in result
+    assert "25 days old" in result
+    assert "NOT a recent catalyst" in result
+
+
+def test_bug3_staleness_caveat_absent_when_narrative_fresh() -> None:
+    """BUG 3: a fresh (2-day-old) narrative gets NO injected caveat."""
+    from datetime import UTC, datetime, timedelta
+
+    formatter = _make_formatter()
+    fresh_ts = (datetime.now(tz=UTC) - timedelta(days=2)).isoformat()
+    ctx = _entity_ctx_with_narrative(fresh_ts)
+    result = formatter.format_entity_context(ctx)
+    assert "CAVEAT:" not in result
+
+
+def test_bug3_staleness_caveat_unconditional_when_timestamp_absent() -> None:
+    """BUG 3: no timestamp → unconditional caveat (safer than intermittent)."""
+    formatter = _make_formatter()
+    ctx = _entity_ctx_with_narrative(None)
+    result = formatter.format_entity_context(ctx)
+    assert "CAVEAT:" in result
+    assert "may be stale" in result

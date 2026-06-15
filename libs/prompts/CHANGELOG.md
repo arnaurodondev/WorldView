@@ -9,6 +9,31 @@ is unchanged.
 
 ## morning_briefing
 
+### 4.8 — 2026-06-14 (brief-quality eval — attribution sign gate + tape-line citation)
+
+- **Sentiment-SIGN + same-holding gate on driver attribution (BUG 4).** The
+  adversarial eval found causal over-attribution against topically-adjacent
+  citations: a holding's driver was grounded on a real, on-topic article whose
+  sentiment SIGN contradicted the price move (AMZN −0.88% "explained" by a
+  POSITIVE Graviton5 margin article), and unrelated articles were pinned to the
+  wrong holding. v4.8 tightens rung 1 of the ladder — a `related: [cN]` article
+  may back a holding's driver ONLY IF (a) it is THAT holding's own `related:`
+  line (never another holding's, never a general-News article) AND (b) its
+  sentiment sign is consistent with the move (a positive article cannot explain
+  a down move, and vice-versa). On contradiction the model flags it explicitly,
+  downgrades to the sector rung, or falls to "idiosyncratic — no identifiable
+  driver". A sign-consistent same-entity article still grants a grounded driver.
+- **Market Snapshot tape line carries NO citation (BUG 5).** The SPY/QQQ/VIX
+  line is derived from quote/tape data, not an article, but the model attached a
+  random run-varying `[cN]` to it. v4.8 instructs that the Market Snapshot line
+  carries no `[cN]`; both few-shot examples were re-shot to drop the marker.
+- **Singular markers only — no `[cA-cB]` ranges (BUG 5).** The model sometimes
+  emitted a range like `[c13-c20]`; v4.8 forbids it (the backend resolver only
+  maps a single `[cN]`). Parser-side, `brief_parser._CN_RANGE_MARKER_RE` now
+  strips any range marker before resolution so it never leaks to the user.
+- **Impact:** flips the content hash; holding drivers are now sign-consistent
+  and same-entity-grounded, and the tape line no longer carries a stray citation.
+
 ### 4.7 — 2026-06-14 (PRD-0030 causal-attribution slice, P2)
 
 - **Added a per-holding DRIVER ATTRIBUTION ladder.** The prior brief restated
@@ -38,6 +63,31 @@ is unchanged.
   grounded in the cited snippet.
 
 ## instrument_briefing
+
+### 4.3 — 2026-06-14 (brief-quality eval — citable fundamentals + deterministic staleness)
+
+- **Fundamentals are a CITABLE structured-data source (BUG 2).** The eval found
+  the Price & Fundamentals section dropped in EVERY served brief: the LLM ended
+  those bullets with the literal `[fundamentals_context]` placeholder token,
+  which the parser stripped (it is not a numeric `[cN]`), leaving the bullets
+  uncited so `BriefBullet`'s ≥1-citation gate dropped the whole section. The
+  formatter now advertises a real `[cN]` index for the fundamentals snapshot
+  inside `<fundamentals_context>` and `materialize_brief_citations` appends a
+  matching "Fundamentals snapshot (structured data)" citation. v4.3 instructs
+  the model to cite that real `[cN]` on Price & Fundamentals bullets and FORBIDS
+  emitting `[fundamentals_context]` (or any `[*_context]` token) as a marker.
+  Parser-side, a fundamentals-section bullet with no numeric marker is now
+  backed by the fundamentals citation rather than dropped (belt-and-braces).
+- **Deterministic narrative staleness caveat (BUG 3).** The prior prompt left
+  the "add a caveat if >1 week old" decision to LLM discretion, so 25-day-old
+  narratives were layered as current themes with no caveat 3/5 runs. The
+  narrative `generated_at` is now threaded from S7 onto the context, and the
+  formatter injects a `CAVEAT:` clause into the narrative context line
+  deterministically when age > 7 days (and unconditionally when the timestamp is
+  absent). v4.3 instructs the model to surface that injected caveat when present,
+  so the caveat no longer depends on the model.
+- **Impact:** flips the content hash; the Price & Fundamentals section renders
+  again, and the staleness caveat is present every time the narrative is stale.
 
 ### 4.2 — 2026-06-14 (definition-first Entity Overview ordering)
 

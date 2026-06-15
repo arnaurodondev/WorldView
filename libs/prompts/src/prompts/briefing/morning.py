@@ -2,6 +2,28 @@
 
 VERSION HISTORY
 ---------------
+- 4.8 — Brief-quality eval 2026-06-14 fixes (BUG 4 + BUG 5):
+          (BUG 4 — causal over-attribution / sentiment-sign mismatch) The brief
+          grounded a holding's driver on a topically-adjacent article even when
+          the article's sentiment SIGN contradicted the price move (e.g. AMZN
+          -0.88% "explained" by a POSITIVE Graviton5 margin article) and pinned
+          unrelated articles to the wrong holding. v4.8 strengthens rung 1 of the
+          attribution ladder: a ``related: [cN]`` article may back a holding's
+          driver ONLY IF (a) it is THAT holding's own ``related:`` line (never
+          another holding's), AND (b) its sentiment sign is CONSISTENT with the
+          move (a positive article cannot explain a down move, and vice-versa).
+          When the only related article's sign contradicts the move, the model
+          must NOT assert it as the cause — it downgrades to the sector rung, or
+          flags the contradiction explicitly, or falls to "idiosyncratic — no
+          identifiable driver". A sign-consistent same-entity article still
+          grants a grounded driver (we do NOT make everything idiosyncratic).
+          (BUG 5 — stray market-snapshot citation + range markers) The Market
+          Snapshot / tape line (SPY/QQQ/VIX) is derived from QUOTE data, not an
+          article, yet the model attached a random run-varying [cN] to it and
+          sometimes emitted a range marker like [c13-c20]. v4.8 instructs that
+          the Market Snapshot line carries NO [cN], and that citation markers are
+          always SINGULAR [cN] — never a [cA-cB] range. (Parser-side: the backend
+          now strips non-singular range markers so they never leak to the user.)
 - 4.7 — PRD-0030 causal-attribution slice (P2, 2026-06-14): the prior brief
         DESCRIBED price moves the user can already see and filled the "why"
         gap with fabricated guesses ("TSLA +3.17% — no direct news;
@@ -132,25 +154,17 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.6 → 4.7 as part of PRD-0030 causal-attribution slice (P2).
-    # v4.7 adds the per-holding DRIVER ATTRIBUTION ladder (entity news →
-    # sector/peer → macro/event → "idiosyncratic — no identifiable driver"),
-    # FORBIDS speculative filler ("momentum-driven", "may be riding", "no
-    # catalyst confirmed"), teaches the new per-holding ``related:`` /
-    # ``sector:`` context shape, and switches the citation marker convention
-    # from the unresolvable [N#] form to [cN] (which the backend resolver
-    # ``_CN_CITATION_RE`` actually maps to a source — the prior [N#] markers
-    # were silently stripped as orphans, so morning-brief per-bullet
-    # citations never resolved). Few-shot Examples A/B re-shot accordingly.
-    version="4.7",
+    # Bumped 4.7 → 4.8: brief-quality eval BUG 4 (sentiment-sign gate on driver
+    # attribution + same-holding-only) and BUG 5 (no [cN] on the Market Snapshot
+    # tape line; singular [cN] markers only, no [cA-cB] ranges).
+    version="4.8",
     description=(
-        "Morning market briefing v4.7 — v4.6 contract (## Summary + 6 mandatory "
-        "sections + few-shot Examples A/B + adaptive Summary length) plus the "
-        "PRD-0030 causal-attribution ladder: every holding line explains the "
-        "LIKELY DRIVER of its move (entity news → sector/peer → macro → "
-        "idiosyncratic) grounded in fed ``related:``/``sector:`` context, with "
-        "speculative filler forbidden and [cN] citation markers (resolvable) "
-        "replacing the prior unresolvable [N#] form."
+        "Morning market briefing v4.8 — v4.7 causal-attribution ladder plus a "
+        "sentiment-SIGN + same-holding gate (a [cN] article may back a driver "
+        "only if it is THAT holding's related: line AND its sentiment sign "
+        "matches the move; else downgrade to sector/idiosyncratic), the Market "
+        "Snapshot tape line carries NO citation (it is quote-derived), and all "
+        "markers are singular [cN] (no [cA-cB] ranges)."
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -177,8 +191,24 @@ MORNING_BRIEFING = PromptTemplate(
         "## Driver Attribution (MANDATORY for every holding)\n"
         "For each holding, explain WHY it moved by walking this ladder in order, "
         "stopping at the first rung with supporting data IN THE CONTEXT:\n"
-        "  1. ENTITY NEWS — if the holding has a ``related: [cN]`` line, attribute "
-        "the move to that story and cite its [cN]. Lead with the driver.\n"
+        "  1. ENTITY NEWS — if the holding has its OWN ``related: [cN]`` line, you "
+        "MAY attribute the move to that story and cite its [cN] — but ONLY IF BOTH "
+        "guards hold:\n"
+        "       (a) SAME HOLDING: the ``related:`` line is the one printed directly "
+        "beneath THIS holding. NEVER attribute a holding's move to another "
+        "holding's article or to an article in the general News list. If an "
+        "article is not on this holding's own ``related:`` line, it is not its "
+        "driver.\n"
+        "       (b) SIGN MATCH: the article's sentiment sign (shown as "
+        "'(positive/negative/neutral, rel%)') must be CONSISTENT with the move. A "
+        "POSITIVE article cannot explain a DOWN move, and a NEGATIVE article cannot "
+        "explain an UP move. If the sign contradicts the move, do NOT assert that "
+        "article as the cause: either (i) state the contradiction explicitly "
+        "('the [cN] story is positive but the stock is down — net effect "
+        "unclear'), or (ii) drop to the SECTOR rung below, or (iii) fall to "
+        "'idiosyncratic — no identifiable driver'. A NEUTRAL article may support "
+        "either direction. When the sign matches, lead with the driver and cite "
+        "[cN].\n"
         "  2. SECTOR / PEER — else if the holding has a ``sector:`` line, attribute "
         "the move to the sector ('tracking <Sector> +X.XX%'), using hedged "
         "language (tracking, in line with) — sector co-movement is correlation, "
@@ -216,8 +246,10 @@ MORNING_BRIEFING = PromptTemplate(
         "heading and a single placeholder line (e.g. ``- No notable risks "
         "identified today``); do NOT omit the heading. Empty sections still need "
         "their bullet line.\n\n"
-        "  1. **Market Snapshot** — one sentence. Futures + VIX. If market data is missing, "
-        "emit ``- Market data unavailable``.\n"
+        "  1. **Market Snapshot** — one sentence. Futures + VIX. This line is "
+        "derived from QUOTE/tape data, NOT from a news article — it MUST carry NO "
+        "[cN] citation (do not attach a citation to the SPY/QQQ/VIX line). If "
+        "market data is missing, emit ``- Market data unavailable``.\n"
         "  2. **Your Portfolio Today** — bullet per material holding. Lead with "
         "implication. If portfolio is empty, emit ``- No material holdings to report``.\n"
         "  3. **Macro Today** — bullet list of today/tomorrow's prints. If empty, "
@@ -245,6 +277,11 @@ MORNING_BRIEFING = PromptTemplate(
         "Use ONLY citation numbers that exist in the context (i.e. ≤ total items).\n"
         "Use the [cN] form (e.g. [c1], [c2]) — do NOT use the bare [N#] form, "
         "which the backend cannot resolve into a source.\n"
+        "Markers are ALWAYS SINGULAR: write [c3][c7] for two sources — NEVER a "
+        "range like [c3-c7] (a hyphen/dash between two numbers). A range marker "
+        "is unresolvable and the backend strips it.\n"
+        "The **Market Snapshot** SPY/QQQ/VIX line is quote-derived, NOT a news "
+        "claim — it MUST carry NO [cN]. Never attach a citation to the tape line.\n"
         "Placeholder lines (when a section has no data) do NOT need a citation.\n\n"
         # ── Tightened MUST language (v4.3) + few-shot examples ────────────────
         # WHY tighten + show: v4.2 imperative language alone wasn't enough — live
@@ -278,7 +315,7 @@ MORNING_BRIEFING = PromptTemplate(
         "\n"
         "## Details\n"
         "**Market Snapshot**\n"
-        "- SPY +0.35%, QQQ +0.62%, VIX 13.8 — risk-on tone pre-mkt [c1]\n"
+        "- SPY +0.35%, QQQ +0.62%, VIX 13.8 — risk-on tone pre-mkt\n"
         # WHY this Portfolio block (PRD-0030): demonstrates the attribution
         # ladder per holding — rung 1 (entity news, cited), rung 2 (sector
         # fallback, hedged), rung 4 (idiosyncratic, only when no related/
@@ -287,6 +324,11 @@ MORNING_BRIEFING = PromptTemplate(
         "- AAPL +0.8% pre-mkt — driven by the Vision Pro shipment beat [c2]; tailwind for your 12% weight\n"
         "- MSFT +1.1% — Azure-AI win at Anthropic confirms the cloud capex thesis [c3]\n"
         "- JPM +0.4% — no stock-specific news; tracking Financial Services +0.30% [c10]\n"
+        # WHY (BUG 4 — sign gate): AMZN's only related: article is POSITIVE but the
+        # stock is DOWN, so the model must NOT assert it as the cause — it flags the
+        # contradiction instead of inventing a "sell the news" story.
+        "- AMZN -0.9% — the [c11] Graviton5 margin story is positive but the stock "
+        "is down; net effect unclear, tracking Consumer Discretionary -0.4% [c12]\n"
         "- NVDA +0.1% — idiosyncratic — no identifiable driver\n"
         "**Macro Today**\n"
         "- CPI 08:30 ET, consensus 3.1% YoY (prev 3.2%); hot print would re-price your duration risk [c4]\n"
@@ -309,7 +351,7 @@ MORNING_BRIEFING = PromptTemplate(
         "\n"
         "## Details\n"
         "**Market Snapshot**\n"
-        "- SPY closed 521.40, QQQ 445.10, VIX 12.6 — market data thin pre-mkt [c1]\n"
+        "- SPY closed 521.40, QQQ 445.10, VIX 12.6 — market data thin pre-mkt\n"
         # WHY: on a quiet day a holding with NO related: and NO sector: line
         # must read 'idiosyncratic — no identifiable driver' — never a guess.
         "**Your Portfolio Today**\n"

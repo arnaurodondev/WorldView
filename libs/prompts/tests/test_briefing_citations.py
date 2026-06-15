@@ -57,16 +57,32 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_47(self) -> None:
-        """MORNING_BRIEFING bumped to v4.7 for PRD-0030 (causal-attribution slice).
+    def test_version_is_48(self) -> None:
+        """MORNING_BRIEFING bumped to v4.8 for the brief-quality eval fixes.
 
-        v4.7 adds the per-holding DRIVER ATTRIBUTION ladder (entity news →
-        sector/peer → macro → "idiosyncratic — no identifiable driver"),
-        forbids speculative filler, documents the new ``related:``/``sector:``
-        context shape, and switches citation markers from the unresolvable
-        [N#] form to [cN]. Asserting the current version pins prompt drift.
+        v4.8 adds the sentiment-SIGN + same-holding gate on driver attribution
+        (BUG 4) and the no-[cN]-on-the-tape-line + singular-marker-only rule
+        (BUG 5), on top of the v4.7 attribution ladder. Asserting the current
+        version pins prompt drift.
         """
-        assert MORNING_BRIEFING.version == "4.7"
+        assert MORNING_BRIEFING.version == "4.8"
+
+    def test_bug4_sentiment_sign_gate_present(self) -> None:
+        """BUG 4: rung 1 must require sentiment-sign + same-holding consistency."""
+        result = self._render()
+        assert "SIGN MATCH" in result
+        assert "SAME HOLDING" in result
+        # A positive article cannot explain a down move (and vice-versa).
+        assert "cannot explain a DOWN move" in result
+
+    def test_bug5_market_snapshot_no_citation_and_no_range(self) -> None:
+        """BUG 5: tape line carries no [cN]; range markers are forbidden."""
+        result = self._render()
+        assert "carry NO [cN]" in result or "carries NO [cN]" in result
+        # Range markers ([cA-cB]) are explicitly forbidden as unresolvable.
+        assert "NEVER a " in result and "range" in result.lower()
+        # The Market Snapshot example line must NOT carry a citation marker.
+        assert "VIX 13.8 — risk-on tone pre-mkt\n" in result
 
     def test_contains_few_shot_examples(self) -> None:
         """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""
@@ -130,16 +146,35 @@ class TestInstrumentBriefingCitationInstructions:
         result = self._render()
         assert "## LEAD" in result
 
-    def test_version_is_42(self) -> None:
-        """INSTRUMENT_BRIEFING must be exactly v4.2 (definition-first Entity Overview).
+    def test_version_is_43(self) -> None:
+        """INSTRUMENT_BRIEFING must be exactly v4.3.
 
         v4.0: LEAD + [cN] gate (PLAN-0062-W4).
         v4.1: KG definition + narrative context (PLAN-0107 follow-up).
         v4.2: definition-FIRST ordering for Entity Overview — the model must open
               the Overview with the business identity (Definition), not financials.
+        v4.3: brief-quality eval fixes — fundamentals are a CITABLE structured
+              source (cite the advertised [cN], never [fundamentals_context]) so
+              the Price & Fundamentals section is no longer dropped (BUG 2); the
+              narrative staleness caveat is injected deterministically and must be
+              surfaced when present (BUG 3).
         Pinning the exact version catches accidental rollback or drift.
         """
-        assert INSTRUMENT_BRIEFING.version == "4.2"
+        assert INSTRUMENT_BRIEFING.version == "4.3"
+
+    def test_bug2_forbids_fundamentals_context_token_and_cites_real_cn(self) -> None:
+        """BUG 2: prompt forbids the [fundamentals_context] token and directs a real [cN]."""
+        result = self._render()
+        # The placeholder token must be explicitly forbidden as a citation.
+        assert "[fundamentals_context]" in result  # named in the prohibition
+        assert "NEVER emit a bracketed prompt-variable name" in result
+        # The Price & Fundamentals citation guidance must be present.
+        assert "Price & Fundamentals — CITATION" in result
+
+    def test_bug3_surfaces_deterministic_staleness_caveat(self) -> None:
+        """BUG 3: prompt instructs the model to surface the injected CAVEAT clause."""
+        result = self._render()
+        assert "CAVEAT:" in result
 
     def test_documents_entity_definition_and_narrative(self) -> None:
         """v4.1+ must instruct the model on the KG definition + background narrative."""
