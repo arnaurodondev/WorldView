@@ -21,21 +21,51 @@ import {
 } from "@/components/instrument/chart/chartPeriods";
 
 describe("chartPeriods presets", () => {
-  it("exposes exactly the 6 backend-supported periods in display order", () => {
-    // 2026-06-15: the set is now backend-honest — every period maps to a
-    // resolution S3 actually stores. 1W (hourly, sparse) and 5Y (weekly, NOT
-    // stored — rendered empty) are gone; 5D (intraday) and 6M (daily) replace
-    // them. See chartPeriods.ts for the live-verified data-availability table.
-    expect(CHART_PERIODS).toEqual(["1D", "5D", "1M", "3M", "6M", "1Y"]);
+  it("exposes exactly the 8 supported periods in display order", () => {
+    // 2026-06-15 LONG-RANGE RESTORE: the set now includes the long horizons
+    // again. 5Y and MAX were re-added once S3 wired its derive logic
+    // (daily→weekly "1W" and daily→monthly "1M" aggregation at query time), so
+    // a weekly/monthly series is now SERVABLE — see chartPeriods.ts for the
+    // data-availability + data-depth notes. The 1H (hourly, sparse) resolution
+    // remains banned (no period button maps to it).
+    expect(CHART_PERIODS).toEqual(["1D", "5D", "1M", "3M", "6M", "1Y", "5Y", "MAX"]);
   });
 
-  it("only maps to resolutions the backend actually stores (5M or 1D — never 1H/1W/1M)", () => {
-    // ROOT-CAUSE GUARD: the old 1W→1H and 5Y→1W mappings hit resolutions with
-    // ~10 or ZERO stored bars. Pin that NO period may ever map to those again.
-    const allowed = new Set(["5M", "1D"]);
+  it("only maps to resolutions the backend can serve (5M / 1D / 1W / 1M — never the sparse 1H)", () => {
+    // ROOT-CAUSE GUARD: the old 1W *period* → 1H mapping hit a resolution with
+    // ~10 stored bars/day. Pin that NO period maps to 1H. Weekly ("1W") and
+    // monthly ("1M") ARE now allowed because S3 derives them on demand from the
+    // daily series (DeriveOHLCVUseCase) — they are no longer empty.
+    const allowed = new Set(["5M", "1D", "1W", "1M"]);
     for (const period of CHART_PERIODS) {
-      expect(allowed.has(CHART_PERIOD_PRESETS[period].timeframe)).toBe(true);
+      const tf = CHART_PERIOD_PRESETS[period].timeframe;
+      expect(allowed.has(tf)).toBe(true);
+      // Explicitly assert the banned sparse resolution never reappears.
+      expect(tf).not.toBe("1H");
     }
+  });
+
+  it("5Y maps to the DERIVED weekly ('1W') resolution in its own cache slot", () => {
+    // 5Y stands alone — its own timeframe → its own qk.instruments.ohlcv slot.
+    // WHY weekly (not monthly): ~260 weekly bars over 5 years is dense+readable.
+    expect(CHART_PERIOD_PRESETS["5Y"].timeframe).toBe("1W");
+    // The fetch window must reach ~5 years back so the full horizon becomes
+    // available once the daily backfill is deep enough (data-depth, not window,
+    // is the current limit).
+    expect(CHART_PERIOD_PRESETS["5Y"].fetchDaysBack).toBeGreaterThanOrEqual(1825);
+    // 5Y must NOT share the daily cache slot (different resolution).
+    expect(CHART_PERIOD_PRESETS["5Y"].timeframe).not.toBe(CHART_PERIOD_PRESETS["1Y"].timeframe);
+  });
+
+  it("MAX maps to the DERIVED monthly ('1M') resolution in its own cache slot", () => {
+    // MAX = deepest zoom-out → monthly bars. "1M" is the frontend UPPERCASE
+    // month convention the gateway preserves for S3's case-sensitive ONE_MONTH.
+    expect(CHART_PERIOD_PRESETS["MAX"].timeframe).toBe("1M");
+    // Very-wide window (~20y) so "all available history" is requested; S3
+    // returns only what the daily series can derive.
+    expect(CHART_PERIOD_PRESETS["MAX"].fetchDaysBack).toBeGreaterThanOrEqual(7300);
+    // MAX and 5Y are distinct resolutions → distinct cache slots.
+    expect(CHART_PERIOD_PRESETS["MAX"].timeframe).not.toBe(CHART_PERIOD_PRESETS["5Y"].timeframe);
   });
 
   it("1M / 3M / 6M / 1Y share one daily-bar cache slot (same timeframe + fetch window)", () => {

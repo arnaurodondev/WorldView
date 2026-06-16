@@ -147,23 +147,52 @@ afterEach(() => cleanup());
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("OHLCVChart period selector", () => {
-  it("renders all 6 backend-supported period pills with 1Y selected by default", async () => {
-    // 2026-06-15 BACKEND-HONEST SET: the pill set changed from
-    // [1D,1W,1M,3M,1Y,5Y] to [1D,5D,1M,3M,6M,1Y]. WHY: 1W (hourly) and 5Y
-    // (weekly) mapped to resolutions the S3 backend barely/never stores — 5Y
-    // rendered an empty chart and 1W only ~10 bars (the reported bugs). They
-    // are replaced by 5D (intraday, dense 5-minute data) and 6M (daily, same
-    // series as 1M/3M/1Y). 1Y remains the dense daily default.
+  it("renders all 8 supported period pills with 1Y selected by default", async () => {
+    // 2026-06-15 LONG-RANGE RESTORE: the pill set is now
+    // [1D,5D,1M,3M,6M,1Y,5Y,MAX]. The long horizons (5Y/MAX) were RE-ADDED once
+    // S3 wired its daily→weekly ("1W") and daily→monthly ("1M") derive logic, so
+    // those views are servable again. 5D (intraday) and 6M (daily) stay. The 1W
+    // *period* button is NOT restored — it mapped to the sparse 1H resolution
+    // (~10 bars/day); only the 5Y/MAX long horizons came back. 1Y remains the
+    // dense daily default.
     await act(async () => { renderChart(makeClient()); });
-    for (const p of ["1D", "5D", "1M", "3M", "6M", "1Y"]) {
+    for (const p of ["1D", "5D", "1M", "3M", "6M", "1Y", "5Y", "MAX"]) {
       expect(screen.getByRole("button", { name: p })).toBeInTheDocument();
     }
-    // The dropped periods must NOT be present any more.
+    // The 1W period button must NOT be present (it mapped to sparse 1H bars).
     expect(screen.queryByRole("button", { name: "1W" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "5Y" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "1Y" }).getAttribute("aria-pressed"),
     ).toBe("true");
+  });
+
+  it("selecting 5Y fetches WEEKLY (1W) derived bars", async () => {
+    // 5Y maps to the derived "1W" resolution — switching to it must request
+    // weekly bars (S3 aggregates daily→weekly at query time). The chart passes
+    // the frontend uppercase convention "1W"; the gateway normalizes it to "1w".
+    await act(async () => { renderChart(makeClient()); });
+    await waitFor(() => expect(mockGetOHLCV).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "5Y" }));
+    });
+    await waitFor(() => {
+      const calls = mockGetOHLCV.mock.calls.map(([, p]) => p.timeframe);
+      expect(calls).toContain("1W");
+    });
+  });
+
+  it("selecting MAX fetches MONTHLY (1M) derived bars", async () => {
+    // MAX maps to the derived "1M" (uppercase = monthly) resolution. The
+    // gateway preserves "1M" as-is for S3's case-sensitive ONE_MONTH enum.
+    await act(async () => { renderChart(makeClient()); });
+    await waitFor(() => expect(mockGetOHLCV).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "MAX" }));
+    });
+    await waitFor(() => {
+      const calls = mockGetOHLCV.mock.calls.map(([, p]) => p.timeframe);
+      expect(calls).toContain("1M");
+    });
   });
 
   it("default period fetches DAILY bars with an explicit start + a high bar limit", async () => {

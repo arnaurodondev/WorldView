@@ -2,14 +2,14 @@
  * components/instrument/chart/chartPeriods.ts — period → fetch-params presets
  *
  * WHY THIS EXISTS (Round-1 Foundation, requirement 2):
- * The chart toolbar exposes a PERIOD selector (1D / 1W / 1M / 3M / 1Y / 5Y)
- * like TradingView/Finviz, but the S9 price-history endpoint
- * (GET /v1/ohlcv/{id}?timeframe&start) speaks in BAR RESOLUTION ("5M", "1H",
- * "1D", "1W") + a start date. This module is the single source of truth for
+ * The chart toolbar exposes a PERIOD selector (1D / 5D / 1M / 3M / 6M / 1Y /
+ * 5Y / MAX) like TradingView/Finviz, but the S9 price-history endpoint
+ * (GET /v1/ohlcv/{id}?timeframe&start) speaks in BAR RESOLUTION ("5M", "1D",
+ * "1W", "1M") + a start date. This module is the single source of truth for
  * that translation so OHLCVChart and its tests can never drift apart.
  *
  * DESIGN DECISION — share one fetch per bar resolution, zoom client-side:
- * 1M / 3M / 1Y all map to DAILY bars and share ONE fetch window (366 days).
+ * 1M / 3M / 6M / 1Y all map to DAILY bars and share ONE fetch window (730 days).
  * Switching between them therefore:
  *   1. hits the SAME TanStack Query cache slot (qk.instruments.ohlcv(id,"1D"))
  *      → zero refetch, instant switch (requirement 5: tab/period switching
@@ -17,8 +17,11 @@
  *   2. only adjusts the chart's VISIBLE RANGE client-side (see OHLCVChart's
  *      visible-range effect) — lightweight-charts can re-window already-loaded
  *      bars without any network round-trip.
- * 1D / 1W / 5Y need different bar resolutions (5-minute / hourly / weekly), so
- * they get their own cache slots keyed by their timeframe.
+ * The other groups each need their own bar resolution, so they get their own
+ * cache slots keyed by their timeframe:
+ *   • 1D / 5D     → "5M" intraday bars (share one slot);
+ *   • 5Y          → "1W" weekly bars (derived daily→weekly by S3 at query time);
+ *   • MAX         → "1M" monthly bars (derived daily→monthly by S3).
  *
  * WHY fetchDaysBack is explicit (not S9's default): S9 injects a default
  * `start` of only 90 days back for daily bars. The 1Y period needs 365 days,
@@ -33,8 +36,8 @@ import type { Timeframe } from "@/lib/chart-adapter";
 // lib/chart-adapter.ts and lets PeriodSelector (generic over string) infer
 // the type without casts.
 
-// ── 2026-06-15 BACKEND-HONEST TIMEFRAME SET (this fix) ───────────────────────
-// The previous set (1D/1W/1M/3M/1Y/5Y) advertised periods the S3 market-data
+// ── 2026-06-15 BACKEND-HONEST TIMEFRAME SET (earlier fix) ────────────────────
+// The original set (1D/1W/1M/3M/1Y/5Y) advertised periods the S3 market-data
 // backend CANNOT serve, which produced all three reported bugs. Verified live
 // against S9 → S3 for AAPL (01900000-…-1001) on 2026-06-15:
 //
@@ -43,27 +46,50 @@ import type { Timeframe } from "@/lib/chart-adapter";
 //   5m         ~297 bars over ~1 month (intraday)    1D
 //   1h         ~46 bars over ~1 month (SPARSE)       1W  ← only ~10/day
 //   1d         274 bars, May-2025 → Jun-2026 (~13mo) 1M / 3M / 1Y
-//   1w         0 bars (NOT stored / NOT derived)     5Y  ← always empty!
-//   1M(month)  0 bars (NOT stored / NOT derived)     (unused)
+//   1w         0 bars (NOT stored)                   5Y  ← was always empty!
+//   1M(month)  0 bars (NOT stored)                   (unused)
 //
-// ROOT CAUSES of the reported bugs, in backend terms:
-//   • "label says X, bars are different / missing"  → 5Y mapped to weekly bars,
-//     of which the backend has ZERO, so the 5Y button rendered an empty chart
-//     while its label promised 5 years.
-//   • "some temporalities missing"                  → 1W (hourly) returns only
-//     ~10 bars because the backend stores barely a day of hourly data per day,
-//     and 5Y (weekly) returns nothing at all.
-//   • "only ~10 bars instead of ~200"              → the 1D/1W intraday fetch
-//     WINDOWS were too short (3d / 8d) AND landed on sparse synthetic sessions.
+// The first remediation DROPPED 1W and 5Y entirely (no weekly/monthly bars
+// existed and S9 exposed no derive path), replacing them with 5D (intraday)
+// and 6M (daily).
 //
-// FIX: expose ONLY periods the backend can actually fill, and remove weekly/
-// monthly entirely (R14 — the frontend talks only to S9; S3 simply has no
-// weekly/monthly bars and no derive path is exposed through S9, so adding a
-// backend resample is out of scope and would be a much larger change). The
-// daily history is ~13 months, so the longest honest period is 1Y; 6M/3M/1M
-// all slice the same daily series. Intraday gets two periods (1D, 5D) over the
-// 5-minute series, which is the resolution that actually has dense recent data.
-export type ChartPeriod = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y";
+// ── 2026-06-15 LONG-RANGE RESTORE (this change) ──────────────────────────────
+// A sibling backend agent has now wired S3's pre-existing (but previously
+// dead) derive logic — DeriveOHLCVUseCase aggregates stored DAILY bars into
+// weekly ("1w") and monthly ("1M") bars on demand at QUERY TIME (no polling,
+// no extra ingestion). `_DERIVABLE = {ONE_WEEK, ONE_MONTH}` in
+// services/market-data/.../use_cases/derive_ohlcv.py. So weekly + monthly
+// resolutions are now SERVABLE through the same /v1/ohlcv/{id}?timeframe=…
+// endpoint the chart already uses.
+//
+// That lets us RESTORE the long horizons honestly:
+//   • 5Y  → "1W" weekly bars  (≈ 260 weeks for a full 5 years).
+//   • MAX → "1M" monthly bars (the deepest zoom-out; whole history available).
+//
+// WHY weekly for 5Y and monthly for MAX (not e.g. monthly for both): weekly
+// bars give 5Y a dense, readable ~260-candle series — enough granularity to
+// read multi-month swings — while monthly is the right granularity only once
+// the horizon is many years (MAX), where ~260 weekly candles would be too
+// noisy/crowded. Each long period gets its OWN bar resolution → its OWN
+// TanStack cache slot, exactly like the intraday (1D/5D → 5M) and daily
+// (1M/3M/6M/1Y → 1D) groups already do.
+//
+// ── HONESTY: data-depth limit (NOT a bug) ────────────────────────────────────
+// The derived bars are aggregated from the stored DAILY series, which today is
+// only ~13 months deep (~274 daily bars). So a 5Y-weekly view currently shows
+// ~13 months of weekly bars (~57 weeks), and MAX-monthly shows ~13 monthly
+// bars — i.e. "5 years available: ~1.1y" until more daily history is ingested.
+// This is a DATA-DEPTH limit of the source series, not a chart defect:
+//   • The chart already renders whatever range exists (the visible-range effect
+//     in OHLCVChart CLAMPS the window to the first/last loaded bar, and the
+//     bar-COUNT windowing via visibleBars shows min(visibleBars, bars.length)),
+//     so a short weekly/monthly series fills the canvas instead of leaving a
+//     broken/empty axis. The 0-bar and <2-plottable-bar empty states still
+//     guard the genuinely-empty case.
+//   • As the daily backfill deepens, the SAME 5Y/MAX presets automatically
+//     surface more weekly/monthly bars with no frontend change — the fetch
+//     windows below (1830d / 7300d) are already sized for the full horizon.
+export type ChartPeriod = "1D" | "5D" | "1M" | "3M" | "6M" | "1Y" | "5Y" | "MAX";
 
 /** Display order for the toolbar — shortest to longest, TradingView style. */
 export const CHART_PERIODS: readonly ChartPeriod[] = [
@@ -73,6 +99,8 @@ export const CHART_PERIODS: readonly ChartPeriod[] = [
   "3M",
   "6M",
   "1Y",
+  "5Y",
+  "MAX",
 ] as const;
 
 // ── Preset shape ─────────────────────────────────────────────────────────────
@@ -177,6 +205,34 @@ const DAILY_FETCH_DAYS_BACK = 730;
  */
 const INTRADAY_FETCH_DAYS_BACK = 8;
 
+/**
+ * Fetch window for the WEEKLY (5Y) period — "1W" derived bars.
+ *
+ * WHY 1830 (≈ 5 years + 1 day of slack): 5 years × 365 days = 1825; +5 guards
+ * the boundary where "now - 1825d" lands exactly on the first available bar's
+ * date and a DST/UTC rounding shaves it off (same +1-day rationale as the
+ * daily window). S3 DERIVES weekly bars from whatever daily history exists
+ * inside this window, so the view returns the full 5 years once the daily
+ * series is that deep — and gracefully returns fewer weeks (~57 today) while
+ * the daily backfill is shallower. limit=1000 (from OHLCVChart) is the ceiling;
+ * 5 years is ~260 weekly bars, well under it.
+ */
+const WEEKLY_FETCH_DAYS_BACK = 1830;
+
+/**
+ * Fetch window for the MONTHLY (MAX) period — "1M" derived bars.
+ *
+ * WHY 7300 (≈ 20 years): MAX means "all available history". The daily source
+ * series will never realistically exceed ~20 years for these instruments, so a
+ * 20-year window guarantees we ask for everything; S3 derives monthly bars from
+ * however much daily history actually exists and returns only that (~13 monthly
+ * bars today). 20 years is ~240 monthly bars — still under the limit=1000 cap.
+ * WHY not "no start at all": S9 injects only a 90-day default start when the
+ * caller omits one (see api-gateway market route), which would silently clamp
+ * MAX to one quarter — so we MUST pass an explicit, very-wide start.
+ */
+const MONTHLY_FETCH_DAYS_BACK = 7300;
+
 export const CHART_PERIOD_PRESETS: Record<ChartPeriod, ChartPeriodPreset> = {
   // ── Intraday (5-minute bars) — share one cache slot ──────────────────────
   // WHY visibleBars on BOTH (not a day-window): intraday sessions vary wildly
@@ -202,6 +258,27 @@ export const CHART_PERIOD_PRESETS: Record<ChartPeriod, ChartPeriodPreset> = {
   // visible range to the LAST ~200 BARS so the opening view is a dense,
   // readable ~200-candle chart with the rest of the loaded history to pan into.
   "1Y": { timeframe: "1D", fetchDaysBack: DAILY_FETCH_DAYS_BACK, visibleDays: 365, visibleBars: 200 },
+
+  // ── Weekly bars — 5Y stands alone in its own cache slot ───────────────────
+  // 5Y maps to the DERIVED "1W" resolution (S3 aggregates daily→weekly at query
+  // time). visibleBars=260 ≈ the number of weeks in 5 years, so the opening
+  // view shows the whole horizon when the daily backfill is deep enough. When
+  // it's shallow (~57 weeks today) the chart clamps to the available bars
+  // (Math.min in OHLCVChart's windowing effect) and fills the canvas — a data-
+  // depth limit, not a broken axis. fetchDaysBack ≫ visibleDays so client-side
+  // zoom-out within the weekly series never needs a refetch.
+  "5Y": { timeframe: "1W", fetchDaysBack: WEEKLY_FETCH_DAYS_BACK, visibleDays: 1830, visibleBars: 260 },
+
+  // ── Monthly bars — MAX stands alone in its own cache slot ─────────────────
+  // MAX maps to the DERIVED "1M" resolution (S3 aggregates daily→monthly). This
+  // is the deepest zoom-out: visibleBars=240 ≈ 20 years of months, so the view
+  // shows ALL available monthly bars (today ~13; more as the daily series
+  // grows). Same graceful-clamp behaviour as 5Y for the shallow-history case.
+  // NOTE: "1M" is the frontend's UPPERCASE month convention; the gateway
+  // normalizer (lib/api/instruments.ts) preserves "1M" as-is because S3's
+  // Timeframe.ONE_MONTH is case-sensitive "1M" — lowercase "1m" would be
+  // rejected as an intraday minute resolution.
+  "MAX": { timeframe: "1M", fetchDaysBack: MONTHLY_FETCH_DAYS_BACK, visibleDays: 7300, visibleBars: 240 },
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
