@@ -215,3 +215,74 @@ class TestMigration0017:
         insider_id = mod._ulid_from_seed(f"eodhd:insider_transactions:{sym}:US:::")
         market_cap_id = mod._ulid_from_seed(f"eodhd:market_cap:{sym}:US:::")
         assert insider_id != market_cap_id
+
+
+# ---------------------------------------------------------------------------
+# Migration 0020 — disable weekly/monthly OHLCV polling (now DERIVED)
+# ---------------------------------------------------------------------------
+
+
+class _CapturingBind:
+    """Mock SQLAlchemy bind that records the SQL text passed to execute()."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, clause: object) -> None:
+        # ``clause`` is a sqlalchemy.text() construct; str() yields the SQL.
+        self.statements.append(str(clause))
+
+
+class TestMigration0020:
+    """Revision chain + SQL semantics for the weekly/monthly polling-disable migration."""
+
+    _FILE = "0020_disable_weekly_monthly_ohlcv_polling.py"
+
+    def test_revision_is_0020(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.revision == "0020"
+
+    def test_down_revision_is_0019(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.down_revision == "0019"
+
+    def test_upgrade_and_downgrade_are_callable(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert callable(mod.upgrade)
+        assert callable(mod.downgrade)
+
+    def _run(self, fn_name: str) -> list[str]:
+        """Execute upgrade/downgrade against a capturing bind, return SQL statements."""
+        mod = _load_migration(self._FILE)
+        bind = _CapturingBind()
+        mod.op.get_bind = lambda: bind  # type: ignore[attr-defined]
+        getattr(mod, fn_name)()
+        return bind.statements
+
+    def test_upgrade_disables_only_weekly_and_monthly_ohlcv(self) -> None:
+        stmts = self._run("upgrade")
+        assert len(stmts) == 1
+        sql = stmts[0]
+        # Disables (enabled = false) the right rows …
+        assert "enabled = false" in sql
+        assert "dataset_type = 'ohlcv'" in sql
+        assert "'1w'" in sql and "'1mo'" in sql
+        # … and ONLY targets currently-enabled rows (idempotent re-run = no-op).
+        assert "enabled = true" in sql
+        # Must NOT touch daily or intraday ingestion.
+        assert "'1d'" not in sql
+        assert "'1m'" not in sql
+
+    def test_downgrade_re_enables_weekly_and_monthly_ohlcv(self) -> None:
+        stmts = self._run("downgrade")
+        assert len(stmts) == 1
+        sql = stmts[0]
+        assert "enabled = true" in sql
+        assert "dataset_type = 'ohlcv'" in sql
+        assert "'1w'" in sql and "'1mo'" in sql
+        assert "enabled = false" in sql  # only re-enable rows we disabled
+
+    def test_idempotent_guard_in_where_clause(self) -> None:
+        """Upgrade WHERE includes ``enabled = true`` so a re-run matches nothing."""
+        sql = self._run("upgrade")[0].lower()
+        assert "where" in sql and "enabled = true" in sql
