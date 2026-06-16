@@ -38,6 +38,21 @@ _TOOL_RESULT_MAX_CHARS = 4000
 # last_n_bars/lookback_days computation to size the backward window. Values
 # match the canonical intervals exposed by the market-data /ohlcv/bars
 # endpoint; unknown intervals fall through to "day" (86400).
+# Minimum backward-window span (seconds) for any computed last_n_bars /
+# default price-history fetch. 86400 (1 day) is NOT enough: the newest bars
+# are the last *trading* session, so a request made on a weekend or holiday
+# (or before the first prints of the current session, e.g. Monday pre-market)
+# anchored on now() with a 1-day window reaches back only to "yesterday",
+# which may be Sunday/Saturday — yielding ZERO bars even though the symbol
+# has plenty of Friday data. This is the AAPL "couldn't find a match" bug
+# (investigation 2026-06-15): `last_n_bars=1, interval=1m` computed
+# max(1*60*2, 86400) = 1 day, returning empty on Mon/weekend while a 3-day
+# window returned 252 Friday bars. 4 calendar days clears a normal Fri→Mon
+# weekend PLUS one adjacent market holiday so the last session is always in
+# range. Daily/weekly intervals already imply much larger windows, so this
+# floor only bites the intraday + tiny-N cases that were broken.
+_MIN_LOOKBACK_SECONDS = 4 * 86400  # 4 calendar days — clears a weekend + holiday
+
 _INTERVAL_SECONDS_MAP: dict[str, int] = {
     "1m": 60,
     "5m": 300,
@@ -375,18 +390,28 @@ class MarketHandler(ToolHandler):
             n = int(last_n_bars)
             interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
             implied_seconds = n * interval_seconds
-            buffer_seconds = max(implied_seconds * 2, 86400)  # >= 1 day
+            # Floor at _MIN_LOOKBACK_SECONDS (4d) so a weekend/holiday between
+            # now() and the last trading session never produces an empty fetch
+            # (the AAPL "couldn't find a match" bug). Was max(..., 86400).
+            buffer_seconds = max(implied_seconds * 2, _MIN_LOOKBACK_SECONDS)
             buffer_seconds = min(buffer_seconds, 365 * 86400)  # cap at 1y
             _to = _dt.now(tz=UTC).date()
             _from = _to - _td(seconds=buffer_seconds)
         elif lookback_days is not None and lookback_days > 0:
             _to = _dt.now(tz=UTC).date()
-            _from = _to - _td(days=int(lookback_days))
+            # Honour the caller's window but never look back less than the
+            # weekend/holiday-clearing floor — a literal lookback_days=1 on a
+            # Monday/weekend would otherwise miss Friday's session entirely.
+            _lookback = max(int(lookback_days) * 86400, _MIN_LOOKBACK_SECONDS)
+            _from = _to - _td(seconds=_lookback)
         else:
             # Default: most recent 20 bars at requested interval.
             n = 20
             interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
-            buffer_seconds = max(n * interval_seconds * 2, 86400)
+            # Same weekend/holiday-clearing floor as the explicit last_n_bars
+            # branch (was 86400) so an interval="1m" default fetch on a
+            # weekend still reaches the last trading session.
+            buffer_seconds = max(n * interval_seconds * 2, _MIN_LOOKBACK_SECONDS)
             _to = _dt.now(tz=UTC).date()
             _from = _to - _td(seconds=buffer_seconds)
 
@@ -414,10 +439,17 @@ class MarketHandler(ToolHandler):
 
         # ── Step 3: slice when last_n_bars mode ──────────────────────────
         if n is not None and len(bars) > n:
-            # /ohlcv/bars returns ascending; take the trailing N.
+            # /ohlcv/bars returns ascending; take the trailing N (the most
+            # recent bars of the last trading session). The live market-data
+            # payload keys each bar as "date" (e.g. "2026-06-12 18:48"); older
+            # callers used "ts"/"bar_date". Include all three so the sort is a
+            # real chronological sort regardless of upstream shape — the
+            # previous key (ts|bar_date) was always "" for the live "date"
+            # payload, silently degrading to a no-op that only worked because
+            # the upstream order is already ascending.
             bars = sorted(
                 bars,
-                key=lambda b: b.get("ts") or b.get("bar_date") or "",
+                key=lambda b: b.get("ts") or b.get("bar_date") or b.get("date") or "",
             )[-n:]
 
         # ── Step 4: format ──────────────────────────────────────────────
