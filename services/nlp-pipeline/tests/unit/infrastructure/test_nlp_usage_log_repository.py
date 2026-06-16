@@ -115,3 +115,47 @@ class TestNlpUsageLogRepository:
         )
 
         session.execute.assert_awaited_once()
+
+    async def test_log_records_actual_model_and_fallback_reason(self) -> None:
+        """Task #36: the row records the ACTUAL serving model + fallback_reason.
+
+        The deep-extraction caller passes ``model_id=ExtractionOutput.model_used``
+        (the secondary slug on a fallback hop) plus ``fallback_reason`` as a
+        **context kwarg. The repo must bind BOTH into the INSERT params.
+        """
+        session = _make_session()
+        repo = NlpUsageLogRepository(session)
+
+        await repo.log(
+            model_id="deepseek-ai/DeepSeek-V4-Flash",  # the SECONDARY model served it
+            provider="deepinfra",
+            capability="extraction",
+            tokens_in=500,
+            tokens_out=80,
+            latency_ms=1200,
+            success=True,
+            fallback_reason="rate_limit",
+        )
+
+        session.execute.assert_awaited_once()
+        # The bind-params dict is the 2nd positional arg to session.execute().
+        params = session.execute.await_args.args[1]
+        assert params["model_id"] == "deepseek-ai/DeepSeek-V4-Flash"
+        assert params["fallback_reason"] == "rate_limit"
+
+    async def test_log_fallback_reason_defaults_to_null(self) -> None:
+        """When no fallback_reason is supplied the bound value is None (NULL)."""
+        session = _make_session()
+        repo = NlpUsageLogRepository(session)
+
+        await repo.log(
+            model_id="Qwen/Qwen3-235B-A22B-Instruct-2507",
+            provider="deepinfra",
+            capability="extraction",
+            tokens_in=400,
+            tokens_out=60,
+            latency_ms=900,
+        )
+
+        params = session.execute.await_args.args[1]
+        assert params["fallback_reason"] is None

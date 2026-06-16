@@ -249,8 +249,18 @@ async def _run_extraction_window(
         latency_ms = int((time.perf_counter() - t0) * 1000)
         if usage_logger is not None:
             try:
+                # Task #36: record the ACTUAL serving model, not the configured
+                # primary.  ``ExtractionOutput.model_used`` is the secondary slug
+                # when a 429/timeout forced a fallback hop (else the primary).
+                # ``fallback_reason`` (none|rate_limit|timeout|server_error) is
+                # written to the new ``llm_usage_log.fallback_reason`` column so the
+                # audit query ``SELECT model, fallback_reason, count(*) GROUP BY 1,2``
+                # shows when/why the secondary served calls.  Falls back to the
+                # configured ``model_id`` when the adapter predates the field.
+                actual_model = getattr(output, "model_used", None) or model_id
+                fallback_reason = getattr(output, "fallback_reason", "none")
                 await usage_logger.log(
-                    model_id=model_id,
+                    model_id=actual_model,
                     # The deep-extraction provider is selected at consumer
                     # wiring time (DeepInfra when extraction_api_key set,
                     # Ollama otherwise). Without a hint on the client we tag
@@ -265,6 +275,8 @@ async def _run_extraction_window(
                     success=extract_succeeded,
                     error_code=None if extract_succeeded else "model_error",
                     doc_id=doc_id,
+                    # Service-specific extra consumed by NlpUsageLogRepository.log.
+                    fallback_reason=fallback_reason,
                 )
             except Exception as exc:  # protocol forbids raising; belt-and-braces
                 logger.warning(

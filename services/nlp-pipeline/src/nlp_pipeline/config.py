@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     extraction_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_EXTRACTION_API_KEY (DEF-019)
     extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
     extraction_api_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
+    # Task #36: SECONDARY model the DeepSeekExtractionAdapter falls back to when the
+    # PRIMARY (Qwen3-235B above) is HTTP-429 rate-limited or persistently times out —
+    # the post-outage-backlog saturation scenario that was dead-lettering articles.
+    # Verified DeepInfra slug; OpenAI-compatible JSON-mode. Empty = fallback disabled.
+    # NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID
+    extraction_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
 
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
@@ -278,12 +284,25 @@ class Settings(BaseSettings):
     # Per-message processing budget (watchdog) for the article consumer.  A handler
     # that exceeds this is cancelled and the message is dead-lettered.  Deep-tier
     # extraction (Qwen3-235B-A22B) has a bursty latency tail; at a 300s budget paired
-    # with a 90s extraction wall-clock cap, ~216 docs/hr dead-lettered.  Raised to 450s
-    # (paired with the 150s extraction cap) so a legitimate slow extraction plus the
-    # surrounding pipeline work (embedding, NER, resolution, writes) fits comfortably
-    # without dead-lettering, while still bounding a truly-stuck handler.
+    # with a 90s extraction wall-clock cap, ~216 docs/hr dead-lettered.  Was 450s
+    # (paired with the old 150s single-model extraction budget).
+    #
+    # TASK #36 RE-BUDGET (429 fallback to a secondary model):
+    #   The extract() per-window envelope GREW because a saturated primary now
+    #   exhausts its OWN retry budget (200s) and THEN re-issues against the fallback
+    #   model with a FRESH budget (200s).  Worst-case wall-time for a SINGLE window
+    #   is therefore ~= primary_budget(200) + fallback_budget(200) = 400s.  Almost
+    #   all articles are single-window (<=24k tokens => one window — see
+    #   SINGLE_WINDOW_TOKEN_LIMIT), so the dominant per-doc cost is one window plus
+    #   the surrounding pipeline (GLiNER NER ~160s under load, embedding, resolution,
+    #   writes).  We raise the watchdog to 700s so:
+    #       1 window (primary 200 + fallback 200) + NER 160 + ~80 slack  ≈ 640 < 700
+    #   This keeps the resilience (retry + fallback hop) from itself tripping the
+    #   watchdog and re-creating the dead-letter bleed it was meant to stop.  Rare
+    #   multi-window articles still benefit (the fallback only fires under genuine
+    #   429 saturation, not on every window).  Tunable via the env var below.
     # NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S
-    message_processing_timeout_s: int = 450
+    message_processing_timeout_s: int = 700
 
     # Dispatcher
     dispatcher_poll_interval_secs: float = 1.0

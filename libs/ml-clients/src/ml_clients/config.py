@@ -14,6 +14,14 @@ class MLClientsSettings(BaseSettings):
     ner_model_path: str = "urchade/gliner_large-v2.1"
     max_ollama_concurrent: int = 4  # asyncio.Semaphore value
 
+    # Task #36: SECONDARY deep-extraction model used when the PRIMARY (configured by
+    # the service, e.g. Qwen3-235B) returns HTTP 429 (rate-limit / engine_overloaded)
+    # or persistently fails.  Verified DeepInfra slug: ``deepseek-ai/DeepSeek-V4-Flash``
+    # (OpenAI-compatible, accepts the same JSON-mode extraction request).  Empty =
+    # fallback disabled (behaviour unchanged: exhaust the primary's retries then raise).
+    # Env: ML_CLIENTS_EXTRACTION_FALLBACK_MODEL_ID
+    extraction_fallback_model_id: str = ""
+
     # News-routing cascade router embedding (PLAN-0111 Sub-Plan C).
     # EmbeddingGemma lives in its OWN vector space (classifier input only) — it is
     # NEVER ANN-compared against the BGE retrieval vectors. The API key is read
