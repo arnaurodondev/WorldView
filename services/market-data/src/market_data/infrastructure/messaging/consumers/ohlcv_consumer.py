@@ -52,6 +52,36 @@ def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
     return [CanonicalOHLCVBar.from_dict(json.loads(line)) for line in lines if line.strip()]
 
 
+# Provider-side aliases for timeframe strings that are NOT canonical Timeframe
+# enum members.  S2 (Yahoo) publishes monthly bars as ``"1mo"`` while our enum
+# uses ``ONE_MONTH = "1M"``; without this alias ``Timeframe("1mo")`` raises
+# ValueError and the old code silently coerced it to ``ONE_DAY`` — poisoning the
+# daily series with mislabeled monthly bars (BP: silent enum-coercion to a
+# wrong-but-valid value).  Map the alias here BEFORE the enum lookup.
+_TIMEFRAME_ALIASES: dict[str, Timeframe] = {
+    "1mo": Timeframe.ONE_MONTH,
+}
+
+
+def _resolve_consumer_timeframe(timeframe_str: str) -> Timeframe:
+    """Resolve a provider timeframe string to a canonical Timeframe.
+
+    Accepts both canonical enum values (``"1d"``, ``"1M"`` …) and known
+    provider aliases (``"1mo"`` → monthly).  Raises ``MalformedDataError`` for
+    anything unknown so the message is dead-lettered (FatalError → DLQ) instead
+    of being silently coerced to ``ONE_DAY`` and corrupting the daily series.
+    """
+    alias = _TIMEFRAME_ALIASES.get(timeframe_str)
+    if alias is not None:
+        return alias
+    try:
+        return Timeframe(timeframe_str)
+    except ValueError as exc:
+        raise MalformedDataError(
+            f"Unknown OHLCV timeframe {timeframe_str!r} — refusing to coerce; dead-lettering"
+        ) from exc
+
+
 class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
     """Materializes OHLCV datasets from object storage into the database.
 
@@ -269,11 +299,9 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
                 partition_key=str(instrument.id),
             )
 
-        # Resolve timeframe
-        try:
-            tf = Timeframe(timeframe_str)
-        except ValueError:
-            tf = Timeframe.ONE_DAY
+        # Resolve timeframe — normalize provider aliases (e.g. "1mo" → "1M") and
+        # dead-letter unknown timeframes instead of silently coercing to ONE_DAY.
+        tf = _resolve_consumer_timeframe(timeframe_str)
 
         # Map canonical bars → domain entities
         domain_bars = [

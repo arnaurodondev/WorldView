@@ -12,7 +12,14 @@ if TYPE_CHECKING:
 
 
 class GetOHLCVBarsUseCase:
-    """Return OHLCV bars for an instrument within an optional date range."""
+    """Return OHLCV bars for an instrument within an optional date range.
+
+    Weekly (``1w``) and monthly (``1M``) timeframes are DERIVED on the fly from
+    the stored daily (``1d``) bars in the requested range — no provider polling,
+    no storage growth, no write-on-read (PLAN-0036 intent; R27-safe).  The
+    ``ohlcv_bars`` table never holds 1w/1M rows; this is the path the quote
+    chart's 5Y/MAX views call via S9 ``GET /v1/ohlcv/{id}?timeframe=1w|1M``.
+    """
 
     def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
@@ -28,6 +35,9 @@ class GetOHLCVBarsUseCase:
     ) -> list[OHLCVBar]:
         """Fetch the most-recent ``limit`` bars in [start, end].
 
+        For ``ONE_WEEK``/``ONE_MONTH`` the bars are derived in-memory from daily
+        bars (see :func:`derive_bars_in_memory`).  For all other timeframes:
+
         WHY limit pushdown: the repository's ``limit`` parameter causes the DB
         to use ``ORDER BY bar_date DESC LIMIT N``, materialising only the rows
         we actually keep.  The previous pattern (fetch all, Python-slice with
@@ -36,6 +46,23 @@ class GetOHLCVBarsUseCase:
         window.  The repository re-reverses to ASC so callers see no change in
         order semantics.
         """
+        from market_data.domain.enums import Timeframe
+
+        if timeframe in (Timeframe.ONE_WEEK, Timeframe.ONE_MONTH):
+            from market_data.application.use_cases.derive_ohlcv import derive_bars_in_memory
+
+            # Derive from daily bars in the requested range.  Daily bars are
+            # fetched WITHOUT a limit so every bucket is fully populated; the
+            # limit is then applied to the (far fewer) derived bars as a tail
+            # slice to keep the most-recent N, matching ASC order semantics.
+            daily = await self._uow.ohlcv_read.find_by_instrument_timeframe_range(
+                instrument_id, Timeframe.ONE_DAY, start, end
+            )
+            derived = derive_bars_in_memory(instrument_id, timeframe, daily)
+            if len(derived) > limit:
+                derived = derived[-limit:]
+            return derived
+
         return await self._uow.ohlcv_read.find_by_instrument_timeframe_range(
             instrument_id, timeframe, start, end, limit=limit
         )

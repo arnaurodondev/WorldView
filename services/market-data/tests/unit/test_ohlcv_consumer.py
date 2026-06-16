@@ -410,3 +410,54 @@ async def test_ohlcv_consumer_minio_unavailable_retryable() -> None:
 
     with pytest.raises(StorageUnavailableError, match="not configured"):
         await consumer.process_message(None, _make_message(), {})
+
+
+# ── P1: timeframe normalization & dead-letter (no silent 1mo→1d coercion) ──────
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_normalizes_1mo_to_monthly() -> None:
+    """A ``1mo`` payload maps to Timeframe.ONE_MONTH (not silently coerced to 1d)."""
+    from market_data.domain.enums import Timeframe
+
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_ohlcv_jsonl(2))
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    msg = _make_message()
+    msg["timeframe"] = "1mo"
+    await consumer.process_message(None, msg, {})
+
+    bars = mock_uow.ohlcv.bulk_upsert_with_priority.call_args[0][0]
+    assert bars, "expected bars to be upserted"
+    assert all(b.timeframe == Timeframe.ONE_MONTH for b in bars)
+    assert all(b.timeframe != Timeframe.ONE_DAY for b in bars)
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_dead_letters_unknown_timeframe() -> None:
+    """An unknown timeframe is dead-lettered (MalformedDataError), never coerced to 1d."""
+    from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_ohlcv_jsonl(2))
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    msg = _make_message()
+    msg["timeframe"] = "3y"  # not a valid timeframe and not a known alias
+
+    with pytest.raises(MalformedDataError, match="3y"):
+        await consumer.process_message(None, msg, {})
+
+    # Nothing must have been upserted with a coerced timeframe.
+    mock_uow.ohlcv.bulk_upsert_with_priority.assert_not_called()

@@ -165,3 +165,96 @@ async def test_get_ohlcv_range_no_data() -> None:
     uc = GetOHLCVRangeUseCase(uow)
     result = await uc.execute("instr-001", Timeframe.ONE_DAY)
     assert result is None
+
+
+# ── PATH endpoint weekly/monthly derivation (chart 5Y/MAX path) ────────────────
+
+
+def _daily(instrument_id: str, d: date, o: float, h: float, low: float, c: float, vol: int) -> OHLCVBar:
+    return OHLCVBar(
+        instrument_id=instrument_id,
+        timeframe=Timeframe.ONE_DAY,
+        bar_date=datetime(d.year, d.month, d.day, tzinfo=UTC),
+        open=Decimal(str(o)),
+        high=Decimal(str(h)),
+        low=Decimal(str(low)),
+        close=Decimal(str(c)),
+        volume=vol,
+        source="eodhd",
+        provider_priority=ProviderPriority(provider="eodhd", priority=50),
+        ingested_at=datetime.now(tz=UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_bars_derives_weekly_from_daily() -> None:
+    """timeframe=ONE_WEEK derives ISO-week bars in-memory from daily bars.
+
+    This is the PATH endpoint the quote chart's 5Y/MAX view calls
+    (S9 GET /v1/ohlcv/{id}?timeframe=1w).
+    """
+    iid = "instr-week"
+    daily = [
+        _daily(iid, date(2024, 1, 1), 100, 110, 95, 105, 10),  # Mon
+        _daily(iid, date(2024, 1, 5), 105, 120, 90, 115, 30),  # Fri (same ISO week)
+        _daily(iid, date(2024, 1, 8), 115, 130, 111, 128, 50),  # next Mon
+    ]
+    uow = _make_uow(bars=daily)
+    uc = GetOHLCVBarsUseCase(uow)
+
+    result = await uc.execute(iid, Timeframe.ONE_WEEK, date(2024, 1, 1), date(2024, 1, 8))
+
+    assert len(result) == 2
+    w1, w2 = result
+    assert w1.timeframe == Timeframe.ONE_WEEK and w1.is_derived
+    assert w1.bar_date.date() == date(2024, 1, 1)
+    assert float(w1.open) == 100.0 and float(w1.close) == 115.0
+    assert float(w1.high) == 120.0 and float(w1.low) == 90.0
+    assert w2.bar_date.date() == date(2024, 1, 8)
+    # Daily bars were fetched (ONE_DAY), not weekly.
+    assert uow.ohlcv_read.find_by_instrument_timeframe_range.call_args.args[1] == Timeframe.ONE_DAY
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_bars_derives_monthly_from_daily() -> None:
+    """timeframe=ONE_MONTH derives calendar-month bars in-memory from daily bars."""
+    iid = "instr-month"
+    daily = [
+        _daily(iid, date(2024, 1, 3), 100, 110, 95, 105, 10),
+        _daily(iid, date(2024, 1, 31), 105, 125, 90, 120, 20),
+        _daily(iid, date(2024, 2, 15), 121, 140, 100, 135, 40),
+    ]
+    uow = _make_uow(bars=daily)
+    uc = GetOHLCVBarsUseCase(uow)
+
+    result = await uc.execute(iid, Timeframe.ONE_MONTH, date(2024, 1, 1), date(2024, 2, 28))
+
+    assert len(result) == 2
+    jan, feb = result
+    assert jan.timeframe == Timeframe.ONE_MONTH and jan.is_derived
+    assert jan.bar_date.date() == date(2024, 1, 1)
+    assert float(jan.high) == 125.0 and float(jan.low) == 90.0
+    assert feb.bar_date.date() == date(2024, 2, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_bars_weekly_empty_when_no_daily() -> None:
+    uow = _make_uow(bars=[])
+    uc = GetOHLCVBarsUseCase(uow)
+    result = await uc.execute("instr-x", Timeframe.ONE_WEEK, date(2024, 1, 1), date(2024, 6, 30))
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_ohlcv_bars_weekly_tail_slice_limit() -> None:
+    iid = "instr-lim"
+    daily = [
+        _daily(iid, date(2024, 1, 1), 100, 110, 95, 105, 10),
+        _daily(iid, date(2024, 1, 8), 115, 130, 111, 128, 50),
+        _daily(iid, date(2024, 1, 15), 128, 135, 120, 130, 60),
+    ]
+    uow = _make_uow(bars=daily)
+    uc = GetOHLCVBarsUseCase(uow)
+    result = await uc.execute(iid, Timeframe.ONE_WEEK, date(2024, 1, 1), date(2024, 1, 15), limit=1)
+    assert len(result) == 1
+    assert result[0].bar_date.date() == date(2024, 1, 15)  # most recent week

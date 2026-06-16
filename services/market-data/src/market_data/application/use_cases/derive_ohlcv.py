@@ -99,6 +99,40 @@ def _aggregate_group(instrument_id: str, timeframe: Timeframe, bucket: date, bar
     )
 
 
+def derive_bars_in_memory(
+    instrument_id: str,
+    target_timeframe: Timeframe,
+    daily_bars: list[OHLCVBar],
+) -> list[OHLCVBar]:
+    """Aggregate daily bars into weekly/monthly bars purely in-memory (no persist).
+
+    Shared by the query-time read paths (``GetOHLCVBarsUseCase`` PATH endpoint and
+    ``GetOHLCVBarsFlexibleUseCase`` flexible endpoint) so both derive weekly/monthly
+    bars identically — no storage growth, no write-on-read (R27-safe).  Uses the
+    exact same bucketing rules as :class:`DeriveOHLCVUseCase` (ISO-week Monday
+    anchor / calendar-month day-1 anchor; open=first, high=max, low=min,
+    close=last, volume=sum).
+
+    ``daily_bars`` need not be pre-sorted.  Returns bars ascending by ``bar_date``.
+    """
+    if target_timeframe not in _DERIVABLE:
+        raise ValueError(
+            f"target_timeframe must be one of {[t.value for t in _DERIVABLE]}, got {target_timeframe!r}"
+        )
+    if not daily_bars:
+        return []
+
+    buckets: dict[date, list[OHLCVBar]] = defaultdict(list)
+    for bar in sorted(daily_bars, key=lambda b: b.bar_date):
+        key = _group_key(bar.bar_date.date(), target_timeframe)
+        buckets[key].append(bar)
+
+    return [
+        _aggregate_group(instrument_id, target_timeframe, bucket_date, group_bars)
+        for bucket_date, group_bars in sorted(buckets.items())
+    ]
+
+
 class DeriveOHLCVUseCase:
     """Aggregate daily OHLCV bars into weekly or monthly derived bars.
 
