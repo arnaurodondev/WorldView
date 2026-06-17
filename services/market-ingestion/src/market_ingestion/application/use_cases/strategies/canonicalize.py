@@ -49,12 +49,24 @@ def canonicalize_task(
     """
     raw_data = json.loads(fetch_result.raw_data.decode())
 
+    # SOURCE-PROVENANCE FIX (2026-06-17): stamp the canonical ``source`` with the
+    # provider that ACTUALLY produced this fetch (``fetch_result.provider``), not
+    # the provider the task was scheduled for (``task.provider``).  EOD OHLCV is
+    # scheduled as ``eodhd`` but re-routed to Yahoo at execution time; the raw
+    # ``source`` baked into the canonical JSONL is what market-data (S3) stores in
+    # ``ohlcv_bars.source`` (its ``bar.source or provider_str`` logic prefers this
+    # per-bar value).  Using ``task.provider`` mislabelled every Yahoo-fetched
+    # daily bar as ``source = eodhd`` and resolved its priority to EODHD's — the
+    # root cause of "Yahoo produces 0 daily bars" and the EODHD-daily over-count.
+    # ``fetch_result.provider`` is always set by the adapter; fall back to the
+    # scheduled provider only defensively.
+    actual_source = fetch_result.provider.value if fetch_result.provider is not None else str(task.provider)
+
     if task.dataset_type == DatasetType.OHLCV:
         # EODHD (and most providers) return a JSON array at the top level.
         bars = raw_data if isinstance(raw_data, list) else raw_data.get("data", [raw_data])
         enriched = [
-            {**bar, "symbol": task.symbol, "exchange": task.exchange or "", "source": str(task.provider)}
-            for bar in bars
+            {**bar, "symbol": task.symbol, "exchange": task.exchange or "", "source": actual_source} for bar in bars
         ]
         canon = serializer.serialize_ohlcv(enriched)
         lines = [line for line in canon.split(b"\n") if line.strip()]
@@ -65,7 +77,7 @@ def canonicalize_task(
         # Normalise to a list and remap provider-specific field names to canonical
         # names so CanonicalQuote.from_dict() can parse the result.
         raw_quotes = raw_data if isinstance(raw_data, list) else [raw_data]
-        enriched_quotes = [_remap_quote(q, task.symbol, task.exchange or "", str(task.provider)) for q in raw_quotes]
+        enriched_quotes = [_remap_quote(q, task.symbol, task.exchange or "", actual_source) for q in raw_quotes]
         canon = serializer.serialize_quotes(enriched_quotes)
         lines = [line for line in canon.split(b"\n") if line.strip()]
         return canon, len(lines)

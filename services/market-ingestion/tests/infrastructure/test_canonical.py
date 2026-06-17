@@ -394,3 +394,64 @@ def test_serialize_passthrough_dataset_types(serializer):
         )
         parsed = json.loads(result.decode("utf-8").strip())
         assert parsed["dataset_type"] == dt, f"Wrong dataset_type for {dt}"
+
+
+# ---------------------------------------------------------------------------
+# canonicalize_task source provenance (OHLCV-SOURCING REWORK 2026-06-17)
+# ---------------------------------------------------------------------------
+#
+# The canonical `source` baked into each OHLCV/quote record MUST be the provider
+# that ACTUALLY fetched the data (fetch_result.provider), not the provider the
+# task was scheduled for (task.provider).  EOD OHLCV is scheduled as `eodhd` but
+# re-routed to Yahoo at execution time; using the scheduled provider mislabelled
+# every Yahoo-fetched daily bar as `source = eodhd` in market-data.
+
+
+def _provider_fetch_result(provider, raw):
+    from datetime import UTC, datetime
+
+    from market_ingestion.application.ports.adapters import ProviderFetchResult
+    from market_ingestion.domain.enums import DatasetType
+
+    return ProviderFetchResult(
+        provider=provider,
+        dataset_type=DatasetType.OHLCV,
+        symbol="AAPL",
+        raw_data=raw,
+        content_type="application/json",
+        fetched_at=datetime.now(UTC),
+        duration_ms=10,
+    )
+
+
+def _ohlcv_task():
+    from unittest.mock import MagicMock
+
+    from market_ingestion.domain.enums import DatasetType, Provider
+
+    task = MagicMock()
+    task.dataset_type = DatasetType.OHLCV
+    task.provider = Provider.EODHD  # scheduled provider
+    task.symbol = "AAPL"
+    task.exchange = "US"
+    return task
+
+
+def test_canonicalize_ohlcv_uses_actual_fetch_provider_as_source(serializer):
+    from market_ingestion.application.use_cases.strategies.canonicalize import canonicalize_task
+    from market_ingestion.domain.enums import Provider
+
+    raw = json.dumps(
+        [{"timestamp": "2026-06-10T00:00:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 100}]
+    ).encode()
+    # Task scheduled as EODHD but actually fetched by Yahoo (the routing re-route).
+    task = _ohlcv_task()
+    fr = _provider_fetch_result(Provider.YAHOO_FINANCE, raw)
+
+    canon, row_count = canonicalize_task(task, fr, serializer)
+
+    assert row_count == 1
+    bar = json.loads(canon.decode().strip())
+    assert (
+        bar["source"] == "yahoo_finance"
+    ), "canonical source must reflect the ACTUAL fetcher, not the scheduled provider"

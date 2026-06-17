@@ -49,10 +49,16 @@ _PERIOD_SECONDS: dict[Timeframe, int] = {
 # Source tag stored on all derived bars.
 _DERIVED_SOURCE = "derived"
 
-# Derived bars carry priority=0 — they are never involved in provider-priority
-# conflict resolution (they go through ``bulk_upsert_derived``, not the
-# priority-guarded path).
-_DERIVED_PRIORITY = ProviderPriority(provider="unknown", priority=0)
+# Derived bars are the AUTHORITATIVE source for every timeframe they cover
+# (they are aggregated from Alpaca 1m — the single source of truth).  They are
+# written via the unconditional ``bulk_upsert_derived`` path, so they already
+# overwrite any competing row regardless of priority; we nonetheless tag them
+# with the top-of-ladder ``derived`` priority (see ``_PROVIDER_PRIORITIES``) so
+# that the ASYMMETRIC case also resolves correctly: a later POLLED daily bar
+# arriving via the priority-guarded ``bulk_upsert_with_priority`` (EODHD=60,
+# Yahoo=80) can NO LONGER clobber a derived bar, because its priority is below
+# ``derived``.  This kills the eodhd<->derived flip-flop on liquid symbols.
+_DERIVED_PRIORITY = ProviderPriority(provider="derived", priority=110)
 
 # Default targets when the caller does not specify a subset.
 # Only timeframes strictly coarser than the source are actually derived

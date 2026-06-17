@@ -384,8 +384,22 @@ async def commit_transaction(
         watermark.content_hash = new_sha256
 
         if data_changed:
+            # SOURCE-PROVENANCE FIX: emit the provider that ACTUALLY fetched the
+            # data, not the provider the task was originally scheduled for.
+            # ``task.provider`` is the scheduled/policy provider (e.g. ``eodhd``
+            # for the 554 enabled ``eodhd ohlcv 1d`` policies), but at execution
+            # time ``ExecuteTaskUseCase`` re-routes EOD OHLCV to Yahoo Finance via
+            # the routing cache (``routing_ohlcv_eod = yahoo_finance:100,eodhd:80``)
+            # and records the real fetcher in ``task.fetched_by_provider``.  Before
+            # this fix the outbox event always carried the scheduled provider, so
+            # market-data (S3) labelled every Yahoo-fetched daily bar
+            # ``source = eodhd`` — making Yahoo's contribution invisible (the
+            # "Yahoo produces 0 bars" symptom) and over-stating EODHD daily volume.
+            # Falls back to the scheduled provider when no re-route happened
+            # (``fetched_by_provider`` is None on the non-routed / prefetched path).
+            actual_provider = task.fetched_by_provider or str(task.provider)
             event = MarketDatasetFetched(
-                provider=str(task.provider),
+                provider=actual_provider,
                 dataset_type=str(task.dataset_type),
                 symbol=task.symbol,
                 exchange=task.exchange,

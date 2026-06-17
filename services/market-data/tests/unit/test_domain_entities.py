@@ -65,9 +65,16 @@ class TestProviderPriorityOrdering:
     def test_unknown_priority_is_zero(self) -> None:
         assert Provider.UNKNOWN.priority == 0
 
-    def test_polygon_is_highest_priority(self) -> None:
-        highest = max(Provider, key=lambda p: p.priority)
-        assert highest == Provider.POLYGON
+    def test_alpaca_and_derived_outrank_polled_providers(self) -> None:
+        # OHLCV-SOURCING REWORK (2026-06-17): Alpaca 1m (and its locally-derived
+        # higher timeframes) is the single source of truth, so it must outrank
+        # every polled provider — including Polygon — in conflict resolution.
+        highest = max(p.priority for p in Provider)
+        assert Provider.ALPACA.priority == highest
+        assert Provider.DERIVED.priority == highest
+        assert Provider.ALPACA.priority > Provider.POLYGON.priority
+        # Yahoo (deep daily, free) must beat EODHD (last-resort failover).
+        assert Provider.YAHOO_FINANCE.priority > Provider.EODHD.priority
 
 
 class TestSecurityEntity:

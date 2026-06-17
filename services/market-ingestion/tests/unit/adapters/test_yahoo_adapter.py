@@ -159,3 +159,55 @@ async def test_provider_api_call_event_credit_cost_zero() -> None:
     assert evt["credit_cost"] == 0, "Yahoo Finance free tier must report credit_cost=0"
     assert evt["provider"] == "yahoo_finance"
     assert evt["symbol"] == "MSFT"
+
+
+# ---------------------------------------------------------------------------
+# Exchange-suffix handling (OHLCV-SOURCING REWORK 2026-06-17)
+# ---------------------------------------------------------------------------
+#
+# Root cause of "Yahoo produces 0 daily bars": every US polling policy carries
+# EODHD-style exchange="US", and the adapter used to blindly append it →
+# "AAPL.US" → Yahoo HTTP 404 → 0 bars → silent failover.  Yahoo uses BARE
+# tickers for US listings and its own suffix codes (not EODHD's) for non-US.
+
+
+@pytest.mark.unit
+def test_yahoo_ticker_strips_us_exchange() -> None:
+    from market_ingestion.infrastructure.adapters.providers.yahoo import _yahoo_ticker
+
+    # US (and US-equivalent) exchange codes must NOT be suffixed.
+    assert _yahoo_ticker("AAPL", "US") == "AAPL"
+    assert _yahoo_ticker("AAPL", "us") == "AAPL"
+    assert _yahoo_ticker("MSFT", "NASDAQ") == "MSFT"
+    assert _yahoo_ticker("IBM", "NYSE") == "IBM"
+    # No exchange → bare ticker.
+    assert _yahoo_ticker("TSLA", None) == "TSLA"
+    assert _yahoo_ticker("TSLA", "") == "TSLA"
+
+
+@pytest.mark.unit
+def test_yahoo_ticker_maps_non_us_exchange() -> None:
+    from market_ingestion.infrastructure.adapters.providers.yahoo import _yahoo_ticker
+
+    # Non-US exchanges map to Yahoo's own suffix codes.
+    assert _yahoo_ticker("VOD", "LSE") == "VOD.L"
+    assert _yahoo_ticker("SHOP", "TSX") == "SHOP.TO"
+    # Unknown non-US code falls back to using the code as-is (best effort).
+    assert _yahoo_ticker("XYZ", "WTF") == "XYZ.WTF"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_passes_bare_ticker_for_us_exchange() -> None:
+    """A US-exchange task must call yfinance with the BARE ticker, not 'AAPL.US'."""
+    df = _build_ohlcv_dataframe(n_rows=2)
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = df
+
+    with patch("yfinance.Ticker", return_value=mock_ticker) as mk:
+        adapter = _make_adapter()
+        result = await adapter.fetch_ohlcv("AAPL", "1d", _START, _END, exchange="US")
+
+    # The regression assertion: ticker passed to yfinance is bare "AAPL".
+    mk.assert_called_once_with("AAPL")
+    assert result.bars_returned == 2

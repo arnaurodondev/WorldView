@@ -27,6 +27,44 @@ _YF_INTERVAL_MAP: dict[str, str] = {
 # Use a frozenset for O(1) membership checks in the hot path.
 _SUPPORTED_TIMEFRAMES: frozenset[str] = frozenset(_YF_INTERVAL_MAP.keys())
 
+# EODHD exchange codes that denote a US listing.  Yahoo Finance treats the US as
+# its DEFAULT market and uses a BARE ticker for these (no suffix); appending any
+# of these as ".SUFFIX" yields a 404 / zero bars.  Case-insensitive match.
+_US_EXCHANGE_CODES: frozenset[str] = frozenset({"US", "NYSE", "NASDAQ", "NMS", "NYQ", "AMEX", "BATS", "PCX", "ARCA"})
+
+# Translation from EODHD-style exchange codes to Yahoo Finance ticker suffixes for
+# the non-US venues we ingest.  Yahoo's suffix codes differ from EODHD's, so we map
+# explicitly rather than passing the EODHD code through verbatim.  Unknown non-US
+# codes fall back to using the code as-is (best effort) — better than dropping it.
+_YAHOO_EXCHANGE_SUFFIX: dict[str, str] = {
+    "LSE": "L",  # London Stock Exchange
+    "L": "L",
+    "TO": "TO",  # Toronto
+    "TSX": "TO",
+    "V": "V",  # TSX Venture
+    "PA": "PA",  # Euronext Paris
+    "F": "F",  # Frankfurt
+    "DE": "DE",  # XETRA
+    "MI": "MI",  # Milan
+    "AS": "AS",  # Euronext Amsterdam
+    "HK": "HK",  # Hong Kong
+    "T": "T",  # Tokyo
+    "SW": "SW",  # SIX Swiss
+}
+
+
+def _yahoo_ticker(symbol: str, exchange: str | None) -> str:
+    """Return the Yahoo-Finance ticker string for *symbol* on *exchange*.
+
+    US listings (and the empty/None case) use the bare ticker — Yahoo's default
+    market.  Non-US exchanges are translated to Yahoo's own suffix code.  See the
+    module-level constants for the mapping rationale.
+    """
+    if not exchange or exchange.upper() in _US_EXCHANGE_CODES:
+        return symbol
+    suffix = _YAHOO_EXCHANGE_SUFFIX.get(exchange.upper(), exchange)
+    return f"{symbol}.{suffix}"
+
 
 class YahooFinanceProviderAdapter(BaseProviderAdapter):
     """Yahoo Finance adapter using yfinance library.
@@ -76,9 +114,17 @@ class YahooFinanceProviderAdapter(BaseProviderAdapter):
             )
 
         interval = _YF_INTERVAL_MAP[timeframe]
-        # Yahoo Finance uses "SYMBOL.EXCHANGE" format for non-US symbols.
-        # For US symbols (no exchange) just pass the bare ticker symbol.
-        ticker_sym = f"{symbol}.{exchange}" if exchange else symbol
+        # Yahoo Finance uses BARE tickers for US-listed symbols (its default market)
+        # and a "SYMBOL.SUFFIX" form ONLY for non-US exchanges (e.g. "VOD.L" for the
+        # London Stock Exchange, "SHOP.TO" for Toronto).  The upstream polling
+        # policies carry EODHD-style ``exchange="US"`` on every US symbol; before
+        # this fix the adapter blindly appended it, producing "AAPL.US" which Yahoo
+        # rejects with HTTP 404 ("Quote not found") and returns ZERO bars — the
+        # root cause of "Yahoo produces 0 daily bars".  Yahoo's exchange suffixes
+        # are also NOT the same codes as EODHD's, so we only suffix when the
+        # exchange is a genuine non-US market (handled by ``_yahoo_suffix``); US
+        # (and the empty/None case) maps to the bare symbol.
+        ticker_sym = _yahoo_ticker(symbol, exchange)
 
         t0 = time.monotonic()
         try:

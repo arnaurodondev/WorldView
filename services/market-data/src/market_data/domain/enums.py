@@ -28,20 +28,50 @@ class DatasetType(StrEnum):
 
 
 # Provider priority: higher integer = preferred source for conflict resolution.
+#
+# OHLCV-SOURCING REWORK (2026-06-17): the source identifiers actually emitted by
+# the upstream market-ingestion (S4) pipeline are ``alpaca`` (intraday 1m, the
+# single source of truth), ``yahoo_finance`` (deep daily, free/keyless) and
+# ``eodhd`` (last-resort daily failover) — NOT the legacy ``polygon``/``yahoo``
+# placeholders.  Before this fix every one of those strings failed ``Provider(...)``
+# construction in the S3 consumer and silently collapsed to ``UNKNOWN`` (priority
+# 0), so the ``WHERE EXCLUDED.provider_priority >= ohlcv_bars.provider_priority``
+# upsert guard degenerated to "0 >= 0 = always overwrite" — i.e. provider-priority
+# conflict resolution was effectively disabled and a late EODHD tick could clobber
+# a higher-quality Yahoo/derived bar (the NVDA eodhd<->derived flip-flop).
+#
+# Priority ladder (higher wins): derived Alpaca-1m aggregates are the authoritative
+# source for every timeframe they cover and are written via the unconditional
+# ``bulk_upsert_derived`` path, but we still rank ``alpaca``/``derived`` at the top
+# so that any priority-guarded comparison agrees with that intent.  Yahoo (deep
+# daily) outranks EODHD so EODHD only wins when it is genuinely the sole source.
 _PROVIDER_PRIORITIES: dict[str, int] = {
-    "polygon": 100,
-    "yahoo": 80,
-    "alpha_vantage": 60,
-    "macrotrends": 40,
+    "alpaca": 110,  # 1m bars + their derived higher timeframes — single source of truth
+    "derived": 110,  # locally-derived (from Alpaca 1m) — authoritative for covered window
+    "polygon": 100,  # alternate intraday provider (registered only when keyed)
+    "yahoo_finance": 80,  # deep daily history (free/keyless) — preferred over EODHD
+    "yahoo": 80,  # legacy alias — kept so historical rows compare consistently
+    "eodhd": 60,  # last-resort daily failover only
+    "alpha_vantage": 40,
+    "macrotrends": 20,
     "unknown": 0,
 }
 
 
 class Provider(StrEnum):
-    """Data provider identifiers, in descending priority order."""
+    """Data provider identifiers, in descending priority order.
 
+    Values MUST match the ``source`` / event ``provider`` strings emitted by
+    market-ingestion (S4) so that ``Provider(provider_str)`` in the S3 consumer
+    resolves to a real priority instead of falling through to ``UNKNOWN``.
+    """
+
+    ALPACA = "alpaca"
+    DERIVED = "derived"
     POLYGON = "polygon"
-    YAHOO = "yahoo"
+    YAHOO_FINANCE = "yahoo_finance"
+    YAHOO = "yahoo"  # legacy alias
+    EODHD = "eodhd"
     ALPHA_VANTAGE = "alpha_vantage"
     MACROTRENDS = "macrotrends"
     UNKNOWN = "unknown"
