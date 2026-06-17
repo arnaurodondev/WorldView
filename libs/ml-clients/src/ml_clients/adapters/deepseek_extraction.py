@@ -131,6 +131,20 @@ _EXTRACTION_BACKOFF_CAP_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_BACKOFF_
 # knob is env-overridable (``ML_CLIENTS_EXTRACTION_REASONING_EFFORT``) so it can be
 # reverted to "none" without a code change if a future cost review demands it.
 _EXTRACTION_REASONING_EFFORT = os.environ.get("ML_CLIENTS_EXTRACTION_REASONING_EFFORT", "low")
+# Separate reasoning budget for the SECONDARY (fallback) model.  gpt-oss-20b was
+# validated at ``@low`` (see docs/audits/2026-06-16-extraction-model-ab-results.md)
+# and is the cheap/fast last-resort hop, so it does NOT need the primary's higher
+# reasoning budget.  When empty, the fallback inherits the primary's effort (legacy
+# behaviour — a single shared knob).  Env: ML_CLIENTS_EXTRACTION_FALLBACK_REASONING_EFFORT.
+_EXTRACTION_FALLBACK_REASONING_EFFORT = os.environ.get("ML_CLIENTS_EXTRACTION_FALLBACK_REASONING_EFFORT", "")
+
+# max_tokens CAP for the extraction completion.  This is a CEILING, not a target:
+# gpt-oss-120b@medium emits at most ~3k completion tokens on the 100-doc golden set
+# (p50 ~1.4k), so 8192 is pure safety margin the model never fills — verified to add
+# no latency vs 4096 (docs/audits/2026-06-16-extraction-model-ab-results.md, 8192-check).
+# Reasoning models can need headroom above the answer JSON; the user asked for margin.
+# Env-overridable: ML_CLIENTS_EXTRACTION_MAX_TOKENS.
+_EXTRACTION_MAX_TOKENS = int(os.environ.get("ML_CLIENTS_EXTRACTION_MAX_TOKENS", "4096"))
 
 
 class DeepSeekExtractionAdapter:
@@ -152,6 +166,14 @@ class DeepSeekExtractionAdapter:
         # "low" (default) lets the model enumerate candidate entity pairs before
         # classifying — improves recall AND co-mention rejection (precision).
         reasoning_effort: str = _EXTRACTION_REASONING_EFFORT,
+        # Separate reasoning budget for the fallback model.  Empty => inherit the
+        # primary's ``reasoning_effort`` (legacy single-knob behaviour).  Set to a
+        # cheaper level (e.g. "low") so the fast last-resort hop is not forced into
+        # the primary's higher reasoning cost.
+        fallback_reasoning_effort: str = _EXTRACTION_FALLBACK_REASONING_EFFORT,
+        # max_tokens ceiling for the completion (see _EXTRACTION_MAX_TOKENS).  A CAP,
+        # not a target — reasoning models won't fill it; raising it is free margin.
+        max_tokens: int = _EXTRACTION_MAX_TOKENS,
         # Task #36: SECONDARY model slug used when the primary is rate-limited (or
         # persistently fails).  Empty string => fallback disabled (behaviour
         # unchanged: exhaust primary retries then raise).
@@ -188,6 +210,10 @@ class DeepSeekExtractionAdapter:
         self._backoff_base_s = backoff_base_s
         self._backoff_cap_s = backoff_cap_s
         self._reasoning_effort = reasoning_effort
+        # Fallback reasoning_effort: explicit value if given, else inherit primary.
+        _fb_effort = (fallback_reasoning_effort or "").strip()
+        self._fallback_reasoning_effort = _fb_effort or reasoning_effort
+        self._max_tokens = max_tokens
         # Task #14: deep extraction is I/O-bound (12-22s DeepInfra network wait per
         # article).  When the article consumer processes many articles concurrently,
         # an equal number of extraction calls hit this client at once.  httpx's
@@ -290,7 +316,7 @@ class DeepSeekExtractionAdapter:
             return _FALLBACK_SERVER_ERROR
         return _FALLBACK_TIMEOUT
 
-    async def _create_with_retry(self, inp: ExtractionInput, model_id: str) -> tuple[Any, int]:
+    async def _create_with_retry(self, inp: ExtractionInput, model_id: str, reasoning_effort: str) -> tuple[Any, int]:
         """Call ``model_id`` with bounded retry on transient failures.
 
         Returns ``(response, attempts)`` where ``attempts`` is the number of HTTP
@@ -319,15 +345,17 @@ class DeepSeekExtractionAdapter:
                         ],
                         response_format={"type": "json_object"},
                         temperature=0.0,
-                        max_tokens=4096,
+                        max_tokens=self._max_tokens,
                         extra_body={
-                            # "low" by default (relation-extraction quality, 2026-06-15):
-                            # a lightweight reasoning budget lets Qwen3-235B enumerate
-                            # candidate entity pairs before classifying, lifting recall
-                            # and letting it reject co-mention hallucinations.  Bump the
-                            # cache key to v2 so DeepInfra does not serve a KV-prefix
-                            # cache built for the old (none-reasoning, v1.5-prompt) path.
-                            "reasoning_effort": self._reasoning_effort,
+                            # reasoning_effort is per-MODEL (passed in) so the primary
+                            # (gpt-oss-120b@medium) and the fallback (gpt-oss-20b@low)
+                            # each run at their validated budget — see the 2026-06-16
+                            # extraction-model A/B audit.  Both are REASONING models:
+                            # without an explicit effort they spend the whole budget on
+                            # hidden reasoning and return EMPTY content, so this MUST be
+                            # set.  Bump the cache key to v2 so DeepInfra does not serve a
+                            # KV-prefix cache built for the old (none-reasoning) path.
+                            "reasoning_effort": reasoning_effort,
                             "prompt_cache_key": "kg_extraction_v2",
                         },
                     ),
@@ -400,7 +428,7 @@ class DeepSeekExtractionAdapter:
         or auth problem is deterministic and would fail identically on any model.
         """
         try:
-            response, attempts = await self._create_with_retry(inp, self._model_id)
+            response, attempts = await self._create_with_retry(inp, self._model_id, self._reasoning_effort)
             return response, self._model_id, _FALLBACK_NONE, attempts
         except FatalError:
             # Deterministic failure — a different model will not help.  Propagate.
@@ -426,7 +454,9 @@ class DeepSeekExtractionAdapter:
                 primary_error=str(primary_exc),
             )
             try:
-                fb_response, fb_attempts = await self._create_with_retry(inp, self._fallback_model_id)
+                fb_response, fb_attempts = await self._create_with_retry(
+                    inp, self._fallback_model_id, self._fallback_reasoning_effort
+                )
             except (RetryableError, FatalError):
                 # The fallback ALSO failed — re-raise the PRIMARY's transient error
                 # (the canonical signal: the system is saturated) so the consumer

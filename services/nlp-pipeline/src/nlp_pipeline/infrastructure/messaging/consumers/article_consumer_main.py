@@ -186,6 +186,15 @@ async def main() -> None:
             # against the primary 235B model (post-outage saturation).  Empty string
             # => fallback disabled (behaviour unchanged).
             fallback_model_id=settings.extraction_fallback_model_id,
+            # PLAN-0111 (2026-06-16 A/B swap): gpt-oss-120b/20b are REASONING models;
+            # without an explicit reasoning_effort they return EMPTY content.  Drive it
+            # from config and pass explicitly (do NOT rely on the ml-clients module-level
+            # ML_CLIENTS_* import-time default — the NLP container's env is NLP_PIPELINE_*).
+            # Primary @medium, fallback @low (validated config); max_tokens is a high cap
+            # the model never fills (no latency cost — see the A/B audit).
+            reasoning_effort=settings.extraction_reasoning_effort,
+            fallback_reasoning_effort=settings.extraction_fallback_reasoning_effort,
+            max_tokens=settings.extraction_max_tokens,
             # Task #5 (2026-06-16): drive the per-attempt wall-clock cap, retry count
             # and per-model budget from nlp-pipeline config (NLP_PIPELINE_* env) and
             # pass them EXPLICITLY here.  Previously these came only from the ml-clients
@@ -224,6 +233,8 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group,
         topics=[settings.topic_article_stored],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_consumer_instance_id,
         # bge-large CPU inference can take 2-5s per article; increase poll interval
         # to 30 minutes to prevent consumer from leaving the group mid-batch.
         max_poll_interval_ms=1_800_000,

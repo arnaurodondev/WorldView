@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # loss), which crash-looped the entity-refresh consumer on a missing
     # Settings attribute; restored here.
     kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
+    # PLAN-0113 FIX-2: opt-in static group membership (KIP-345). Empty (default)
+    # = dynamic membership, byte-identical to legacy behaviour. Set per-process
+    # to a unique, restart-stable id (dev: numbered compose service e.g.
+    # ``article-consumer-0``; prod: StatefulSet pod metadata.name) to skip
+    # rebalances on restart. One knob per consumer scope so each fleet can be
+    # made static independently.
+    kafka_consumer_instance_id: str = ""
+    kafka_watchlist_consumer_instance_id: str = ""
+    kafka_entity_refresh_consumer_instance_id: str = ""
+    kafka_document_deletion_consumer_instance_id: str = ""
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
@@ -136,6 +146,26 @@ class Settings(BaseSettings):
     # Verified DeepInfra slug; OpenAI-compatible JSON-mode. Empty = fallback disabled.
     # NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID
     extraction_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+
+    # ── Extraction reasoning_effort + max_tokens (PLAN-0111, 2026-06-16 A/B swap) ─
+    # gpt-oss-120b / gpt-oss-20b are REASONING models: with no explicit
+    # reasoning_effort they spend the whole budget on hidden reasoning and return
+    # EMPTY content (docs/audits/2026-06-16-extraction-model-ab-results.md §4).  The
+    # value MUST therefore be set explicitly and passed to the adapter.
+    #   * Primary  (gpt-oss-120b) = "medium" — validated optimal: recall 3.62 /
+    #     precision 4.93 / adherence 4.98 / ~0 fabrication / ~25s p50.
+    #   * Fallback (gpt-oss-20b)  = "low"    — validated best fast fallback; does not
+    #     need the primary's reasoning budget.  Empty => inherit the primary's effort.
+    # NLP_PIPELINE_EXTRACTION_REASONING_EFFORT
+    extraction_reasoning_effort: str = "medium"
+    # NLP_PIPELINE_EXTRACTION_FALLBACK_REASONING_EFFORT
+    extraction_fallback_reasoning_effort: str = "low"
+    # max_tokens completion CAP — a ceiling, not a target.  gpt-oss-120b@medium emits
+    # at most ~3k completion tokens on the golden set (p50 ~1.4k), so 8192 is pure
+    # safety margin the model never fills; the 8192-vs-4096 check measured NO latency
+    # difference (same audit).  Kept high so a verbose article never truncates JSON.
+    # NLP_PIPELINE_EXTRACTION_MAX_TOKENS
+    extraction_max_tokens: int = 8192
 
     # ── Deep-extraction timeout / retry budget (task #5, 2026-06-16) ──────────
     # The 235B deep tier is LATENCY-bound: the throughput audit measured p50=161s,

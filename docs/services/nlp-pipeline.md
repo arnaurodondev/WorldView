@@ -69,13 +69,60 @@ nlp_pipeline/
 | Docker Compose Service | Entry Point | Role |
 |------------------------|-------------|------|
 | `nlp-pipeline` | `app.py` (uvicorn) | FastAPI HTTP API |
-| `nlp-pipeline-article-consumer` | `article_consumer_main.py` | Main NLP enrichment pipeline |
+| `nlp-pipeline-article-consumer-0` / `-1` | `article_consumer_main.py` | Main NLP enrichment pipeline — DEV static-membership fleet (see below) |
 | `nlp-pipeline-dispatcher` | `dispatcher_main.py` | Outbox → Kafka relay |
 | `nlp-pipeline-watchlist-consumer` | `watchlist_consumer_main.py` | Maintains Valkey watchlist SET |
 | `nlp-pipeline-price-impact-worker` | `price_impact_labelling_worker.py` | Retroactive OHLCV price-impact labels |
 | `nlp-pipeline-relevance-scoring` | `article_relevance_scoring_worker.py` | LLM relevance scores for MEDIUM/DEEP |
 | `nlp-pipeline-unresolved-resolution-worker` | `unresolved_resolution_worker_main.py` | Re-resolves UNRESOLVED entity mentions |
 | `nlp-pipeline-embedding-retry-worker` | `embedding_retry_worker_main.py` | Retries failed embeddings |
+
+### DEV static membership — numbered article consumers (PRD-0113 W3)
+
+The article-consumer group is the only multi-member dev consumer group. It used
+to run as a single service with `deploy.replicas: 2`. That has been replaced with
+two explicit numbered services, `nlp-pipeline-article-consumer-0` and
+`nlp-pipeline-article-consumer-1`.
+
+**Why not `deploy.replicas`?** Anonymous replicas share one rendered config, so
+they cannot each carry a distinct `group.instance.id`. Static membership
+(Kafka KIP-345) requires a *unique, restart-stable* id per member. Numbered
+services can: each sets its own `NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID`
+(`article-consumer-0` / `article-consumer-1`) via an `environment:` override on
+top of the shared `env_file` (whose default is empty = dynamic membership).
+
+**FencedInstanceIdException.** Two members of one consumer group that share a
+`group.instance.id` make the broker fence one of them — a silent stall where one
+member never consumes. The distinct per-service ids are the guard; the infra test
+`tests/infra/test_compose_consumers.py` fails if any two numbered services share
+an id, or if a static-membership consumer still uses `deploy.replicas`.
+
+**OQ-2 count knob.** The fleet size is the number of `…-article-consumer-N`
+service blocks (default 2). Reduce to 1 on constrained laptops; never exceed the
+dev article-topic partition count (3, per FR-1/OQ-1) — extra members would sit
+idle or fenced.
+
+**Single-replica consumers** (watchlist, document-deletion, entity-refresh, and
+the heavy consumers in content-store / knowledge-graph / market-data / alert /
+portfolio) also get a stable per-service `*_CONSUMER_INSTANCE_ID` so a container
+restart skips the consumer-group rebalance. Their groups have one member, so any
+stable value is safe.
+
+**Dev vs prod identity split.** In dev the id comes from the numbered compose
+service's `environment:` block. The authoritative dev source is
+`env/dev/nlp-pipeline.env` in the `worldview-gitops` repo, which records the four
+`NLP_PIPELINE_KAFKA_*_CONSUMER_INSTANCE_ID` knobs with an **empty** default (W6,
+GAP-1 resolved 2026-06-17) — empty because a single shared value would fence the
+second article member; per-replica distinctness lives only in the compose
+`environment:` overrides, which always win over the empty `env_file` default.
+`env/dev/<svc>.env` → generated `services/<svc>/configs/docker.env` is the dev
+single-source-of-truth (OQ-5): `worldview-gitops/scripts/setup-dev.sh` regenerates
+the artifact (with a `# GENERATED …` banner) and `check-dev-env-drift.sh` (CI +
+pre-flight) fails loudly on drift. See `worldview-gitops/docs/CONFIG_MANAGEMENT.md`
+and `docs/BUG_PATTERNS.md` BP-703 (single-node KRaft rebalance-storm +
+`FencedInstanceIdException` static-membership pitfall). In prod the id is the
+StatefulSet pod ordinal name (`<svc>-0/-1/-2` via `metadata.name`) — see PRD-0113
+§7 AD-3 (W4/W5).
 
 ---
 
@@ -212,8 +259,22 @@ Every stage writes an audit row to `mention_resolutions`.
 
 ### Block 10 — Deep Extraction
 
-Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via DeepInfra
+Runs on MEDIUM and DEEP tier only. Uses `openai/gpt-oss-120b` via DeepInfra
 (falls back to `OllamaExtractionAdapter` when no API key).
+
+**Model swap (PLAN-0111, 2026-06-16).** The primary was swapped from
+`Qwen/Qwen3-235B-A22B-Instruct-2507` to `openai/gpt-oss-120b` after an LLM-judge A/B
+(`docs/audits/2026-06-16-extraction-model-ab-results.md`): gpt-oss-120b beats the 235B
+on precision (4.93 vs 4.40), schema adherence (4.98 vs 3.93), and fabrication (1 vs 3),
+and is ~6-19× faster under production load. `gpt-oss` is a **reasoning model** — it
+returns EMPTY `content` unless `reasoning_effort` is set explicitly. The primary runs at
+`reasoning_effort=medium` (`NLP_PIPELINE_EXTRACTION_REASONING_EFFORT`, validated optimal:
+recall 3.62, ~25s p50), the fallback `openai/gpt-oss-20b` at
+`reasoning_effort=low` (`NLP_PIPELINE_EXTRACTION_FALLBACK_REASONING_EFFORT`). `max_tokens`
+is a CAP of **8192** (`NLP_PIPELINE_EXTRACTION_MAX_TOKENS`) — the model emits at most
+~3k completion tokens so it is pure margin; the 8192-vs-4096 check measured no latency
+difference. All three are nlp-pipeline config fields passed explicitly to the adapter
+(NOT the ml-clients import-time `ML_CLIENTS_*` defaults — the container env is `NLP_PIPELINE_*`).
 
 **Task #5 latency budget (2026-06-16).** The 235B deep tier is latency-bound
 (throughput audit: p50=161s, p95=179s for a full `extract()`), yet logs showed
@@ -232,7 +293,8 @@ backoff inside a per-model budget (default 320s, `NLP_PIPELINE_EXTRACTION_TOTAL_
 On a terminal HTTP 429 (always) or a persistent timeout/5xx (when
 `ML_CLIENTS_EXTRACTION_FALLBACK_ON_TIMEOUT`), it re-issues the SAME extraction request
 (same prompt + `response_format=json_object`) against a SECONDARY model
-`deepseek-ai/DeepSeek-V4-Flash` (`NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID`). The call
+`openai/gpt-oss-20b` (`NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID`; was
+`deepseek-ai/DeepSeek-V4-Flash`, retired by the PLAN-0111 A/B as dead). The call
 returns metadata (`model_used`, `fallback_reason` ∈ {none,rate_limit,timeout,server_error},
 `attempts`); the `llm_usage_log` row records the ACTUAL serving model plus a new nullable
 `fallback_reason` column, so `SELECT model_id, fallback_reason, count(*) FROM llm_usage_log
@@ -374,7 +436,7 @@ S6 connects with read/write credentials but never runs Alembic. DDL is owned by 
 |-------|------|-----------|----------|---------|
 | `urchade/gliner_large-v2.1` | NER (11 classes) | — | `gliner-server` container (HTTP) | `GLiNERLocalAdapter` in-process |
 | `BAAI/bge-large-en-v1.5` | Chunk embeddings (all non-SUPPRESS tiers) + section embeddings (MEDIUM/DEEP only) | 1024 | DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`) | Ollama local |
-| `Qwen/Qwen3-235B-A22B-Instruct-2507` | Deep extraction (Block 10) | — | DeepInfra (`NLP_PIPELINE_EXTRACTION_API_KEY`) | Ollama local (`qwen2.5:7b-instruct`) |
+| `openai/gpt-oss-120b` (`@medium`) | Deep extraction (Block 10) | — | DeepInfra (`NLP_PIPELINE_EXTRACTION_API_KEY`) | `openai/gpt-oss-20b` (`@low`) on 429/timeout, then Ollama local (`qwen2.5:7b-instruct`) |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Article relevance scoring | — | DeepInfra (`NLP_PIPELINE_RELEVANCE_SCORING_API_KEY`) | Ollama (`qwen3:0.6b`) |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Unresolved entity classification | — | DeepInfra (`NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY`) | Ollama (`qwen3:0.6b`) |
 
@@ -447,8 +509,11 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 |----------|---------|-------------|
 | `NLP_PIPELINE_EXTRACTION_API_KEY` | `""` | DeepInfra API key for deep extraction (get from deepinfra.com) |
 | `NLP_PIPELINE_EXTRACTION_API_BASE_URL` | `https://api.deepinfra.com/v1/openai` | |
-| `NLP_PIPELINE_EXTRACTION_API_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Primary deep-extraction model (DeepInfra) |
-| `NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID` | `deepseek-ai/DeepSeek-V4-Flash` | Task #36: secondary model on 429/timeout; empty = disabled |
+| `NLP_PIPELINE_EXTRACTION_API_MODEL_ID` | `openai/gpt-oss-120b` | Primary deep-extraction model (PLAN-0111 swap from Qwen3-235B) |
+| `NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID` | `openai/gpt-oss-20b` | Secondary model on 429/timeout (PLAN-0111 swap from DeepSeek-V4-Flash); empty = disabled |
+| `NLP_PIPELINE_EXTRACTION_REASONING_EFFORT` | `medium` | PLAN-0111: primary reasoning budget — gpt-oss returns EMPTY content if unset |
+| `NLP_PIPELINE_EXTRACTION_FALLBACK_REASONING_EFFORT` | `low` | PLAN-0111: fallback reasoning budget; empty = inherit primary |
+| `NLP_PIPELINE_EXTRACTION_MAX_TOKENS` | `8192` | PLAN-0111: completion CAP (margin; model emits ~3k, no latency cost) |
 | `NLP_PIPELINE_EXTRACTION_TIMEOUT_S` | `300.0` | Task #5: per-attempt wall-clock cap (was effectively 90s); 235B p95=179s |
 | `NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS` | `2` | Task #5: attempts per model (1 initial + retries); fits the 320s budget at a 300s cap |
 | `NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S` | `320.0` | Per-model retry wall-time budget (Task #5; passed explicitly to adapter) |
@@ -754,7 +819,7 @@ Structured log output (structlog, JSON format) includes: `service=nlp-pipeline`,
 
 ### Article consumer is not processing messages
 
-1. Check consumer logs: `docker compose logs nlp-pipeline-article-consumer`
+1. Check consumer logs: `docker compose logs nlp-pipeline-article-consumer-0 nlp-pipeline-article-consumer-1`
 2. Verify GLiNER server is healthy: `curl http://localhost:8090/healthz`
 3. Check backpressure metrics: if `max_ollama_queue_depth` is reached, the consumer pauses.
    Reduce load or increase `max_ollama_queue_depth`.
