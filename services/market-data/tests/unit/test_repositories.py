@@ -82,6 +82,110 @@ class TestOHLCVBulkUpsertSQL:
         session.execute.assert_not_called()
 
 
+def _make_bars(n: int) -> list[OHLCVBar]:
+    """Build *n* distinct OHLCV bars (distinct bar_date so no in-batch conflict)."""
+    base = datetime(2020, 1, 1, tzinfo=UTC)
+    return [
+        OHLCVBar(
+            instrument_id="inst-1",
+            timeframe=Timeframe.ONE_MIN,
+            bar_date=base.replace(minute=i % 60, hour=(i // 60) % 24, day=1 + (i // 1440)),
+            open=Decimal("100"),
+            high=Decimal("105"),
+            low=Decimal("99"),
+            close=Decimal("103"),
+            volume=1000 + i,
+            provider_priority=ProviderPriority(provider="alpaca", priority=100),
+        )
+        for i in range(n)
+    ]
+
+
+class TestOHLCVBulkUpsertChunking:
+    """Regression: combined upserts must chunk under Postgres's 65_535 param cap.
+
+    HEAD batched an entire consume-batch (tens of thousands of bars) into ONE
+    multi-row INSERT.  With ~12-13 columns/row that blew past the 65_535
+    bound-parameter wire limit, failed the statement, stalled the Kafka offset
+    and crash-looped the ohlcv-consumer.  The repository now chunks every
+    multi-row INSERT so no single statement can ever exceed the limit.
+    """
+
+    # The widest VALUES row (derived path) has 13 columns; the hard ceiling is
+    # 65_535 / 13 ≈ 5_041 rows.  The chunk size must stay strictly below that.
+    _MAX_COLS = 13
+    _PARAM_CEILING = 65_535
+
+    async def test_with_priority_chunks_large_batch(self):
+        """A >5_000-row batch is split into multiple bounded INSERTs."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        # 12_345 rows → ceil(12345 / 5000) = 3 chunks.
+        await repo.bulk_upsert_with_priority(_make_bars(12_345))
+        assert session.execute.call_count == 3
+        self._assert_chunks_bounded(session, n_total=12_345)
+
+    async def test_derived_chunks_large_batch(self):
+        """The derived upsert path chunks identically."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        await repo.bulk_upsert_derived(_make_bars(10_001))  # ceil → 3 chunks
+        assert session.execute.call_count == 3
+        self._assert_chunks_bounded(session, n_total=10_001)
+
+    async def test_exactly_one_chunk_at_boundary(self):
+        """Exactly 5_000 rows fits in a single INSERT (boundary)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        await repo.bulk_upsert_with_priority(_make_bars(5_000))
+        assert session.execute.call_count == 1
+
+    async def test_one_over_boundary_splits(self):
+        """5_001 rows must split into 2 chunks (none exceeding the cap)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        await repo.bulk_upsert_with_priority(_make_bars(5_001))
+        assert session.execute.call_count == 2
+        self._assert_chunks_bounded(session, n_total=5_001)
+
+    def _assert_chunks_bounded(self, session: AsyncMock, *, n_total: int) -> None:
+        """Every executed chunk's row count keeps params < the wire limit, and
+        the chunks together cover exactly ``n_total`` rows (round-trip safety)."""
+        total_rows = 0
+        for call in session.execute.call_args_list:
+            stmt = call.args[0]
+            # Compile against the postgres dialect and count the bound params —
+            # this is exactly what the wire protocol would carry.
+            compiled = stmt.compile(
+                dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect()
+            )
+            n_params = len(compiled.params)
+            assert n_params < self._PARAM_CEILING, f"chunk has {n_params} params (>= {self._PARAM_CEILING})"
+            # Derive the row count from params / columns; must be <= chunk size.
+            rows_in_chunk = n_params // self._MAX_COLS
+            assert rows_in_chunk <= 5_000
+            total_rows += rows_in_chunk
+        # Round-trip: chunks must reconstruct the full batch (no rows dropped or
+        # duplicated by the chunker).  Allow the column-count estimate to be a
+        # lower bound (with-priority has 12 cols, derived 13) — assert coverage
+        # by re-counting against the actual per-statement VALUES length instead.
+        actual_rows = sum(self._rows_in_stmt(call.args[0]) for call in session.execute.call_args_list)
+        assert actual_rows == n_total
+
+    @staticmethod
+    def _rows_in_stmt(stmt) -> int:
+        """Number of VALUES rows in a multi-row INSERT statement."""
+        # SQLAlchemy stores multi-VALUES rows on the compile state; the simplest
+        # robust count is the number of parameter dicts the insert was built from.
+        compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+        # postgres multi-row insert names params open_m0, open_m1, ... so count
+        # the distinct row suffixes for a single column.
+        suffixes = {k.rsplit("_m", 1)[-1] for k in compiled.params if k.startswith("open")}
+        # Single-row inserts use bare "open" (no _mN suffix) → 1 row.
+        numeric = {s for s in suffixes if s.isdigit()}
+        return len(numeric) if numeric else 1
+
+
 class TestInstrumentSearch:
     """Verify that instrument search generates correct WHERE clauses."""
 

@@ -1,0 +1,1607 @@
+{
+  "summary": {
+    "235b": {
+      "ALL": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "well_known": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure_person": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "mean_tokens_in": null,
+      "mean_tokens_out": null
+    },
+    "gemini": {
+      "ALL": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "well_known": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure_person": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "mean_tokens_in": null,
+      "mean_tokens_out": null
+    },
+    "235b+news": {
+      "ALL": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "well_known": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure_person": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "mean_tokens_in": null,
+      "mean_tokens_out": null
+    },
+    "gemini+news": {
+      "ALL": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "well_known": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "obscure_person": {
+        "n": 0,
+        "fab": null,
+        "hallu": null,
+        "severe": 0,
+        "grounding": null,
+        "accuracy": null,
+        "completeness": null
+      },
+      "mean_tokens_in": null,
+      "mean_tokens_out": null
+    }
+  },
+  "rows": [
+    {
+      "name": "NVIDIA Corporation",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "NVIDIA Corporation",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Apple Inc.",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Apple Inc.",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Intel Corporation",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Intel Corporation",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Meta Platforms Inc.",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Meta Platforms Inc.",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan Stanley",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan Stanley",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Tesla Inc",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Tesla Inc",
+      "type": "financial_instrument",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SpaceX",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SpaceX",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Zacks",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Zacks",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Simply Wall St.",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Simply Wall St.",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Meta AI",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Meta AI",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "GLOBE NEWSWIRE",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "GLOBE NEWSWIRE",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Duke Energy Foundation",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Duke Energy Foundation",
+      "type": "organization",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Elon Musk",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Elon Musk",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jim Cramer",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jim Cramer",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "President Trump",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "President Trump",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jensen Huang",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jensen Huang",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Kevin Warsh",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Kevin Warsh",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Trump",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Trump",
+      "type": "person",
+      "stratum": "well_known",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "SharkNinja, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Xcel Brands, Inc.",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "AMZW",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "five-year note",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Valaris",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "DTTDC",
+      "type": "financial_instrument",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Banza",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Uni Express Inc.",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Paragon Acura",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "TARA",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Guotai Haitong Securities",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Morgan & Morgan",
+      "type": "organization",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Mark Meador",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Allison McNeely",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Vinayak Hegde",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Stephen Sheldon",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Jennifer Schultz",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "235b+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 0,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    },
+    {
+      "name": "Nacho Traves",
+      "type": "person",
+      "stratum": "obscure",
+      "arm": "gemini+news",
+      "run": 1,
+      "err": "__ERR__ HTTP Error 401: Unauthorized"
+    }
+  ],
+  "total_api_calls": 180
+}
