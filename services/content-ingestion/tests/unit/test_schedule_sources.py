@@ -409,3 +409,60 @@ class TestSourceTypeIntervalOverrideBP460:
 
         # Must be enqueued: 120 s elapsed > 60 s global interval
         assert result.tasks_enqueued == 1
+
+
+# ---------------------------------------------------------------------------
+# OPT-5 (2026-06-15): EODHD per-ticker news poll interval override
+# ---------------------------------------------------------------------------
+
+
+class TestEodhdTickerNewsIntervalOverrideOPT5:
+    """EODHD_TICKER_NEWS must honour its hourly override (the quota fix).
+
+    OPT-5: per-ticker news (~600 enabled sources, 5 EODHD credits/request) was
+    ~94% of the 100k daily quota at the 5-minute global tick. The scheduler now
+    overrides EODHD_TICKER_NEWS to 3600 s (1 h). These tests pin the override
+    boundary so a regression cannot silently restore the 5-minute thrash.
+    """
+
+    async def test_ticker_news_source_not_due_within_hourly_override(self) -> None:
+        """A ticker-news source last run 10 min ago is skipped under the 1 h override."""
+        from content_ingestion.domain.entities import SourceType
+
+        source = _make_source_model(name="eodhd-news-AAPL", source_type="eodhd_ticker_news")
+        state = MagicMock()
+        # 10 min ago — past the 300 s global, but well inside the 1 h override
+        state.last_run_at = common.time.utc_now() - timedelta(minutes=10)
+        uow = _make_uow(sources=[source], adapter_state=state)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=300.0,
+            max_tasks_per_tick=100,
+            source_type_intervals={SourceType.EODHD_TICKER_NEWS: 3600.0},
+        )
+        result = await uc.execute()
+
+        # Skipped — 600 s elapsed < 3600 s override (this is the quota saving)
+        assert result.tasks_enqueued == 0
+
+    async def test_ticker_news_source_is_due_after_hourly_override(self) -> None:
+        """A ticker-news source last run 70 min ago is scheduled under the 1 h override."""
+        from content_ingestion.domain.entities import SourceType
+
+        source = _make_source_model(name="eodhd-news-AAPL", source_type="eodhd_ticker_news")
+        state = MagicMock()
+        # 70 min ago — past the 1 h override
+        state.last_run_at = common.time.utc_now() - timedelta(minutes=70)
+        uow = _make_uow(sources=[source], adapter_state=state, add_many_inserted=1)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=300.0,
+            max_tasks_per_tick=100,
+            source_type_intervals={SourceType.EODHD_TICKER_NEWS: 3600.0},
+        )
+        result = await uc.execute()
+
+        # Enqueued — 4200 s elapsed > 3600 s override
+        assert result.tasks_enqueued == 1

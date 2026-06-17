@@ -30,6 +30,13 @@ class TestEODHDDefaults:
         assert s.eodhd.base_url == "https://eodhd.com/api/news"
         assert s.eodhd.page_size == 100
         assert s.eodhd.rate_limit_per_second == 10.0
+        # OPT-5: per-ticker news polls hourly (quota fix), not at the global tick.
+        assert s.eodhd.ticker_news_poll_interval_seconds == 3600
+
+    def test_eodhd_ticker_news_interval_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CONTENT_INGESTION_EODHD__TICKER_NEWS_POLL_INTERVAL_SECONDS", "7200")
+        s = _make_settings()
+        assert s.eodhd.ticker_news_poll_interval_seconds == 7200
 
 
 class TestFinnhubDefaults:

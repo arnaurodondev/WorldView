@@ -180,6 +180,11 @@ class SchedulerProcess:
 
         source_type_intervals: dict[SourceType, float] = {
             SourceType.NEWSAPI: float(self._settings.newsapi.poll_interval_seconds),
+            # OPT-5 (2026-06-15): EODHD per-ticker news (5 credits/request, ~600
+            # enabled sources) was ~94% of the EODHD daily quota at the global
+            # tick cadence. Poll it hourly instead so fundamentals/OHLCV/new
+            # policies have headroom. See EODHDProviderSettings.
+            SourceType.EODHD_TICKER_NEWS: float(self._settings.eodhd.ticker_news_poll_interval_seconds),
         }
 
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
