@@ -32,9 +32,20 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _make_settings(api_key: str = "test-api-key") -> MagicMock:
+def _make_settings(
+    api_key: str = "test-api-key", *, page_limit: int = 1000, max_pages: int = 10
+) -> MagicMock:
+    from content_ingestion.config import EODHDProviderSettings
+
     s = MagicMock()
     s.eodhd_api_key = api_key
+    # Real provider sub-model so the adapter reads numeric page/overlap config
+    # (a bare MagicMock would yield MagicMock ints → TypeError in timedelta).
+    s.eodhd = EODHDProviderSettings(
+        news_page_limit=page_limit, news_watermark_overlap_days=1, news_max_pages=max_pages
+    )
+    # Bounded first-run backfill horizon (days).
+    s.backfill_initial_days = 14
     return s
 
 
@@ -186,7 +197,10 @@ class TestEODHDTickerNewsAdapterURL:
 
 
 class TestEODHDTickerNewsAdapterWatermark:
-    async def test_from_date_sent_as_from_param(self) -> None:
+    async def test_from_date_anchored_on_watermark_minus_overlap(self) -> None:
+        # QUOTA-OPT: ``from`` = watermark - overlap_days (1) so a same-day
+        # boundary article is never missed; downstream url_hash dedup absorbs
+        # the small re-fetch. With watermark 2026-01-01 and overlap 1 → 2025-12-31.
         adapter = EODHDTickerNewsAdapter(settings=_make_settings())
         source = _make_source()
 
@@ -199,9 +213,19 @@ class TestEODHDTickerNewsAdapterWatermark:
 
         # params is passed as a kwarg in httpx client.get(url, params=...)
         actual_params = mock_client.get.call_args.kwargs.get("params") or {}
-        assert actual_params.get("from") == "2026-01-01"
+        assert actual_params.get("from") == "2025-12-31"
+        # ``to`` must be present so EODHD returns the whole batch up to today
+        # in a single sweep (rather than relying on the API default window).
+        assert "to" in actual_params
 
-    async def test_no_from_param_when_no_watermark(self) -> None:
+    async def test_bounded_backfill_from_when_no_watermark(self) -> None:
+        # QUOTA-OPT: on first run (empty watermark) the adapter uses a BOUNDED
+        # backfill horizon (today - backfill_initial_days), NOT "since epoch"
+        # (which would be an unbounded sweep) and NOT "no from" (API default).
+        from datetime import timedelta
+
+        import common.time as ct
+
         adapter = EODHDTickerNewsAdapter(settings=_make_settings())
         source = _make_source()
 
@@ -213,7 +237,8 @@ class TestEODHDTickerNewsAdapterWatermark:
             await adapter.fetch(source)  # no from_date
 
         actual_params = mock_client.get.call_args.kwargs.get("params") or {}
-        assert "from" not in actual_params
+        expected_from = (ct.utc_now().date() - timedelta(days=14)).isoformat()
+        assert actual_params["from"] == expected_from
 
     async def test_symbol_exchange_in_s_param(self) -> None:
         adapter = EODHDTickerNewsAdapter(settings=_make_settings())
@@ -408,3 +433,110 @@ class TestEODHDTickerNewsAdapterEdgeCases:
 
         assert results[0].published_at is not None
         assert results[0].published_at.tzinfo == UTC
+
+
+class TestEODHDTickerNewsAdapterBatchSweep:
+    """QUOTA-OPT (2026-06-16): the adapter must pull the entire batch since the
+    watermark in a SINGLE request when it fits one page, request the maximum
+    page size (1000), and paginate via ``offset`` ONLY when a page is full."""
+
+    async def test_single_request_uses_max_limit(self) -> None:
+        """A normal incremental run issues exactly ONE request at limit=1000."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(page_limit=1000))
+        source = _make_source()
+        # 5 articles < page_limit → partial page → no pagination.
+        articles = [_make_article(link=f"https://example.com/{i}") for i in range(5)]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response(articles)
+
+            results = await adapter.fetch(source, from_date="2026-06-01")
+
+        assert mock_client.get.call_count == 1, "incremental batch must be one call"
+        params = mock_client.get.call_args.kwargs["params"]
+        assert params["limit"] == 1000
+        assert params["offset"] == 0
+        assert len(results) == 5
+
+    async def test_paginates_only_when_page_full(self) -> None:
+        """When a page is FULL the adapter fetches the next offset; it stops at
+        the first partial page."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(page_limit=2))
+        source = _make_source()
+        call_count = {"n": 0}
+
+        def _get(_url, params):  # type: ignore[no-untyped-def]
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Full page (2 == limit) → triggers a second request.
+                return _make_httpx_response(
+                    [_make_article(link="https://example.com/a"), _make_article(link="https://example.com/b")]
+                )
+            # Partial page (1 < limit) → stop.
+            return _make_httpx_response([_make_article(link="https://example.com/c")])
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.side_effect = _get
+
+            results = await adapter.fetch(source, from_date="2026-06-01")
+
+        assert mock_client.get.call_count == 2, "must paginate when first page is full"
+        # Offsets advance by page_limit.
+        assert mock_client.get.call_args_list[1].kwargs["params"]["offset"] == 2
+        assert len(results) == 3
+
+    async def test_page_cap_stops_unbounded_pagination(self) -> None:
+        """Defensive backstop (QA H1): if EODHD keeps returning FULL pages (e.g.
+        it ignores ``offset``), the sweep stops at ``news_max_pages`` instead of
+        looping forever, and logs a warning rather than truncating silently."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(page_limit=2, max_pages=3))
+        source = _make_source()
+        call_count = {"n": 0}
+
+        def _get(_url, params):  # type: ignore[no-untyped-def]
+            # ALWAYS return a full page (== limit) — simulates offset being
+            # ignored so the partial-page exit never fires. Unique links each
+            # call so the page-full test keys off raw len(), not dedup.
+            call_count["n"] += 1
+            n = call_count["n"]
+            return _make_httpx_response(
+                [
+                    _make_article(link=f"https://example.com/{n}-a"),
+                    _make_article(link=f"https://example.com/{n}-b"),
+                ]
+            )
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.side_effect = _get
+
+            results = await adapter.fetch(source, from_date="2026-06-01")
+
+        # Hard-capped at max_pages (3), not infinite.
+        assert mock_client.get.call_count == 3, "must stop at news_max_pages"
+        assert len(results) == 6  # 3 pages x 2 unique articles
+
+    async def test_overlap_duplicate_deduped_within_sweep(self) -> None:
+        """The same link returned twice (e.g. across the overlap window) yields
+        a single FetchResult — intra-sweep url_hash dedup."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings(page_limit=1000))
+        source = _make_source()
+        articles = [
+            _make_article(link="https://example.com/dup"),
+            _make_article(link="https://example.com/dup"),
+            _make_article(link="https://example.com/unique"),
+        ]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response(articles)
+
+            results = await adapter.fetch(source, from_date="2026-06-01")
+
+        assert len(results) == 2

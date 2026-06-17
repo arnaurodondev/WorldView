@@ -260,6 +260,69 @@ class TestExecuteUpdatesWatermark:
         assert mock_asr.upsert.await_count >= 1
         assert task.status == IngestionTaskStatus.SUCCEEDED
 
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_watermark_advances_to_newest_article_published_at(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """QUOTA-OPT: ``last_watermark`` must advance to the NEWEST article's
+        ``published_at`` (not wall-clock ``now``) so the next sweep's ``from``
+        window stays tight and correct."""
+        from datetime import UTC, datetime
+
+        from content_ingestion.domain.entities import FetchResult
+
+        task = _make_claimed_task()
+
+        older = FetchResult(
+            source_id=task.source_id,
+            url="https://example.com/old",
+            url_hash="h1",
+            raw_bytes=b"{}",
+            fetched_at=common.time.utc_now(),
+            http_status=200,
+            content_type="application/json",
+            published_at=datetime(2026, 6, 10, 9, 0, tzinfo=UTC),
+        )
+        newest = FetchResult(
+            source_id=task.source_id,
+            url="https://example.com/new",
+            url_hash="h2",
+            raw_bytes=b"{}",
+            fetched_at=common.time.utc_now(),
+            http_status=200,
+            content_type="application/json",
+            published_at=datetime(2026, 6, 14, 18, 30, tzinfo=UTC),
+        )
+        mock_fetch.return_value = _make_fetch_output(task, results=[older, newest])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=2)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(write_factory=write_factory, adapter_state_factory=adapter_state_factory)
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        # The upsert that advances the watermark must carry the NEWEST article's
+        # published_at, not the wall-clock now.
+        advancing_calls = [c for c in mock_asr.upsert.await_args_list if "last_watermark" in c.kwargs]
+        assert advancing_calls, "watermark must advance on a non-empty successful poll"
+        assert advancing_calls[-1].kwargs["last_watermark"] == datetime(2026, 6, 14, 18, 30, tzinfo=UTC)
+
 
 class TestMetricsNotCalledInUseCase:
     """Verify metrics recording is NOT called inside the use case (T-C-05).

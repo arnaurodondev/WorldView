@@ -43,6 +43,18 @@ logger = get_logger(__name__)
 _FATAL_ERRORS = (ConfigurationError, KeyError, ValueError, TypeError)
 
 
+def _newest_published_at(results: list[FetchResult]) -> Any:
+    """Return the maximum ``published_at`` across a fetched batch, or ``None``.
+
+    Used to advance the source watermark to the newest article we actually
+    saw (QUOTA-OPT) so the next sweep's ``from`` window stays tight. Articles
+    without a parseable ``published_at`` are ignored; when none carry a
+    timestamp the caller falls back to wall-clock ``now``.
+    """
+    timestamps = [r.published_at for r in results if r.published_at is not None]
+    return max(timestamps) if timestamps else None
+
+
 @dataclass
 class _FetchOutput:
     """Result of _fetch_from_source — carries all data needed for write phase."""
@@ -326,9 +338,18 @@ class ExecuteContentTaskUseCase:
         now = ct_mod.utc_now()
         config_hash = getattr(fetch_output.source, "config_hash", None)
         if summary.fetched > 0:
+            # QUOTA-OPT (2026-06-16): advance the watermark to the NEWEST
+            # article's ``published_at`` (not wall-clock ``now``). The next
+            # sweep's ``from`` is derived from this value, so anchoring it on
+            # the actual newest article keeps the incremental window tight and
+            # correct — wall-clock ``now`` could skip articles published
+            # between the API's latest item and this write, or (with the
+            # adapter's safety overlap) needlessly widen the next window.
+            # Fall back to ``now`` only when no article carried a timestamp.
+            newest_published = _newest_published_at(fetch_output.results)
             await adapter_state_repo.upsert(
                 task.source_id,
-                last_watermark=now,
+                last_watermark=newest_published or now,
                 last_run_at=now,
                 last_run_config_hash=config_hash,
             )

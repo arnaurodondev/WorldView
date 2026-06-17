@@ -18,7 +18,7 @@ Differences from the global EODHDAdapter (adapters/eodhd/adapter.py):
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import httpx
@@ -43,10 +43,6 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # (marketing HTML).  Correct path is /api/news (same as global feed but with
 # ?s= param for per-ticker scoping).
 _EODHD_TICKER_NEWS_BASE_URL = "https://eodhd.com/api/news"
-# 50 articles per request keeps credit usage low; a separate scheduled job
-# (TickerNewsSymbolSyncWorker) re-enqueues each ticker every 6 hours so
-# freshness is preserved without hammering the API.
-_DEFAULT_LIMIT = 50
 
 
 class ProviderRateLimited(AdapterError):  # noqa: N818
@@ -90,6 +86,20 @@ class EODHDTickerNewsAdapter(SourceAdapter):
         # the API key is read from the environment at runtime rather than
         # being baked into the adapter at import time.
         self._api_key: str = settings.eodhd_api_key
+        # QUOTA-OPT (2026-06-16): pull the WHOLE batch since the watermark in
+        # one request. EODHD bills per-request (flat 5 + 5/ticker) regardless of
+        # how many articles come back, so a single ``limit=1000`` request is the
+        # cheapest way to capture every new article. ``_page_limit`` doubles as
+        # the pagination trigger: a full page implies there may be more.
+        self._page_limit: int = settings.eodhd.news_page_limit
+        # Defensive cap on pages per sweep — backstop against an EODHD that
+        # ignores ``offset`` and returns full pages forever (QA H1).
+        self._max_pages: int = settings.eodhd.news_max_pages
+        # Days subtracted from the watermark to build ``from`` (boundary-safe).
+        self._overlap_days: int = settings.eodhd.news_watermark_overlap_days
+        # First-run horizon when there is no watermark yet — a BOUNDED backfill
+        # rather than "since epoch", which would be an unbounded sweep.
+        self._backfill_days: int = settings.backfill_initial_days
 
     async def fetch(
         self,
@@ -140,19 +150,24 @@ class EODHDTickerNewsAdapter(SourceAdapter):
         # logs + error messages) are left untouched.
         eodhd_symbol = symbol.replace(".", "-")
 
-        # Build query parameters for the EODHD /api/news endpoint.
-        # ``fmt=json`` is mandatory — without it EODHD returns CSV.
-        params: dict[str, str | int] = {
+        # ── Build the [from, to] window for this sweep (QUOTA-OPT) ──────────
+        # ``from`` anchors on the stored watermark minus a safety overlap so a
+        # boundary article is never missed; on an empty watermark we fall back
+        # to a BOUNDED backfill horizon (never "since epoch"). ``to`` is today
+        # so EODHD returns the whole batch up to now in a single sweep.
+        effective_from = self._resolve_from_date(from_date)
+        to_date = common.time.utc_now().date().isoformat()
+
+        # ``s`` and ``api_token`` are constant across pages; ``offset``/``limit``
+        # drive pagination. ``fmt=json`` is mandatory — without it EODHD CSVs.
+        base_params: dict[str, str | int] = {
             "s": f"{eodhd_symbol}.{exchange}",
             "api_token": self._api_key,
-            "limit": _DEFAULT_LIMIT,
+            "limit": self._page_limit,
+            "from": effective_from,
+            "to": to_date,
             "fmt": "json",
         }
-
-        # Watermark: only fetch articles published after the last successful
-        # run so we don't re-ingest the same 50 articles on every tick.
-        if from_date:
-            params["from"] = from_date
 
         url = _EODHD_TICKER_NEWS_BASE_URL
 
@@ -161,86 +176,155 @@ class EODHDTickerNewsAdapter(SourceAdapter):
             symbol=symbol,
             exchange=exchange,
             source_id=str(source.id),
-            from_date=from_date or "none",
+            from_date=effective_from,
+            to_date=to_date,
+            limit=self._page_limit,
         )
-
-        try:
-            # BP-235: always set an explicit httpx.Timeout — never rely on
-            # the httpx 5-second default for cross-service / external calls.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                resp = await client.get(url, params=params)
-        except httpx.HTTPError as exc:
-            msg = f"EODHD ticker-news HTTP error for {symbol}.{exchange}: {exc}"
-            raise AdapterError(msg) from exc
-
-        # Rate-limit — EODHD returns 429 under burst load; the scheduler
-        # back-off path (scheduler.py _poll_loop) catches ``AdapterError``
-        # and backs off; callers that care specifically about rate-limits
-        # can isinstance-check ``ProviderRateLimited``.
-        if resp.status_code == 429:
-            msg = f"EODHD rate-limited for {symbol}.{exchange} (HTTP 429)"
-            raise ProviderRateLimited(msg)
-
-        if resp.status_code != 200:
-            msg = f"EODHD ticker-news non-200 for {symbol}.{exchange}: HTTP {resp.status_code}"
-            raise AdapterError(msg)
-
-        try:
-            articles: object = resp.json()
-        except ValueError as exc:
-            msg = f"EODHD ticker-news JSON decode error for {symbol}.{exchange}: {exc}"
-            raise AdapterError(msg) from exc
-
-        if not isinstance(articles, list):
-            logger.warning(
-                "eodhd_ticker_news_unexpected_response_shape",
-                symbol=symbol,
-                exchange=exchange,
-                response_type=type(articles).__name__,
-            )
-            return []
 
         results: list[FetchResult] = []
         fetched_at = common.time.utc_now()
+        seen_hashes: set[str] = set()
+        total_api = 0
+        offset = 0
+        page_count = 0
 
-        for article in articles:
-            if not isinstance(article, dict):
-                continue
+        # BP-235: always set an explicit httpx.Timeout — never rely on the
+        # httpx 5-second default for cross-service / external calls.  One
+        # client is reused across pages so a paginated sweep shares the pool.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            while True:
+                params = {**base_params, "offset": offset}
+                articles = await self._fetch_page(client, url, params, symbol, exchange)
+                page_count += 1
+                total_api += len(articles)
 
-            link: str = str(article.get("link") or "").strip()
-            if not link:
-                # EODHD occasionally returns articles without a link; skip
-                # them since URL dedup relies on the link field.
-                continue
+                for article in articles:
+                    if not isinstance(article, dict):
+                        continue
+                    link: str = str(article.get("link") or "").strip()
+                    if not link:
+                        # EODHD occasionally returns articles without a link;
+                        # skip — URL dedup relies on the link field.
+                        continue
+                    article_hash = url_hash(link)
+                    # Intra-sweep dedup: the watermark overlap can return the
+                    # same article on consecutive pages/runs; collapse here so
+                    # the downstream pipeline never sees an in-batch duplicate.
+                    if article_hash in seen_hashes:
+                        continue
+                    seen_hashes.add(article_hash)
+                    results.append(
+                        FetchResult(
+                            source_id=source.id,
+                            url=link,
+                            url_hash=article_hash,
+                            raw_bytes=json.dumps(article).encode("utf-8"),
+                            fetched_at=fetched_at,
+                            http_status=200,
+                            content_type="application/json",
+                            published_at=_parse_published_at(article),
+                            is_backfill=is_backfill,
+                            title=article.get("title") or None,
+                        )
+                    )
 
-            article_hash = url_hash(link)
-            raw_bytes: bytes = json.dumps(article).encode("utf-8")
-            published_at: datetime | None = _parse_published_at(article)
-            title: str | None = article.get("title") or None
-
-            results.append(
-                FetchResult(
-                    source_id=source.id,
-                    url=link,
-                    url_hash=article_hash,
-                    raw_bytes=raw_bytes,
-                    fetched_at=fetched_at,
-                    http_status=200,
-                    content_type="application/json",
-                    published_at=published_at,
-                    is_backfill=is_backfill,
-                    title=title,
-                )
-            )
+                # Paginate ONLY when the page was full — a partial page means
+                # we have drained every article since the watermark, so the
+                # normal incremental run is exactly one request.
+                if len(articles) < self._page_limit:
+                    break
+                # Defensive backstop (QA H1): if EODHD keeps returning full
+                # pages (e.g. it ignores ``offset``), stop at the cap rather
+                # than spinning forever. Log a WARNING so a genuinely huge
+                # backlog is visible and never silently truncated — the next
+                # sweep continues from the (un-advanced-past-unfetched)
+                # watermark, so no article is lost.
+                if page_count >= self._max_pages:
+                    logger.warning(
+                        "eodhd_ticker_news_page_cap_reached",
+                        symbol=symbol,
+                        exchange=exchange,
+                        pages=page_count,
+                        max_pages=self._max_pages,
+                        fetched_so_far=len(results),
+                    )
+                    break
+                offset += self._page_limit
 
         logger.info(
             "eodhd_ticker_news_fetch_complete",
             symbol=symbol,
             exchange=exchange,
-            total_api=len(articles),
+            total_api=total_api,
             new=len(results),
+            pages=page_count,
         )
         return results
+
+    def _resolve_from_date(self, watermark: str) -> str:
+        """Return the EODHD ``from`` date (YYYY-MM-DD) for this sweep.
+
+        - With a watermark: ``watermark - overlap_days`` so a same-day boundary
+          article is never dropped (downstream url_hash dedup absorbs the
+          re-fetch at zero extra credit cost).
+        - Without a watermark (first run): a BOUNDED backfill horizon
+          ``today - backfill_days`` — never an unbounded "since epoch" sweep.
+        """
+        if watermark:
+            try:
+                anchor = date.fromisoformat(watermark)
+            except ValueError:
+                # Malformed stored watermark — fall back to the bounded horizon
+                # rather than sending EODHD an invalid ``from`` (HTTP 422).
+                anchor = common.time.utc_now().date() - timedelta(days=self._backfill_days)
+            else:
+                anchor = anchor - timedelta(days=self._overlap_days)
+        else:
+            anchor = common.time.utc_now().date() - timedelta(days=self._backfill_days)
+        return anchor.isoformat()
+
+    async def _fetch_page(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, str | int],
+        symbol: str,
+        exchange: str,
+    ) -> list[dict]:  # type: ignore[type-arg]
+        """Fetch one page, mapping transport/HTTP errors to adapter errors.
+
+        On HTTP 429 raises ``ProviderRateLimited`` so the worker's retry/back-off
+        path engages and the watermark is NOT advanced (a failed fetch must not
+        look like a successful empty poll).
+        """
+        try:
+            resp = await client.get(url, params=params)
+        except httpx.HTTPError as exc:
+            msg = f"EODHD ticker-news HTTP error for {symbol}.{exchange}: {exc}"
+            raise AdapterError(msg) from exc
+
+        if resp.status_code == 429:
+            msg = f"EODHD rate-limited for {symbol}.{exchange} (HTTP 429)"
+            raise ProviderRateLimited(msg)
+        if resp.status_code != 200:
+            msg = f"EODHD ticker-news non-200 for {symbol}.{exchange}: HTTP {resp.status_code}"
+            raise AdapterError(msg)
+
+        try:
+            payload: object = resp.json()
+        except ValueError as exc:
+            msg = f"EODHD ticker-news JSON decode error for {symbol}.{exchange}: {exc}"
+            raise AdapterError(msg) from exc
+
+        if not isinstance(payload, list):
+            logger.warning(
+                "eodhd_ticker_news_unexpected_response_shape",
+                symbol=symbol,
+                exchange=exchange,
+                response_type=type(payload).__name__,
+            )
+            return []
+        return payload
 
 
 def _parse_published_at(article: dict) -> datetime | None:  # type: ignore[type-arg]
