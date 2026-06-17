@@ -63,6 +63,70 @@ nlp_sectioning_fallback_total = prometheus_client.Counter(
     "Times the synthetic (fallback) sectioner was used because source_type was unknown",
 )
 
+# ── Extraction-endpoint recovery (2026-06-14 entity-ref-matching mitigation) ──
+#
+# When the deep-extraction LLM emits a relation/event/claim whose endpoint ref
+# is NOT one of THIS document's NER mentions, the doc-local ``entity_id_by_ref``
+# lookup misses it and the whole row was previously dropped silently (the
+# F-CRIT-07 residual: the *opposite* endpoint of a Jackery-style relation was a
+# real entity GLiNER never minted a mention for). The layered fix tries two
+# precision-safe recoveries before any drop:
+#
+#   M1 — canonical-store fall-back (cheap, batched): resolve the missed ref
+#        against ``entity_aliases``/``canonical_entities`` (exact alias +
+#        ticker/ISIN, optional gated fuzzy) behind the 0.75 floor + 0.15 delta
+#        gate. A hit binds to a REAL canonical (entity_provisional=False).
+#   M2 — provisional minting (live first-touch): for refs still unresolved
+#        after M1 and not junk/common-noun, mint a provisional_entity_queue row
+#        so the relation PERSISTS with entity_provisional=True and is
+#        canonicalized later by the UnresolvedResolutionWorker → KG promotion.
+#
+# Labelled by ``outcome`` so the recall lift is observable per stage:
+#   m1_recovered    — bound to a canonical via the store fall-back
+#   m2_minted       — minted a provisional queue row for an unknown endpoint
+#   dropped_junk    — failed both M1 and M2 (empty/junk/common-noun ref)
+s6_extraction_endpoint_recovery_total = prometheus_client.Counter(
+    "s6_extraction_endpoint_recovery_total",
+    "Deep-extraction endpoint refs that missed the document-local entity_id_by_ref "
+    "lookup, by recovery outcome (M1 canonical-store fall-back / M2 provisional mint / "
+    "still-dropped junk). Quantifies the relation-drop mitigation lift.",
+    ["outcome"],  # m1_recovered | m2_minted | dropped_junk
+)
+
+# Fixed enum of allowed outcome label values — bounds cardinality.
+EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES: tuple[str, ...] = (
+    "m1_recovered",
+    "m2_minted",
+    "dropped_junk",
+)
+
+# Pre-initialise every outcome child to 0 at import time.  A *labelled*
+# prometheus Counter exports NO time series for a label value until that value
+# is first ``.inc()``-ed — so a fresh article-consumer process that has not yet
+# hit the recovery path exposes the HELP/TYPE header but ZERO
+# ``s6_extraction_endpoint_recovery_total{outcome=...}`` samples.  That made the
+# metric look "missing" on the /metrics endpoint (port 9100) and broke any
+# Grafana panel / alert that expects all three series to exist from boot.
+# Seeding each child here guarantees all three outcome series are scrape-able the
+# instant the module is imported by the consumer entrypoint — without changing
+# any observed value (they start at 0.0, exactly the true count).
+for _outcome in EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES:
+    s6_extraction_endpoint_recovery_total.labels(outcome=_outcome)
+
+
+def record_extraction_endpoint_recovery(outcome: str, count: int = 1) -> None:
+    """Increment the endpoint-recovery counter for *count* refs.
+
+    ``outcome`` MUST be one of ``EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES``;
+    anything else is coerced to ``"dropped_junk"`` to keep cardinality bounded.
+    Best-effort — never let a metrics error break the article pipeline.
+    """
+    if count <= 0:
+        return
+    label = outcome if outcome in EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES else "dropped_junk"
+    s6_extraction_endpoint_recovery_total.labels(outcome=label).inc(count)
+
+
 # ── Backpressure gauge (polled from BackpressureController) ──────────────────
 
 s6_intel_commit_failures_total = prometheus_client.Counter(

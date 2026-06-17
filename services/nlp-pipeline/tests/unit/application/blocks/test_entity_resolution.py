@@ -602,6 +602,70 @@ class TestEnsureProvisionalForMention:
         assert mention.resolution_outcome == ResolutionOutcome.UNRESOLVED
 
 
+# ── ensure_provisional_for_ref (2026-06-14 M2 endpoint-recovery) ─────────────
+
+
+@pytest.mark.unit
+class TestEnsureProvisionalForRef:
+    """ensure_provisional_for_ref mints a queue row for a bare LLM endpoint
+    surface that has NO backing mention — the M2 fix for the dominant
+    relation-drop miss-reason (the non-mention counterparty endpoint).
+    """
+
+    @pytest.mark.asyncio
+    async def test_mints_queue_row_for_bare_surface(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_ref
+
+        queue_id = uuid.uuid4()
+        session = _intelligence_session_mock(hourly_count=0, queue_id=queue_id)
+
+        result = await ensure_provisional_for_ref(
+            surface="ARMEC",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result == queue_id
+        # Both the churn-COUNT and the INSERT ran (no backing mention required).
+        assert session.execute.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_churn_guard_blocks_mint(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import (
+            MAX_PROVISIONAL_PER_HOUR,
+            ensure_provisional_for_ref,
+        )
+
+        session = _intelligence_session_mock(hourly_count=MAX_PROVISIONAL_PER_HOUR, queue_id=uuid.uuid4())
+
+        result = await ensure_provisional_for_ref(
+            surface="Mystery Co",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result is None
+        # Only the COUNT ran — no INSERT attempted (begin_nested never entered).
+        session.begin_nested.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_savepoint_failure_returns_none(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_ref
+
+        session = _intelligence_session_mock(hourly_count=0, queue_id=None)
+
+        result = await ensure_provisional_for_ref(
+            surface="Some Org",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result is None
+
+
 # ── PLAN-0087 F-LLM-001: Stage 2.5 class-aware canonical_name resolution ─────
 
 
@@ -768,3 +832,70 @@ class TestStage25ClassAwareCanonical:
         # 0.85 (fuzzy sim) * 0.90 (multiplier) = 0.765 → AUTO_RESOLVED
         assert resolved[0].resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
         assert resolved[0].resolved_entity_id == fuzzy_id
+
+
+class TestStage2ExchangeQualifierStrip:
+    """2026-06-15 fix: exchange-suffixed tickers resolve via the bare symbol.
+
+    Before the fix, "AAPL.MX" (length 7) failed the ``len <= 6`` ticker gate and
+    never reached the Stage-2 lookup, so it fell through to fuzzy/ANN or was
+    dropped — minting a duplicate tickerless canonical downstream.
+    """
+
+    @pytest.mark.asyncio
+    async def test_exchange_suffixed_ticker_resolves_via_bare_symbol(self) -> None:
+        entity_id = uuid.uuid4()
+        mention = _make_mention("AAPL.MX")
+        # The repo is keyed by the BARE ticker the block must query after stripping.
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ticker_isin_map={"AAPL": entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # Resolved to the existing AAPL canonical (no duplicate minted)...
+        assert resolved[0].resolved_entity_id == entity_id
+        # ...and the lookup was issued for the STRIPPED bare ticker, not "AAPL.MX".
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert "AAPL" in called_tickers
+        assert "AAPL.MX" not in called_tickers
+
+    @pytest.mark.asyncio
+    async def test_share_class_ticker_is_not_stripped(self) -> None:
+        """BRK.B is a distinct security — it must be queried as-is, not as 'BRK'."""
+        entity_id = uuid.uuid4()
+        mention = _make_mention("BRK.B")
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ticker_isin_map={"BRK.B": entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert resolved[0].resolved_entity_id == entity_id
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert "BRK.B" in called_tickers
+        assert "BRK" not in called_tickers
