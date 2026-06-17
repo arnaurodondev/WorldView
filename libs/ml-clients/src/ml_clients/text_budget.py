@@ -45,6 +45,25 @@ import re
 # Maximal runs of ASCII alphanumerics — these become WordPiece SUB-word tokens.
 _WORD_RE = re.compile(r"[A-Za-z0-9]+")
 
+# JSON ``\uXXXX`` unicode escapes.  The pipeline stores chunk/section text as a JSON
+# envelope with ``ensure_ascii`` ON, so non-Latin content (Hebrew, CJK, accented
+# Latin) is serialised as ``ר``-style escapes.  Each such escape DECODES to a
+# non-Latin codepoint that the (English-centric) BGE WordPiece tokenizer splits into
+# ~2-3 byte/sub-word tokens — far MORE than the ~3-token estimate the 6 ASCII escape
+# characters would otherwise contribute via the alnum rule.  Live DeepInfra probing
+# of escape-dense Hebrew rows confirmed the naive estimate under-counts ~2x, so we
+# score each escape explicitly at _TOKENS_PER_UNICODE_ESCAPE (a conservative upper
+# bound) and remove its characters from the cheaper alnum accounting.  Without this,
+# escape-dense rows truncated at the token budget still 400'd at 513 tokens (the
+# residual failures observed after the initial task #4 deploy, 2026-06-16).
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+# Live calibration (2026-06-16): an escape-dense Hebrew row was safe at ~600 chars /
+# 75 escapes (~500 real tokens) but 400'd at 650 / 84 escapes, implying each decoded
+# non-Latin codepoint costs BGE ~6 tokens.  We charge 6 per escape (conservative
+# upper bound) so the budget truncation leaves real headroom under 512 even for
+# all-Hebrew/CJK content.  Latin-only text contains no escapes, so it is unaffected.
+_TOKENS_PER_UNICODE_ESCAPE = 6
+
 # Conservative token budget for BAAI/bge-large-en-v1.5 (hard limit 512).
 # 480 leaves >=32 tokens of headroom below the model's 512-token ceiling so that
 # the estimator's residual error (it under-counts only for exotic Unicode, which
@@ -83,18 +102,35 @@ def estimate_bert_tokens(text: str) -> int:
     Because every rule rounds toward MORE tokens, the result is >= the real
     tokenizer's output for our corpus, so a truncation that keeps this estimate
     under :data:`MAX_TOKENS` keeps the real count under 512.
+
+    Special-cases JSON ``\\uXXXX`` escapes (see ``_UNICODE_ESCAPE_RE``): each is
+    charged ``_TOKENS_PER_UNICODE_ESCAPE`` rather than the ~3 cheap tokens its 6
+    ASCII chars would otherwise score, because the decoded non-Latin codepoint costs
+    BGE more.  Escapes are blanked out FIRST so the alnum/punctuation rules below do
+    not double-count their characters.
     """
+    # Count + neutralise \uXXXX escapes so they don't leak into the cheap alnum rule.
+    escape_count = 0
+
+    def _blank(_m: re.Match[str]) -> str:
+        nonlocal escape_count
+        escape_count += 1
+        return " " * 6  # same length (keeps positions stable; spaces are free)
+
+    scrubbed = _UNICODE_ESCAPE_RE.sub(_blank, text)
+
     n = 2  # [CLS] + [SEP]
+    n += escape_count * _TOKENS_PER_UNICODE_ESCAPE
     pos = 0
-    for m in _WORD_RE.finditer(text):
+    for m in _WORD_RE.finditer(scrubbed):
         # Punctuation/symbols sitting BEFORE this word run → 1 token each.
-        n += sum(1 for c in text[pos : m.start()] if not c.isspace())
+        n += sum(1 for c in scrubbed[pos : m.start()] if not c.isspace())
         # Alphanumeric run → ceil(len / 3) sub-word tokens (over-estimate).
         word_len = len(m.group())
         n += -(-word_len // 3)  # ceil division
         pos = m.end()
     # Trailing punctuation/symbols after the last word run.
-    n += sum(1 for c in text[pos:] if not c.isspace())
+    n += sum(1 for c in scrubbed[pos:] if not c.isspace())
     return n
 
 

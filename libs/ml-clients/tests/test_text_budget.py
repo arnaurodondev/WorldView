@@ -34,6 +34,20 @@ class TestEstimateBertTokens:
         prose = ("apple reported strong quarterly earnings " * n)[:n]
         assert estimate_bert_tokens(dense) > estimate_bert_tokens(prose)
 
+    def test_unicode_escapes_score_heavier_than_their_ascii_chars(self) -> None:
+        # A JSON \uXXXX escape decodes to a non-Latin codepoint that BGE tokenises
+        # into several tokens — far more than the ~3 its 6 ASCII chars would score
+        # via the alnum rule.  This is what fixed the residual Hebrew/CJK 400s after
+        # the first task #4 deploy.  An escape-dense string must out-score the same
+        # number of plain ASCII chars.
+        # Literal backslash-u escapes, exactly as the JSON envelope stores Hebrew
+        # (ensure_ascii=True). Built from a backslash + "uXXXX" so the source file
+        # contains the 6-char escape token, NOT a decoded Hebrew glyph.
+        escaped = ("\\u05e8" * 20)  # 120 chars, 20 escapes
+        # Same character count, but plain ASCII letters (no escapes).
+        plain = "x" * len(escaped)
+        assert estimate_bert_tokens(escaped) > estimate_bert_tokens(plain)
+
     def test_monotonic_in_prefix_length(self) -> None:
         # A longer prefix never has fewer estimated tokens — required for the
         # binary search in truncate_for_bge to be correct.
