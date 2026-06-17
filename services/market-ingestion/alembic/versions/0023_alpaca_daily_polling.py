@@ -90,6 +90,7 @@ def upgrade() -> None:
             "SELECT symbol, exchange, tier "
             "FROM polling_policies "
             "WHERE provider = 'alpaca' AND dataset_type = 'ohlcv' AND timeframe = '1m'"
+            " AND enabled = true"  # H-1: only mirror ENABLED 1m symbols into daily policies
         )
     ).fetchall()
 
@@ -186,6 +187,17 @@ def downgrade() -> None:
         )
 
     # Re-enable the EODHD 1d polling policies.
+    #
+    # M-2 TRADE-OFF: this UPDATE re-enables ALL currently-disabled eodhd/ohlcv/1d rows,
+    # not only those that THIS migration disabled.  A clean discriminator (e.g. a
+    # ``disabled_by_migration`` column) does not exist, so we cannot scope the restore
+    # more tightly without schema changes.  The accepted risk: any eodhd/1d rows that
+    # were ops-paused BEFORE 0023 ran (e.g. manually disabled in a previous release)
+    # will also be re-enabled after downgrade.  In practice the 554 rows disabled here
+    # are the entire population of eodhd/ohlcv/1d rows, so this is a full restore —
+    # acceptable for a thesis-grade system.  A future hardening could add a
+    # ``disabled_by`` text column to polling_policies to make migration-specific
+    # rollback surgical.
     conn.execute(
         sa.text(
             "UPDATE polling_policies "
