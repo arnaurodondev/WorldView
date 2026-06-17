@@ -84,9 +84,13 @@ def test_burst_limit_not_exceeded() -> None:
 def test_provider_default_eodhd() -> None:
     budget = ProviderBudget.for_eodhd()
     assert budget.provider == Provider.EODHD
-    assert budget.burst_capacity == 1000.0
-    assert budget.refill_rate == 10.0
-    assert budget.tokens == 1000.0
+    # Must match the live DB row (migration 0005): 10_000 burst, 1.157/s refill
+    # so a fresh env reproduces the real 100k-req/day EODHD quota (BP-EODHD-QUOTA).
+    assert budget.burst_capacity == 10_000.0
+    assert budget.refill_rate == pytest.approx(1.157)
+    assert budget.tokens == 10_000.0
+    # Sustained refill must equal the daily allowance: 1.157/s * 86_400 ~ 100k/day.
+    assert budget.refill_rate * 86_400 == pytest.approx(100_000, rel=0.01)
 
 
 @pytest.mark.unit

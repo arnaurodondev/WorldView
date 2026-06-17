@@ -172,8 +172,13 @@ async def test_wildcard_symbol_policy_is_skipped() -> None:
 
 @pytest.mark.unit
 async def test_budget_exhausted_limits_tasks() -> None:
-    """When provider budget has 0 tokens, no tasks are enqueued."""
-    policy = _make_policy(symbol="AAPL")
+    """When the EODHD budget has 0 tokens, EODHD-charged tasks are not enqueued.
+
+    Uses FUNDAMENTALS (a genuinely EODHD-charged dataset). OHLCV-daily is now
+    routed to Yahoo and intentionally bypasses the EODHD budget gate, so it can
+    no longer exercise budget exhaustion (see test_yahoo_routed_eod_ohlcv_*).
+    """
+    policy = _make_policy(symbol="AAPL", dataset_type=DatasetType.FUNDAMENTALS)
     wm = _make_watermark(current_bar_ts=None)
     budget = _make_budget(tokens=0.0)
     uow = _make_uow(policies=[policy], watermark=wm, budget=budget, add_many_return=0)
@@ -187,14 +192,62 @@ async def test_budget_exhausted_limits_tasks() -> None:
 
 @pytest.mark.unit
 async def test_all_budgets_exhausted_no_tasks() -> None:
-    """Two policies, zero budget → no tasks created."""
-    policies = [_make_policy(symbol="AAPL"), _make_policy(symbol="TSLA")]
+    """Two EODHD-charged policies, zero budget → no tasks created."""
+    policies = [
+        _make_policy(symbol="AAPL", dataset_type=DatasetType.FUNDAMENTALS),
+        _make_policy(symbol="TSLA", dataset_type=DatasetType.FUNDAMENTALS),
+    ]
     budget = _make_budget(tokens=0.0)
     uow = _make_uow(policies=policies, budget=budget, add_many_return=0)
     uc = ScheduleDueTasksUseCase(uow)
     result = await uc.execute()
     assert result.tasks_enqueued == 0
     assert result.budget_limited >= 1
+
+
+@pytest.mark.unit
+async def test_yahoo_routed_eod_ohlcv_bypasses_eodhd_budget() -> None:
+    """OHLCV-daily (Yahoo-routed) must NOT be dropped by an exhausted EODHD budget.
+
+    The 1d/1w/1mo OHLCV timeframes resolve to Yahoo Finance as primary, so the
+    scheduler must keep them even when the EODHD token bucket is empty — otherwise
+    a quota-exhausted EODHD bucket would silently starve free Yahoo OHLCV polling
+    AND the phantom charge would crowd out genuine EODHD work (BP-EODHD-QUOTA).
+    """
+    policy = _make_policy(symbol="AAPL", dataset_type=DatasetType.OHLCV)  # timeframe="1d"
+    wm = _make_watermark(current_bar_ts=None)
+    budget = _make_budget(tokens=0.0)  # EODHD bucket fully exhausted
+    uow = _make_uow(policies=[policy], watermark=wm, budget=budget, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    result = await uc.execute()
+
+    # Task survives the budget gate and is enqueued despite zero EODHD tokens.
+    assert result.budget_limited == 0
+    uow.tasks.add_many.assert_awaited_once()
+    enqueued = uow.tasks.add_many.call_args[0][0]
+    assert len(enqueued) == 1
+
+
+@pytest.mark.unit
+async def test_eod_ohlcv_does_not_drain_eodhd_tokens() -> None:
+    """A Yahoo-routed OHLCV-daily task must not consume EODHD tokens.
+
+    Regression for the phantom-charge bug: pre-charging ~2_200 EODHD credits/day
+    on 554 ohlcv-1d policies could starve fundamentals under quota pressure.
+    """
+    policy = _make_policy(symbol="AAPL", dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(current_bar_ts=None)
+    budget = _make_budget(tokens=500.0)
+    uow = _make_uow(policies=[policy], watermark=wm, budget=budget, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    # Tokens were NOT drawn down by the EOD OHLCV task. (They may tick *up* a hair
+    # from the time-based refill, but must never drop below the starting balance —
+    # a consumed task would have cost ≥1 token.)
+    assert budget.tokens >= 500.0
 
 
 @pytest.mark.unit

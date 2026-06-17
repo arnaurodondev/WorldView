@@ -48,6 +48,19 @@ _EODHD_CREDIT_COST: dict[str, float] = {
 # Intraday timeframes that hit /api/intraday (5 credits each).
 _INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
 
+# EOD OHLCV timeframes (daily/weekly/monthly) are routed to Yahoo Finance as the
+# PRIMARY provider (config routing_ohlcv_eod = "yahoo_finance:100,eodhd:80"); EODHD
+# is only a zero-bar FAILOVER.  In steady state these tasks consume ZERO EODHD
+# credits, so the scheduler must NOT pre-charge the EODHD token bucket for them.
+# Pre-charging (the old behaviour) burned ~2_200 phantom EODHD credits/day on the
+# 554 enabled `eodhd ohlcv 1d` policies and — because the budget gate stops at the
+# first exhaustion — could STARVE the genuinely-EODHD fundamentals tasks (priority
+# 2, ranked *below* ohlcv-1d priority 5) under quota pressure.  EODHD failover is
+# still guarded at execution time by the circuit breaker and the monthly quota
+# service, so skipping the scheduler pre-charge does not let a Yahoo outage flood
+# EODHD uncontrolled (BP-EODHD-QUOTA).
+_YAHOO_ROUTED_EOD_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
+
 # FIX-INTRADAY-DEDUP: all intraday OHLCV timeframes whose incremental tasks must
 # use a per-minute dedupe bucket instead of a per-day bucket.  With day-truncated
 # range_start:range_end the dedupe_key is identical for every scheduler tick of
@@ -463,6 +476,19 @@ class ScheduleDueTasksUseCase:
                 budget.refill(elapsed)
 
             for task in ptasks:
+                # EOD OHLCV (daily/weekly/monthly) routes to Yahoo Finance, not
+                # EODHD — do NOT charge the EODHD bucket for it (see
+                # _YAHOO_ROUTED_EOD_TIMEFRAMES note above).  These tasks are kept
+                # unconditionally; their real cost is borne by Yahoo (free) and
+                # any EODHD failover is guarded downstream at execution time.
+                if (
+                    provider == Provider.EODHD
+                    and str(task.dataset_type) == DatasetType.OHLCV.value
+                    and task.timeframe in _YAHOO_ROUTED_EOD_TIMEFRAMES
+                ):
+                    kept.append(task)
+                    continue
+
                 # Consume credits proportional to the EODHD endpoint cost so
                 # the budget accurately throttles expensive endpoints (e.g.
                 # fundamentals = 10 credits) not just task count (BP-183).
