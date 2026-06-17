@@ -409,12 +409,24 @@ shared across all adapters that call the same backend.
 `loop.run_in_executor(None, ...)`. Without this, GLiNER's CPU inference would block
 the event loop, stalling all concurrent requests in the service.
 
-### `DeepInfraEmbeddingAdapter` — 1500-char truncation
+### `DeepInfraEmbeddingAdapter` — token-budget truncation (`text_budget.py`)
 
-BGE-large has a 512-token BERT context window. Texts exceeding ~512 tokens cause
-the GGML runner to abort (BP-121). Both `DeepInfraEmbeddingAdapter` and
-`OllamaEmbeddingAdapter` apply a 1500-character truncation limit so that ingestion
-embeddings and query embeddings remain in the same semantic space.
+BGE-large has a HARD 512-token BERT context window. The old flat **1500-char**
+truncation assumed ~3 chars/token, which is wrong for dense financial/JSON text
+(chunk-0 envelopes pack >512 tokens into <1500 chars) → DeepInfra returns a *fatal*
+HTTP 400 `invalid_request_error` ("513 input tokens > 512") that the retry worker
+can never drain (task #4 / 2026-06-16 embedding-backlog audit; ~1,625 rows
+abandoned).
+
+Truncation is now driven by **estimated token count** via the shared
+`ml_clients.text_budget.truncate_for_bge` (default budget `MAX_TOKENS=480`, hard
+backstop `MAX_CHARS=2000`). `estimate_bert_tokens` is a conservative pure-Python
+WordPiece *upper-bound* (no tokenizer dependency): it over-counts vs the real BGE
+tokenizer, so a prefix kept under 480 estimated tokens is comfortably under 512
+real tokens. `DeepInfraEmbeddingAdapter`, `OllamaEmbeddingAdapter`, and the
+nlp-pipeline query endpoint `POST /api/v1/embed` all call the SAME helper, so
+ingestion and query embeddings stay in one semantic space. Dense JSON is cut more
+aggressively than prose (the win over a flat char cap).
 
 ### `EmbeddingGemmaRouterAdapter` — news-routing classifier (PLAN-0111 C-1)
 

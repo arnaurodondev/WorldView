@@ -1218,12 +1218,19 @@ class TestDeepInfraEmbeddingAdapter:
             with pytest.raises(RetryableError, match="timeout"):
                 await adapter.embed(inputs)
 
-    async def test_instruction_prefix_prepended_and_truncated(self) -> None:
-        """Instruction prefix is prepended to the text and result is truncated to 1500 chars."""
+    async def test_instruction_prefix_prepended_and_token_truncated(self) -> None:
+        """Instruction prefix is prepended and the text is truncated by token budget.
+
+        Task #4: truncation is now driven by ``truncate_for_bge`` (estimated BGE
+        token count <= MAX_TOKENS), NOT a flat char cap.  We assert the sent text
+        keeps the prefix and that its estimated token count stays under the budget —
+        this is what guarantees DeepInfra never returns the 512-token-overflow 400.
+        """
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
         from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.text_budget import MAX_TOKENS, estimate_bert_tokens
 
-        long_text = "A" * 2000  # deliberately over 1500 chars
+        long_text = "A" * 2000  # deliberately over the token budget
         inputs = [
             EmbeddingInput(
                 text=long_text,
@@ -1248,9 +1255,9 @@ class TestDeepInfraEmbeddingAdapter:
 
         assert len(captured_json) == 1
         sent_text = captured_json[0]["input"][0]
-        # Prefix should be present, total length should not exceed 1500 chars
+        # Prefix preserved; estimated token count stays under the 512-safe budget.
         assert sent_text.startswith("Represent this text:")
-        assert len(sent_text) <= 1500
+        assert estimate_bert_tokens(sent_text) <= MAX_TOKENS
 
     async def test_result_count_mismatch_raises_fatal(self) -> None:
         """API returns fewer items than inputs → FatalError."""

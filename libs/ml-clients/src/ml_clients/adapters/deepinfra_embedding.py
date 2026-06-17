@@ -31,6 +31,7 @@ import structlog
 
 from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput
 from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
+from ml_clients.text_budget import truncate_for_bge
 
 if TYPE_CHECKING:
     from observability.metrics import MLMetrics
@@ -41,10 +42,14 @@ _DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 _DEFAULT_MODEL_ID = "BAAI/bge-large-en-v1.5"
 _EXPECTED_DIMENSION = 1024
 
-# BGE-large BERT context window = 512 tokens. Apply the same 1500-char truncation
-# used by OllamaEmbeddingAdapter and the nlp-pipeline embed endpoint so that
-# ingestion embeddings and query embeddings remain in the same semantic space.
-_MAX_CHARS = 1500
+# BGE-large is a BERT encoder with a HARD 512-token context window.  Truncation is
+# now driven by an ESTIMATED token count (ml_clients.text_budget) rather than a flat
+# char cap: the old 1500-char limit assumed ~3 chars/token, which is wrong for the
+# dense financial/JSON text this pipeline embeds (chunk-0 envelopes pack >512 tokens
+# into <1500 chars → DeepInfra HTTP 400 "513 > 512", which the retry worker can never
+# drain — task #4 / 2026-06-16 embedding-backlog audit).  truncate_for_bge keeps the
+# input under MAX_TOKENS (480, safe headroom below 512) and is shared with the Ollama
+# adapter and the query-side embed endpoint so ingest and query vectors match exactly.
 
 
 class DeepInfraEmbeddingAdapter:
@@ -81,8 +86,9 @@ class DeepInfraEmbeddingAdapter:
     async def embed(self, inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]:
         """Embed a batch of texts via DeepInfra OpenAI-compatible embeddings API.
 
-        Applies the same instruction-prefix + 1500-char truncation as
-        OllamaEmbeddingAdapter so that ingestion and query embeddings land in
+        Applies the same instruction-prefix + token-budget truncation
+        (``truncate_for_bge``) as OllamaEmbeddingAdapter and the query-side
+        ``/api/v1/embed`` endpoint, so ingestion and query embeddings land in
         the same semantic space.
 
         Raises:
@@ -95,13 +101,13 @@ class DeepInfraEmbeddingAdapter:
         start = time.perf_counter()
         status = "success"
         try:
-            # Build text list: apply instruction prefix + truncate to 1500 chars.
+            # Build text list: apply instruction prefix, THEN truncate by token budget.
+            # Truncation runs on the prefixed text (the prefix tokens count toward the
+            # 512-token window too), so the request can never exceed BGE's context.
             texts: list[str] = []
             for inp in inputs:
                 text = f"{inp.instruction_prefix} {inp.text}" if inp.instruction_prefix else inp.text
-                if len(text) > _MAX_CHARS:
-                    text = text[:_MAX_CHARS]
-                texts.append(text)
+                texts.append(truncate_for_bge(text))
 
             try:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
