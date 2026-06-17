@@ -73,40 +73,43 @@ _FALLBACK_SERVER_ERROR = "server_error"
 # 429-vs-5xx-vs-4xx distinction before the error is type-erased).
 #
 # BUDGET ARITHMETIC (why these numbers fit the consumer watchdog):
-#   * ``message_processing_timeout_s`` watchdog = 450s and bounds the WHOLE article
-#     pipeline (GLiNER NER, which can take ~160s under load, PLUS every extraction
-#     window run sequentially).  So the extraction retry budget cannot multiply
-#     freely or it would blow the watchdog.
-#   * We therefore keep the TOTAL wall-time of a single ``extract()`` call (all
-#     attempts + backoff) bounded by ``_EXTRACTION_TOTAL_BUDGET_S`` = 150s — the
-#     SAME envelope the system already tolerated per window (the old single-shot
-#     cap was 150s).  The watchdog math is unchanged: a window still consumes
-#     <=150s, only now that budget buys up to 3 attempts instead of one shot.
-#   * Per-attempt cap is lowered to 90s so two fast-fail 429s + a final attempt fit
-#     inside 150s (90 + backoff + 60 <= 150), while the p50 16.5s call has ample
-#     room.  A genuinely-stalled single attempt is cut at 90s and retried.
-#   * Because the per-call envelope is unchanged at 150s, NO consumer watchdog bump
-#     is required.
+#   * ``message_processing_timeout_s`` watchdog bounds the WHOLE article pipeline
+#     (GLiNER NER, which can take ~160s under load, PLUS every extraction window run
+#     sequentially).  So the extraction retry budget cannot multiply freely or it
+#     would blow the watchdog.
+#   * TASK #5 (2026-06-16): the 235B deep tier is LATENCY-bound — the throughput
+#     audit measured a full extract() at p50=161s / p95=179s, yet the old 90s
+#     per-attempt cap cut calls that would have completed, logging "wall-clock
+#     timeout after 90.0s".  The defaults below are RAISED so a p95 call finishes:
+#       - per-attempt cap   = 300s  (was 90s) → p95 (179s) completes on attempt 1.
+#       - max_attempts      = 2     (was 3)   → with a 300s cap, 2 fits the budget.
+#       - total per-model budget = 320s (was 200s) → one 300s attempt + short backoff.
+#     The nlp-pipeline ALSO passes these explicitly from NLP_PIPELINE_* config (the
+#     authoritative source — see article_consumer_main.py); these module defaults are
+#     the fallback when the adapter is constructed without explicit values.
+#   * Worst case per window (primary 320 + fresh fallback budget 320) ≈ 640s; the
+#     consumer watchdog is sized to 900s to fit this + NER + writes (see config.py).
 #
 # The openai SDK default of 600s means a stalled request would otherwise hang the
 # article consumer for up to 10 minutes (BP-235 variant); asyncio.wait_for caps the
 # wall clock per attempt.  The httpx read timeout is wired to the SAME per-attempt
 # timeout_s value (see __init__) so it never fires before the wait_for guard.
 # All knobs env-overridable so they can be tuned without a code change.
-_EXTRACTION_TIMEOUT_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_TIMEOUT_S", "90.0"))
+_EXTRACTION_TIMEOUT_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_TIMEOUT_S", "300.0"))
 # Total wall-time budget across ALL attempts of a single extract() call against ONE
 # model (s).  Once the elapsed time would exceed this, no further retry on THAT
 # model is scheduled and the last transient error is raised (or — Task #36 — the
-# fallback model is tried).  The PRIMARY budget is bumped 150->200s (task brief) so
-# a slow-but-legitimate 235B call plus one in-budget retry survives without the
-# loop giving up prematurely under queue pressure.  The fallback model gets its OWN
-# fresh budget (see _create_with_retry), so the worst-case wall time per window is
-# roughly ``primary_budget + fallback_budget`` — the consumer
+# fallback model is tried).  Task #5: bumped 200->320s so one full 300s attempt plus
+# a short backoff stays in budget for the latency-bound 235B.  The fallback model
+# gets its OWN fresh budget (see _create_with_retry), so the worst-case wall time per
+# window is roughly ``primary_budget + fallback_budget`` — the consumer
 # ``message_processing_timeout_s`` is raised to fit this (see nlp-pipeline config).
-_EXTRACTION_TOTAL_BUDGET_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_TOTAL_BUDGET_S", "200.0"))
-# Maximum attempts for a single extract() call (1 initial + retries).  3 matches
-# the live RCA recommendation (most 429s recover on a fresh call outside the burst).
-_EXTRACTION_MAX_ATTEMPTS = int(os.environ.get("ML_CLIENTS_EXTRACTION_MAX_ATTEMPTS", "3"))
+_EXTRACTION_TOTAL_BUDGET_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_TOTAL_BUDGET_S", "320.0"))
+# Maximum attempts for a single extract() call (1 initial + retries).  Task #5:
+# lowered 3->2 — with the 300s per-attempt cap, 2 attempts is the most that fits the
+# 320s per-model budget; the 235B's failures are dominated by latency (now absorbed
+# by the larger cap), not by recoverable 429 bursts that a 3rd attempt would catch.
+_EXTRACTION_MAX_ATTEMPTS = int(os.environ.get("ML_CLIENTS_EXTRACTION_MAX_ATTEMPTS", "2"))
 # Exponential-backoff-with-full-jitter parameters for transient retries.
 _EXTRACTION_BACKOFF_BASE_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_BACKOFF_BASE_S", "2.0"))
 _EXTRACTION_BACKOFF_CAP_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_BACKOFF_CAP_S", "20.0"))
@@ -124,7 +127,7 @@ _EXTRACTION_BACKOFF_CAP_S = float(os.environ.get("ML_CLIENTS_EXTRACTION_BACKOFF_
 # COST / LATENCY TRADEOFF: "low" reasoning adds a modest hidden-token + latency
 # cost over "none" (the answer still lands in ``content`` because the prompt forces
 # ``response_format=json_object``; reasoning tokens are billed but not returned).
-# The per-attempt 90s cap and the 200s total budget absorb the extra latency.  The
+# The per-attempt 300s cap and the 320s total budget absorb the extra latency.  The
 # knob is env-overridable (``ML_CLIENTS_EXTRACTION_REASONING_EFFORT``) so it can be
 # reverted to "none" without a code change if a future cost review demands it.
 _EXTRACTION_REASONING_EFFORT = os.environ.get("ML_CLIENTS_EXTRACTION_REASONING_EFFORT", "low")
@@ -484,7 +487,7 @@ class DeepSeekExtractionAdapter:
                     #   tokens are billed after the initial cache-miss call.
                     # asyncio.wait_for enforces a per-attempt wall-clock timeout so
                     # a stalled DeepInfra request (high TTFT under queue pressure)
-                    # cannot consume the article consumer's 450s watchdog budget.
+                    # cannot consume the article consumer's 900s watchdog budget.
                     # _create_with_fallback bound-retries transient failures (429
                     # engine_overloaded, 5xx, connection/timeout) on the PRIMARY
                     # inside the total wall-time budget, then — on a 429 (always) or

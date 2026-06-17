@@ -432,10 +432,13 @@ def test_entity_refresh_consumer_settings_present(monkeypatch: pytest.MonkeyPatc
 
 
 def test_message_processing_timeout_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Per-message watchdog defaults to 450s and is env-overridable.
+    """Per-message watchdog defaults to 900s and is env-overridable.
 
-    Raised from 300 -> 450 (paired with the 150s extraction wall-clock cap) to stop
-    the deep-extraction dead-letter bleed (~216 docs/hr at 300s/90s).
+    Raised 300 -> 450 -> 700, then 700 -> 900 for Task #5 (2026-06-16): the 235B
+    deep tier is latency-bound (p95=179s), so the extraction per-attempt cap is
+    raised 90 -> 300s.  Worst case a window spends primary(320) + fallback(320),
+    plus NER(~160) and writes, so 900s keeps the resilience from itself tripping
+    the watchdog (see config.py budget arithmetic).
     """
     monkeypatch.setenv("NLP_PIPELINE_DATABASE_URL", "postgresql+asyncpg://u:p@localhost/nlp_db")
     monkeypatch.setenv(
@@ -448,10 +451,46 @@ def test_message_processing_timeout_default_and_override(monkeypatch: pytest.Mon
 
     from nlp_pipeline.config import Settings
 
-    assert Settings().message_processing_timeout_s == 450  # type: ignore[call-arg]
+    assert Settings().message_processing_timeout_s == 900  # type: ignore[call-arg]
 
     monkeypatch.setenv("NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S", "600")
     assert Settings().message_processing_timeout_s == 600  # type: ignore[call-arg]
+
+
+def test_extraction_timeout_budget_defaults_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task #5: extraction per-attempt cap / attempts / budget are config-driven.
+
+    The 90s "wall-clock timeout" came from the ml-clients module-level ML_CLIENTS_*
+    env default, which the NLP container never set.  These NLP_PIPELINE_* knobs are
+    now the authoritative source and are passed explicitly to the adapter, so the
+    effective cap is 300s (p95=179s completes on attempt 1) regardless of ML_CLIENTS_*.
+    """
+    monkeypatch.setenv("NLP_PIPELINE_DATABASE_URL", "postgresql+asyncpg://u:p@localhost/nlp_db")
+    monkeypatch.setenv(
+        "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL",
+        "postgresql+asyncpg://u:p@localhost/intelligence_db",
+    )
+    for var in (
+        "NLP_PIPELINE_EXTRACTION_TIMEOUT_S",
+        "NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS",
+        "NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    from nlp_pipeline.config import Settings
+
+    s = Settings()  # type: ignore[call-arg]
+    assert s.extraction_timeout_s == 300.0
+    assert s.extraction_max_attempts == 2
+    assert s.extraction_total_budget_s == 320.0
+
+    monkeypatch.setenv("NLP_PIPELINE_EXTRACTION_TIMEOUT_S", "250")
+    monkeypatch.setenv("NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S", "500")
+    s2 = Settings()  # type: ignore[call-arg]
+    assert s2.extraction_timeout_s == 250.0
+    assert s2.extraction_max_attempts == 3
+    assert s2.extraction_total_budget_s == 500.0
 
 
 @pytest.mark.asyncio

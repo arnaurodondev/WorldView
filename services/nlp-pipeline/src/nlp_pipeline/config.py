@@ -137,6 +137,33 @@ class Settings(BaseSettings):
     # NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID
     extraction_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
 
+    # ── Deep-extraction timeout / retry budget (task #5, 2026-06-16) ──────────
+    # The 235B deep tier is LATENCY-bound: the throughput audit measured p50=161s,
+    # p95=179s for a full extract() call — yet logs showed "wall-clock timeout after
+    # 90.0s".  The 90s came from the ml-clients module-level default
+    # (ML_CLIENTS_EXTRACTION_TIMEOUT_S), which an ML_CLIENTS_* env never overrode in
+    # the NLP container (its env is NLP_PIPELINE_*).  We now drive these knobs from
+    # nlp-pipeline config and pass them EXPLICITLY to DeepSeekExtractionAdapter so the
+    # effective per-attempt cap is config-controlled (no reliance on import-time env).
+    #
+    # BUDGET ARITHMETIC (must fit message_processing_timeout_s = 900s watchdog):
+    #   * per-attempt cap = 300s  → a p95 (179s) call completes comfortably instead of
+    #     being cut at 90s and wastefully retried.
+    #   * max_attempts = 2  → with a 300s cap, 2 attempts is the most that fits the
+    #     per-model budget without blowing the watchdog (was 3 at the old 90s cap).
+    #   * total_budget_s = 320s  → one full 300s attempt + a short backoff + an early
+    #     bail before a second 300s attempt that wouldn't fit.  In practice the p95
+    #     completes on attempt 1, so the budget is rarely re-spent.
+    #   * Worst case per window (primary 320 + fallback fresh 320) ≈ 640s, + GLiNER NER
+    #     (~160s) + writes ≈ 820s < 900s watchdog.  See message_processing_timeout_s.
+    # All env-overridable via the NLP_PIPELINE_* names below.
+    # NLP_PIPELINE_EXTRACTION_TIMEOUT_S
+    extraction_timeout_s: float = 300.0
+    # NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS
+    extraction_max_attempts: int = 2
+    # NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S
+    extraction_total_budget_s: float = 320.0
+
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
     gliner_base_url: str = ""
@@ -287,22 +314,24 @@ class Settings(BaseSettings):
     # with a 90s extraction wall-clock cap, ~216 docs/hr dead-lettered.  Was 450s
     # (paired with the old 150s single-model extraction budget).
     #
-    # TASK #36 RE-BUDGET (429 fallback to a secondary model):
-    #   The extract() per-window envelope GREW because a saturated primary now
-    #   exhausts its OWN retry budget (200s) and THEN re-issues against the fallback
-    #   model with a FRESH budget (200s).  Worst-case wall-time for a SINGLE window
-    #   is therefore ~= primary_budget(200) + fallback_budget(200) = 400s.  Almost
-    #   all articles are single-window (<=24k tokens => one window — see
-    #   SINGLE_WINDOW_TOKEN_LIMIT), so the dominant per-doc cost is one window plus
-    #   the surrounding pipeline (GLiNER NER ~160s under load, embedding, resolution,
-    #   writes).  We raise the watchdog to 700s so:
-    #       1 window (primary 200 + fallback 200) + NER 160 + ~80 slack  ≈ 640 < 700
+    # TASK #5 RE-BUDGET (2026-06-16, raise the extraction per-attempt cap to 300s):
+    #   The 235B is LATENCY-bound (p50=161s, p95=179s for a full extract()).  The old
+    #   90s per-attempt cap guaranteed mass "wall-clock timeout after 90.0s" failures
+    #   on calls that would have succeeded at ~180s.  We raise the per-attempt cap to
+    #   300s and drop max_attempts to 2 (see extraction_timeout_s above) so a p95 call
+    #   completes on attempt 1.  The per-MODEL budget is ~320s; with the Task #36
+    #   fallback hop a window can in the WORST case spend primary(320) + fallback(320)
+    #   ≈ 640s.  Almost all articles are single-window (<=24k tokens => one window, see
+    #   SINGLE_WINDOW_TOKEN_LIMIT), so the dominant per-doc cost is one window plus the
+    #   surrounding pipeline (GLiNER NER ~160s under load, embedding, resolution,
+    #   writes).  We raise the watchdog to 900s so:
+    #       1 window (primary 320 + fallback 320) + NER 160 + ~100 slack ≈ 900
     #   This keeps the resilience (retry + fallback hop) from itself tripping the
-    #   watchdog and re-creating the dead-letter bleed it was meant to stop.  Rare
-    #   multi-window articles still benefit (the fallback only fires under genuine
-    #   429 saturation, not on every window).  Tunable via the env var below.
+    #   watchdog and re-creating the dead-letter bleed it was meant to stop.  In the
+    #   common (no-fallback) path a window is ~300s, leaving huge headroom.  Tunable
+    #   via the env var below.
     # NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S
-    message_processing_timeout_s: int = 700
+    message_processing_timeout_s: int = 900
 
     # Dispatcher
     dispatcher_poll_interval_secs: float = 1.0

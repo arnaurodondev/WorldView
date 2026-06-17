@@ -215,6 +215,31 @@ Every stage writes an audit row to `mention_resolutions`.
 Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via DeepInfra
 (falls back to `OllamaExtractionAdapter` when no API key).
 
+**Task #5 latency budget (2026-06-16).** The 235B deep tier is latency-bound
+(throughput audit: p50=161s, p95=179s for a full `extract()`), yet logs showed
+"wall-clock timeout after 90.0s". The 90s came from the ml-clients module default
+`ML_CLIENTS_EXTRACTION_TIMEOUT_S`, which the NLP container's `NLP_PIPELINE_*` env
+never overrode. The per-attempt cap / attempts / budget are now driven by
+nlp-pipeline config and passed **explicitly** to the adapter:
+`NLP_PIPELINE_EXTRACTION_TIMEOUT_S` (default **300s**),
+`NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS` (default **2**),
+`NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S` (default **320s**). A p95 call now completes
+on attempt 1 instead of being cut at 90s and wastefully retried.
+
+**Task #36 resilience (429 fallback + audit).** The shared `DeepSeekExtractionAdapter`
+bound-retries transient failures (429 / 5xx / timeout / connection) with exponential
+backoff inside a per-model budget (default 320s, `NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S`).
+On a terminal HTTP 429 (always) or a persistent timeout/5xx (when
+`ML_CLIENTS_EXTRACTION_FALLBACK_ON_TIMEOUT`), it re-issues the SAME extraction request
+(same prompt + `response_format=json_object`) against a SECONDARY model
+`deepseek-ai/DeepSeek-V4-Flash` (`NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID`). The call
+returns metadata (`model_used`, `fallback_reason` ∈ {none,rate_limit,timeout,server_error},
+`attempts`); the `llm_usage_log` row records the ACTUAL serving model plus a new nullable
+`fallback_reason` column, so `SELECT model_id, fallback_reason, count(*) FROM llm_usage_log
+GROUP BY 1,2` shows when/why the secondary served calls. The article watchdog
+`message_processing_timeout_s` was raised 700 → 900s to fit the 300s extraction cap
+(worst case primary 320 + fallback 320 + NER ~160 + writes).
+
 - ≤ 24k tokens → single extraction window
 - > 24k tokens → 6k-token sliding windows with 500-token overlap
 - Extracts: events, claims, relations, temporal assertions
@@ -323,7 +348,7 @@ Extensions required: `vector`, `pg_trgm`
 | `article_impact_windows` | Multi-window price-impact labels. Replaces `article_price_impacts`. One row per `(article_id, entity_id, window_type)`. Window types: `day_t0`, `day_t1`, `day_t2`, `day_t5`. UNIQUE index on the triple. |
 | `outbox_events` | Transactional outbox for Kafka messages. |
 | `dead_letter_queue` | Poison-pill events that exhausted all retry attempts. |
-| `llm_usage_log` | Per-call LLM cost and latency tracking. |
+| `llm_usage_log` | Per-call LLM cost and latency tracking. `model_id` is the ACTUAL serving model; `fallback_reason` (nullable, Task #36) records why a 429-fallback fired (none/rate_limit/timeout/server_error). |
 
 **Key index constraints**:
 - HNSW indexes require `op.execute(...)` in Alembic (not a native Alembic operation)
@@ -422,7 +447,12 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 |----------|---------|-------------|
 | `NLP_PIPELINE_EXTRACTION_API_KEY` | `""` | DeepInfra API key for deep extraction (get from deepinfra.com) |
 | `NLP_PIPELINE_EXTRACTION_API_BASE_URL` | `https://api.deepinfra.com/v1/openai` | |
-| `NLP_PIPELINE_EXTRACTION_API_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Confirmed available on DeepInfra |
+| `NLP_PIPELINE_EXTRACTION_API_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Primary deep-extraction model (DeepInfra) |
+| `NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID` | `deepseek-ai/DeepSeek-V4-Flash` | Task #36: secondary model on 429/timeout; empty = disabled |
+| `NLP_PIPELINE_EXTRACTION_TIMEOUT_S` | `300.0` | Task #5: per-attempt wall-clock cap (was effectively 90s); 235B p95=179s |
+| `NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS` | `2` | Task #5: attempts per model (1 initial + retries); fits the 320s budget at a 300s cap |
+| `NLP_PIPELINE_EXTRACTION_TOTAL_BUDGET_S` | `320.0` | Per-model retry wall-time budget (Task #5; passed explicitly to adapter) |
+| `NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S` | `900` | Article watchdog; fits 300s extraction cap + fallback + NER (Task #5) |
 | `NLP_PIPELINE_EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Ollama fallback model |
 
 ### ML — Relevance Scoring Worker

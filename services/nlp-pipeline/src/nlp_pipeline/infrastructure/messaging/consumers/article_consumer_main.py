@@ -182,12 +182,27 @@ async def main() -> None:
             # Task #14: dedicated wide semaphore + sized httpx pool so N concurrent
             # article handlers each get an extraction slot without queuing.
             semaphore=extraction_sem,
+            # Task #36: SECONDARY model the adapter falls back to on a 429/timeout
+            # against the primary 235B model (post-outage saturation).  Empty string
+            # => fallback disabled (behaviour unchanged).
+            fallback_model_id=settings.extraction_fallback_model_id,
+            # Task #5 (2026-06-16): drive the per-attempt wall-clock cap, retry count
+            # and per-model budget from nlp-pipeline config (NLP_PIPELINE_* env) and
+            # pass them EXPLICITLY here.  Previously these came only from the ml-clients
+            # module-level ML_CLIENTS_* env defaults, which the NLP container never set
+            # — so the cap silently stayed at the 90s default and the 235B (p95=179s)
+            # timed out on calls that would have completed.  300s cap / 2 attempts /
+            # 320s budget lets a p95 call finish on attempt 1 (see config docstrings).
+            timeout_s=settings.extraction_timeout_s,
+            max_attempts=settings.extraction_max_attempts,
+            total_budget_s=settings.extraction_total_budget_s,
             max_connections=settings.deepinfra_max_connections,
             max_keepalive_connections=settings.deepinfra_max_keepalive,
         )
         log.info(
             "extraction_deepinfra_adapter_selected",
             model_id=settings.extraction_api_model_id,
+            fallback_model_id=settings.extraction_fallback_model_id or None,
             base_url=settings.extraction_api_base_url,
         )
     else:
@@ -218,6 +233,18 @@ async def main() -> None:
         # paired with the 150s extraction cap) and env-overridable via
         # NLP_PIPELINE_MESSAGE_PROCESSING_TIMEOUT_S to stop dead-letter bleed.
         message_processing_timeout_s=settings.message_processing_timeout_s,
+        # Transient-failure resilience (2026-06-14): turn ON the persistent-retry
+        # path so a deep-extraction RetryableError (429 engine_overloaded / 5xx /
+        # timeout that survives the in-adapter bounded retry) is SEEKED BACK and
+        # redelivered, and after max_retries (5) DEAD-LETTERED — instead of the
+        # historical OFF path that silently committed the offset with empty
+        # ``relations``.  The article consumer provides the required durable
+        # attempt counter (Valkey-backed _get_attempt_count / _record_attempt) so
+        # the count survives redelivery; its batch dispatch honours the
+        # seek-back-as-commit-barrier contract via _handle_failure's return value.
+        # SCOPE: this flag lives on THIS consumer's ConsumerConfig only — the other
+        # ~30 platform consumers keep the default (False) and are unaffected.
+        enable_persistent_retry=True,
     )
     # Optional: configure MinIO storage (article downloads + chunk text upload)
     _object_storage = None
