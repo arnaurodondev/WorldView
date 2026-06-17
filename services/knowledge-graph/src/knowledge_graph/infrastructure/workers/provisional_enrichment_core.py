@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.tickers import strip_exchange_qualifier  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
@@ -328,7 +329,15 @@ async def persist_enrichment(
     # NOTE: ticker is parsed BEFORE entity_type so the FR-12 tickerless-company
     # downgrade below can consult it.
     _ticker_raw: str | None = profile.get("ticker")
-    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+    # 2026-06-15 entity-matching fix: collapse provider exchange suffixes
+    # (e.g. ``AAPL.MX`` / ``NVDA.US``) to the bare symbol BEFORE any lookup or
+    # write, so the ticker we query in M-017 anchoring and the BP-459 ticker
+    # dedup pre-lookup is the same bare symbol the canonical row already owns.
+    # Without this, ``AAPL.MX`` never matched ``AAPL`` and minted a duplicate
+    # tickerless canonical.  Share classes (``BRK.A``) and preferred shares
+    # (``JPM.PRM``) are deliberately preserved by the allowlist helper.
+    _ticker_stripped: str | None = strip_exchange_qualifier(_ticker_raw)
+    ticker: str | None = _ticker_stripped[:20] if _ticker_stripped else None
 
     # ── entity_type resolution + FR-12 tickerless-company hardening ──────────
     # The LLM may omit entity_type; we then fall back to the raw GLiNER

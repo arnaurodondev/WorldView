@@ -723,6 +723,73 @@ class TestPersistEnrichment:
         repos.outbox_append.assert_not_awaited()
         repos.embedding_ensure.assert_not_awaited()
 
+    async def test_exchange_suffixed_ticker_dedups_via_bare_symbol(self) -> None:
+        """2026-06-15 entity-matching fix: ``AAPL.MX`` resolves to the ``AAPL`` canonical.
+
+        The exchange qualifier is stripped BEFORE the BP-459 ticker pre-lookup, so a
+        provider symbol like ``AAPL.MX`` finds the existing bare-``AAPL`` canonical
+        instead of minting a duplicate tickerless entity.  We assert both the dedup
+        result AND that ``find_by_ticker`` was queried with the bare ``AAPL``.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # An existing financial_instrument canonical already owns the bare ticker.
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={"entity_id": _EXISTING_OTHER_ID, "canonical_name": "Apple Inc."},
+        )
+        profile = {
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "ticker": "AAPL.MX",  # Mexican-listing suffix — must collapse to AAPL
+            "isin": None,
+            "aliases": ["Apple"],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple Inc.",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Reused the existing canonical — no duplicate minted.
+        assert result == _EXISTING_OTHER_ID
+        # The pre-lookup queried the STRIPPED bare ticker, not "AAPL.MX".
+        assert repos.canonical_find_by_ticker.await_args.args[0] == "AAPL"
+        # Dedup short-circuit: no create, no side effects.
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+
+    async def test_share_class_ticker_is_not_stripped_on_persist(self) -> None:
+        """``BRK.B`` is a distinct security — the pre-lookup must query it verbatim."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Berkshire Hathaway Inc. Class B",
+            "entity_type": "financial_instrument",
+            "ticker": "BRK.B",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Berkshire Hathaway Inc. Class B",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Queried as-is — never collapsed to "BRK".
+        assert repos.canonical_find_by_ticker.await_args.args[0] == "BRK.B"
+
     async def test_truncates_llm_aliases_to_first_five(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
