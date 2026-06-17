@@ -50,6 +50,23 @@ _TIMEFRAME_MAP: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Pagination safety cap.
+#
+# Alpaca's `limit` is a PER-RESPONSE total across ALL symbols in the call (NOT
+# per-symbol), so a multi-symbol or multi-day intraday request must follow the
+# response's `next_page_token` until it is absent — otherwise the tail symbols
+# (and the oldest bars of long catch-ups) are silently dropped.
+#
+# `_MAX_PAGES` bounds the loop: Alpaca has a known historical quirk where
+# `next_page_token` can be self-referential / non-terminating, so we stop after
+# this many pages and emit a `warning` ("alpaca_pagination_cap_hit") to make a
+# runaway visible rather than silently looping. 20 pages x 10000 = 200,000 data
+# points, which comfortably covers any realistic multi-day catch-up window.
+# ---------------------------------------------------------------------------
+_MAX_PAGES: int = 20
+
+
 def _is_crypto_symbol(symbol: str) -> bool:
     """True for crypto tickers in our ``COIN-USD`` house format (e.g. ``BTC-USD``)."""
     return symbol.upper().endswith("-USD")
@@ -171,15 +188,18 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
             params["end"] = end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         t0 = time.monotonic()
-        raw_json = await self._get(url, params)
+        # Follow next_page_token to completion — a single response only carries up
+        # to `limit` total data points, so long catch-ups span multiple pages.
+        bars_map = await self._get_paginated(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
-        # Parse the Alpaca response — shape: {"bars": {"AAPL": [...]}, ...}
-        # Crypto responses key by Alpaca format (BTC/USD); normalise back to our format.
-        bars = self._parse_bars(raw_json, alpaca_sym)
-        if alpaca_sym != symbol and not bars:
-            # Fallback: try keying by original symbol in case Alpaca mirrors formats.
-            bars = self._parse_bars(raw_json, symbol)
+        # Merged map is keyed by Alpaca-format symbol (BTC/USD for crypto). Normalise
+        # the one symbol's bars; fall back to the house-format key in case Alpaca
+        # mirrors formats. Concatenation across pages already preserves chronology.
+        raw_bars = bars_map.get(alpaca_sym)
+        if not raw_bars and alpaca_sym != symbol:
+            raw_bars = bars_map.get(symbol)
+        bars = self._normalize_bars(raw_bars or [])
         raw_bytes = json.dumps(bars).encode()
 
         self._record_api_call(
@@ -262,15 +282,11 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                 params["end"] = end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
             t0 = time.monotonic()
-            raw_json = await self._get(url, params)
+            # Paginate within this chunk's HTTP call sequence. Alpaca's `limit` is a
+            # per-RESPONSE total across all symbols, so without following the token
+            # the tail symbols (symbol-sorted) would silently get zero bars.
+            bars_map = await self._get_paginated(url, params)
             duration_ms = int((time.monotonic() - t0) * 1000)
-
-            try:
-                data = json.loads(raw_json)
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise ProviderDataError(f"Alpaca returned non-JSON response: {type(exc).__name__}") from exc
-
-            bars_map: dict[str, list[dict[str, Any]]] = data.get("bars") or {}
 
             for sym, alpaca_sym in zip(chunk, alpaca_syms, strict=False):
                 sym_bars = self._normalize_bars(bars_map.get(alpaca_sym) or bars_map.get(sym, []))
@@ -413,29 +429,6 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
-    def _parse_bars(self, raw: bytes, symbol: str) -> list[dict[str, Any]]:
-        """Parse the Alpaca multi-bar response and return normalised bars for *symbol*.
-
-        Alpaca response shape::
-
-            {
-                "bars": {
-                    "AAPL": [{"t": "2024-01-02T09:30:00Z", "o": 100.0, ...}, ...],
-                },
-                "next_page_token": null
-            }
-
-        Each bar dict is normalised to: {timestamp, open, high, low, close, volume}.
-        """
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ProviderDataError(f"Alpaca returned non-JSON response: {type(exc).__name__}") from exc
-
-        bars_map: dict[str, list[dict[str, Any]]] = data.get("bars") or {}
-        raw_bars = bars_map.get(symbol, [])
-        return self._normalize_bars(raw_bars)
-
     @staticmethod
     def _normalize_bars(raw_bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert Alpaca bar dicts to the canonical {datetime, open, high, low, close, volume} format.
@@ -468,6 +461,76 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                 }
             )
         return normalised
+
+    async def _get_paginated(self, url: str, params: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """Fetch a bars request, following Alpaca's ``next_page_token`` to completion.
+
+        Alpaca's ``limit`` parameter is the TOTAL number of data points across ALL
+        symbols in a single response (not per-symbol). To get the complete result a
+        client MUST keep re-issuing the same request with ``page_token`` set to the
+        previous response's ``next_page_token`` until that token is null/absent.
+
+        This method accumulates the multi-symbol ``bars`` map across every page by
+        concatenating each symbol's raw bar list in page order. Because we always
+        request ``sort=asc`` and Alpaca emits all of one symbol's bars (in ascending
+        time) before moving to the next symbol, list-extending per symbol preserves
+        chronological order. The returned map keys are Alpaca-format symbol keys
+        (e.g. ``BTC/USD`` for crypto); callers re-key to house format.
+
+        A hard ``_MAX_PAGES`` cap guards against a non-terminating / self-referential
+        ``next_page_token`` (a known Alpaca quirk). When the cap is hit we log a
+        ``warning`` so a runaway is observable, and return whatever was accumulated.
+
+        Args:
+            url:    The bars endpoint URL (equity or crypto).
+            params: Base query params (symbols/timeframe/limit/sort/start/end/feed).
+                    NOT mutated — a per-page copy carries the ``page_token``.
+
+        Returns:
+            Merged per-symbol bars map: ``{alpaca_symbol: [raw_bar_dict, ...]}``.
+
+        Raises:
+            ProviderDataError: A page response is not valid JSON.
+            (plus the HTTP error mapping from ``_get``).
+        """
+        merged: dict[str, list[dict[str, Any]]] = {}
+        page_token: str | None = None
+
+        for page_index in range(_MAX_PAGES):
+            # Copy the base params per page so the shared dict is never mutated and
+            # the page_token only applies to the follow-up requests (page 1 omits it).
+            page_params = dict(params)
+            if page_token is not None:
+                # Request key is "page_token"; response key is "next_page_token".
+                page_params["page_token"] = page_token
+
+            raw_json = await self._get(url, page_params)
+            try:
+                data = json.loads(raw_json)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ProviderDataError(f"Alpaca returned non-JSON response: {type(exc).__name__}") from exc
+
+            bars_map: dict[str, list[dict[str, Any]]] = data.get("bars") or {}
+            for sym, sym_bars in bars_map.items():
+                # Concatenate in page order — asc sort keeps each symbol chronological.
+                merged.setdefault(sym, []).extend(sym_bars or [])
+
+            page_token = data.get("next_page_token")
+            if not page_token:
+                # No more pages — the result is complete.
+                return merged
+
+            if page_index == _MAX_PAGES - 1:
+                # Token still present after the final allowed page → likely a runaway
+                # / self-referential token. Stop and surface it rather than loop.
+                logger.warning(
+                    "alpaca_pagination_cap_hit",
+                    symbols=params.get("symbols"),
+                    timeframe=params.get("timeframe"),
+                    pages=_MAX_PAGES,
+                )
+
+        return merged
 
     async def _get(self, url: str, params: dict[str, Any]) -> bytes:
         """Execute authenticated GET request with Alpaca API key headers.
