@@ -117,6 +117,10 @@ class WorkerProcess:
         # Build Valkey-backed infrastructure once (F-007: avoid per-task connection leak)
         self._circuit_breaker = self._build_circuit_breaker()
         self._zero_bar_tracker = self._build_zero_bar_tracker()
+        # Cross-replica monthly EODHD quota guard (shared Valkey counter).  Without
+        # this the pipeline's Step-0 quota gate is silently skipped (quota_service is
+        # None) and there is NO hard 100k/month enforcement across worker replicas.
+        self._quota_service = self._build_quota_service()
 
         # Build and load the provider routing cache from env-var settings (PRD-0032).
         # Synchronous — no I/O; reloaded via POST /internal/v1/routing/reload.
@@ -224,6 +228,7 @@ class WorkerProcess:
             circuit_breaker=self._circuit_breaker,
             zero_bar_tracker=self._zero_bar_tracker,
             routing_cache=self._routing_cache,
+            quota_service=self._quota_service,
         )
         try:
             await use_case.execute(task)
@@ -348,6 +353,7 @@ class WorkerProcess:
                     circuit_breaker=self._circuit_breaker,
                     zero_bar_tracker=self._zero_bar_tracker,
                     routing_cache=self._routing_cache,
+                    quota_service=self._quota_service,
                 )
 
                 try:
@@ -418,6 +424,27 @@ class WorkerProcess:
         if valkey is None:
             return None
         return ValkeyZeroBarTracker(valkey=valkey)
+
+    def _build_quota_service(self) -> Any | None:
+        """Build the shared cross-replica EODHD monthly quota service.
+
+        Backed by the same Valkey instance as the circuit breaker / zero-bar
+        tracker.  Returns None when Valkey is not configured (local/test) so the
+        pipeline degrades to the per-process token bucket as the sole defence.
+        The monthly hard limit defaults to EODHD's 100k/month but can be
+        overridden via the ``eodhd_monthly_quota`` setting.
+        """
+        valkey = self._build_valkey_client()
+        if valkey is None:
+            return None
+        try:
+            from messaging.eodhd_quota.quota_service import EodhdQuotaService
+
+            hard_limit = int(getattr(self._settings, "eodhd_monthly_quota", EodhdQuotaService.HARD_LIMIT))
+            return EodhdQuotaService(valkey=valkey, hard_limit=hard_limit)
+        except Exception as exc:
+            logger.warning("quota_service_unavailable", error=str(exc))
+            return None
 
     def _build_valkey_client(self) -> Any | None:
         """Return a ValkeyClient if Valkey URL is configured, else None."""

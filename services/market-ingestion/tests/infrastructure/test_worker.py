@@ -106,3 +106,86 @@ async def test_worker_continues_other_tasks_after_timeout() -> None:
 
     assert "ok-1" in executed
     assert "ok-2" in executed
+
+
+# ---------------------------------------------------------------------------
+# EodhdQuotaService wiring (cross-replica monthly guard) — Issue 2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit()
+def test_worker_builds_quota_service_when_valkey_configured() -> None:
+    """When Valkey is configured, the worker builds an EodhdQuotaService.
+
+    This is the cross-replica monthly guard: without it, pipeline Step 0 is
+    skipped (quota_service is None) and there is no hard 100k/month enforcement.
+    """
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
+
+    settings = _make_settings()
+    settings.valkey_url = "redis://localhost:6379/0"
+
+    with (
+        patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
+        patch(_PATCH_BUILD_REGISTRY),
+        patch("messaging.valkey.client.ValkeyClient", return_value=MagicMock()),
+    ):
+        worker = WorkerProcess(settings=settings, worker_id="test-worker")
+
+    assert worker._quota_service is not None  # type: ignore[attr-defined]
+
+
+@pytest.mark.unit()
+def test_worker_quota_service_none_without_valkey() -> None:
+    """No Valkey URL → no quota service (degrades to per-process token bucket)."""
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
+
+    settings = _make_settings()
+    settings.valkey_url = None
+
+    with (
+        patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
+        patch(_PATCH_BUILD_REGISTRY),
+    ):
+        worker = WorkerProcess(settings=settings, worker_id="test-worker")
+
+    assert worker._quota_service is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.unit()
+@pytest.mark.asyncio()
+async def test_worker_injects_quota_service_into_use_case() -> None:
+    """_execute_task must pass the worker's quota_service to ExecuteTaskUseCase."""
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
+
+    settings = _make_settings()
+    settings.valkey_url = None  # quota_service None is fine; we assert it is forwarded
+
+    with (
+        patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
+        patch(_PATCH_BUILD_REGISTRY),
+    ):
+        worker = WorkerProcess(settings=settings, worker_id="test-worker")
+
+    sentinel = object()
+    worker._quota_service = sentinel  # type: ignore[attr-defined]
+
+    captured: dict[str, object] = {}
+
+    class _FakeUseCase:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def execute(self, _task: object) -> None:
+            return None
+
+    task = MagicMock()
+    task.id = "task-xyz"
+
+    with patch(
+        "market_ingestion.infrastructure.workers.worker.ExecuteTaskUseCase",
+        _FakeUseCase,
+    ):
+        await worker._execute_task(task)  # type: ignore[attr-defined]
+
+    assert captured["quota_service"] is sentinel

@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import ObjectStoreAdapter
     from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from market_ingestion.config import Settings
+    from messaging.eodhd_quota.quota_service import EodhdQuotaService
 
 logger = get_logger(__name__)
 
@@ -280,6 +281,27 @@ async def metrics() -> Response:
 # ---------------------------------------------------------------------------
 
 
+def _build_quota_service(settings: Settings) -> EodhdQuotaService | None:
+    """Build a read-only EodhdQuotaService from Valkey settings, or None.
+
+    Mirrors the worker's builder so the daily-budget tracker can read the same
+    cumulative per-day counter the worker increments.  Returns None when Valkey
+    is not configured (the tracker then reports neutral headroom).
+    """
+    valkey_url = getattr(settings, "valkey_url", None)
+    if not valkey_url:
+        return None
+    try:
+        from messaging.eodhd_quota.quota_service import EodhdQuotaService
+        from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+        hard_limit = int(getattr(settings, "eodhd_monthly_quota", EodhdQuotaService.HARD_LIMIT))
+        return EodhdQuotaService(valkey=ValkeyClient(url=str(valkey_url)), hard_limit=hard_limit)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("quota_service_unavailable", error=str(exc))
+        return None
+
+
 @router.get(
     "/api/v1/eodhd/quota/status",
     response_model=EodhdQuotaStatusResponse,
@@ -287,26 +309,27 @@ async def metrics() -> Response:
 )
 async def eodhd_quota_status(
     uow: UnitOfWork = Depends(get_uow),
+    settings: Settings = Depends(get_settings),
 ) -> EodhdQuotaStatusResponse:
     """Return the current EODHD quota and daily budget status.
 
-    This is a read-heavy endpoint — it uses the write UoW because both
-    SnapshotEodhdQuotaUseCase and DailyBudgetTracker call ``get_or_create``
-    on ProviderBudget, which writes the default row on first run.
+    This is a read-heavy endpoint — it uses the write UoW because
+    SnapshotEodhdQuotaUseCase calls ``get_or_create`` on ProviderBudget, which
+    writes the default row on first run.
 
     Response fields:
     * ``credits_used`` / ``monthly_budget``: token-bucket proxy for monthly quota.
-    * ``daily_budget``: DailyBudgetTracker with 0.85 safety factor.
+    * ``daily_budget``: DailyBudgetTracker reading the cumulative Valkey day
+      counter (0.85 safety factor) — reflects real daily spend, not bucket depletion.
     * ``circuit_breaker``: stubbed "closed" / 0 trips until CB is wired.
     """
     # Snapshot the raw quota data from the DB.
     quota_uc = SnapshotEodhdQuotaUseCase(uow=uow)
     snapshot = await quota_uc.execute()
 
-    # Compute the daily budget status using the same UoW.
-    # Each use case opens its own `async with uow:` context; the UoW is
-    # reusable across multiple sequential executions.
-    budget_tracker = DailyBudgetTracker(uow=uow, safety_factor=0.85)
+    # Compute the daily budget status from the shared Valkey cumulative-spend
+    # counter (EodhdQuotaService) rather than the instantaneous token bucket.
+    budget_tracker = DailyBudgetTracker(quota_service=_build_quota_service(settings), safety_factor=0.85)
     daily_status = await budget_tracker.get_status()
 
     # Publish metrics so Grafana sees fresh values immediately on each poll.

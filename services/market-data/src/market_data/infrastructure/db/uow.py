@@ -113,7 +113,14 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._write_session = self._write_factory()
-        self._read_session = self._read_factory()
+        # 2026-06-16 session-optimization #1: the read session is created
+        # LAZILY on first ``_read()`` access, NOT eagerly here.  Write-only
+        # consumers (e.g. the OHLCV materializer) never touch a read repo, so
+        # opening a second session in every ``__aenter__`` doubled the Postgres
+        # connections per UoW for no benefit — the dominant driver of the
+        # connection-budget ceiling that blocked consumer replica scaling.
+        # ``_read()`` builds it on demand; ``__aexit__`` only closes it if it
+        # was actually created (the ``if self._read_session`` guard below).
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -178,14 +185,21 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self._write_session
 
     def _read(self) -> AsyncSession:
-        """Return the read (replica) session.
+        """Return the read (replica) session, creating it lazily on first use.
 
-        Falls back to the write session when read and write sessions are the
-        same object (i.e. no replica configured).
+        The read session is opened on demand here (not in ``__aenter__``) so a
+        UoW that only ever writes never allocates a second connection — see the
+        2026-06-16 session-optimization note in ``__aenter__``.  The presence of
+        the write session is the "entered" signal (it is always created in
+        ``__aenter__``); a missing write session means the UoW was used outside
+        its ``async with`` block.  Falls back to the write engine's factory when
+        no replica is configured (``read_factory`` then points at the primary).
         """
-        if self._read_session is None:
+        if self._write_session is None:
             msg = "UnitOfWork not entered — use 'async with uow:' context manager"
             raise RuntimeError(msg)
+        if self._read_session is None:
+            self._read_session = self._read_factory()
         return self._read_session
 
     def get_read_session(self) -> AsyncSession:
@@ -195,6 +209,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         not depend on private naming conventions.
         """
         return self._read()
+
+    def get_write_session(self) -> AsyncSession:
+        """Public accessor for the write (primary) session.
+
+        Mirrors :meth:`get_read_session` for the write side so callers that need
+        the raw session (e.g. the OHLCV batch consumer wrapping each message in a
+        ``session.begin_nested()`` SAVEPOINT) do not depend on the private
+        ``_write()`` naming.  Raises ``RuntimeError`` if the UoW was not entered.
+        """
+        return self._write()
 
     # ── write-side repository accessors (lazy init) ───────────────────────────
 

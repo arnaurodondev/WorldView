@@ -166,6 +166,15 @@ class UnitOfWork(ABC):
         avoid routing reads through the write session.
         """
 
+    @abstractmethod
+    def get_write_session(self) -> Any:
+        """Return the write (primary) session.
+
+        Used by the OHLCV batch consumer to wrap each message's writes in a
+        ``session.begin_nested()`` SAVEPOINT inside one shared batch transaction
+        (so a poison message rolls back only its own writes, not the batch).
+        """
+
     # ── post-commit hooks ────────────────────────────────────────────────────
 
     @abstractmethod

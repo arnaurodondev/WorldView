@@ -195,7 +195,14 @@ async def test_monthly_quota_month_key_isolation() -> None:
     await service.try_consume(cost=1, service="s2", month="2026-03")
 
     incr_calls = [call.args[0] for call in valkey.incr.call_args_list]
-    assert all("2026-03" in k for k in incr_calls)
+    # Monthly/per-service/per-symbol keys are scoped to the explicit month.
+    # The cumulative per-UTC-day counter ("...:day:...") is keyed by today's UTC
+    # date and is intentionally month-param-independent — exclude it here.
+    monthly_calls = [k for k in incr_calls if ":day:" not in k]
+    assert monthly_calls  # at least the total + service keys
+    assert all("2026-03" in k for k in monthly_calls)
+    # The daily cumulative counter is also incremented.
+    assert any(":day:" in k for k in incr_calls)
 
 
 @pytest.mark.unit
@@ -209,10 +216,14 @@ async def test_monthly_quota_ttl_set_on_increment() -> None:
     await service.try_consume(cost=1, service="s2", month="2026-04")
 
     expire_calls = valkey.expire.call_args_list
-    # At least 2 calls: total key + service key
+    # At least 3 calls: total key + service key + daily counter.
     assert len(expire_calls) >= 2
-    # All TTLs should be 32 days (32 * 86400)
-    assert all(call.args[1] == 32 * 86_400 for call in expire_calls)
+    # Monthly keys carry a 32-day TTL; the per-day counter carries a 2-day TTL.
+    monthly_ttls = [call.args[1] for call in expire_calls if ":day:" not in call.args[0]]
+    daily_ttls = [call.args[1] for call in expire_calls if ":day:" in call.args[0]]
+    assert monthly_ttls
+    assert all(ttl == 32 * 86_400 for ttl in monthly_ttls)
+    assert daily_ttls == [2 * 86_400]
 
 
 # ---------------------------------------------------------------------------
