@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval python-base build-bases
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval python-base build-bases
 
 # ── Docker base images ────────────────────────────────────────────────────────
 # `python-base` must be built before any service image that derives from it.
@@ -204,6 +204,14 @@ dev-rebuild:
 	$(COMPOSE_DEV) build --no-cache
 	$(COMPOSE_DEV) up -d --force-recreate
 	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
+
+## Rebuild + recreate EVERY variant of ONE service family (app + migrate +
+## consumers + workers). Each variant has its own build:/image in compose, so
+## `docker compose build <svc>` alone ships STALE code to the siblings — this
+## target rebuilds them all. Usage: make rebuild SVC=market-data [CACHE=1]
+rebuild:
+	@test -n "$(SVC)" || { echo "Usage: make rebuild SVC=<family> [CACHE=1] (e.g. SVC=market-data)"; exit 2; }
+	./scripts/rebuild_service.sh $(SVC) $(if $(CACHE),--cache,)
 
 ## Remove local docker.env files (re-run setup-dev.sh from worldview-gitops to restore)
 dev-clean:
