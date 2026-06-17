@@ -65,18 +65,17 @@ def test_read_timeout_preserved() -> None:
     assert httpx_client.timeout.read == pytest.approx(120.0)
 
 
-def test_default_extraction_timeout_is_90s() -> None:
-    """Default PER-ATTEMPT wall-clock cap is 90s (transient-failure resilience).
+def test_default_extraction_timeout_is_300s() -> None:
+    """Default PER-ATTEMPT wall-clock cap is 300s (gpt-oss-120b deep-extraction tail).
 
-    The default was lowered from a single-shot 150s to a per-attempt 90s so that a
-    bounded retry (1 initial + up to 2 retries) fits inside the TOTAL per-model
-    budget (``_EXTRACTION_TOTAL_BUDGET_S``).  Task #36 bumped that per-model budget
-    150 -> 200s (a saturated 235B primary may need its full retry budget) and added
-    a SECONDARY-model fallback hop with its OWN fresh 200s budget; the nlp-pipeline
-    article watchdog was raised 450 -> 700s to fit primary + fallback + NER (see
-    config.py budget arithmetic).  p50 deep-extraction latency is ~16.5s so 90s
-    still captures the legitimate tail.  The httpx read timeout is wired to the same
-    per-attempt value so it never fires before the asyncio.wait_for guard.
+    Task #5 raised the per-attempt cap 90 -> 300s and Task #9 swapped the extraction
+    primary to ``openai/gpt-oss-120b@medium`` (fallback ``gpt-oss-20b@low``); a
+    medium-effort 120B reasoning pass can spend the better part of a minute enumerating
+    candidate entity pairs, so the per-attempt cap is sized for that legitimate tail.
+    With the higher cap a bounded retry (default 1 initial + 1 retry = 2 attempts) fits
+    inside the TOTAL per-model budget (``_EXTRACTION_TOTAL_BUDGET_S`` = 320s).  The httpx
+    read timeout is wired to the same per-attempt value so it never fires before the
+    asyncio.wait_for guard.
     """
     from ml_clients.adapters.deepseek_extraction import (
         _EXTRACTION_MAX_ATTEMPTS,
@@ -84,16 +83,18 @@ def test_default_extraction_timeout_is_90s() -> None:
         _EXTRACTION_TOTAL_BUDGET_S,
     )
 
-    assert _EXTRACTION_TIMEOUT_S == pytest.approx(90.0)
-    # Task #36: per-model total budget raised 150 -> 200s.
-    assert _EXTRACTION_TOTAL_BUDGET_S == pytest.approx(200.0)
-    assert _EXTRACTION_MAX_ATTEMPTS == 3
-    # Budget arithmetic: a first 90s attempt + one backoff (<= cap) + a second 90s
-    # attempt must fit inside the per-model total budget, which caps the whole
-    # per-model call regardless of attempt count.
+    assert _EXTRACTION_TIMEOUT_S == pytest.approx(300.0)
+    # Task #5: per-model total budget = 320s (one 300s attempt + a short backoff +
+    # headroom; the cap bounds the whole per-model call regardless of attempt count).
+    assert _EXTRACTION_TOTAL_BUDGET_S == pytest.approx(320.0)
+    # Task #5: default attempts lowered 3 -> 2 (1 initial + 1 retry) so a 300s cap fits
+    # the per-model budget.
+    assert _EXTRACTION_MAX_ATTEMPTS == 2
+    # Budget arithmetic: a 300s attempt must fit inside the per-model total budget,
+    # which caps the whole per-model call regardless of attempt count.
     assert _EXTRACTION_TIMEOUT_S < _EXTRACTION_TOTAL_BUDGET_S
 
-    # Default constructor (no explicit timeout_s) propagates 90s to the http client.
+    # Default constructor (no explicit timeout_s) propagates 300s to the http client.
     adapter = _make_adapter()
     httpx_client = adapter._client._client  # type: ignore[attr-defined]
-    assert httpx_client.timeout.read == pytest.approx(90.0)
+    assert httpx_client.timeout.read == pytest.approx(300.0)
