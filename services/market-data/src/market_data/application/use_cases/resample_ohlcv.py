@@ -1,8 +1,8 @@
 """ResampledOHLCVUseCase — derive coarser bars from a finest-granularity source bar.
 
 When a new bar at the configured source timeframe is persisted, this use case
-resamples it into all coarser intraday timeframes including 1d.  For each target
-timeframe it:
+resamples it into all coarser INTRADAY timeframes (5m/15m/30m/1h/4h).  For each
+target timeframe it:
 
 1. Floors the trigger bar's timestamp to the period boundary.
 2. Fetches all source-TF bars in [period_start, trigger_bar.bar_date].
@@ -49,27 +49,35 @@ _PERIOD_SECONDS: dict[Timeframe, int] = {
 # Source tag stored on all derived bars.
 _DERIVED_SOURCE = "derived"
 
-# Derived bars are the AUTHORITATIVE source for every timeframe they cover
-# (they are aggregated from Alpaca 1m — the single source of truth).  They are
-# written via the unconditional ``bulk_upsert_derived`` path, so they already
-# overwrite any competing row regardless of priority; we nonetheless tag them
-# with the top-of-ladder ``derived`` priority (see ``_PROVIDER_PRIORITIES``) so
-# that the ASYMMETRIC case also resolves correctly: a later POLLED daily bar
-# arriving via the priority-guarded ``bulk_upsert_with_priority`` (EODHD=60,
-# Yahoo=80) can NO LONGER clobber a derived bar, because its priority is below
-# ``derived``.  This kills the eodhd<->derived flip-flop on liquid symbols.
+# Derived bars are the AUTHORITATIVE source for the INTRADAY timeframes they
+# cover (5m..4h, aggregated from Alpaca 1m — the single intraday source of
+# truth).  They are written via the unconditional ``bulk_upsert_derived`` path,
+# so they already overwrite any competing row regardless of priority; we
+# nonetheless tag them with the top-of-ladder ``derived`` priority so that the
+# ASYMMETRIC case also resolves correctly: a later POLLED intraday bar arriving
+# via the priority-guarded ``bulk_upsert_with_priority`` (EODHD=60) can NO LONGER
+# clobber a derived bar.  Daily (1d) is no longer derived here — it is polled
+# directly from Alpaca — so the historical eodhd/yahoo<->derived flip-flop on
+# the daily timeframe is now moot.
 _DERIVED_PRIORITY = ProviderPriority(provider="derived", priority=110)
 
 # Default targets when the caller does not specify a subset.
 # Only timeframes strictly coarser than the source are actually derived
 # (filtering happens dynamically in execute() based on source_timeframe).
+#
+# NOTE (PLAN-0036 final topology): ONE_DAY is deliberately ABSENT. Daily (1d)
+# bars are now POLLED directly from Alpaca (timeframe=1Day) as the deep-history
+# daily source, so deriving 1d from 1m here would create a second, shallower,
+# IEX-intraday-volume daily series that competes with the polled one. Each
+# timeframe family therefore has exactly ONE source: 1m→intraday derived,
+# Alpaca-1Day→1d polled, 1d→1w/1mo derived-on-read in query_ohlcv. Resampling
+# stops at 4h.
 _DEFAULT_TARGET_TIMEFRAMES: list[Timeframe] = [
     Timeframe.FIVE_MIN,
     Timeframe.FIFTEEN_MIN,
     Timeframe.THIRTY_MIN,
     Timeframe.ONE_HOUR,
     Timeframe.FOUR_HOUR,
-    Timeframe.ONE_DAY,
 ]
 
 

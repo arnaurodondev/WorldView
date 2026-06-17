@@ -47,7 +47,24 @@ _TIMEFRAME_MAP: dict[str, str] = {
     "30m": "30Min",
     "1h": "1Hour",
     "4h": "4Hour",
+    # Daily bars — polled directly from Alpaca as the deep-history daily source
+    # (PLAN-0036 final topology). Alpaca free/IEX serves ~6 years of daily bars
+    # (~1480 sessions back to mid-2020 in practice). 1w/1mo are NOT polled — they
+    # are derived-on-read from this polled daily series in market-data (S3).
+    "1d": "1Day",
 }
+
+# Timeframes for which Alpaca must apply CORPORATE-ACTION adjustment.
+#
+# Intraday bars (1Min..4Hour) are requested raw — they live inside a single
+# session so splits/dividends never fall mid-window, and the resampler derives
+# coarser intraday bars from them.  DAILY bars, however, span years of history
+# and MUST be split/dividend-adjusted (``adjustment=all``) so the polled Alpaca
+# daily series is on the same adjusted basis as the EODHD failover daily and the
+# 1w/1mo bars derived from it.  Without this, pre-split prices (e.g. AAPL's 4:1
+# Aug-2020 split → ~$380 raw vs ~$95 adjusted) would corrupt charts and the
+# derived weekly/monthly aggregates.
+_ADJUSTED_TIMEFRAMES: frozenset[str] = frozenset({"1d"})
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +199,10 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                 "feed": self._feed,
                 "sort": "asc",
             }
+            # Daily equity bars must be corporate-action adjusted (see
+            # ``_ADJUSTED_TIMEFRAMES``); intraday bars stay raw.
+            if timeframe in _ADJUSTED_TIMEFRAMES:
+                params["adjustment"] = "all"
         if start is not None:
             params["start"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         if end is not None:
@@ -276,6 +297,10 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                     "feed": self._feed,
                     "sort": "asc",
                 }
+                # Daily equity bars must be corporate-action adjusted (see
+                # ``_ADJUSTED_TIMEFRAMES``); intraday bars stay raw.
+                if timeframe in _ADJUSTED_TIMEFRAMES:
+                    params["adjustment"] = "all"
             if start is not None:
                 params["start"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
             if end is not None:

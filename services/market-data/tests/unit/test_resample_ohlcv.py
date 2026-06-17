@@ -275,52 +275,52 @@ async def test_resample_single_bar_group() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resample_all_six_timeframes() -> None:
-    """execute(bar) with default target_timeframes produces 6 derived bars (5m→1d)."""
+async def test_resample_default_five_intraday_timeframes() -> None:
+    """execute(bar) with default target_timeframes produces 5 intraday bars (5m→4h).
+
+    PLAN-0036 final topology: 1d is NO LONGER derived from 1m — daily is polled
+    directly from Alpaca (1Day). The default derivation therefore stops at 4h.
+    """
     trigger = _make_1m_bar(bar_date=datetime(2024, 6, 3, 9, 13, tzinfo=UTC))
     uow = _make_uow(source_bars=[trigger])
 
     uc = ResampledOHLCVUseCase(uow)
-    result = await uc.execute(trigger)  # default = all 6 timeframes
+    result = await uc.execute(trigger)  # default = 5 intraday timeframes
 
-    assert len(result) == 6
+    assert len(result) == 5
     expected_tfs = {
         Timeframe.FIVE_MIN,
         Timeframe.FIFTEEN_MIN,
         Timeframe.THIRTY_MIN,
         Timeframe.ONE_HOUR,
         Timeframe.FOUR_HOUR,
-        Timeframe.ONE_DAY,
     }
     actual_tfs = {b.timeframe for b in result}
     assert actual_tfs == expected_tfs
+    # Daily must NOT be derived by default — it is polled.
+    assert Timeframe.ONE_DAY not in actual_tfs
 
-    # bulk_upsert_derived called once with all 6 bars
+    # bulk_upsert_derived called once with all 5 bars
     uow.ohlcv.bulk_upsert_derived.assert_awaited_once()
     upserted = uow.ohlcv.bulk_upsert_derived.call_args[0][0]
-    assert len(upserted) == 6
+    assert len(upserted) == 5
 
 
 # ---------------------------------------------------------------------------
-# T-B-2-03-06b: 1d derivation from 1m source bar
+# T-B-2-03-06b: 1d is not derived by default (polled from Alpaca instead)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_resample_1d_bar_from_1m() -> None:
-    """A 1m bar at 09:13 derives a 1d bar at midnight UTC with is_partial=True."""
+async def test_resample_does_not_derive_1d_by_default() -> None:
+    """The default derivation path never emits a 1d bar (daily is polled, not derived)."""
     trigger = _make_1m_bar(bar_date=datetime(2024, 6, 3, 9, 13, tzinfo=UTC))
     uow = _make_uow(source_bars=[trigger])
 
     uc = ResampledOHLCVUseCase(uow)
-    result = await uc.execute(trigger, target_timeframes=[Timeframe.ONE_DAY])
+    result = await uc.execute(trigger)
 
-    assert len(result) == 1
-    bar_1d = result[0]
-    assert bar_1d.bar_date == datetime(2024, 6, 3, 0, 0, tzinfo=UTC)
-    assert bar_1d.is_partial is True
-    assert bar_1d.timeframe == Timeframe.ONE_DAY
-    assert bar_1d.is_derived is True
+    assert all(b.timeframe != Timeframe.ONE_DAY for b in result)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +353,9 @@ async def test_source_timeframe_5m_filters_coarser_only() -> None:
     assert Timeframe.FIVE_MIN not in result_tfs, "5m source must not derive 5m target"
     assert Timeframe.ONE_MIN not in result_tfs, "1m must not appear (coarser filter)"
     assert Timeframe.FIFTEEN_MIN in result_tfs
-    assert Timeframe.ONE_DAY in result_tfs
+    assert Timeframe.FOUR_HOUR in result_tfs
+    # 1d is no longer a default target (daily is polled from Alpaca, not derived).
+    assert Timeframe.ONE_DAY not in result_tfs
 
 
 # ---------------------------------------------------------------------------

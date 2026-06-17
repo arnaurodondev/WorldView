@@ -63,7 +63,13 @@ class Settings(BaseSettings):
     # These env vars define priority ordering for each dataset+timeframe slot.
     # No DB table — config-backed only. Force-reload via POST /internal/v1/routing/reload.
     routing_ohlcv_intraday: str = "alpaca:100,polygon:80"  # timeframes: 1m,5m,15m,30m,1h,4h
-    routing_ohlcv_eod: str = "yahoo_finance:100,eodhd:80"  # timeframes: 1d,1w,1M
+    # EOD/daily OHLCV: Alpaca is now the primary deep-daily source (free, IEX,
+    # ~6y of split-adjusted daily bars), EODHD is failover-only. Yahoo Finance is
+    # DROPPED from OHLCV routing (PLAN-0036 final topology) — Alpaca 1Day replaces
+    # it as the free deep-daily provider, so every timeframe family has exactly
+    # ONE source and there is no cross-source seam. (1w/1mo are derived-on-read
+    # in market-data from the polled daily series, never routed here.)
+    routing_ohlcv_eod: str = "alpaca:100,eodhd:80"  # timeframes: 1d,1w,1M
     routing_quotes: str = "eodhd:100"
     routing_fundamentals: str = "eodhd:100"
     # Finnhub provides these for free — set to "finnhub:100,eodhd:80" to prefer Finnhub.
