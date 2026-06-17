@@ -131,6 +131,97 @@ class TestWatchlistCache:
         await cache.invalidate("entity-1")
 
 
+# ── In-process micro-cache (issue 4 / Fix B throughput) ──────────────────────
+
+
+class TestLocalMicroCache:
+    @pytest.mark.unit
+    async def test_repeated_entity_hits_neither_valkey_nor_s1(self) -> None:
+        """Second lookup of the same entity is served from the in-process cache.
+
+        This is the throughput fix: during a burst drain the same entity recurs
+        within the short local TTL and must not re-hit Valkey or S1.
+        """
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)  # first call misses Valkey
+        watchers = [WatcherInfo("u1", "w1", ["SIGNAL"])]
+        s1 = _mock_s1(watchers)
+
+        cache = WatchlistCache(valkey, s1, ttl=300, local_ttl_seconds=60.0)
+        first = await cache.get_watchers("entity-burst")
+        second = await cache.get_watchers("entity-burst")
+
+        assert len(first) == len(second) == 1
+        # S1 and Valkey.get hit exactly once — the second lookup was local.
+        s1.get_watchers_by_entity.assert_called_once()
+        valkey.get.assert_called_once()
+
+    @pytest.mark.unit
+    async def test_local_cache_expires(self) -> None:
+        """After the local TTL elapses the cache refreshes from Valkey/S1."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        watchers = [WatcherInfo("u1", "w1")]
+        s1 = _mock_s1(watchers)
+
+        # Zero TTL → every entry is immediately stale, so each call re-fetches.
+        cache = WatchlistCache(valkey, s1, ttl=300, local_ttl_seconds=0.0)
+        await cache.get_watchers("entity-x")
+        await cache.get_watchers("entity-x")
+
+        assert s1.get_watchers_by_entity.call_count == 2
+
+    @pytest.mark.unit
+    async def test_s1_failure_not_locally_cached(self) -> None:
+        """An S1 failure must NOT be cached locally (would suppress alerts)."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        s1 = _mock_s1(failure=True)
+
+        cache = WatchlistCache(valkey, s1, ttl=300, local_ttl_seconds=60.0)
+        with patch(_COUNTER_PATH):
+            await cache.get_watchers("entity-fail")
+            await cache.get_watchers("entity-fail")
+
+        # Both calls retried S1 because the failed result was not cached.
+        assert s1.get_watchers_by_entity.call_count == 2
+
+    @pytest.mark.unit
+    async def test_invalidate_clears_local(self) -> None:
+        """invalidate() drops the in-process copy so the next read refreshes."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        watchers = [WatcherInfo("u1", "w1")]
+        s1 = _mock_s1(watchers)
+
+        cache = WatchlistCache(valkey, s1, ttl=300, local_ttl_seconds=60.0)
+        await cache.get_watchers("entity-inv")
+        await cache.invalidate("entity-inv")
+        await cache.get_watchers("entity-inv")
+
+        # First populate + post-invalidate refresh = 2 S1 calls.
+        assert s1.get_watchers_by_entity.call_count == 2
+
+    @pytest.mark.unit
+    async def test_lru_eviction_bounds_memory(self) -> None:
+        """The local cache evicts least-recently-used entries past capacity."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        watchers = [WatcherInfo("u1", "w1")]
+        s1 = _mock_s1(watchers)
+
+        cache = WatchlistCache(valkey, s1, ttl=300, local_ttl_seconds=60.0, local_max_entries=2)
+        await cache.get_watchers("a")  # local order: [a]
+        await cache.get_watchers("b")  # local order: [a, b]
+        await cache.get_watchers("c")  # over cap → evict a → [b, c]
+        await cache.get_watchers("c")  # local hit (still cached) — no S1 call
+
+        # `a` was evicted, so re-fetch counts; `c` repeat did not.
+        assert s1.get_watchers_by_entity.call_count == 3
+        await cache.get_watchers("a")  # miss → S1 (4); put a evicts b → [c, a]
+        assert s1.get_watchers_by_entity.call_count == 4
+
+
 # ── S1 failure signalling (T-A-2-02) ─────────────────────────────────────────
 
 
@@ -163,9 +254,9 @@ class TestS1FailureSignalling:
             with patch(_COUNTER_PATH):
                 await cache.get_watchers("entity-99")
 
-        assert any(
-            e.get("event") == "watchlist_s1_unavailable" and e.get("entity_id") == "entity-99" for e in cap
-        ), f"Expected warning not found in: {cap}"
+        assert any(e.get("event") == "watchlist_s1_unavailable" and e.get("entity_id") == "entity-99" for e in cap), (
+            f"Expected warning not found in: {cap}"
+        )
 
     @pytest.mark.unit
     async def test_s1_empty_ok_no_counter(self) -> None:

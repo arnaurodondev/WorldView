@@ -2037,12 +2037,22 @@ services:
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
     expose: ["9100"]
     restart: unless-stopped
+    # Fix A, gap D (issue 4 / audit 2026-06-16): a real progress/liveness probe
+    # instead of `os.kill(1, 0)` (which only proved PID 1 existed and let a
+    # wedged poll loop report `healthy` for 43h). The consumer touches a
+    # heartbeat file on every processed message; this check fails if that file
+    # is missing or older than 300s, so a stalled consumer reports `unhealthy`.
+    # `start_period` (90s) covers cold start + first-message latency.
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import os,time,sys; p=os.environ.get('ALERT_CONSUMER_HEARTBEAT_PATH','/tmp/alert_intelligence_consumer.heartbeat'); sys.exit(0 if os.path.exists(p) and (time.time()-os.path.getmtime(p))<300 else 1)"
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   alert-watchlist-consumer:
     build:

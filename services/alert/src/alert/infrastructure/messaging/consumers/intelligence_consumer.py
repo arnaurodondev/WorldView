@@ -13,6 +13,8 @@ Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
 from __future__ import annotations
 
 import json
+import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -84,6 +86,12 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
 
     """
 
+    # How often (seconds) to run the expensive per-partition watermark sweep
+    # for the lag gauge. The base class does it after every message; we cap it
+    # so a 48-partition assignment does not pay ~48 blocking broker calls per
+    # message. Class attr (not config) to avoid per-service drift.
+    _LAG_RECORD_INTERVAL_SECONDS: float = 10.0
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -101,6 +109,66 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         self._fanout = fanout_use_case
         self._dedup_client = dedup_client
         self._dedup_prefix = f"s10:dedup:{config.group_id}"
+        # ── Liveness / progress instrumentation (issue 4, Fix A gaps A+D) ──────
+        # The 43h silent wedge (audit 2026-06-16) was invisible because nothing
+        # tracked *forward progress*: the Docker healthcheck only proved PID 1
+        # existed, and the lag-stall warning only *logged*. We record a
+        # monotonic timestamp every time a message is actually processed so two
+        # things can ACT on a stall:
+        #   1. the wall-clock watchdog in intelligence_consumer_main.py
+        #      (exits the process for an orchestrator restart), and
+        #   2. the Docker healthcheck, which reads the heartbeat file we touch
+        #      below (a wedged consumer then reports `unhealthy`).
+        # `time.monotonic()` is used for the watchdog comparison because it is
+        # immune to the wall-clock skew the audit observed on this host
+        # (Docker StartedAt was 43h wrong). It is seeded to "now" so a
+        # freshly-started consumer is never considered stalled before it has
+        # had a chance to poll.
+        self._last_progress_monotonic: float = time.monotonic()
+        # Throttle timestamp for the per-message lag-recording override below.
+        # Seeded into the past so the first message records lag immediately.
+        self._last_lag_record_monotonic: float = 0.0
+        # Heartbeat file path the Docker healthcheck stats for freshness. Lives
+        # under /tmp (always writable, tmpfs) so the check needs no network or
+        # broker round-trip. Overridable via env for tests.
+        self._heartbeat_path = os.environ.get(
+            "ALERT_CONSUMER_HEARTBEAT_PATH",
+            "/tmp/alert_intelligence_consumer.heartbeat",  # noqa: S108 — tmpfs liveness marker, not sensitive
+        )
+        # Touch once at construction so the healthcheck has a fresh marker
+        # during the `start_period` before the first message arrives.
+        self._touch_heartbeat()
+
+    @property
+    def last_progress_monotonic(self) -> float:
+        """Monotonic timestamp of the last successfully processed message.
+
+        Read by the wall-clock watchdog in the entry point to decide whether
+        the poll loop has wedged (no forward progress while a backlog exists).
+        """
+        return self._last_progress_monotonic
+
+    def _touch_heartbeat(self) -> None:
+        """Record forward progress for both the watchdog and the healthcheck.
+
+        Best-effort: a failure to write the heartbeat file must never break
+        message processing. The in-memory monotonic timestamp is the
+        authoritative signal for the in-process watchdog; the file exists only
+        so the *out-of-process* Docker healthcheck can observe liveness without
+        importing application state.
+        """
+        self._last_progress_monotonic = time.monotonic()
+        try:
+            # `os.utime(..., None)` sets mtime to the current wall-clock time;
+            # the healthcheck compares that mtime against `now` for staleness.
+            with open(self._heartbeat_path, "a"):
+                os.utime(self._heartbeat_path, None)
+        except OSError:
+            logger.debug(  # type: ignore[no-any-return]
+                "intelligence_consumer.heartbeat_write_failed",
+                path=self._heartbeat_path,
+                exc_info=True,
+            )
 
     # ── Core processing ───────────────────────────────────────────────────────
 
@@ -137,6 +205,12 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             correlation_id=correlation_id,
             market_impact_score=market_impact_score,
         )
+
+        # Fix A (gaps A+D): record forward progress so the watchdog +
+        # healthcheck can tell a draining consumer from a wedged one. Done
+        # AFTER fan-out returns so a message that hangs in fan-out does NOT
+        # count as progress — that is exactly the stall we want to detect.
+        self._touch_heartbeat()
 
         logger.debug(  # type: ignore[no-any-return]
             "intelligence_consumer.processed",
@@ -248,6 +322,34 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
 
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         return _NoOpUoW()  # type: ignore[return-value]
+
+    # ── Lag-recording throttle (issue 4 / Fix B throughput) ───────────────────
+
+    def _record_consumer_lag(self) -> None:
+        """Throttled override of the base per-message lag recorder.
+
+        ROOT CAUSE of the ~3 msg/min drain (audit 2026-06-16): the base class
+        calls ``_record_consumer_lag`` after EVERY committed message, and that
+        routine loops over the *entire* assignment calling the blocking
+        librdkafka ``get_watermark_offsets(timeout=1.0)`` once per partition.
+        This consumer is assigned ~48 partitions (24 signal + 12 graph + 12
+        contradiction), so each message paid up to ~48 broker round-trips of
+        watermark polling — tens of seconds of pure overhead per message that
+        dwarfed the actual fan-out work.
+
+        We cannot change the shared ``BaseKafkaConsumer`` from here, so we
+        override the hook to RATE-LIMIT it: recompute lag at most once every
+        ``_LAG_RECORD_INTERVAL_SECONDS`` instead of after every message. The
+        gauge is for dashboards/alerting (and the base class's own lag-stall
+        probe samples lag independently on its 60s cadence), so a slightly
+        coarser per-message gauge is an acceptable trade for an order-of-
+        magnitude throughput gain. Correctness of consumption is unaffected.
+        """
+        now = time.monotonic()
+        if now - self._last_lag_record_monotonic < self._LAG_RECORD_INTERVAL_SECONDS:
+            return  # skip — too soon since the last (expensive) watermark sweep
+        self._last_lag_record_monotonic = now
+        super()._record_consumer_lag()
 
     # ── Serialization ─────────────────────────────────────────────────────────
 
