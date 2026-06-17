@@ -21,6 +21,7 @@ from observability.logging import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.domain.entities.polling_policy import PollingPolicy
+    from market_ingestion.domain.entities.watermark import Watermark
 
 logger = get_logger(__name__)
 
@@ -54,6 +55,18 @@ _INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
 # pipeline fetches intraday bars exactly once per day (~2% of expected bars).
 # Daily-and-slower timeframes keep the day bucket (original FIX-DEDUP intent).
 _INTRADAY_DEDUP_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
+# CATCH-UP (2026-06-16): cap on how far back an INCREMENTAL task may resume its
+# range_start from the data high-water mark after a gap.  Before this, range_start
+# was hard-pinned to today-midnight, so a multi-day outage (e.g. the 2026-06-13..15
+# platform-down window) was never backfilled — incremental fetches only ever asked
+# for "today".  We now resume from the watermark's last-fetched day, bounded by this
+# cap so a long-dormant policy issues one bounded catch-up request rather than an
+# unbounded range; gaps wider than this should use the explicit backfill path
+# (``backfill_enabled`` + ``backfill_start_date``).  Alpaca batches up to 10k bars
+# per symbol/call, so a one-week catch-up is a single request, and bar upserts are
+# idempotent so re-fetching the boundary day is a no-op.
+_MAX_CATCHUP_DAYS: int = 7
 
 
 @dataclass
@@ -222,7 +235,7 @@ class ScheduleDueTasksUseCase:
                             symbol=symbol,
                         )
                         continue
-                    task = self._build_incremental_task(policy, symbol, now)
+                    task = self._build_incremental_task(policy, symbol, now, watermark)
                     if task is not None:
                         tasks.append(task)
 
@@ -242,8 +255,15 @@ class ScheduleDueTasksUseCase:
         policy: PollingPolicy,
         symbol: str,
         now: datetime,
+        watermark: Watermark | None = None,
     ) -> IngestionTask | None:
-        """Create one incremental task for a due policy."""
+        """Create one incremental task for a due policy.
+
+        ``watermark`` (optional, backward-compatible) supplies the data
+        high-water mark used for staleness-proportional catch-up after a gap —
+        see ``_MAX_CATCHUP_DAYS``.  When omitted the legacy today-only range is
+        used.
+        """
         from datetime import timedelta
 
         # FIX-DEDUP: Truncate to UTC-day boundaries so the dedupe_key stays
@@ -252,6 +272,17 @@ class ScheduleDueTasksUseCase:
         # ON CONFLICT DO NOTHING never fires, causing unbounded task growth.
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         range_start = today
+
+        # CATCH-UP: when the data high-water mark lags behind today (an outage
+        # or a long dormant period), resume range_start from the last-fetched
+        # day instead of today, bounded by _MAX_CATCHUP_DAYS, so the gap is
+        # actually refetched.  range_start stays day-truncated so the dedupe key
+        # is stable across same-day ticks until a successful fetch advances the
+        # watermark; once it does, the next tick's range_start advances with it.
+        if watermark is not None and watermark.current_bar_ts is not None:
+            wm_day = watermark.current_bar_ts.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            if wm_day < today:
+                range_start = max(wm_day, today - timedelta(days=_MAX_CATCHUP_DAYS))
         if policy.dataset_type == DatasetType.OHLCV and (policy.timeframe or "") in _INTRADAY_DEDUP_TIMEFRAMES:
             # FIX-INTRADAY-DEDUP: bucket intraday tasks per MINUTE, not per day.
             # A day-stable dedupe_key makes ON CONFLICT DO NOTHING swallow every

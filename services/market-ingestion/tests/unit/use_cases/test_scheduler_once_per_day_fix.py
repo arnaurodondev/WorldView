@@ -238,3 +238,73 @@ def test_intraday_midnight_tick_produces_valid_range() -> None:
     assert task is not None
     assert task.range_start is not None and task.range_end is not None
     assert task.range_start < task.range_end
+
+
+# ---------------------------------------------------------------------------
+# CATCH-UP (2026-06-16): range_start resumes from the data high-water mark
+# after a gap, instead of being pinned to today (the 06-13..15 outage backfill).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_catchup_resumes_range_start_from_watermark_after_gap() -> None:
+    """A stale watermark (3-day gap) must pull range_start back to the last-fetched day."""
+    uc = ScheduleDueTasksUseCase(MagicMock())
+    now = datetime(2026, 6, 16, 14, 7, 30, tzinfo=UTC)
+    # Last fetched bar was 2026-06-13 — a 3-day gap (the platform-outage window).
+    wm = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="BTC/USD",
+        timeframe="1m",
+        current_bar_ts=datetime(2026, 6, 13, 22, 39, tzinfo=UTC),
+    )
+    task = uc._build_incremental_task(_make_policy(timeframe="1m"), "BTC/USD", now, wm)
+    assert task is not None
+    # range_start resumes from the watermark's day (06-13), not today (06-16).
+    assert task.range_start == datetime(2026, 6, 13, tzinfo=UTC)
+    assert task.range_end == datetime(2026, 6, 16, 14, 7, tzinfo=UTC)
+
+
+@pytest.mark.unit
+def test_catchup_is_capped_at_max_catchup_days() -> None:
+    """A long-dormant watermark must not produce an unbounded range_start."""
+    from market_ingestion.application.use_cases.schedule_tasks import _MAX_CATCHUP_DAYS
+
+    uc = ScheduleDueTasksUseCase(MagicMock())
+    now = datetime(2026, 6, 16, 0, 0, 0, tzinfo=UTC)
+    # Watermark 60 days stale — far beyond the catch-up cap.
+    wm = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="BTC/USD",
+        timeframe="1d",
+        current_bar_ts=datetime(2026, 4, 17, tzinfo=UTC),
+    )
+    task = uc._build_incremental_task(_make_policy(timeframe="1d"), "BTC/USD", now, wm)
+    assert task is not None
+    # Clamped to today - _MAX_CATCHUP_DAYS, not the 60-day-old watermark.
+    assert task.range_start == (datetime(2026, 6, 16, tzinfo=UTC) - timedelta(days=_MAX_CATCHUP_DAYS))
+
+
+@pytest.mark.unit
+def test_no_catchup_when_watermark_current_or_absent() -> None:
+    """No watermark, or one already at/after today, keeps the legacy today range_start."""
+    uc = ScheduleDueTasksUseCase(MagicMock())
+    now = datetime(2026, 6, 16, 14, 7, 30, tzinfo=UTC)
+    today = datetime(2026, 6, 16, tzinfo=UTC)
+
+    # No watermark passed → legacy behaviour.
+    task_none = uc._build_incremental_task(_make_policy(timeframe="1d"), "BTC/USD", now)
+    assert task_none is not None and task_none.range_start == today
+
+    # Watermark already current (today) → no catch-up.
+    wm_current = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="BTC/USD",
+        timeframe="1d",
+        current_bar_ts=datetime(2026, 6, 16, 9, 0, tzinfo=UTC),
+    )
+    task_current = uc._build_incremental_task(_make_policy(timeframe="1d"), "BTC/USD", now, wm_current)
+    assert task_current is not None and task_current.range_start == today

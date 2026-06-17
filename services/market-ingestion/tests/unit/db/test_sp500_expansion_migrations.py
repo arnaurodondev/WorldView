@@ -286,3 +286,140 @@ class TestMigration0020:
         """Upgrade WHERE includes ``enabled = true`` so a re-run matches nothing."""
         sql = self._run("upgrade")[0].lower()
         assert "where" in sql and "enabled = true" in sql
+
+
+# ---------------------------------------------------------------------------
+# Migration 0022 — seed Tier-1-US tickerless-company polling policies
+# (derived-bar-aware: 1m + 1d + fundamentals only; NO 1w/1mo)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBind:
+    """Mock SQLAlchemy bind that records (statement, params) and answers EXISTS.
+
+    ``execute`` returns a result whose ``.first()`` is ``None`` (no existing row)
+    so every planned insert proceeds — modelling a clean DB.  All bound params are
+    captured so the test can assert the exact set of rows the migration inserts.
+    """
+
+    class _Result:
+        def __init__(self, first_value: object) -> None:
+            self._first = first_value
+
+        def first(self) -> object:
+            return self._first
+
+    def __init__(self, *, exists: bool = False) -> None:
+        self._exists = exists
+        self.inserts: list[dict] = []
+        self.exists_calls: list[dict] = []
+        self.deletes: list[dict] = []
+
+    def execute(self, clause: object, params: dict | None = None) -> _RecordingBind._Result:
+        sql = str(clause).strip().upper()
+        if sql.startswith("SELECT"):
+            self.exists_calls.append(params or {})
+            # Return a row iff we are configured to claim everything exists.
+            return self._Result(1 if self._exists else None)
+        if sql.startswith("INSERT"):
+            self.inserts.append(params or {})
+            return self._Result(None)
+        if sql.startswith("DELETE"):
+            self.deletes.append(params or {})
+            return self._Result(None)
+        return self._Result(None)
+
+
+class TestMigration0022:
+    """Revision chain + policy-set semantics for the Tier-1-US seed migration."""
+
+    _FILE = "0022_seed_tier1_us_polling_policies.py"
+
+    def test_revision_is_0022(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.revision == "0022"
+
+    def test_down_revision_is_0021(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.down_revision == "0021"
+
+    def test_upgrade_and_downgrade_are_callable(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert callable(mod.upgrade)
+        assert callable(mod.downgrade)
+
+    def test_exactly_three_policy_specs(self) -> None:
+        """Each symbol gets exactly 3 policies: alpaca 1m + eodhd 1d + eodhd fundamentals."""
+        mod = _load_migration(self._FILE)
+        assert len(mod._POLICY_SPECS) == 3
+
+    def test_policy_specs_are_the_expected_set(self) -> None:
+        """The spec set is precisely {alpaca:ohlcv:1m, eodhd:ohlcv:1d, eodhd:fundamentals}."""
+        mod = _load_migration(self._FILE)
+        # (provider, dataset_type, variant, timeframe) identity of each spec.
+        ids = {(p, dt, v, tf) for p, dt, v, tf, *_ in mod._POLICY_SPECS}
+        assert ids == {
+            ("alpaca", "ohlcv", None, "1m"),
+            ("eodhd", "ohlcv", None, "1d"),
+            ("eodhd", "fundamentals", "General", None),
+        }
+
+    def test_no_weekly_or_monthly_specs(self) -> None:
+        """REGRESSION: derived bars — no 1w/1mo OHLCV rows may be seeded (cf. migration 0020)."""
+        mod = _load_migration(self._FILE)
+        timeframes = {tf for *_, tf, _b, _m, _j, _p in mod._POLICY_SPECS}  # type: ignore[misc]
+        assert "1w" not in timeframes
+        assert "1mo" not in timeframes
+
+    def test_planned_rows_have_no_weekly_or_monthly(self) -> None:
+        """The expanded row set must contain zero 1w/1mo rows for any symbol."""
+        mod = _load_migration(self._FILE)
+        rows = mod._planned_rows()
+        assert all(r["timeframe"] not in ("1w", "1mo") for r in rows)
+
+    def test_planned_row_count_is_symbols_times_three(self) -> None:
+        mod = _load_migration(self._FILE)
+        rows = mod._planned_rows()
+        assert len(rows) == len(mod._TIER1_US_CANDIDATES) * 3
+
+    def test_alpaca_tracks_candidate_tier_eodhd_is_tier_2(self) -> None:
+        mod = _load_migration(self._FILE)
+        rows = mod._planned_rows()
+        for r in rows:
+            if r["provider"] == "alpaca":
+                assert r["tier"] == 1  # all candidates are tier-1
+            else:
+                assert r["tier"] == 2
+
+    def _run(self, fn_name: str, *, exists: bool) -> _RecordingBind:
+        mod = _load_migration(self._FILE)
+        bind = _RecordingBind(exists=exists)
+        mod.op.get_bind = lambda: bind  # type: ignore[attr-defined]
+        getattr(mod, fn_name)()
+        return bind
+
+    def test_upgrade_seeds_all_rows_on_clean_db(self) -> None:
+        """On an empty DB (no row exists), upgrade inserts exactly one row per planned row."""
+        mod = _load_migration(self._FILE)
+        expected = len(mod._planned_rows())
+        bind = self._run("upgrade", exists=False)
+        assert len(bind.inserts) == expected
+        # Every insert carries a fresh 26-char ULID id.
+        ids = [ins["id"] for ins in bind.inserts]
+        assert all(len(i) == 26 for i in ids)
+        assert len(ids) == len(set(ids)), "duplicate policy IDs generated"
+
+    def test_upgrade_is_noop_when_all_rows_exist(self) -> None:
+        """Idempotent re-run: when every 6-tuple already exists, upgrade inserts nothing."""
+        bind = self._run("upgrade", exists=True)
+        assert len(bind.inserts) == 0
+
+    def test_upgrade_inserts_no_weekly_or_monthly_rows(self) -> None:
+        """REGRESSION: not a single inserted row may carry a 1w/1mo timeframe."""
+        bind = self._run("upgrade", exists=False)
+        assert all(ins["timeframe"] not in ("1w", "1mo") for ins in bind.inserts)
+
+    def test_downgrade_deletes_one_per_planned_row(self) -> None:
+        mod = _load_migration(self._FILE)
+        bind = self._run("downgrade", exists=False)
+        assert len(bind.deletes) == len(mod._planned_rows())
