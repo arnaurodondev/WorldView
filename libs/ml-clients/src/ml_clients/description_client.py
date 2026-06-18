@@ -15,6 +15,7 @@ class EntityDescriptionClient(Protocol):
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None:
         """Generate a world-knowledge description for a non-company entity.
 
@@ -23,6 +24,9 @@ class EntityDescriptionClient(Protocol):
             canonical_name: Canonical entity name (e.g. "Jerome Powell").
             entity_type:    Entity type string (e.g. "person", "country").
             context_hints:  Additional hints such as {"role": "Fed Chair", "country": "US"}.
+            news_context:   Optional recent-news snippets used to ground the
+                            description. When None/empty the adapter injects a
+                            no-news guard so the model stays at the category level.
 
         Returns:
             Description string, or None if the API is unavailable or cost cap exceeded.
@@ -47,5 +51,6 @@ class NullDescriptionAdapter:
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None:
         return None

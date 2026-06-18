@@ -14,6 +14,7 @@ both proceed past the cap.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -55,6 +56,39 @@ _RETRYABLE_GEMINI_ERRORS = frozenset(
 
 # Default output token estimate for pre-reservation cost calculation
 _DEFAULT_ESTIMATED_OUTPUT_TOKENS = 150
+
+# News-grounding (parity with DeepInfraDescriptionAdapter; description audit
+# 2026-06-17). Strips control chars + angle brackets from untrusted news
+# snippets and caps snippet length / count before prompt insertion.
+_NEWS_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f<>]")
+_NEWS_SNIPPET_MAX_LEN = 300
+_NEWS_MAX_SNIPPETS = 3
+
+
+def _build_news_block(news_context: list[str] | None) -> str:
+    """Render the news-grounding block (mirrors the DeepInfra adapter).
+
+    Non-empty ``news_context`` → a block of up to ``_NEWS_MAX_SNIPPETS`` sanitized,
+    length-capped snippets the model must ground its description in. Empty/None →
+    the no-news guard telling the model to stay at the category/type level rather
+    than fabricate specifics. Snippets are untrusted (upstream news extraction) so
+    they are stripped of control chars + angle brackets to bound the prompt-injection
+    surface.
+    """
+    snippets = [s for s in (news_context or []) if s and s.strip()]
+    if not snippets:
+        return (
+            "\n\n## No corroborating news found. If you are not independently certain of "
+            "specific facts about this entity, describe only its general category and type — "
+            "do not invent roles, titles, affiliations, or biographical detail."
+        )
+    lines = [
+        "\n\n## Recent news context (ground your description in these facts; state nothing they do not support):",
+    ]
+    for snippet in snippets[:_NEWS_MAX_SNIPPETS]:
+        safe = _NEWS_CONTROL_CHAR_RE.sub("", snippet)[:_NEWS_SNIPPET_MAX_LEN]
+        lines.append(f"- {safe}")
+    return "\n".join(lines)
 
 
 def _month_key() -> str:
@@ -108,10 +142,14 @@ class GeminiDescriptionAdapter:
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None:
         """Generate a world-knowledge description for a non-company entity.
 
         Returns None (without calling the API) if the monthly cost cap is exceeded.
+
+        ``news_context`` (optional): recent news snippets used to ground the
+        description (parity with the DeepInfra adapter).
 
         Cost cap uses an atomic reserve-then-check pattern (G-005 fix):
         1. INCRBYFLOAT atomically reserves estimated cost
@@ -119,7 +157,7 @@ class GeminiDescriptionAdapter:
         3. After API call → adjust reservation to actual cost
         """
         # Build prompt first — needed for cost estimation
-        prompt = self._build_prompt(canonical_name, entity_type, context_hints)
+        prompt = self._build_prompt(canonical_name, entity_type, context_hints, news_context)
 
         # ---- Atomic cost-cap reserve ----
         reserved, estimated_cost = await self._reserve_cost(prompt)
@@ -325,11 +363,17 @@ class GeminiDescriptionAdapter:
             logger.warning("gemini_cost_undo_failed", error=str(exc))
 
     @staticmethod
-    def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:
+    def _build_prompt(
+        canonical_name: str,
+        entity_type: str,
+        context_hints: dict[str, str],
+        news_context: list[str] | None = None,
+    ) -> str:
         """Build the entity description prompt.
 
         ``canonical_name`` and context values are XML-wrapped to prevent prompt
-        injection (PRD-0017 §8 security requirement).
+        injection (PRD-0017 §8 security requirement). ``news_context`` (optional)
+        appends the same grounding block / no-news guard as the DeepInfra adapter.
         """
         # Truncate inputs to safe bounds before interpolation
         safe_name = canonical_name[:256]
@@ -345,4 +389,4 @@ class GeminiDescriptionAdapter:
             "Focus on what this entity is, its significance, and its primary domain. "
             "Do not include opinions or speculation. "
             "Respond with only the description text, no JSON, no markdown."
-        )
+        ) + _build_news_block(news_context)
