@@ -319,6 +319,11 @@ class DeepInfraCompletionAdapter:
                 # OpenAI format: list of {"type": "function", "function": {...}}
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
+            # gpt-oss-* are reasoning models that return EMPTY content unless
+            # reasoning_effort is set explicitly. Guarded on the model id so it is a
+            # no-op for Qwen3/others. Enables gpt-oss as completion or grounding-rewrite model.
+            if "gpt-oss" in model.lower():
+                payload["reasoning_effort"] = "medium"
             resp = await self._client.post(
                 f"{_BASE_URL}/chat/completions",
                 json=payload,
@@ -460,6 +465,10 @@ class DeepInfraCompletionAdapter:
         # errors on some provider builds.
         if seed is not None:
             payload["seed"] = seed
+        # gpt-oss reasoning models emit empty content without reasoning_effort — set it on
+        # the streaming path too (covers synthesis AND the grounding-rewrite). Guarded.
+        if "gpt-oss" in model.lower():
+            payload["reasoning_effort"] = "medium"
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",
