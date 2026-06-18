@@ -323,13 +323,55 @@ class EntityAliasRepository:
         threshold: float = 0.75,
         top_k: int = 5,
     ) -> list[tuple[UUID, float]]:
-        """Stage 3 — fuzzy trigram similarity via pg_trgm. Confidence: sim * 0.90."""
+        """Stage 3 — fuzzy trigram similarity via pg_trgm. Confidence: sim * 0.90.
+
+        RC-3 latency fix (2026-06-18): the WHERE predicate uses the pg_trgm
+        similarity *operator* ``%`` instead of the function form
+        ``similarity(col, x) > t``.  The GIN trigram index
+        ``idx_entity_aliases_trgm`` can ONLY be probed by the ``%`` operator
+        (and the ``<->`` distance operator) — the function-form predicate is
+        opaque to the planner and forces a full Seq Scan over every alias row
+        (~37k rows, ~1000 heap buffers), which scales linearly with alias-table
+        growth and is the contention-sensitive hot spot of the chat pipeline's
+        entity-resolution phase.
+
+        Correctness is preserved exactly:
+
+        * ``%`` matches when ``similarity(a, b) >= pg_trgm.similarity_threshold``.
+          We set that GUC to the caller's ``:threshold`` via ``set_limit()``
+          for the current session/transaction, so the operator's cutoff is
+          identical to the old ``> :threshold`` predicate (modulo the
+          ``>=`` vs ``>`` boundary — see the outer filter below).
+        * The OLD predicate was strict ``> :threshold``; ``%`` is inclusive
+          (``>=``).  To keep behaviour byte-for-byte identical we re-apply the
+          exact strict ``sim > :threshold`` filter in an outer wrapper, so a
+          surface landing exactly ON the threshold is still excluded.
+        * Ordering (``sim DESC``) and the ``top_k`` limit are unchanged.
+
+        NOTE: whether the planner actually chooses the GIN index at the current
+        table size also depends on ``random_page_cost`` (SSD clusters want
+        ~1.1; the PG default of 4 over-prices random index I/O and can keep the
+        planner on the Seq Scan until the table grows).  Either way, the
+        operator form is what makes the index *usable* — the function form
+        never could be — so this is a strict, necessary improvement.
+        """
+        # Set the pg_trgm cutoff for the ``%`` operator to exactly the caller's
+        # threshold, scoped to this session/transaction.  set_limit() persists
+        # for the session, but because async sessions are pooled we set it on
+        # every call to avoid leaking a stale threshold across checkouts.
+        await self._session.execute(text("SELECT set_limit(:threshold)"), {"threshold": threshold})
         result = await self._session.execute(
             text(
-                "SELECT entity_id, similarity(normalized_alias_text, lower(:mention_text)) AS sim "
-                "FROM entity_aliases "
-                "WHERE similarity(normalized_alias_text, lower(:mention_text)) > :threshold "
-                "AND is_active = true "
+                # Inner: GIN-index-usable ``%`` probe (cutoff = set_limit above).
+                # Outer: re-impose the strict ``> :threshold`` boundary so the
+                # match set is identical to the legacy function-form predicate.
+                "SELECT entity_id, sim FROM ("
+                "  SELECT entity_id, similarity(normalized_alias_text, lower(:mention_text)) AS sim "
+                "  FROM entity_aliases "
+                "  WHERE normalized_alias_text % lower(:mention_text) "
+                "  AND is_active = true "
+                ") AS m "
+                "WHERE sim > :threshold "
                 "ORDER BY sim DESC "
                 "LIMIT :top_k",
             ),
@@ -459,22 +501,61 @@ class EntityAliasRepository:
 
         Issues one parameterised LATERAL query for all mentions.
         Returns {normalized_text: [(entity_id, similarity), ...]}.
+
+        RC-3 latency fix (2026-06-18): the previous form joined the term list
+        against ``entity_aliases`` on the function predicate
+        ``similarity(ea.col, q.term) > :threshold``.  That predicate is opaque
+        to the planner, so it ran a **Nested Loop that Seq-Scanned the entire
+        ~37k-row alias table once per search term** (EXPLAIN: 112k+ "Rows
+        Removed by Join Filter", ~150ms for 3 terms) — cost scaling with
+        ``len(terms) * table_rows``.
+
+        The rewrite uses a ``JOIN LATERAL`` per term whose inner query filters
+        with the GIN-index-usable ``%`` operator and orders by the ``<->``
+        distance operator, so each term probes ``idx_entity_aliases_trgm``
+        independently (EXPLAIN: ``Bitmap Index Scan on idx_entity_aliases_trgm``
+        per loop) and caps work at ``top_k_per_mention`` rows per term.
+
+        Behaviour is preserved exactly:
+
+        * The ``%`` cutoff is set to the caller's ``:threshold`` via
+          ``set_limit()`` (see :meth:`fuzzy_trigram`).
+        * ``%`` is inclusive (``>=``); the legacy predicate was strict
+          (``>``).  The inner ``WHERE sim > :threshold`` re-imposes the strict
+          boundary so the match set is identical.
+        * The per-term ``LIMIT :top_k`` and the ``sim DESC`` ordering reproduce
+          the old "keep top_k per mention, highest similarity first" semantics
+          (previously enforced in Python after the fact).
+        * Return shape ``{normalized_text: [(entity_id, sim), ...]}`` and the
+          lower/strip normalisation of inputs are unchanged.
         """
         if not mention_texts:
             return {}
         normalized = [t.lower().strip() for t in mention_texts]
-        # Use UNNEST to pass all search terms in one round-trip
+        # Set the pg_trgm cutoff for ``%`` to exactly the caller's threshold,
+        # scoped to this session/transaction (re-applied per call because the
+        # async session is pooled — see fuzzy_trigram()).
+        await self._session.execute(text("SELECT set_limit(:threshold)"), {"threshold": threshold})
+        # One round-trip: unnest the terms, then LATERAL-probe the GIN index
+        # per term.  ``top_k`` lives inside the LATERAL so each term is capped
+        # at the index level rather than after a full-table scan.
         result = await self._session.execute(
             text(
-                "SELECT q.search_term, ea.entity_id, "
-                "similarity(ea.normalized_alias_text, q.search_term) AS sim "
+                "SELECT q.search_term, m.entity_id, m.sim "
                 "FROM unnest(cast(:terms AS text[])) AS q(search_term) "
-                "JOIN entity_aliases ea ON "
-                "  similarity(ea.normalized_alias_text, q.search_term) > :threshold "
+                "JOIN LATERAL ("
+                "  SELECT ea.entity_id, "
+                "    similarity(ea.normalized_alias_text, q.search_term) AS sim "
+                "  FROM entity_aliases ea "
+                "  WHERE ea.normalized_alias_text % q.search_term "
                 "  AND ea.is_active = true "
-                "ORDER BY q.search_term, sim DESC",
+                "  AND similarity(ea.normalized_alias_text, q.search_term) > :threshold "
+                "  ORDER BY ea.normalized_alias_text <-> q.search_term "
+                "  LIMIT :top_k "
+                ") AS m ON true "
+                "ORDER BY q.search_term, m.sim DESC",
             ),
-            {"terms": normalized, "threshold": threshold},
+            {"terms": normalized, "threshold": threshold, "top_k": top_k_per_mention},
         )
         # Group results by search term, keep top_k per mention
         out: dict[str, list[tuple[UUID, float]]] = {}
