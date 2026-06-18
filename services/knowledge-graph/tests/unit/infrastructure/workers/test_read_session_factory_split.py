@@ -319,3 +319,82 @@ class TestEntityEnrichmentAdapterFetchUsesReadFactory:
         # The write factory is only used by mutation methods that take a caller
         # supplied session; ``list_unenriched`` must never open a write session.
         write_sf.assert_not_called()
+
+
+class TestEntityEnrichmentAdapterFetchRecentEvidence:
+    """News-grounding (description audit 2026-06-17) — ``fetch_recent_evidence``."""
+
+    @staticmethod
+    def _adapter_with_rows(rows: list[tuple[str, object]]):
+        """Build an adapter whose read session returns ``rows`` from execute()."""
+        from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+            EntityEnrichmentAdapter,
+        )
+
+        write_sf, _ = _make_factory("write")
+        read_sf, read_sess = _make_factory("read")
+        result_obj = MagicMock()
+        result_obj.fetchall = MagicMock(return_value=rows)
+        read_sess.execute = AsyncMock(return_value=result_obj)
+        adapter = EntityEnrichmentAdapter(write_sf, read_session_factory=read_sf)
+        return adapter, read_sf, write_sf
+
+    @pytest.mark.asyncio
+    async def test_opens_read_factory_only(self) -> None:
+        """Pure SELECT — must open the read factory and never the write factory."""
+        from uuid import uuid4
+
+        adapter, read_sf, write_sf = self._adapter_with_rows([])
+        out = await adapter.fetch_recent_evidence(uuid4())
+        assert out == []
+        read_sf.assert_called_once()
+        write_sf.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_result_returns_empty_list(self) -> None:
+        from uuid import uuid4
+
+        adapter, _, _ = self._adapter_with_rows([])
+        assert await adapter.fetch_recent_evidence(uuid4()) == []
+
+    @pytest.mark.asyncio
+    async def test_dedup_preserves_recency_order(self) -> None:
+        """Verbatim duplicates are collapsed; first (newest) occurrence wins."""
+        from uuid import uuid4
+
+        rows = [
+            ("Newest fact about the entity.", "t3"),
+            ("Newest fact about the entity.", "t2"),  # duplicate of the above
+            ("An older distinct fact.", "t1"),
+        ]
+        adapter, _, _ = self._adapter_with_rows(rows)
+        out = await adapter.fetch_recent_evidence(uuid4())
+        assert out == ["Newest fact about the entity.", "An older distinct fact."]
+
+    @pytest.mark.asyncio
+    async def test_limit_caps_returned_snippets(self) -> None:
+        from uuid import uuid4
+
+        rows = [(f"Fact {i}.", f"t{i}") for i in range(20)]
+        adapter, _, _ = self._adapter_with_rows(rows)
+        out = await adapter.fetch_recent_evidence(uuid4(), limit=2)
+        assert out == ["Fact 0.", "Fact 1."]
+
+    @pytest.mark.asyncio
+    async def test_truncates_long_snippet(self) -> None:
+        from uuid import uuid4
+
+        rows = [("Z" * 500, "t1")]
+        adapter, _, _ = self._adapter_with_rows(rows)
+        out = await adapter.fetch_recent_evidence(uuid4())
+        assert len(out) == 1
+        assert len(out[0]) == 300
+
+    @pytest.mark.asyncio
+    async def test_blank_snippets_skipped(self) -> None:
+        from uuid import uuid4
+
+        rows = [("   ", "t2"), ("A real fact.", "t1")]
+        adapter, _, _ = self._adapter_with_rows(rows)
+        out = await adapter.fetch_recent_evidence(uuid4())
+        assert out == ["A real fact."]

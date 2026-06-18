@@ -76,6 +76,10 @@ def _make_adapter(seeded: list[str] | None = None) -> AsyncMock:
     adapter.seed_relations = AsyncMock(return_value=seeded or [])
     adapter.write_enrichment_result = AsyncMock()
     adapter.increment_attempts = AsyncMock()
+    # News-grounding (description audit 2026-06-17): the use case fetches recent
+    # evidence before the LLM call. Default to "no news" so tests not exercising
+    # grounding behave as before (the adapter then injects its no-news guard).
+    adapter.fetch_recent_evidence = AsyncMock(return_value=[])
     return adapter
 
 
@@ -466,3 +470,45 @@ async def test_enrichment_attempts_incremented_on_llm_short_response() -> None:
     await worker.run()
 
     adapter.increment_attempts.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# News-grounding (description audit 2026-06-17)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_news_context_passed_to_llm() -> None:
+    """The recent-evidence snippets fetched from the adapter must be forwarded
+    to ``generate_description`` as ``news_context`` so the model grounds the
+    description in real facts."""
+    entity = _make_entity(entity_type="person", ticker=None)
+    snippets = ["Jane Doe was appointed CFO in 2026.", "She previously led finance at Acme."]
+    adapter = _make_adapter()
+    adapter.fetch_recent_evidence = AsyncMock(return_value=snippets)
+    llm = _make_llm("Jane Doe is a finance executive.")
+    uc = _make_use_case(adapter=adapter, mdc=_make_mdc(), llm=llm)
+
+    await uc.enrich(entity)
+
+    adapter.fetch_recent_evidence.assert_awaited_once_with(entity.entity_id)
+    llm.generate_description.assert_awaited_once()
+    assert llm.generate_description.call_args.kwargs["news_context"] == snippets
+
+
+@pytest.mark.asyncio
+async def test_news_fetch_error_degrades_to_none() -> None:
+    """If the evidence fetch raises, enrichment must NOT fail — it proceeds with
+    ``news_context=None`` (grounding is best-effort)."""
+    entity = _make_entity(entity_type="person", ticker=None)
+    adapter = _make_adapter()
+    adapter.fetch_recent_evidence = AsyncMock(side_effect=RuntimeError("read replica down"))
+    llm = _make_llm("Jane Doe is a finance executive.")
+    uc = _make_use_case(adapter=adapter, mdc=_make_mdc(), llm=llm)
+
+    # Must not raise.
+    result = await uc.enrich(entity)
+
+    assert result is not None
+    llm.generate_description.assert_awaited_once()
+    assert llm.generate_description.call_args.kwargs["news_context"] is None
