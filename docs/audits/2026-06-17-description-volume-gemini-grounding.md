@@ -217,6 +217,16 @@ win; gemini's marginal grounded edge isn't worth its cost/latency/operational ri
 
 ## Part 5 — Implementation plan (ready to execute; news-grounding on 235b)
 
+> **STATUS (2026-06-17): SHIPPED (code only) on branch `feat/kg-description-news-grounding`.** Steps
+> 1–4 (ml-clients: protocol + DeepInfra/Gemini/Chained/Null adapters), step 4-DB
+> (`EntityEnrichmentAdapter.fetch_recent_evidence`), and step 5 (`StructuredEnrichmentUseCase` Step 3
+> fetch+pass, best-effort degrade-to-None) are implemented with unit tests (ml-clients description
+> suite + KG enrichment/read-split suites green). `news_context` is defaulted (`None`) and
+> forward-compatible throughout; Qwen3-235B kept (no model swap); BP-339 note preserved (no
+> `reasoning_effort`). **Deferred:** the `DefinitionRefreshWorker` (13D-1) mirror — that worker holds
+> no evidence-fetch dependency, so wiring it is non-trivial; follow-up. `structured_enrichment_consumer_main.py`
+> intentionally untouched (R42, sibling session). Not yet deployed; acceptance A/B re-run pending.
+
 Fully mapped against the live code. Every new arg is **defaulted (`= None`)** → forward-compatible, each
 layer lands independently. **Do NOT touch `structured_enrichment_consumer_main.py`** (active sibling
 session, R42). Suggested order (leaf → root), one commit + tests per step:
