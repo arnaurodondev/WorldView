@@ -9,6 +9,7 @@ from results/kg_desc_eval/eval.py. Adds:
 
 READ-ONLY. DeepInfra API only. No production change.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,29 +25,35 @@ HERE = os.path.dirname(__file__)
 
 # Import the verbatim prod prompt + helpers from the prior harness.
 import sys
+
 sys.path.insert(0, os.path.join(HERE, "..", "kg_desc_eval"))
-from eval import SYSTEM_PROMPT, build_prompt, JUDGE_SYS, JUDGE  # noqa: E402
+from eval import JUDGE, JUDGE_SYS, SYSTEM_PROMPT, build_prompt  # noqa: E402
 
 # Arms: (model, reasoning_effort, label, use_news). max_tokens 256 = prod.
 ARMS = [
-    ("Qwen/Qwen3-235B-A22B-Instruct-2507", None, "235b", False),       # baseline (re-run subset)
-    ("google/gemini-3.1-flash-lite", None, "gemini", False),           # Part 2
-    ("Qwen/Qwen3-235B-A22B-Instruct-2507", None, "235b+news", True),   # Part 3
-    ("google/gemini-3.1-flash-lite", None, "gemini+news", True),       # Part 3
+    ("Qwen/Qwen3-235B-A22B-Instruct-2507", None, "235b", False),  # baseline (re-run subset)
+    ("google/gemini-3.1-flash-lite", "low", "gemini", False),  # Part 2 (FIX: thinking model — reasoning_effort=low)
+    ("Qwen/Qwen3-235B-A22B-Instruct-2507", None, "235b+news", True),  # Part 3
+    ("google/gemini-3.1-flash-lite", "low", "gemini+news", True),  # Part 3
 ]
 RUNS_OBSCURE = 2
 RUNS_WELLKNOWN = 1
 
 
 def call(model, system, user, reasoning, max_tokens=256, temperature=0.3):
-    body = {"model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": temperature, "max_tokens": max_tokens}
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
     if reasoning is not None:
         body["reasoning_effort"] = reasoning
     req = urllib.request.Request(
-        URL, data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
+        URL,
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+    )
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=180) as r:
@@ -55,7 +62,7 @@ def call(model, system, user, reasoning, max_tokens=256, temperature=0.3):
         content = (msg.get("content") or "").strip()
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
         return content, time.time() - t0, resp.get("usage", {})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"__ERR__ {e}", time.time() - t0, {}
 
 
@@ -64,26 +71,38 @@ def build_grounded_prompt(name, etype, hints, snippets):
     base = build_prompt(name, etype, hints)
     if not snippets:
         # Grounded-but-no-news: tell the model there is no corroborating news.
-        ctx = ("\n\nNEWS CONTEXT: No corroborating news mentions were found for this entity. "
-               "Describe only the general category; do NOT invent specifics.")
+        ctx = (
+            "\n\nNEWS CONTEXT: No corroborating news mentions were found for this entity. "
+            "Describe only the general category; do NOT invent specifics."
+        )
     else:
         joined = "\n".join(f"- {s}" for s in snippets)
-        ctx = ("\n\nNEWS CONTEXT (verbatim snippets from articles where this entity was mentioned; "
-               "ground your description in these facts and do not contradict or go beyond them):\n" + joined)
+        ctx = (
+            "\n\nNEWS CONTEXT (verbatim snippets from articles where this entity was mentioned; "
+            "ground your description in these facts and do not contradict or go beyond them):\n" + joined
+        )
     return base + ctx
 
 
 def judge(name, etype, hints, desc):
     hints_str = "; ".join(f"{k}={v}" for k, v in hints.items() if v) or "(none)"
-    user = (f"INPUT CONTEXT given to the writer:\n  name: {name}\n  entity_type: {etype}\n"
-            f"  hints: {hints_str}\n\nGENERATED description:\n{desc}")
+    user = (
+        f"INPUT CONTEXT given to the writer:\n  name: {name}\n  entity_type: {etype}\n"
+        f"  hints: {hints_str}\n\nGENERATED description:\n{desc}"
+    )
     out, _, _ = call(JUDGE, JUDGE_SYS, user, None, max_tokens=300, temperature=0.0)
     s, e = out.find("{"), out.rfind("}")
     try:
-        return json.loads(out[s:e + 1])
-    except Exception:  # noqa: BLE001
-        return {"fabricated_claims": None, "hallucination": None, "grounding": None,
-                "accuracy": None, "completeness": None, "note": out[:60]}
+        return json.loads(out[s : e + 1])
+    except Exception:
+        return {
+            "fabricated_claims": None,
+            "hallucination": None,
+            "grounding": None,
+            "accuracy": None,
+            "completeness": None,
+            "note": out[:60],
+        }
 
 
 def main():
@@ -104,20 +123,36 @@ def main():
             if use_news and stratum == "well_known":
                 continue
             user = build_grounded_prompt(name, etype, hints, snippets) if use_news else build_prompt(name, etype, hints)
+            # gemini-3.1-flash-lite is a THINKING model (~220 reasoning tokens before any answer);
+            # at the 235b-tuned 256 cap it hits finish=length with EMPTY content. Give it room so
+            # the answer survives after reasoning (think block is stripped in call()). 235b keeps the
+            # prod cap of 256 (its answers fit; mean ~80 tokens). This is the harness bug that made
+            # the first A/B reject gemini on empty output (see audit Part 4 correction).
+            mt = 1024 if "gemini" in model.lower() else 256
             for run_i in range(n_runs):
-                d, dt, usage = call(model, SYSTEM_PROMPT, user, reff)
+                d, dt, usage = call(model, SYSTEM_PROMPT, user, reff, max_tokens=mt)
                 total_calls += 1
                 if d.startswith("__ERR__"):
-                    rows.append({"name": name, "type": etype, "stratum": stratum,
-                                 "arm": label, "run": run_i, "err": d[:120]})
+                    rows.append(
+                        {"name": name, "type": etype, "stratum": stratum, "arm": label, "run": run_i, "err": d[:120]}
+                    )
                     print(f"[{label:12}] ERR {name[:24]}: {d[:80]}")
                     continue
                 j = judge(name, etype, hints, d)
                 total_calls += 1
-                rec = {"name": name, "type": etype, "stratum": stratum, "arm": label, "run": run_i,
-                       "has_news": bool(snippets), "latency_s": round(dt, 2),
-                       "tokens_in": usage.get("prompt_tokens"), "tokens_out": usage.get("completion_tokens"),
-                       "desc": d, "judge": j}
+                rec = {
+                    "name": name,
+                    "type": etype,
+                    "stratum": stratum,
+                    "arm": label,
+                    "run": run_i,
+                    "has_news": bool(snippets),
+                    "latency_s": round(dt, 2),
+                    "tokens_in": usage.get("prompt_tokens"),
+                    "tokens_out": usage.get("completion_tokens"),
+                    "desc": d,
+                    "judge": j,
+                }
                 rows.append(rec)
                 for m in ("fabricated_claims", "hallucination", "grounding", "accuracy", "completeness"):
                     v = j.get(m)
@@ -130,8 +165,10 @@ def main():
                 if usage.get("prompt_tokens"):
                     per_arm[label][("ALL", "tin")].append(usage["prompt_tokens"])
                     per_arm[label][("ALL", "tout")].append(usage.get("completion_tokens", 0))
-                print(f"[{label:12}] {stratum:10} {etype[:4]} {name[:24]:24} news={int(bool(snippets))} "
-                      f"fab={j.get('fabricated_claims')} hal={j.get('hallucination')} grnd={j.get('grounding')} t={dt:.1f}s")
+                print(
+                    f"[{label:12}] {stratum:10} {etype[:4]} {name[:24]:24} news={int(bool(snippets))} "
+                    f"fab={j.get('fabricated_claims')} hal={j.get('hallucination')} grnd={j.get('grounding')} t={dt:.1f}s"
+                )
 
     def agg(label, stratum, m):
         vals = per_arm[label].get((stratum, m), [])

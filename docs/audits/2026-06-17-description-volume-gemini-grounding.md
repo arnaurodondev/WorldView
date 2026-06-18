@@ -8,16 +8,20 @@ entity-description capability (`DefinitionRefreshWorker` 13D-1 + `StructuredEnri
 `model_id=Qwen/Qwen3-235B-A22B-Instruct-2507`, `temperature=0.3`, `max_tokens=256`,
 `description_max_monthly_usd=10.0`, prompt-cached (`prompt_cache_key="entity_description_v1"`).
 
-> **Run status (FINAL, 2026-06-17 — A/B EXECUTED).** The revoked DeepInfra key (`xVi3…GivI` → HTTP 401)
-> was rotated to a working key and redeployed across `worldview-gitops`; the platform LLM layer is
-> restored. **The full live A/B then ran to completion** (360 gen+judge calls, DeepSeek-V4-Flash judge,
-> `news_context.json` rebuilt from the live `relation_evidence_raw` join). **Results in Part 4 below.**
-> Headline: **news-grounding on the existing Qwen3-235B is the fix** — obscure-person fabrication
-> **1.83 → 0.17** (−91%), grounding **2.50 → 4.75**, description richness preserved. **The gemini arms
-> are INVALID**: `google/gemini-3.1-flash-lite` returned **100% empty output** (54/54 + 36/36 blank, 0
-> chars) on DeepInfra when called with no reasoning/thinking config — the same empty-output reasoning-model
-> trap as gpt-oss. Its apparent "low fabrication" is an artefact of emitting nothing. **Verdict resolves to:
-> implement news-grounding on 235b; do NOT migrate to gemini.**
+> **Run status (FINAL v2, 2026-06-17 — A/B EXECUTED + gemini re-QA'd).** The revoked DeepInfra key
+> (`xVi3…GivI` → 401) was rotated and redeployed via `worldview-gitops`; the LLM layer is restored. The
+> live A/B ran twice. **v1 (results_v1_gemini_starved.json) had a HARNESS BUG**: it called
+> `gemini-3.1-flash-lite` at the 235b-tuned `max_tokens=256`, but gemini is a **thinking model** that
+> spends ~220 tokens on reasoning before any answer → it hit `finish=length` with EMPTY content (the same
+> trap as gpt-oss). v1 therefore rejected gemini unfairly. **v2 (current results.json) fixed it** (gemini
+> arms: `max_tokens=1024` + `reasoning_effort=low`, `<think>` stripped) — gemini now emits real
+> descriptions (0 empty). **Corrected verdict (Part 4):** **news-grounding is the fix, on either model**
+> (obscure-person fab **2.0→0.25** on 235b, **1.58→0.17** on gemini; grounding 1.75→~4.6). **Bare gemini
+> barely beats bare 235b** (fab 1.58 vs 2.0) — a model swap alone does NOT solve fabrication. **Once
+> grounded, 235b vs gemini is a wash** (235b+news fab 0.25 / best completeness 3.39 vs gemini+news 0.17 /
+> terser 0.31kchar). **Resolution: implement news-grounding; KEEP 235b** — gemini's marginal grounded edge
+> is not worth its 4.8× cost + thinking-model latency + empty-output footgun (silent fail if
+> `max_tokens`<~512).
 
 ---
 
@@ -162,49 +166,52 @@ lift on the staged A/B, then wiring the plumbing.
 
 ---
 
-## Part 4 — LIVE A/B results (EXECUTED 2026-06-17, n=360 gen+judge calls)
+## Part 4 — LIVE A/B results (EXECUTED 2026-06-17; v2 = gemini fairly QA'd)
 
-Four arms, DeepSeek-V4-Flash judge, `max_tokens=256 temperature=0.3` (prod), news snippets from the
-**live** `relation_evidence_raw.evidence_text` join (top-3 by `extracted_at DESC`, subject-or-object).
-Fabrication / hallucination / severe are *per-description* counts (lower = better); grounding / accuracy
-/ completeness are 1–5 (higher = better).
+Four arms, DeepSeek-V4-Flash judge, `temperature=0.3`, news snippets from the **live**
+`relation_evidence_raw.evidence_text` join (top-3 by `extracted_at DESC`, subject-or-object). **235b
+arms: `max_tokens=256` (prod).** **gemini arms: `max_tokens=1024` + `reasoning_effort=low`** — REQUIRED
+because gemini-3.1-flash-lite is a thinking model (~220 reasoning tokens before any answer); at 256 it
+returns EMPTY (the v1 bug, see below). Fabrication / hallucination / severe = per-description counts
+(lower better); grounding / accuracy / completeness = 1–5 (higher better).
 
-| Arm | stratum | n | **fab↓** | hallu↓ | severe↓ | ground↑ | acc↑ | compl↑ | toks_out |
+| Arm | stratum | n | **fab↓** | hallu↓ | sev↓ | grnd↑ | acc↑ | compl↑ | toks_out |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| 235b (baseline) | obscure | 36 | 0.64 | 0.44 | 8 | 3.89 | 3.92 | 3.28 | 82 |
-| **235b+news** | obscure | 36 | **0.19** | 0.17 | 3 | **4.64** | **4.67** | **3.50** | 70 |
-| gemini ⚠️ | obscure | 36 | 0.08 | 0.17 | 3 | 4.39 | 4.39 | 2.33 | **9 (EMPTY)** |
-| gemini+news ⚠️ | obscure | 36 | 0.03 | 0.06 | 1 | 4.64 | 4.64 | 2.64 | **9 (EMPTY)** |
-| 235b (baseline) | **obscure_person** | 12 | **1.83** | 1.17 | 7 | **2.50** | 2.50 | 2.17 | 82 |
-| **235b+news** | **obscure_person** | 12 | **0.17** | 0.17 | 1 | **4.75** | 4.67 | 3.33 | 70 |
-| gemini ⚠️ | obscure_person | 12 | 0.25 | 0.50 | 3 | 4.00 | 4.00 | 2.33 | **9 (EMPTY)** |
-| gemini+news ⚠️ | obscure_person | 12 | 0.08 | 0.17 | 1 | 4.67 | 4.67 | 2.50 | **9 (EMPTY)** |
+| 235b (baseline) | obscure | 36 | 0.69 | 0.61 | 11 | 3.64 | 3.67 | 3.14 | 82 |
+| gemini (bare) | obscure | 36 | 0.64 | 0.56 | 10 | 3.72 | 3.69 | 3.08 | 70 |
+| **235b+news** | obscure | 36 | 0.25 | 0.22 | 4 | 4.58 | 4.56 | **3.39** | 70 |
+| gemini+news | obscure | 36 | **0.17** | 0.22 | 4 | 4.58 | 4.58 | 3.36 | 52 |
+| 235b (baseline) | **obscure_person** | 12 | **2.00** | 1.67 | 10 | **1.75** | 1.75 | 1.67 | 82 |
+| gemini (bare) | obscure_person | 12 | 1.58 | 1.33 | 8 | 2.25 | 2.17 | 2.00 | 70 |
+| **235b+news** | obscure_person | 12 | 0.25 | 0.17 | 1 | **4.75** | 4.67 | 3.17 | 70 |
+| gemini+news | obscure_person | 12 | **0.17** | 0.33 | 2 | 4.50 | 4.50 | 3.17 | 52 |
 
-**⚠️ The gemini arms are INVALID — 100% empty output.** `google/gemini-3.1-flash-lite` returned blank
-strings for **all 90** of its calls (54 no-news + 36 news; avg 0 chars, `tokens_out`≈9). Called with no
-`reasoning_effort`/thinking config it spends its budget on hidden reasoning and emits empty `content` —
-identical to the gpt-oss trap. Its "best fabrication" scores are an artefact of saying nothing; ignore
-them. (To evaluate gemini at all would require the adapter to send a thinking/effort param — but see the
-verdict: it's moot, grounding-on-235b already wins.)
+**v1 harness bug (corrected here).** The first run called gemini at `max_tokens=256` → `finish=length`,
+`reasoning_tokens≈246`, `content=''` for **all 90** gemini calls. That was a config artefact, not a model
+limit — `google/gemini-3.1-flash-lite` emits its reasoning as an inline `<think>…</think>` block and needs
+headroom for the answer after it. v2 (1024 tokens + `reasoning_effort=low`, `<think>` stripped) gives 0
+empty. Raw: v1 `results_v1_gemini_starved.json`, v2 `results.json`.
 
-**The real result — news-grounding on 235b is decisive:**
-- **Obscure persons (the worst cell): fabrication 1.83 → 0.17 (−91%), grounding 2.50 → 4.75, completeness
-  2.17 → 3.33.** It both kills invented facts *and* makes descriptions more complete (because real
-  evidence gives it something true to say).
-- **All obscure: fabrication 0.64 → 0.19 (−70%), grounding 3.89 → 4.64**, richness preserved (390 chars).
-- **Qualitative proof (real outputs):**
-  - *Mark Meador* — 235b: **"Chief Financial Officer of Workday, Inc."** (fabricated). 235b+news:
-    **"Commissioner of the U.S. Federal Trade Commission"** (correct — grounded in the injected news).
-  - *Allison McNeely* (zero news) — 235b: **"leadership roles in asset management and investment advisory
-    firms"** (invented). 235b+news: **"without corroborating information, no specific role or achievements
-    can be verified"** — the **no-news guard** suppressing confabulation exactly as designed.
+**Three findings:**
+1. **News-grounding is the dominant lever — on either model.** Obscure-person fabrication **2.0 → 0.25**
+   (235b) and **1.58 → 0.17** (gemini); grounding 1.75 → ~4.6; completeness ~doubles (real evidence gives
+   the model something true to say). This is the fix.
+2. **A bare model swap is NOT a fix.** Bare gemini barely beats bare 235b (obscure-person fab 1.58 vs 2.0,
+   grounding 2.25 vs 1.75) — better world knowledge, but it still fabricates heavily on entities it
+   doesn't know. Swapping the model without grounding leaves the core problem.
+3. **Once grounded, 235b vs gemini is a wash.** `gemini+news` fab 0.17 vs `235b+news` 0.25 — within n=12
+   noise; `235b+news` has the best completeness (3.39) and person-grounding (4.75), `gemini+news` is
+   terser (0.31k vs 0.39k char). gemini carries 4.8× cost, thinking-model latency, and the empty-output
+   footgun (silent fail if `max_tokens`<~512).
 
-**This confirms the two-branch design with live numbers:** (a) for the ~22% of obscure entities *with*
-news, grounding paraphrases real facts (Meador); (b) for the ~78% *without*, the explicit "no
-corroborating news → describe only the category" guard turns a confident fabrication into an honest
-non-claim (McNeely). Both branches are already exercised in the prototype prompt and both work.
+**Qualitative proof (235b → 235b+news):** *Mark Meador* — "CFO of Workday" (fabricated) → "Commissioner
+of the U.S. FTC" (correct, from injected news). *Allison McNeely* (zero news) — "asset-management
+leadership roles" (invented) → "without corroborating information, no specific role can be verified" (the
+no-news guard). Both branches work.
 
-**Eval $:** ~360 calls ≈ <$0.40, completed. Raw: `results/desc_grounding_eval/results.json`.
+**Decision: implement news-grounding; KEEP Qwen3-235B (no model swap).** Grounding is the model-agnostic
+win; gemini's marginal grounded edge isn't worth its cost/latency/operational risk. **Eval $:** v1+v2 ≈
+<$0.80. Raw: `results/desc_grounding_eval/`.
 
 ---
 
@@ -271,12 +278,14 @@ expect obscure-person fab ≤ ~0.2 (from 1.83), grounding ≥ ~4.5.
    ship the *"no corroborating news → category-only"* guard as a first-class path, not an afterthought;
    that guard alone suppresses most obscure-person confabulation. Also **fetch evidence at query time**
    (the TARA stand-in error proves a static news map goes stale — join `relation_evidence_raw` live).
-2. **(a) Migrate to gemini — NO (resolved by the live A/B).** `google/gemini-3.1-flash-lite` returned
-   **100% empty output** on DeepInfra (no reasoning/thinking config → empty `content`, the gpt-oss trap).
-   It cannot be evaluated as-is, and it is **moot regardless**: news-grounding on the existing 235b
-   already drives obscure-person fabrication to 0.17 with *higher* completeness (3.33) than any gemini
-   arm. No model swap — keep Qwen3-235B and add grounding. (If a future need arises, gemini would first
-   require an adapter thinking/effort param before it emits anything.)
+2. **(a) Migrate to gemini — NO (resolved by the fair v2 A/B).** gemini-3.1-flash-lite *does* work once
+   given enough tokens (it's a thinking model; the v1 "100% empty" was a `max_tokens=256` harness bug).
+   But the fair comparison shows: bare gemini barely beats bare 235b (still fabricates), and **once both
+   are grounded the difference is noise** (gemini+news fab 0.17 vs 235b+news 0.25, n=12) — while 235b+news
+   has the best completeness (3.39). gemini's 4.8× cost, thinking-model latency, and empty-output footgun
+   (silent fail if `max_tokens`<~512) aren't worth a marginal grounded edge. **Keep Qwen3-235B + add
+   grounding.** (Revisit gemini+news only if squeezing the last fabrication point ever becomes a priority;
+   it would need the adapter to send `reasoning_effort` + `max_tokens`≥512.)
 3. **Not (d) "neither":** the status quo confidently poisons the graph with fabricated biographies for
    unknown persons (235B **1.83** fab/obscure-person, live). Doing nothing is the worst option for KG
    quality.
