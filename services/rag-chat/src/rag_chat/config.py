@@ -218,6 +218,27 @@ class Settings(BaseSettings):
     # RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS.
     entity_grounding_rewrite_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
 
+    # RC-1 (2026-06-18 internal-tool latency investigation) — configurable model
+    # for the SINGLE combined grounding-repair rewrite. The combined
+    # numeric+entity grounding pass fires at most one repair completion per turn
+    # (the dominant tail-latency cost: a full completion on the 235B model).
+    # Setting this lets an operator A/B the repair rewrite on a cheaper/faster
+    # model (e.g. gpt-oss-120b / gpt-oss-20b) WITHOUT a code change, while the
+    # primary synthesis turn keeps the default ``completion_model``.
+    #
+    # DEFAULT None → the rewrite uses the existing completion model (the chain's
+    # active provider model), so behaviour is byte-for-byte unchanged when unset.
+    # When set to a non-empty model id, the combined rewrite's ``stream_chat``
+    # call is issued with ``model=<this>`` so the provider adapter routes the
+    # single repair completion to the override model.
+    #
+    # NOTE: if a gpt-oss model is selected, the DeepInfra adapter must send
+    # ``reasoning_effort`` for that family — this field does NOT set it. The
+    # operator configures reasoning_effort separately (see the adapter's gpt-oss
+    # handling); we deliberately do not hardcode it here.
+    # Override via RAG_CHAT_GROUNDING_REWRITE_MODEL.
+    grounding_rewrite_model: str | None = None
+
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
     #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor
@@ -253,9 +274,7 @@ class Settings(BaseSettings):
     # Bounded retry on a transient classifier transport failure BEFORE declaring
     # the classifier unavailable. 0 disables retries (legacy behaviour). Kept
     # small (1) so a real outage surfaces fast instead of multiplying latency.
-    classifier_retry_attempts: int = Field(
-        default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS"
-    )
+    classifier_retry_attempts: int = Field(default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS")
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant

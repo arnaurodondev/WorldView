@@ -258,10 +258,16 @@ class OpenRouterCompletionAdapter:
         thread_id: UUID | None = None,
         tools: list[dict] | None = None,
         seed: int | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the final answer turn from an OpenAI-format messages list."""
+        """Stream the final answer turn from an OpenAI-format messages list.
+
+        RC-1 (2026-06-18): ``model`` overrides ``self._model`` for THIS call
+        only (combined grounding-repair rewrite A/B). ``None`` preserves the
+        prior behaviour.
+        """
         payload: dict[str, object] = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": messages,
             "stream": True,
             "max_tokens": max_tokens,

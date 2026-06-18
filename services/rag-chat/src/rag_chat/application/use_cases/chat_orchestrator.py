@@ -3457,79 +3457,65 @@ class ChatOrchestratorUseCase:
         # already short-circuited — the refusal text has no numbers to
         # validate and the validator would either no-op or false-positive.
         grounding_passed = True
-        # BP-670: track whether the numeric pass spent an LLM rewrite. The
-        # live 50s Apple-news turn burned 16.5s on a numeric rewrite AND a
-        # further 15s on an entity-grounding rewrite that timed out — two
-        # sequential LLM repair calls on one answer. We cap the turn at ONE
-        # repair rewrite: if the numeric pass already rewrote, the entity
-        # pass below runs validate-only (banner on failure, no second call).
-        _pre_numeric_text = full_text
+        # RC-1 (2026-06-18 internal-tool latency investigation): the numeric and
+        # entity-name grounding passes are MERGED into ONE combined pass. Both
+        # deterministic validators still run (the cheap ~105ms checks identify
+        # the ungrounded numbers AND names); if EITHER finds genuine issues a
+        # SINGLE rewrite completion is fired whose prompt lists both classes,
+        # then both are re-validated. This replaces the prior up-to-two
+        # sequential rewrites (16.5s numeric + 15s entity on the live 50s
+        # Apple-news turn) with at most ONE — and FIXES a name issue that
+        # co-occurs with a number issue instead of merely bannering it
+        # (BP-670 forced the entity pass to validate-only when numeric rewrote).
+        #
+        # ``grounding_passed`` is the AND of numeric AND entity grounding — same
+        # semantics as the prior ``grounding_passed and entity_grounding_passed``
+        # that gated the completion-cache write (F-LIVE-008: never cache a
+        # validator-rejected answer; it poisons the deterministic key for 24h).
         if had_tool_calls and full_text.strip() and grounded:
+            # RC-1: resolve the optional repair-rewrite model override. Lazy
+            # ``Settings()`` mirrors the existing grounding-timeout lookup; a
+            # construction failure (missing env) degrades to None → default
+            # completion model (unchanged behaviour).
+            try:
+                from rag_chat.config import Settings as _RagChatSettings
+
+                _grounding_rewrite_model = _RagChatSettings().grounding_rewrite_model  # type: ignore[call-arg]
+            except Exception:
+                _grounding_rewrite_model = None
             async with phase("grounding_validation", phases):
-                full_text, grounding_passed = await self._run_grounding_validation(
+                full_text, grounding_passed = await self._run_combined_grounding_validation(
                     p=p,
                     response=full_text,
                     tool_items=non_none_items,
+                    resolved_entities=list(entities),
                     messages=messages,
                     budget=budget,
                     entity_context=entity_context,
                     # 2026-06-12 root-cause audit Theme A fix #2: feed the
-                    # actually-called tool names so (a) the phantom-citation
-                    # gate can flag ``[tool row N]`` tags naming uncalled tools
-                    # and (b) the validator's existing tool-name cross-check
-                    # (numeric_grounding._has_grounding_citation) finally
-                    # activates instead of accepting any bracket citation.
+                    # actually-called tool names so the phantom-citation gate
+                    # and the validator's tool-name cross-check activate.
                     called_tool_names=list(_executed_tool_names),
-                    # PLAN-0107 follow-up: forward eval-mode seed to inner
-                    # stream_chat rewrite for reproducibility.
+                    # PLAN-0104 W42: forward the prior-tool-call list so the
+                    # entity-NAME validator accepts the LLM's tool-call ticker
+                    # bridge (Round 6 TSLA double-refusal fix).
+                    prior_tool_calls=_prior_tool_calls,
+                    # Entity-name grounding only runs when the question carries
+                    # resolved entities — an empty set means open-domain, where
+                    # the grounded set would be empty and every name would
+                    # fail-closed (false-positive flood). Mirrors the prior
+                    # ``... and entities`` gate on the entity pass.
+                    run_entity_pass=bool(entities),
+                    # PLAN-0107 follow-up: forward eval-mode seed for repro.
                     seed=request.seed,
+                    # RC-1: configurable repair-rewrite model (None → default
+                    # completion model, unchanged behaviour).
+                    rewrite_model=_grounding_rewrite_model,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
             # generic message that would replay for any future failure.
             grounding_passed = False
-
-        # ── F-LIVE-NEW-002: Entity-name grounding validation ──────────────────
-        # Catches the empty-result hallucination pattern: the LLM names a
-        # company that exists nowhere in the resolved-entity set OR the
-        # tool result payloads. The check is fail-safe — false positives
-        # surface as ``[unverified]`` markers, false negatives let
-        # confident wrong answers through. Tune toward false positives.
-        #
-        # Gating: only runs when the question has resolved entities. An
-        # empty entity set means the question is open-domain (no specific
-        # company anchor) and the grounded set would be empty — every
-        # company name in the response would fail closed, flooding false
-        # positives. Mirrors the BP-605 gating on _question_entity_ids.
-        if had_tool_calls and full_text.strip() and grounded and entities:
-            # BP-670: phase-tracked (the 15s entity-rewrite timeout was
-            # previously INVISIBLE in chat_phase_timings_ms — the largest
-            # single contributor to the live 50s turn had no phase entry).
-            async with phase("entity_grounding_validation", phases):
-                full_text, entity_grounding_passed = await self._run_entity_grounding_validation(
-                    p=p,
-                    response=full_text,
-                    resolved_entities=list(entities),
-                    tool_items=non_none_items,
-                    messages=messages,
-                    budget=budget,
-                    # PLAN-0104 W42: forward the same prior-tool-call list the
-                    # W37 ``_check_entity_grounding`` fallback uses so the
-                    # second-pass entity-NAME validator also accepts the LLM's
-                    # tool-call ticker bridge (Round 6 TSLA double-refusal fix).
-                    prior_tool_calls=_prior_tool_calls,
-                    # PLAN-0107 follow-up: forward eval-mode seed.
-                    seed=request.seed,
-                    # BP-670: one repair rewrite per turn — when the numeric
-                    # pass already replaced the answer, this pass may only
-                    # validate + banner (no second sequential LLM call).
-                    allow_rewrite=full_text == _pre_numeric_text,
-                )
-            # If entity grounding failed and even the rewrite + banner
-            # produced text, we treat the answer as un-cacheable for the
-            # same reason as numeric grounding (poison the 24h cache).
-            if not entity_grounding_passed:
-                grounding_passed = False
 
         # ── BP-674 defense-in-depth: post-grounding narration scrub ───────────
         # The grounding rewrites (above) replace ``full_text`` with their own
@@ -3714,6 +3700,440 @@ class ChatOrchestratorUseCase:
 
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
         yield p.emitter.emit_done(phase_timings_ms=_phase_snapshot)
+
+    def _build_entity_grounded_sets(
+        self,
+        *,
+        resolved_entities: list[Any],
+        tool_items: list,
+        prior_tool_calls: list[Any] | None,
+    ) -> tuple[set[str], set[str], str]:
+        """Build the entity-name grounded sets used by both the entity pass and
+        the combined pass.
+
+        Extracted VERBATIM from :meth:`_run_entity_grounding_validation` so the
+        combined pass grounds names with byte-identical logic (resolved-entity
+        attrs + tool citation_meta/item_id + text-body tickers + prior-tool-call
+        ticker bridge + verbatim tool-text blob). Returns
+        ``(grounded_names, tool_refs, tool_text_blob)``. No behavioural change —
+        this is a shared helper, not a new rule.
+        """
+        grounded_names: set[str] = set()
+        for ent in resolved_entities:
+            if ent is None:
+                continue
+            for attr in ("canonical_name", "ticker", "matched_text"):
+                v = getattr(ent, attr, None)
+                if isinstance(v, str) and v:
+                    grounded_names.add(v)
+
+        tool_refs: set[str] = set()
+        for item in tool_items:
+            if item is None:
+                continue
+            cm = getattr(item, "citation_meta", None)
+            if cm is not None:
+                ent_name = getattr(cm, "entity_name", None)
+                if isinstance(ent_name, str) and ent_name:
+                    tool_refs.add(ent_name)
+            item_id = getattr(item, "item_id", None)
+            if isinstance(item_id, str) and item_id:
+                tool_refs.add(item_id)
+            for attr in ("ticker", "canonical_name", "entity_name"):
+                v = getattr(item, attr, None)
+                if isinstance(v, str) and v:
+                    tool_refs.add(v)
+            text_body = getattr(item, "text", None)
+            if isinstance(text_body, str) and text_body:
+                for match in _TOOL_TEXT_TICKER_RE.findall(text_body):
+                    tool_refs.add(match)
+
+        if prior_tool_calls:
+            for tc in prior_tool_calls:
+                tc_input = getattr(tc, "input", None) or {}
+                if not isinstance(tc_input, dict):
+                    continue
+                for k, v in tc_input.items():
+                    if k not in _ENTITY_TYPED_FIELDS and k not in _TICKER_LIKE_FIELDS:
+                        continue
+                    for ident in _normalise_entity_identifier(v):
+                        if ident:
+                            tool_refs.add(ident)
+
+        _tool_text_parts: list[str] = []
+        for item in tool_items:
+            _t = getattr(item, "text", None)
+            if isinstance(_t, str) and _t:
+                _tool_text_parts.append(_t[:4000])
+        tool_text_blob = "\n".join(_tool_text_parts)
+        return grounded_names, tool_refs, tool_text_blob
+
+    async def _run_combined_grounding_validation(
+        self,
+        *,
+        p: ChatPipeline,
+        response: str,
+        tool_items: list,
+        resolved_entities: list[Any],
+        messages: list[dict[str, Any]],
+        budget: AgentBudget,
+        entity_context: Any = None,
+        called_tool_names: list[str] | None = None,
+        prior_tool_calls: list[Any] | None = None,
+        run_entity_pass: bool = True,
+        seed: int | None = None,
+        rewrite_model: str | None = None,
+    ) -> tuple[str, bool]:
+        """RC-1 — single combined numeric + entity-name grounding pass.
+
+        Merges the two formerly-sequential rewrite passes
+        (:meth:`_run_grounding_validation` for numbers,
+        :meth:`_run_entity_grounding_validation` for names) into ONE repair
+        completion per turn. The two deterministic validators (the cheap
+        ~105ms checks) STILL run independently and identify the ungrounded
+        numbers AND names; if EITHER finds genuine issues we fire a SINGLE
+        ``stream_chat`` rewrite whose prompt lists BOTH the ungrounded numbers
+        and the ungrounded names, then re-validate both and banner only on
+        residual failure.
+
+        Why this is faster AND better:
+          * Faster: at most ONE rewrite completion (the dominant tail-latency
+            cost) instead of up to two sequential ones.
+          * Better: today, when the numeric pass rewrites, the entity pass is
+            forced to validate-only (``allow_rewrite=False``) and merely
+            BANNERS a fixable name issue (BP-670). Here the single rewrite is
+            instructed to ground BOTH classes, so a name problem that
+            co-occurs with a number problem is actually FIXED, not bannered.
+
+        Stricter trigger: when both validators pass on the ORIGINAL answer we
+        return it unchanged with NO LLM call. A fully-grounded answer never
+        triggers a rewrite — there is no quality loss because grounded answers
+        never needed one.
+
+        PRESERVED EXACTLY (the anti-fabrication safeguards):
+          * numeric phantom-citation + empty-pool refusals (deterministic, no
+            LLM) and the BP-648 small-revenue banner-suppression guard;
+          * the BP-671 divergence guard ``_rewrite_is_divergent_resynthesis``;
+          * the BP-674/675 tool-call-stub guard, the BP-648 defeatist guard,
+            the BP-670 worse-than-original numeric-degradation guard, and the
+            entity fabricated-number guard;
+          * the ``[unverified]`` banner behaviour and the
+            ``(final_text, grounding_passed)`` return + metric contract.
+
+        Returns ``(final_text, grounding_passed)``. ``grounding_passed`` is the
+        AND of numeric AND entity grounding (matching the prior orchestrator
+        semantics where ``grounding_passed and entity_grounding_passed`` gated
+        the completion-cache write).
+        """
+        from rag_chat.application.services.entity_name_grounding import (
+            EntityNameGroundingValidator,
+        )
+        from rag_chat.application.services.numeric_grounding import (
+            FieldKind,
+            NumericGroundingValidator,
+            find_phantom_tool_citations,
+            flatten_tool_values_count,
+            response_has_numeric_claims,
+        )
+
+        _called = list(called_tool_names or [])
+        _have_called_set = called_tool_names is not None
+
+        # ── NUMERIC deterministic gates (PRESERVED EXACTLY) ───────────────────
+        # Phantom-citation + empty-pool refusals fire BEFORE any rewrite and
+        # never spend an LLM call. Identical to the numeric pass.
+        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
+        if _phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_phantom_citation_refused",
+                phantom_tools=sorted(_phantom),
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_empty_pool_refused",
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_empty_pool").inc()
+            return _EMPTY_POOL_REFUSAL, False
+
+        # ── Deterministic validations (the cheap ~105ms checks) ───────────────
+        numeric_validator = NumericGroundingValidator()
+        numeric_first = numeric_validator.validate(response, tool_items, called_tool_names=_called)
+
+        # Entity validation only when the question carries resolved entities
+        # (mirrors the orchestrator gate ``... and entities``). When the entity
+        # pass is disabled the entity result is treated as a pass.
+        grounded_names: set[str] = set()
+        tool_refs: set[str] = set()
+        tool_text_blob = ""
+        entity_validator = EntityNameGroundingValidator()
+        entity_first_passed = True
+        entity_unsupported: tuple[Any, ...] = ()
+        if run_entity_pass:
+            grounded_names, tool_refs, tool_text_blob = self._build_entity_grounded_sets(
+                resolved_entities=resolved_entities,
+                tool_items=tool_items,
+                prior_tool_calls=prior_tool_calls,
+            )
+            entity_first = entity_validator.validate(response, grounded_names, tool_refs, tool_text=tool_text_blob)
+            entity_first_passed = entity_first.passed
+            entity_unsupported = entity_first.unsupported
+
+        # ── STRICTER TRIGGER: both classes grounded → no rewrite, no LLM ──────
+        if numeric_first.passed and entity_first_passed:
+            rag_grounding_validation_total.labels(result="passed").inc()
+            return response, True
+
+        # BP-648 Guard A (PRESERVED) — numeric unsupported set dominated by
+        # small-revenue quarter-label false positives: the validator is
+        # misfiring, the original is fine. Suppress the banner, skip the
+        # rewrite. Only applies when the ENTITY pass also has no genuine issue
+        # (an entity problem still warrants the combined rewrite below).
+        if entity_first_passed:
+            _total = len(numeric_first.unsupported)
+            if _total > 0:
+                _small_rev = sum(
+                    1 for u in numeric_first.unsupported if u.field_kind == FieldKind.REVENUE and abs(u.value) < 100
+                )
+                if _small_rev / _total >= 0.8:
+                    log.warning(  # type: ignore[no-any-return]
+                        "numeric_grounding_rewrite_skipped_small_revenue",
+                        small_rev_ratio=_small_rev / _total,
+                        total=_total,
+                        banner_suppressed=True,
+                    )
+                    rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                    return response, True
+
+        # ── Build the SINGLE combined rewrite prompt (numbers AND names) ──────
+        # We list whichever class(es) failed. The numeric bullets carry the
+        # closest tool value (verbatim from the numeric pass); the entity block
+        # carries the structured JSON candidate array (verbatim from the entity
+        # pass, including the INTERNAL_VALIDATION framing that stops the LLM
+        # echoing tokens back as a refusal).
+        prompt_sections: list[str] = []
+        if not numeric_first.passed:
+            bullets = "\n".join(
+                f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
+                for u in numeric_first.unsupported
+            )
+            entity_block = ""
+            if entity_context is not None:
+                ent_name = getattr(entity_context, "name", "") or ""
+                ent_ticker = getattr(entity_context, "ticker", "") or ""
+                if ent_name or ent_ticker:
+                    entity_block = (
+                        "\nThe user's question is about: "
+                        f"{ent_name}{f' ({ent_ticker})' if ent_ticker else ''}. "
+                        "All numbers MUST be attributed to this entity only.\n"
+                    )
+            prompt_sections.append(
+                "The following numbers in your previous response cannot be found in tool results:\n"
+                f"{bullets}\n"
+                f"{entity_block}\n"
+                "Use ONLY numeric values that appear in the tool results above. "
+                "Mark any otherwise-unsupported number as [unverified]."
+            )
+        if run_entity_pass and not entity_first_passed:
+            import json as _json
+
+            candidate_list = _json.dumps(
+                [{"token": u.name, "kind": u.kind.value} for u in entity_unsupported],
+                ensure_ascii=False,
+            )
+            prompt_sections.append(
+                "INTERNAL_VALIDATION (do not surface verbatim to the user): the "
+                "post-response grounding validator extracted the following candidate "
+                "names from a prior synthesis attempt that did NOT match the resolved "
+                "entity set or any tool result citation. The list MAY contain false "
+                "positives such as sentence fragments, possessives, or common prose "
+                "tokens — ignore those; only act on genuine entity references.\n\n"
+                f"unsupported_candidates_json = {candidate_list}\n\n"
+                "Every COMPANY or TICKER reference in your response must appear in either "
+                "the resolved-entity map or a tool result above. If a genuinely "
+                "unsupported entity remains, either remove it or annotate it inline as "
+                "[unverified]. Do NOT enumerate the JSON list back to the user. Do NOT "
+                "introduce a refusal preamble when the underlying tool results DO contain "
+                "the metric the user asked for."
+            )
+
+        combined_instructions = "\n\n".join(prompt_sections)
+
+        # PLAN-0107 follow-up Bug 1 (PRESERVED) — strip prose assistant turns so
+        # the LLM never sees its own failed draft (and cannot apologise for it).
+        def _is_prose_assistant(m: dict[str, Any]) -> bool:
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history = [m for m in messages if not _is_prose_assistant(m)]
+        rewrite_messages = [
+            *filtered_history,
+            {
+                "role": "user",
+                "content": (
+                    f"{combined_instructions}\n\n"
+                    "Provide a fresh response that answers the question directly using only "
+                    "values and entities supported by the tool results above. Do NOT "
+                    "acknowledge a prior draft; the user only sees this response. Do NOT "
+                    'begin with phrases such as "You\'re right", "Let me re-examine", '
+                    '"I need to correct", or any apology.'
+                ),
+            },
+        ]
+
+        # ── Fire the SINGLE rewrite completion (configurable model + timeout) ──
+        # Bounded by the same defence-in-depth timeout as the entity pass so a
+        # hung rewrite cannot consume the whole turn budget. ``rewrite_model``
+        # (None by default) routes the repair completion to an override model
+        # for A/B without changing the synthesis model.
+        from rag_chat.config import Settings as _RagChatSettings
+
+        try:
+            _rewrite_timeout = _RagChatSettings().entity_grounding_rewrite_timeout_seconds  # type: ignore[call-arg]
+        except Exception:
+            _rewrite_timeout = 15.0
+
+        async def _drain_rewrite() -> str:
+            buf = ""
+            async for chunk in p.llm_chain.stream_chat(
+                rewrite_messages,
+                max_tokens=budget.max_tokens_final,
+                temperature=0.0,  # deterministic rewrite
+                tools=[],  # forbid function calling on the repair turn
+                seed=seed,
+                # RC-1: route the single repair completion to the override model
+                # when configured; None preserves the default completion model.
+                model=rewrite_model,
+            ):
+                buf += chunk
+            return buf
+
+        rewritten = ""
+        try:
+            rewritten = await asyncio.wait_for(_drain_rewrite(), timeout=_rewrite_timeout)
+        except TimeoutError:
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_timeout",
+                timeout_s=_rewrite_timeout,
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified (validator timeout).", False
+        except Exception as exc:
+            log.warning("combined_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # ── Post-rewrite guards (ALL PRESERVED from both passes) ──────────────
+        # 1. Tool-call / planning stub (BP-674/675) — keep the grounded original.
+        if _is_tool_call_stub(rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_tool_call_stub",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 2. Defeatist short rewrite (BP-648) — keep the original.
+        _r_strip = rewritten.lstrip()
+        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
+        if any(_r_strip.startswith(pref) for pref in _refusal_prefixes) and len(rewritten) < len(response):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_defeatist",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 3. Divergent re-synthesis (BP-671) — keep the grounded original.
+        if _rewrite_is_divergent_resynthesis(response, rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_divergent_resynthesis",
+                original_len=len(response),
+                rewrite_len=len(rewritten),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 4. Phantom-citation re-check on the rewrite (Theme A).
+        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
+        if _rewrite_phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_phantom_citation_refused",
+                phantom_tools=sorted(_rewrite_phantom),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        # ── Re-validate BOTH classes on the single rewrite ────────────────────
+        numeric_second = numeric_validator.validate(rewritten, tool_items, called_tool_names=_called)
+        entity_second_passed = True
+        if run_entity_pass:
+            entity_second_passed = entity_validator.validate(
+                rewritten, grounded_names, tool_refs, tool_text=tool_text_blob
+            ).passed
+
+        # 5. Numeric worse-than-original guard (BP-670) — a rewrite that
+        # invented MORE unsupported numbers than the original fabricated
+        # content; the original is strictly safer.
+        if len(numeric_second.unsupported) > len(numeric_first.unsupported):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_worse_than_original",
+                original_unsupported=len(numeric_first.unsupported),
+                rewrite_unsupported=len(numeric_second.unsupported),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # Both classes now grounded → accept the rewrite.
+        if numeric_second.passed and entity_second_passed:
+            rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
+            return rewritten, True
+
+        # ── Residual failure: banner suppression (PRESERVED) then banner ──────
+        # Honest-refusal rewrite suppression (W44) — only when the residual is
+        # purely numeric (an honest "data unavailable" already conveys it).
+        if entity_second_passed and not numeric_second.passed:
+            _rw_strip = rewritten.lstrip()
+            _refusal_signals = (
+                "not currently available",
+                "not available",
+                "data is unavailable",
+                "I do not have",
+                "I don't have",
+                "no data is available",
+                "unable to retrieve",
+                "could not retrieve",
+            )
+            if any(sig.lower() in _rw_strip.lower()[:400] for sig in _refusal_signals) and len(rewritten) < 600:
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_banner_suppressed_honest_refusal",
+                    rewrite_len=len(rewritten),
+                )
+                rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                return rewritten, True
+
+            # Full-citation-coverage suppression (W50) — numeric residual but
+            # every number is cited (unit-suffix mismatch false positive).
+            if _answer_has_full_citation_coverage(rewritten):
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_banner_suppressed_full_citation_coverage",
+                    rewrite_len=len(rewritten),
+                )
+                rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                return rewritten, True
+
+        rag_grounding_validation_total.labels(result="failed_banner").inc()
+        return rewritten + "\n\n⚠ Some figures could not be verified against retrieved data.", False
 
     async def _run_grounding_validation(
         self,
