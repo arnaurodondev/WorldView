@@ -360,6 +360,19 @@ class EntityAliasRepository:
         # for the session, but because async sessions are pooled we set it on
         # every call to avoid leaking a stale threshold across checkouts.
         await self._session.execute(text("SELECT set_limit(:threshold)"), {"threshold": threshold})
+        # RC-3 planner fix (2026-06-18): even with the ``%`` rewrite, at the
+        # current ~37k-row alias table the planner STILL prefers a Seq Scan
+        # under PG's default ``random_page_cost=4`` — it over-prices the random
+        # index I/O of the Bitmap Index Scan.  ``SET LOCAL`` scopes the SSD-
+        # appropriate value (1.1) to THIS transaction only (auto-reverts on
+        # commit/rollback), so the GIN index ``idx_entity_aliases_trgm`` is
+        # actually chosen for the probe below.  Verified live: Seq Scan 56ms →
+        # Bitmap Index Scan 12ms.  Surgical + self-contained: no cluster-wide
+        # config change, no effect on any other query path.  ``SET LOCAL``
+        # requires an open transaction; SQLAlchemy AsyncSession runs inside one
+        # implicitly, so this is a no-op-safe statement even in autocommit-style
+        # checkouts (the value simply applies for the duration of the unit).
+        await self._session.execute(text("SET LOCAL random_page_cost = 1.1"))
         result = await self._session.execute(
             text(
                 # Inner: GIN-index-usable ``%`` probe (cutoff = set_limit above).
@@ -536,6 +549,13 @@ class EntityAliasRepository:
         # scoped to this session/transaction (re-applied per call because the
         # async session is pooled — see fuzzy_trigram()).
         await self._session.execute(text("SELECT set_limit(:threshold)"), {"threshold": threshold})
+        # RC-3 planner fix (2026-06-18): scope ``random_page_cost`` to the SSD
+        # value for THIS transaction so the planner picks the per-term Bitmap
+        # Index Scan on ``idx_entity_aliases_trgm`` rather than a Seq Scan per
+        # LATERAL loop.  See :meth:`fuzzy_trigram` for the full rationale.
+        # Verified live: 3-term batch 107ms (Seq Scan x3) -> 12ms (Bitmap Index
+        # Scan per loop), ~9x.  ``SET LOCAL`` auto-reverts on commit/rollback.
+        await self._session.execute(text("SET LOCAL random_page_cost = 1.1"))
         # One round-trip: unnest the terms, then LATERAL-probe the GIN index
         # per term.  ``top_k`` lives inside the LATERAL so each term is capped
         # at the index level rather than after a full-table scan.

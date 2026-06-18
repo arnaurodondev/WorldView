@@ -365,13 +365,19 @@ async def test_fuzzy_trigram_sets_threshold_guc_then_probes_with_operator() -> N
 
     await repo.fuzzy_trigram("Apple", threshold=0.55, top_k=5)
 
-    assert len(sql_strings) == 2
+    # Three executes: (1) set_limit GUC, (2) SET LOCAL random_page_cost so the
+    # planner actually picks the GIN index (RC-3, 2026-06-18), (3) the probe.
+    assert len(sql_strings) == 3
     # First call sets the operator cutoff to the caller's threshold.
     assert "set_limit" in sql_strings[0]
     assert params_list[0]["threshold"] == 0.55
-    # Second call uses the GIN-index-usable ``%`` operator (NOT the opaque
+    # Second call lowers random_page_cost to the SSD value for THIS transaction
+    # so the Bitmap Index Scan on idx_entity_aliases_trgm is chosen over a Seq
+    # Scan (PG default rpc=4 over-prices random index I/O at ~37k rows).
+    assert "SET LOCAL random_page_cost = 1.1" in sql_strings[1]
+    # Third call uses the GIN-index-usable ``%`` operator (NOT the opaque
     # function-form predicate ``similarity(col, x) > t`` that forced a Seq Scan).
-    probe_sql = sql_strings[1]
+    probe_sql = sql_strings[2]
     assert "normalized_alias_text % lower(:mention_text)" in probe_sql
     # The old function-form WHERE predicate must be gone.
     assert "WHERE similarity(normalized_alias_text" not in probe_sql
@@ -380,7 +386,7 @@ async def test_fuzzy_trigram_sets_threshold_guc_then_probes_with_operator() -> N
     # Ordering + limit unchanged.
     assert "ORDER BY sim DESC" in probe_sql
     assert "LIMIT :top_k" in probe_sql
-    assert params_list[1] == {"mention_text": "Apple", "threshold": 0.55, "top_k": 5}
+    assert params_list[2] == {"mention_text": "Apple", "threshold": 0.55, "top_k": 5}
 
 
 @pytest.mark.asyncio
@@ -394,8 +400,8 @@ async def test_fuzzy_trigram_returns_entity_sim_pairs_in_order() -> None:
     async def _execute(sql_obj: object, params: dict | None = None) -> MagicMock:  # type: ignore[type-arg]
         call["n"] += 1
         result = MagicMock()
-        if call["n"] == 1:
-            # set_limit() call — no rows consumed.
+        if call["n"] <= 2:
+            # set_limit() (1) + SET LOCAL random_page_cost (2) — no rows consumed.
             result.fetchall = MagicMock(return_value=[])
         else:
             r1, r2 = MagicMock(), MagicMock()
@@ -426,11 +432,13 @@ async def test_batch_fuzzy_trigram_uses_lateral_operator_join() -> None:
 
     await repo.batch_fuzzy_trigram(["Apple", "Microsoft"], threshold=0.55, top_k_per_mention=5)
 
-    assert len(sql_strings) == 2
+    # Three executes: set_limit GUC, SET LOCAL random_page_cost (RC-3), lateral probe.
+    assert len(sql_strings) == 3
     assert "set_limit" in sql_strings[0]
     assert params_list[0]["threshold"] == 0.55
+    assert "SET LOCAL random_page_cost = 1.1" in sql_strings[1]
 
-    batch_sql = sql_strings[1]
+    batch_sql = sql_strings[2]
     # Per-term lateral probe using the index-usable operator + distance order.
     assert "JOIN LATERAL" in batch_sql
     assert "ea.normalized_alias_text % q.search_term" in batch_sql
@@ -442,8 +450,8 @@ async def test_batch_fuzzy_trigram_uses_lateral_operator_join() -> None:
     # The old full-table function-predicate JOIN must be gone.
     assert "JOIN entity_aliases ea ON" not in batch_sql
     # Terms are normalised (lower+strip) and passed as a text[] in one round-trip.
-    assert params_list[1]["terms"] == ["apple", "microsoft"]
-    assert params_list[1]["top_k"] == 5
+    assert params_list[2]["terms"] == ["apple", "microsoft"]
+    assert params_list[2]["top_k"] == 5
 
 
 @pytest.mark.asyncio
@@ -457,7 +465,8 @@ async def test_batch_fuzzy_trigram_groups_by_term_and_caps_top_k() -> None:
     async def _execute(sql_obj: object, params: dict | None = None) -> MagicMock:  # type: ignore[type-arg]
         call["n"] += 1
         result = MagicMock()
-        if call["n"] == 1:
+        if call["n"] <= 2:
+            # set_limit() (1) + SET LOCAL random_page_cost (2) — no rows consumed.
             result.fetchall = MagicMock(return_value=[])
         else:
             # (search_term, entity_id, sim) — three rows for "apple", one for "msft".
