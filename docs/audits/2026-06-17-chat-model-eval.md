@@ -1,9 +1,49 @@
 # Chat-model eval (task #12) — Qwen3-235B vs gpt-oss-120b
 
-Date: 2026-06-17 (key blocker); **RESOLVED 2026-06-18** via a synthesis-level A/B.
-Live chat model = `Qwen/Qwen3-235B-A22B-Instruct-2507`.
+Date: 2026-06-17 (key blocker); **RESOLVED 2026-06-18** via a synthesis-level A/B **and a full
+`chat_quality_benchmark` head-to-head**. Live chat model = `Qwen/Qwen3-235B-A22B-Instruct-2507`.
 
-## VERDICT (2026-06-18) — gpt-oss-120b@medium is a viable chat model; quality-equivalent, comparable latency
+## VERDICT v2 (2026-06-18) — FULL benchmark: quality TIED incl. tool-selection; keep 235B (or swap for cost)
+
+The **full `chat_quality_benchmark`** was run for both arms (12 questions × 3 runs × full RAG pipeline +
+DeepSeek-V4-Flash judge). For gpt-oss, `reasoning_effort=medium` was wired into both the tool-planning and
+synthesis turns (clean-worktree image `worldview-rag-chat:gptoss-eval`; it returns EMPTY without it).
+Baseline ran at calm load (8-13); the gpt-oss arm ran at load ~33 with the upstream timeout raised to 30s
+so entity-resolve wouldn't time out (the load-induced empties are model-agnostic — both arms hit them; see
+RC-2 in `2026-06-18-internal-tool-latency-investigation.md`). Raw:
+`results/chat_model_eval/FULL_qwen235b/` and `FULL_gptoss120b_v2/`.
+
+| Judge dimension (/25) | Qwen3-235B | gpt-oss-120b@medium |
+|---|---|---|
+| **overall score (/100)** | 82.94 | **83.19** (tie, +0.25) |
+| tool_use | 22.92 | **22.92 (identical)** |
+| grounding | **19.75** | 18.75 |
+| framing | 20.83 | 20.69 |
+| refusal_judgment | 19.44 | **20.83** |
+| buckets (P/W/F) | 29 / 4 / 3 | 24 / 9 / 3 |
+| judge verdicts (P/W/F) | 26 / 1 / 9 | 26 / 3 / 7 |
+
+**The deeper benchmark confirms the synthesis A/B and adds tool-selection (which synthesis couldn't test):**
+- **Quality is statistically tied** (82.94 vs 83.19). **Tool-selection is identical** (22.92 both) — gpt-oss
+  plans/selects tools as well as 235B through the real agent loop.
+- gpt-oss trades **slightly weaker grounding** (−1.0) for **better refusal judgment** (+1.4); more borderline
+  WARNs (9 vs 4) but fewer hard judge-FAILs (7 vs 9). Both block the prompt-injection (adversarial FAIL =
+  the input-safety guard firing; judge PASS).
+- **Latency across the two arms is NOT comparable** (baseline load 8-13 / 10s timeout vs gpt-oss load 33 /
+  30s timeout). The per-call latency truth is the calm synthesis A/B (gpt-oss slightly *faster*, 2.6 vs
+  3.8s p50). And per the latency investigation, a turn fires 4-6 sequential completions, so a faster +
+  ~10× cheaper per-call model would help proportionally if swapped.
+
+**Recommendation (unchanged, now deeper-confirmed): keep Qwen3-235B** on quality grounds (tied, with a
+marginal grounding edge). gpt-oss-120b@medium is a **fully viable, ~10× cheaper, no-worse-quality**
+alternative — **swap only if cost becomes the driver** (tool-selection + overall quality are confirmed
+safe). The real chat-latency win is NOT the model — it's the orchestration (offload the grounding rewrites
+to the 8B model, fix the entity-resolution Seq Scan, isolate the read path — see the latency audit).
+
+---
+
+## VERDICT v1 (2026-06-18) — synthesis-level A/B (superseded by the full benchmark above, consistent with it)
+gpt-oss-120b@medium is a viable chat model; quality-equivalent, comparable latency.
 
 The full-pipeline benchmark proved **too platform-fragile** to run cleanly (rag-chat crash-loops on the
 `APP_ENV` bug — now fixed `dfb91c8` — plus entity-resolve/tool ReadTimeouts under host load; 4 distinct
