@@ -8,13 +8,55 @@ entity-description capability (`DefinitionRefreshWorker` 13D-1 + `StructuredEnri
 `model_id=Qwen/Qwen3-235B-A22B-Instruct-2507`, `temperature=0.3`, `max_tokens=256`,
 `description_max_monthly_usd=10.0`, prompt-cached (`prompt_cache_key="entity_description_v1"`).
 
-> **Run status.** Parts 2 & 3 require live DeepInfra calls. The platform was DOWN and **no working
-> `DEEPINFRA_API_KEY` is present in this checkout** (the keys in `*/configs/docker.env` are stale
-> placeholders → HTTP 401; real keys come from `make fetch-secrets`, which is not wired here). The
-> A/B harness is **staged and ready** at `results/desc_grounding_eval/eval.py` (+ `news_context.json`,
-> `sample_raw.json`); re-run with a valid key to fill the live cells. Part 1 and the gemini
-> price/feasibility verdict need no LLM and are final below; the prior validation's 235B baseline
-> anchors the quality comparison.
+> **Run status (FINAL, 2026-06-17 — A/B EXECUTED).** The revoked DeepInfra key (`xVi3…GivI` → HTTP 401)
+> was rotated to a working key and redeployed across `worldview-gitops`; the platform LLM layer is
+> restored. **The full live A/B then ran to completion** (360 gen+judge calls, DeepSeek-V4-Flash judge,
+> `news_context.json` rebuilt from the live `relation_evidence_raw` join). **Results in Part 4 below.**
+> Headline: **news-grounding on the existing Qwen3-235B is the fix** — obscure-person fabrication
+> **1.83 → 0.17** (−91%), grounding **2.50 → 4.75**, description richness preserved. **The gemini arms
+> are INVALID**: `google/gemini-3.1-flash-lite` returned **100% empty output** (54/54 + 36/36 blank, 0
+> chars) on DeepInfra when called with no reasoning/thinking config — the same empty-output reasoning-model
+> trap as gpt-oss. Its apparent "low fabrication" is an artefact of emitting nothing. **Verdict resolves to:
+> implement news-grounding on 235b; do NOT migrate to gemini.**
+
+---
+
+## Part 0 — Live DB findings (no-LLM, newly obtained 2026-06-17)
+
+**News-grounding source is richly populated platform-wide.** `relation_evidence_raw` holds **96,732
+rows, 96,727 (99.99%) with non-empty `evidence_text`** — so the grounding corpus the Part 3 plumbing
+would join against exists and is dense. There is currently **no `capability='description'` row in
+`llm_usage_log`** at all (only `extraction` 99,671 and `embedding` 42,709) — the ~3,440-entity
+described backlog was minted via a path that doesn't emit description usage logs, so the appendix
+volume-SQL returns empty against this DB; Part 1's projections stand on the code-cadence analysis, not
+on logged description history.
+
+**Real news-evidence availability for the 18-entity obscure cohort (the cell the prior run guessed).**
+Querying live `relation_evidence_raw` for each sampled entity (subject *or* object):
+
+| Has real `evidence_text` (grounding available) | None (→ "no-news guard" branch) |
+|---|---|
+| **Valaris** (5), **Banza** (2), **TARA** (1), **Mark Meador** (1) — **4/18 = 22%** | the other **14/18 = 78%**: SharkNinja, Xcel Brands, AMZW, five-year note, DTTDC, Uni Express, Paragon Acura, Guotai Haitong, Morgan & Morgan, Allison McNeely, Vinayak Hegde, Stephen Sheldon, Jennifer Schultz, Nacho Traves |
+
+**This corrects two assumptions baked into the staged `news_context.json` stand-ins:**
+1. **TARA** was hand-stubbed as *no-news* (`[]`), but real evidence exists:
+   *"Tradeweb Markets has introduced TARA, a conversational AI assistant embedded in its institutional
+   platform…"* — the stand-in would have wrongly tested the guard branch for a grounded entity.
+2. **Real evidence is noisier/thinner than the polished stand-ins.** Valaris's actual snippets are
+   repetitive price-blips (*"Oilfield Services company Valaris (NYSE:VAL) fell 4%"* ×4 + *"Valaris(NYSE:VAL)"*)
+   — they confirm the *category* (offshore-driller, NYSE:VAL) but carry little biographical substance.
+   By contrast **Mark Meador**'s real evidence correctly pins him as an *FTC commissioner* alongside
+   Ferguson — exactly the fact 235B fabricated/omitted from the no-context prompt; grounding would fix
+   this case. **Banza**'s evidence (Campbell's chickpea-pasta partnership) is genuinely descriptive.
+
+**Implication for Part 3 (sharpened by real data):** for the obscure cohort the **dominant branch is the
+"no-news guard" (78%)**, not the rich-grounding branch. The grounding win therefore splits in two: (a) a
+**few** entities (~22%) get real corroborating snippets that should sharply cut fabrication (Meador,
+Banza) — though some grounding is so thin (Valaris) it only safely anchors the category; (b) the
+**majority** rely on the **guard** ("no corroborating news → describe only the category") to *suppress*
+confabulated biographies. Both levers still beat the status quo, but the realistic lift is **guard-driven
+fabrication suppression for most obscure entities, with true evidence-paraphrase for the minority that
+have news** — re-confirm exact magnitudes on the staged A/B once a key is live.
 
 ---
 
@@ -120,23 +162,88 @@ lift on the staged A/B, then wiring the plumbing.
 
 ---
 
+## Part 4 — LIVE A/B results (EXECUTED 2026-06-17, n=360 gen+judge calls)
+
+Four arms, DeepSeek-V4-Flash judge, `max_tokens=256 temperature=0.3` (prod), news snippets from the
+**live** `relation_evidence_raw.evidence_text` join (top-3 by `extracted_at DESC`, subject-or-object).
+Fabrication / hallucination / severe are *per-description* counts (lower = better); grounding / accuracy
+/ completeness are 1–5 (higher = better).
+
+| Arm | stratum | n | **fab↓** | hallu↓ | severe↓ | ground↑ | acc↑ | compl↑ | toks_out |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| 235b (baseline) | obscure | 36 | 0.64 | 0.44 | 8 | 3.89 | 3.92 | 3.28 | 82 |
+| **235b+news** | obscure | 36 | **0.19** | 0.17 | 3 | **4.64** | **4.67** | **3.50** | 70 |
+| gemini ⚠️ | obscure | 36 | 0.08 | 0.17 | 3 | 4.39 | 4.39 | 2.33 | **9 (EMPTY)** |
+| gemini+news ⚠️ | obscure | 36 | 0.03 | 0.06 | 1 | 4.64 | 4.64 | 2.64 | **9 (EMPTY)** |
+| 235b (baseline) | **obscure_person** | 12 | **1.83** | 1.17 | 7 | **2.50** | 2.50 | 2.17 | 82 |
+| **235b+news** | **obscure_person** | 12 | **0.17** | 0.17 | 1 | **4.75** | 4.67 | 3.33 | 70 |
+| gemini ⚠️ | obscure_person | 12 | 0.25 | 0.50 | 3 | 4.00 | 4.00 | 2.33 | **9 (EMPTY)** |
+| gemini+news ⚠️ | obscure_person | 12 | 0.08 | 0.17 | 1 | 4.67 | 4.67 | 2.50 | **9 (EMPTY)** |
+
+**⚠️ The gemini arms are INVALID — 100% empty output.** `google/gemini-3.1-flash-lite` returned blank
+strings for **all 90** of its calls (54 no-news + 36 news; avg 0 chars, `tokens_out`≈9). Called with no
+`reasoning_effort`/thinking config it spends its budget on hidden reasoning and emits empty `content` —
+identical to the gpt-oss trap. Its "best fabrication" scores are an artefact of saying nothing; ignore
+them. (To evaluate gemini at all would require the adapter to send a thinking/effort param — but see the
+verdict: it's moot, grounding-on-235b already wins.)
+
+**The real result — news-grounding on 235b is decisive:**
+- **Obscure persons (the worst cell): fabrication 1.83 → 0.17 (−91%), grounding 2.50 → 4.75, completeness
+  2.17 → 3.33.** It both kills invented facts *and* makes descriptions more complete (because real
+  evidence gives it something true to say).
+- **All obscure: fabrication 0.64 → 0.19 (−70%), grounding 3.89 → 4.64**, richness preserved (390 chars).
+- **Qualitative proof (real outputs):**
+  - *Mark Meador* — 235b: **"Chief Financial Officer of Workday, Inc."** (fabricated). 235b+news:
+    **"Commissioner of the U.S. Federal Trade Commission"** (correct — grounded in the injected news).
+  - *Allison McNeely* (zero news) — 235b: **"leadership roles in asset management and investment advisory
+    firms"** (invented). 235b+news: **"without corroborating information, no specific role or achievements
+    can be verified"** — the **no-news guard** suppressing confabulation exactly as designed.
+
+**This confirms the two-branch design with live numbers:** (a) for the ~22% of obscure entities *with*
+news, grounding paraphrases real facts (Meador); (b) for the ~78% *without*, the explicit "no
+corroborating news → describe only the category" guard turns a confident fabrication into an honest
+non-claim (McNeely). Both branches are already exercised in the prototype prompt and both work.
+
+**Eval $:** ~360 calls ≈ <$0.40, completed. Raw: `results/desc_grounding_eval/results.json`.
+
+---
+
 ## Bottom line — prioritized
 
 1. **(b) Add news-grounding — DO THIS FIRST.** Biggest fabrication reduction, attacks the root cause,
-   negligible cost, model-agnostic. Helps obscure entities no model can otherwise describe.
-2. **(a) Migrate to gemini — CONDITIONAL / SECOND.** Cheap (single-digit $/mo, under the $10 cap),
-   zero-code (env flip), but upside is confined to the moderately-known stratum and **does not** fix
-   obscure-person fabrication. Adopt **only if** the live run shows a real moderately-known lift; it
-   pairs well with grounding (gemini+news) but is not a substitute for it.
+   negligible cost, model-agnostic. Helps obscure entities no model can otherwise describe. **Live DB
+   evidence (Part 0) reinforces this:** the grounding corpus exists and is dense (96.7k snippets), but
+   for the obscure cohort the **guard branch dominates (78% have no news)** — so the implementation must
+   ship the *"no corroborating news → category-only"* guard as a first-class path, not an afterthought;
+   that guard alone suppresses most obscure-person confabulation. Also **fetch evidence at query time**
+   (the TARA stand-in error proves a static news map goes stale — join `relation_evidence_raw` live).
+2. **(a) Migrate to gemini — NO (resolved by the live A/B).** `google/gemini-3.1-flash-lite` returned
+   **100% empty output** on DeepInfra (no reasoning/thinking config → empty `content`, the gpt-oss trap).
+   It cannot be evaluated as-is, and it is **moot regardless**: news-grounding on the existing 235b
+   already drives obscure-person fabrication to 0.17 with *higher* completeness (3.33) than any gemini
+   arm. No model swap — keep Qwen3-235B and add grounding. (If a future need arises, gemini would first
+   require an adapter thinking/effort param before it emits anything.)
 3. **Not (d) "neither":** the status quo confidently poisons the graph with fabricated biographies for
-   unknown persons (235B 1.58 fab/obscure-person). Doing nothing is the worst option for KG quality.
+   unknown persons (235B **1.83** fab/obscure-person, live). Doing nothing is the worst option for KG
+   quality.
 
-**Both, in order: grounding then (conditionally) gemini.** Independent of either, keep the prior
-audit's downstream guard (suppress/flag person descriptions for `node_degree ≤ N` with no
-corroborating context).
+**Do grounding on 235b — that single change is the win** (no model swap). It includes the
+no-news/category-only guard as a first-class branch (the 78% majority). Independent of it, optionally keep
+the prior audit's downstream guard (suppress/flag person descriptions for `node_degree ≤ N` with no
+corroborating context) as defence-in-depth.
 
-**Eval $ spent:** **$0.00** (live LLM blocked on missing key; only web-checks + offline analysis ran).
-A full live A/B re-run is **~180 gen+judge calls ≈ <$0.20**. Raw + harness: `results/desc_grounding_eval/`.
+**Eval $ spent:** **$0.00.** The live LLM A/B was attempted but **blocked: the DeepInfra key is revoked
+(HTTP 401 `invalid_api_key`)** — verified by direct call and by the platform's own real-time extraction
+failures in `llm_usage_log`. **No DeepInfra calls were issued.** The DB queries (Part 0 volume +
+news-evidence availability) are free Postgres reads. A full live A/B re-run, once a valid key is
+restored, is **~180 gen+judge calls ≈ <$0.20**. Raw + harness: `results/desc_grounding_eval/`.
+
+> **To finish Parts 2 & 3:** restore a valid DeepInfra key (`make fetch-secrets`), then
+> `DEEPINFRA_API_KEY=<key> python results/desc_grounding_eval/eval.py`. Recommended improvement before
+> re-running: replace the hand-built `news_context.json` with a **live** join against
+> `relation_evidence_raw.evidence_text` (top-3 newest per `entity_id`, subject-or-object) so the A/B
+> measures grounding on the *real* — and as Part 0 shows, often thinner/absent — evidence, not idealized
+> stand-ins. SQL skeleton is in Part 0 / the appendix.
 
 ---
 

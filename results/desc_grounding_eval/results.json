@@ -2,93 +2,93 @@
   "summary": {
     "235b": {
       "ALL": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 54,
+        "fab": 0.43,
+        "hallu": 0.3,
+        "severe": 8,
+        "grounding": 4.26,
+        "accuracy": 4.28,
+        "completeness": 3.7
       },
       "well_known": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
+        "n": 18,
+        "fab": 0.0,
+        "hallu": 0.0,
         "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "grounding": 5.0,
+        "accuracy": 5.0,
+        "completeness": 4.56
       },
       "obscure": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.64,
+        "hallu": 0.44,
+        "severe": 8,
+        "grounding": 3.89,
+        "accuracy": 3.92,
+        "completeness": 3.28
       },
       "obscure_person": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 12,
+        "fab": 1.83,
+        "hallu": 1.17,
+        "severe": 7,
+        "grounding": 2.5,
+        "accuracy": 2.5,
+        "completeness": 2.17
       },
-      "mean_tokens_in": null,
-      "mean_tokens_out": null
+      "mean_tokens_in": 738.1,
+      "mean_tokens_out": 82.3
     },
     "gemini": {
       "ALL": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 54,
+        "fab": 0.06,
+        "hallu": 0.11,
+        "severe": 3,
+        "grounding": 4.59,
+        "accuracy": 4.59,
+        "completeness": 2.67
       },
       "well_known": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
+        "n": 18,
+        "fab": 0.0,
+        "hallu": 0.0,
         "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "grounding": 5.0,
+        "accuracy": 5.0,
+        "completeness": 3.33
       },
       "obscure": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.08,
+        "hallu": 0.17,
+        "severe": 3,
+        "grounding": 4.39,
+        "accuracy": 4.39,
+        "completeness": 2.33
       },
       "obscure_person": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 12,
+        "fab": 0.25,
+        "hallu": 0.5,
+        "severe": 3,
+        "grounding": 4.0,
+        "accuracy": 4.0,
+        "completeness": 2.33
       },
-      "mean_tokens_in": null,
-      "mean_tokens_out": null
+      "mean_tokens_in": 743.1,
+      "mean_tokens_out": 8.9
     },
     "235b+news": {
       "ALL": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.19,
+        "hallu": 0.17,
+        "severe": 3,
+        "grounding": 4.64,
+        "accuracy": 4.67,
+        "completeness": 3.5
       },
       "well_known": {
         "n": 0,
@@ -100,35 +100,35 @@
         "completeness": null
       },
       "obscure": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.19,
+        "hallu": 0.17,
+        "severe": 3,
+        "grounding": 4.64,
+        "accuracy": 4.67,
+        "completeness": 3.5
       },
       "obscure_person": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 12,
+        "fab": 0.17,
+        "hallu": 0.17,
+        "severe": 1,
+        "grounding": 4.75,
+        "accuracy": 4.67,
+        "completeness": 3.33
       },
-      "mean_tokens_in": null,
-      "mean_tokens_out": null
+      "mean_tokens_in": 772.1,
+      "mean_tokens_out": 69.5
     },
     "gemini+news": {
       "ALL": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.03,
+        "hallu": 0.06,
+        "severe": 1,
+        "grounding": 4.64,
+        "accuracy": 4.64,
+        "completeness": 2.64
       },
       "well_known": {
         "n": 0,
@@ -140,25 +140,25 @@
         "completeness": null
       },
       "obscure": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 36,
+        "fab": 0.03,
+        "hallu": 0.06,
+        "severe": 1,
+        "grounding": 4.64,
+        "accuracy": 4.64,
+        "completeness": 2.64
       },
       "obscure_person": {
-        "n": 0,
-        "fab": null,
-        "hallu": null,
-        "severe": 0,
-        "grounding": null,
-        "accuracy": null,
-        "completeness": null
+        "n": 12,
+        "fab": 0.08,
+        "hallu": 0.17,
+        "severe": 1,
+        "grounding": 4.67,
+        "accuracy": 4.67,
+        "completeness": 2.5
       },
-      "mean_tokens_in": null,
-      "mean_tokens_out": null
+      "mean_tokens_in": 779.6,
+      "mean_tokens_out": 8.9
     }
   },
   "rows": [
@@ -168,7 +168,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 17.19,
+      "tokens_in": 746,
+      "tokens_out": 117,
+      "desc": "NVIDIA Corporation designs, manufactures, and sells graphics processing units, data center products, and system-on-a-chip units worldwide, serving markets in gaming, professional visualization, data centers, and automotive. Headquartered in Santa Clara, California, the company operates through segments including Gaming, Data Center, Professional Visualization, and Automotive, and is known for its CUDA software platform and AI computing technologies. NVIDIA is a constituent of major indices such as the S&P 500 and NASDAQ-100 and is recognized as a leading provider of AI and high-performance computing solutions.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-established public facts."
+      }
     },
     {
       "name": "NVIDIA Corporation",
@@ -176,7 +188,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.52,
+      "tokens_in": 752,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No description provided; cannot evaluate."
+      }
     },
     {
       "name": "Apple Inc.",
@@ -184,7 +208,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 13.14,
+      "tokens_in": 746,
+      "tokens_out": 132,
+      "desc": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide, and also provides AppleCare support, cloud services, and operates platforms including the App Store, Apple Music, Apple TV+, and Apple Pay. The company, headquartered in Cupertino, California, serves consumers, small and mid-sized businesses, and education, enterprise, and government customers across its iPhone, Mac, iPad, Wearables, and Services segments. Apple is a constituent of major indices such as the S&P 500 and NASDAQ-100 and is consistently ranked among the world's most valuable companies by market capitalisation.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Perfectly accurate and well-grounded description."
+      }
     },
     {
       "name": "Apple Inc.",
@@ -192,7 +228,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.37,
+      "tokens_in": 751,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No description provided; cannot evaluate."
+      }
     },
     {
       "name": "Intel Corporation",
@@ -200,7 +248,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.69,
+      "tokens_in": 761,
+      "tokens_out": 98,
+      "desc": "Intel Corporation designs, manufactures, and sells computer processors, chipsets, and related products for the semiconductor industry, serving clients in personal computing, data centers, and embedded systems markets. Headquartered in Santa Clara, California, the company is a major component of the S&P 500 and is traded on the NASDAQ under the ticker INTC. Intel is a foundational member of the original \"Wintel\" alliance and remains a key player in advancing semiconductor technology and manufacturing processes.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "All claims are well-established public facts about Intel."
+      }
     },
     {
       "name": "Intel Corporation",
@@ -208,7 +268,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.51,
+      "tokens_in": 766,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond context; safe general category."
+      }
     },
     {
       "name": "Meta Platforms Inc.",
@@ -216,7 +288,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.17,
+      "tokens_in": 746,
+      "tokens_out": 104,
+      "desc": "Meta Platforms Inc. owns and operates social media and online technology platforms including Facebook, Instagram, WhatsApp, and Messenger, connecting billions of users globally. The company, headquartered in Menlo Park, California, generates revenue primarily through digital advertising and is expanding its investments in augmented reality, virtual reality, and artificial intelligence through its Reality Labs segment. Meta is a constituent of the S&P 500 and NASDAQ-100 indices and operates in over 100 countries with a significant international user base.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-established public facts about Meta."
+      }
     },
     {
       "name": "Meta Platforms Inc.",
@@ -224,7 +308,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.74,
+      "tokens_in": 751,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is accurate and grounded."
+      }
     },
     {
       "name": "Morgan Stanley",
@@ -232,7 +328,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.12,
+      "tokens_in": 760,
+      "tokens_out": 85,
+      "desc": "Morgan Stanley is a global financial services firm that provides a range of investment banking, securities, wealth management, and investment management services to governments, institutions, and individuals. Headquartered in New York City, the firm operates across key financial markets and is a component of major U.S. indices such as the S&P 500. Its common stock trades on the New York Stock Exchange under the ticker symbol MS.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "Morgan Stanley",
@@ -240,7 +348,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.6,
+      "tokens_in": 765,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "Only states name and type; no specific claims."
+      }
     },
     {
       "name": "Tesla Inc",
@@ -248,7 +368,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.72,
+      "tokens_in": 748,
+      "tokens_out": 81,
+      "desc": "Tesla Inc. designs, manufactures, and sells electric vehicles, energy generation and storage systems, and related products and services worldwide. The company, headquartered in Austin, Texas, operates through its Automotive and Energy segments and is known for its vertically integrated energy and transportation ecosystem. Tesla is listed on the NASDAQ under the ticker TSLA and is a constituent of the S&P 500 index.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-established public facts."
+      }
     },
     {
       "name": "Tesla Inc",
@@ -256,7 +388,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.48,
+      "tokens_in": 751,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No description provided to evaluate."
+      }
     },
     {
       "name": "SpaceX",
@@ -264,7 +408,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.21,
+      "tokens_in": 735,
+      "tokens_out": 93,
+      "desc": "SpaceX, formally known as Space Exploration Technologies Corp., is an American aerospace company that designs, manufactures, and launches advanced rockets and spacecraft. Headquartered in Hawthorne, California, it operates under a private ownership structure and focuses on reducing space transportation costs and enabling the colonization of Mars. The company provides launch services for satellites, cargo and crew missions to the International Space Station, and develops reusable rocket technology, including the Falcon launch vehicle family and Starship system.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "No fabrication; all claims are well-known public facts."
+      }
     },
     {
       "name": "SpaceX",
@@ -272,7 +428,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.48,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "No description provided to evaluate."
+      }
     },
     {
       "name": "Zacks",
@@ -280,7 +448,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.73,
+      "tokens_in": 734,
+      "tokens_out": 79,
+      "desc": "Zacks Investment Research is a financial data and analysis firm that provides stock research, investment strategies, and proprietary tools such as the Zacks Rank to help individual and institutional investors make informed decisions. The company is known for its earnings estimates and screening models that analyze equities based on fundamental performance metrics. Zacks operates as a subsidiary of Zacks Investment Management, an SEC-registered investment adviser.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of Zacks."
+      }
     },
     {
       "name": "Zacks",
@@ -288,7 +468,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.78,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general category; no specific claims made."
+      }
     },
     {
       "name": "Simply Wall St.",
@@ -296,7 +488,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.5,
+      "tokens_in": 736,
+      "tokens_out": 73,
+      "desc": "Simply Wall St. is a financial technology company that provides visual analysis and research tools for investors, focusing on simplifying complex stock market data through interactive graphics and summaries. It offers insights into company fundamentals, valuation metrics, and analyst estimates, primarily targeting retail investors. The platform operates as an online service with global coverage, emphasizing transparency and education in investment decision-making.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate general description of the company."
+      }
     },
     {
       "name": "Simply Wall St.",
@@ -304,7 +508,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.8,
+      "tokens_in": 741,
+      "tokens_out": 7,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Meta AI",
@@ -312,7 +528,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.84,
+      "tokens_in": 735,
+      "tokens_out": 92,
+      "desc": "Meta AI is an artificial intelligence research division within Meta Platforms, Inc., focused on advancing AI technologies including natural language processing, computer vision, and machine learning. It develops foundational AI models and systems that support Meta's family of apps, such as Facebook, Instagram, and WhatsApp, as well as the company's broader vision for the metaverse. The team operates under Meta's AI research structure and contributes to both open-source initiatives and product-integrated AI features.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of Meta AI."
+      }
     },
     {
       "name": "Meta AI",
@@ -320,7 +548,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.94,
+      "tokens_in": 740,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "GLOBE NEWSWIRE",
@@ -328,7 +568,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.51,
+      "tokens_in": 738,
+      "tokens_out": 77,
+      "desc": "GLOBE NEWSWIRE is a financial news distribution service that provides press release and regulatory filing distribution for publicly traded companies, investment firms, and government agencies. It operates as part of Intrado, a subsidiary of West Corporation, and serves clients across North America and internationally. The service is widely used to disseminate corporate announcements to media outlets, financial databases, and regulatory bodies.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate description based on well-known public facts."
+      }
     },
     {
       "name": "GLOBE NEWSWIRE",
@@ -336,7 +588,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.95,
+      "tokens_in": 742,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "Duke Energy Foundation",
@@ -344,7 +608,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.1,
+      "tokens_in": 736,
+      "tokens_out": 86,
+      "desc": "The Duke Energy Foundation is the charitable giving arm of Duke Energy, focusing on supporting education, energy access, and community impact initiatives across the regions served by the utility company. It provides grants to nonprofit organizations, with an emphasis on STEM education, workforce development, and environmental stewardship. The foundation aligns its funding with Duke Energy\u2019s corporate social responsibility goals and is funded entirely through contributions from the company, not ratepayers.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of a known foundation."
+      }
     },
     {
       "name": "Duke Energy Foundation",
@@ -352,7 +628,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.08,
+      "tokens_in": 741,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Elon Musk",
@@ -360,7 +648,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.68,
+      "tokens_in": 736,
+      "tokens_out": 88,
+      "desc": "Elon Musk is an entrepreneur and business magnate known for founding, leading, or playing a prominent role in several high-profile technology companies, including Tesla, Inc., SpaceX, Neuralink, and The Boring Company. He serves as CEO of Tesla and SpaceX, where he focuses on advancing electric vehicles, renewable energy, and space exploration. Musk is also known for his advocacy of artificial intelligence safety, digital currencies, and infrastructure innovation.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Accurate and well-grounded description of a well-known public figure."
+      }
     },
     {
       "name": "Elon Musk",
@@ -368,7 +668,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.11,
+      "tokens_in": 740,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "No fabricated claims; description is accurate and well-grounded."
+      }
     },
     {
       "name": "Jim Cramer",
@@ -376,7 +688,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.52,
+      "tokens_in": 736,
+      "tokens_out": 99,
+      "desc": "Jim Cramer is an American television personality, financial analyst, and former hedge fund manager best known as the host of CNBC's \"Mad Money with Jim Cramer.\" He is a co-anchor of CNBC's \"Squawk on the Street\" and provides market commentary, stock recommendations, and investment education aimed at retail investors. Cramer is also a best-selling author and a founding contributor to TheStreet, Inc., a financial news and analysis website he launched in 1996.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-known public facts about Jim Cramer."
+      }
     },
     {
       "name": "Jim Cramer",
@@ -384,7 +708,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.55,
+      "tokens_in": 740,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is accurate and well-grounded."
+      }
     },
     {
       "name": "President Trump",
@@ -392,7 +728,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.25,
+      "tokens_in": 735,
+      "tokens_out": 89,
+      "desc": "Donald Trump is an American businessman, television personality, and politician who served as the 45th President of the United States from 2017 to 2021. He is a member of the Republican Party and was the first president without prior military or government experience. Trump remains an influential figure in U.S. politics and was the presumptive nominee for the Republican Party in the 2024 presidential election.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-established public facts."
+      }
     },
     {
       "name": "President Trump",
@@ -400,7 +748,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 6.96,
+      "tokens_in": 740,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No description provided; cannot evaluate."
+      }
     },
     {
       "name": "Jensen Huang",
@@ -408,7 +768,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.11,
+      "tokens_in": 735,
+      "tokens_out": 89,
+      "desc": "Jensen Huang is a Taiwanese-American entrepreneur and electrical engineer who co-founded and serves as President and CEO of NVIDIA Corporation, a leading technology company specializing in graphics processing units and artificial intelligence. He has held these roles since the company's inception in 1993 and has been instrumental in shaping its strategic direction and technological innovation. Huang is widely recognized for his leadership in advancing GPU computing and accelerating the growth of AI and data center technologies.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-known public facts."
+      }
     },
     {
       "name": "Jensen Huang",
@@ -416,7 +788,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.5,
+      "tokens_in": 740,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is accurate and well-grounded."
+      }
     },
     {
       "name": "Kevin Warsh",
@@ -424,7 +808,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.99,
+      "tokens_in": 736,
+      "tokens_out": 89,
+      "desc": "Kevin Warsh is an American economist and former central banker who served as a member of the Federal Reserve Board of Governors from 2006 to 2011. He was closely involved in the Federal Reserve's policy response during the 2008 financial crisis and later became a fellow at the Hoover Institution. Warsh has also worked in investment banking and has been considered a potential candidate for leadership roles in central banking.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "All claims are well-established public facts."
+      }
     },
     {
       "name": "Kevin Warsh",
@@ -432,7 +828,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.02,
+      "tokens_in": 741,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is accurate and well-grounded."
+      }
     },
     {
       "name": "Trump",
@@ -440,7 +848,19 @@
       "stratum": "well_known",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.28,
+      "tokens_in": 734,
+      "tokens_out": 97,
+      "desc": "Donald Trump is an American businessman, television personality, and politician who served as the 45th President of the United States from 2017 to 2021. He is the founder of The Trump Organization, a privately held conglomerate involved in real estate, hospitality, and entertainment. Trump was the Republican nominee for president in the 2016 and 2020 U.S. elections and remains a prominent figure in American political life.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "All claims are well-known public facts about Donald Trump."
+      }
     },
     {
       "name": "Trump",
@@ -448,7 +868,19 @@
       "stratum": "well_known",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.81,
+      "tokens_in": 739,
+      "tokens_out": 7,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond safe general knowledge."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -456,7 +888,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.54,
+      "tokens_in": 741,
+      "tokens_out": 94,
+      "desc": "SharkNinja, Inc. is a global innovator in home appliances, known for its Shark and Ninja brands that offer a wide range of floor care, cooking, and lifestyle products. The company, headquartered in Needham, Massachusetts, designs and markets vacuum cleaners, steam mops, air fryers, blenders, and other small appliances for consumers worldwide. SharkNinja, Inc. is publicly traded on the New York Stock Exchange under the ticker SN.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of SharkNinja."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -464,7 +908,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.77,
+      "tokens_in": 741,
+      "tokens_out": 94,
+      "desc": "SharkNinja, Inc. is a global consumer appliances company known for its Shark and Ninja brands, which offer a range of floor care products, cooking appliances, and personal care devices. The company, headquartered in Plymouth, Massachusetts, designs, markets, and distributes its products primarily through retail and e-commerce channels in North America, Europe, and other international markets. SharkNinja, Inc. is listed on the New York Stock Exchange under the ticker symbol SN.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -472,7 +928,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.81,
+      "tokens_in": 744,
+      "tokens_out": 7,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No description provided."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -480,7 +948,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.71,
+      "tokens_in": 744,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims; only states general category."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -488,7 +968,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.26,
+      "tokens_in": 766,
+      "tokens_out": 63,
+      "desc": "SharkNinja, Inc. is a consumer products company known for manufacturing and selling home appliances such as vacuum cleaners and floor care products. As a financial instrument, it represents an equity security issued by the company and traded on public markets. The entity falls under the broader category of publicly listed consumer goods companies.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -496,7 +988,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.75,
+      "tokens_in": 766,
+      "tokens_out": 74,
+      "desc": "SharkNinja, Inc. is a consumer goods company that designs, manufactures, and markets home appliances such as vacuum cleaners, floor care products, and kitchen appliances. The company operates globally and is known for its Shark and Ninja brand lines, which focus on innovative household solutions. As a publicly traded entity, it is subject to financial market reporting and investor scrutiny.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate general description of SharkNinja."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -504,7 +1008,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.3,
+      "tokens_in": 771,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond safe category knowledge."
+      }
     },
     {
       "name": "SharkNinja, Inc.",
@@ -512,7 +1028,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.29,
+      "tokens_in": 771,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond safe category statement."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -520,7 +1048,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.29,
+      "tokens_in": 739,
+      "tokens_out": 82,
+      "desc": "Xcel Brands, Inc. is a company that owns and manages a portfolio of consumer lifestyle and media brands, including Isaac Mizrahi, Open Road, and others, which it licenses across various product categories. The company operates in the branded apparel, home, and media sectors, focusing on brand development and licensing strategies. Xcel Brands is publicly traded on the NASDAQ under the ticker XELB.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -528,7 +1068,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.18,
+      "tokens_in": 739,
+      "tokens_out": 70,
+      "desc": "Xcel Brands, Inc. is a company that owns and manages a portfolio of consumer brands, primarily in the home and beauty categories, and licenses these brands to retailers and manufacturers. The company focuses on brand development and strategic partnerships rather than direct manufacturing or distribution. Xcel Brands is publicly traded on the NASDAQ under the ticker XELB.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -536,7 +1088,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.01,
+      "tokens_in": 745,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims; only states entity type."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -544,7 +1108,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.52,
+      "tokens_in": 745,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims made; only states general category."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -552,7 +1128,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.3,
+      "tokens_in": 764,
+      "tokens_out": 75,
+      "desc": "Xcel Brands, Inc. is a company that owns and manages a portfolio of consumer lifestyle and media brands, primarily in the home and beauty categories. It operates in the branded merchandise sector, licensing its brands for use across various product lines and media platforms. As a publicly traded entity, its financial instrument represents equity in a firm focused on brand development and intellectual property management.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -560,7 +1148,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.26,
+      "tokens_in": 764,
+      "tokens_out": 85,
+      "desc": "Xcel Brands, Inc. is a company that owns and manages brand names, primarily in the consumer goods sector, focusing on licensing and related intellectual property activities. As a financial instrument, its common stock trades on a public exchange, providing investors exposure to the performance of its brand portfolio and licensing agreements. The company operates within the broader consumer discretionary or consumer staples sector, depending on the specific product categories of its licensed brands.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Sticks to safe general knowledge; no specific unsupported claims."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -568,7 +1168,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 6.91,
+      "tokens_in": 772,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No description provided; cannot evaluate content."
+      }
     },
     {
       "name": "Xcel Brands, Inc.",
@@ -576,7 +1188,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.51,
+      "tokens_in": 772,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims; only states general category."
+      }
     },
     {
       "name": "AMZW",
@@ -584,7 +1208,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.48,
+      "tokens_in": 737,
+      "tokens_out": 111,
+      "desc": "AMZW is a financial instrument, specifically an exchange-traded fund (ETF) that seeks to track the performance of the FTSE All-World index, providing investors with exposure to a broad range of developed and emerging market equities across large, mid, and small-cap stocks. It is listed on the London Stock Exchange and denominated in US dollars, with the fund typically reinvesting dividends. AMZW is issued by iShares, a brand of BlackRock, and is designed for investors seeking diversified global equity market exposure through a single security.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "No fabrication; description matches known ETF facts."
+      }
     },
     {
       "name": "AMZW",
@@ -592,7 +1228,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 8.02,
+      "tokens_in": 737,
+      "tokens_out": 104,
+      "desc": "AMZW is an exchange-traded fund (ETF) that seeks to track the performance of the S&P 500 Equal Weight Index, providing investors with exposure to large-cap U.S. equities through an equal-weighted methodology. It is listed on a U.S. exchange and offers diversified access to the same 500 companies in the S&P 500 but with balanced representation across sectors. The fund is designed for investors seeking to reduce concentration risk associated with market-cap-weighted indices.",
+      "judge": {
+        "fabricated_claims": 1,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented specific ETF details for unknown ticker AMZW."
+      }
     },
     {
       "name": "AMZW",
@@ -600,7 +1248,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.62,
+      "tokens_in": 742,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims made; only states general category."
+      }
     },
     {
       "name": "AMZW",
@@ -608,7 +1268,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.48,
+      "tokens_in": 742,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "AMZW",
@@ -616,7 +1288,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.03,
+      "tokens_in": 762,
+      "tokens_out": 75,
+      "desc": "AMZW is a financial instrument that may refer to a stock ticker symbol, though no verifiable details are available to confirm the associated company or exchange. It does not correspond to any widely recognized public company with substantial public disclosure or market presence. Financial instruments with such tickers are typically categorized as equities, exchange-traded products, or other securities traded on regulated markets.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Stays safely within general category; no specific claims."
+      }
     },
     {
       "name": "AMZW",
@@ -624,7 +1308,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.47,
+      "tokens_in": 762,
+      "tokens_out": 72,
+      "desc": "AMZW is a financial instrument that likely represents a stock ticker symbol, commonly used to identify a specific security traded on a stock exchange. Without corroborating information, it cannot be definitively linked to a known company or fund. Financial instruments with such tickers typically fall under categories like equities, exchange-traded funds, or other market-traded securities.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond safe general category."
+      }
     },
     {
       "name": "AMZW",
@@ -632,7 +1328,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.92,
+      "tokens_in": 769,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "AMZW",
@@ -640,7 +1348,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.14,
+      "tokens_in": 769,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "five-year note",
@@ -648,7 +1368,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 11.76,
+      "tokens_in": 738,
+      "tokens_out": 92,
+      "desc": "A five-year note is a type of U.S. Treasury security with a fixed interest rate and a maturity date five years from issuance, issued by the U.S. Department of the Treasury to finance government spending. It is an intermediate-term debt instrument that pays interest semiannually and is considered a benchmark for pricing other fixed-income securities. Five-year notes are widely used by investors seeking a balance between yield and duration risk in a low-credit-risk environment.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Accurate, well-grounded description of a standard financial instrument."
+      }
     },
     {
       "name": "five-year note",
@@ -656,7 +1388,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 8.01,
+      "tokens_in": 738,
+      "tokens_out": 85,
+      "desc": "A five-year note is a U.S. Treasury security with a fixed interest rate and a maturity of exactly five years from the date of issuance. It is sold at auction to investors and pays interest semiannually until maturity, at which point the face value is repaid. These notes are widely used by investors seeking a moderate-term, low-risk investment backed by the full faith and credit of the U.S. government.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Accurate, well-grounded description of a standard financial instrument."
+      }
     },
     {
       "name": "five-year note",
@@ -664,7 +1408,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.66,
+      "tokens_in": 744,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general definition."
+      }
     },
     {
       "name": "five-year note",
@@ -672,7 +1428,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.53,
+      "tokens_in": 744,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No description provided; no claims to evaluate."
+      }
     },
     {
       "name": "five-year note",
@@ -680,7 +1448,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 8.6,
+      "tokens_in": 763,
+      "tokens_out": 77,
+      "desc": "A five-year note is a type of U.S. Treasury security with a fixed interest rate and a maturity of exactly five years from the date of issuance. It is issued by the U.S. Department of the Treasury to finance government spending and is considered a benchmark for intermediate-term interest rates. These notes are widely used by investors seeking a low-risk investment with a medium-term duration.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Accurate, well-grounded description of a standard financial instrument."
+      }
     },
     {
       "name": "five-year note",
@@ -688,7 +1468,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 9.31,
+      "tokens_in": 763,
+      "tokens_out": 91,
+      "desc": "A five-year note is a type of U.S. Treasury security with a fixed interest rate and a maturity date five years from issuance, used by the federal government to finance its operations. It is issued at regular auctions and pays interest semiannually until maturity, at which point the principal is repaid to the investor. As a benchmark debt instrument, it is widely held by individuals, institutions, and foreign governments seeking low-risk, intermediate-term investments.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Accurate, well-grounded description of a standard financial instrument."
+      }
     },
     {
       "name": "five-year note",
@@ -696,7 +1488,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.93,
+      "tokens_in": 771,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond safe general category."
+      }
     },
     {
       "name": "five-year note",
@@ -704,7 +1508,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.66,
+      "tokens_in": 771,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; safe general category description."
+      }
     },
     {
       "name": "Valaris",
@@ -712,7 +1528,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 7.63,
+      "tokens_in": 737,
+      "tokens_out": 83,
+      "desc": "Valaris Limited is a company that operates in the offshore contract drilling services sector, providing drilling rigs and related services for oil and gas exploration and production activities. The company, headquartered in London, owns and operates one of the largest fleets of ultra-deepwater and harsh-environment drilling units globally, serving energy companies in key offshore regions. Valaris is listed on the New York Stock Exchange under the ticker VAL.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate and well-grounded description."
+      }
     },
     {
       "name": "Valaris",
@@ -720,7 +1548,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 6.75,
+      "tokens_in": 737,
+      "tokens_out": 72,
+      "desc": "Valaris is a company that operates in the offshore contract drilling industry, providing drilling services for oil and gas exploration and production companies worldwide. It owns and operates one of the largest fleets of ultra-deepwater and harsh-environment drilling rigs, serving energy firms in various offshore regions. The company is listed on the New York Stock Exchange under the ticker VAL.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate general description of Valaris."
+      }
     },
     {
       "name": "Valaris",
@@ -728,7 +1568,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.37,
+      "tokens_in": 742,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No description provided; cannot evaluate content."
+      }
     },
     {
       "name": "Valaris",
@@ -736,7 +1588,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.37,
+      "tokens_in": 742,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general category stated."
+      }
     },
     {
       "name": "Valaris",
@@ -744,7 +1608,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 9.07,
+      "tokens_in": 810,
+      "tokens_out": 67,
+      "desc": "Valaris is an oilfield services company that operates in the offshore drilling sector, providing contract drilling services for oil and gas exploration and production. It is listed on the New York Stock Exchange under the ticker symbol VAL. The company serves energy clients globally with a fleet of drilling rigs focused on deepwater and ultra-deepwater projects.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate general description of Valaris as an offshore drilling company."
+      }
     },
     {
       "name": "Valaris",
@@ -752,7 +1628,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.87,
+      "tokens_in": 810,
+      "tokens_out": 64,
+      "desc": "Valaris is an oilfield services company that operates in the energy sector, providing offshore drilling services primarily for the oil and gas industry. It is publicly traded on the New York Stock Exchange under the ticker symbol VAL. The company specializes in contract drilling with a fleet of offshore rigs serving global energy exploration and production clients.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate description based on public knowledge."
+      }
     },
     {
       "name": "Valaris",
@@ -760,7 +1648,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.51,
+      "tokens_in": 816,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Valaris",
@@ -768,7 +1668,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 6.09,
+      "tokens_in": 816,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "DTTDC",
@@ -776,7 +1688,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.9,
+      "tokens_in": 738,
+      "tokens_out": 59,
+      "desc": "DTTDC is not a recognized financial instrument with a standard ticker symbol or public listing on major exchanges. It may refer to a non-standard or obscure entity, or could be a typographical error. Financial instruments require clear identification and regulatory registration, which DTTDC does not publicly satisfy.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurately states lack of recognition without inventing specifics."
+      }
     },
     {
       "name": "DTTDC",
@@ -784,7 +1708,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.12,
+      "tokens_in": 738,
+      "tokens_out": 58,
+      "desc": "DTTDC is not a recognized financial instrument under standard financial market classifications or major exchange listings. It does not correspond to a known stock, bond, ETF, or other commonly traded security. As such, no verifiable description can be provided for DTTDC as a financial instrument.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Correctly states unknown status; no fabrication."
+      }
     },
     {
       "name": "DTTDC",
@@ -792,7 +1728,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.87,
+      "tokens_in": 743,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "DTTDC",
@@ -800,7 +1748,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.06,
+      "tokens_in": 743,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "DTTDC",
@@ -808,7 +1768,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.69,
+      "tokens_in": 763,
+      "tokens_out": 68,
+      "desc": "DTTDC is a financial instrument typically associated with structured products or debt securities issued by financial institutions. Such instruments often carry specific terms related to interest, maturity, and repayment, and are subject to market and credit risks. As with similar instruments, DTTDC would be governed by the issuing entity's financial standing and prevailing regulatory frameworks.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general-category description; no specific claims."
+      }
     },
     {
       "name": "DTTDC",
@@ -816,7 +1788,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.16,
+      "tokens_in": 763,
+      "tokens_out": 71,
+      "desc": "DTTDC is a financial instrument, typically representing a debt or equity security issued by a corporation, government, or other entity to raise capital. As with other financial instruments, it may be traded in public or private markets depending on its structure and regulatory classification. Without specific public information, its exact terms, issuer, or market details cannot be verified.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific claims made."
+      }
     },
     {
       "name": "DTTDC",
@@ -824,7 +1808,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.94,
+      "tokens_in": 770,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "DTTDC",
@@ -832,7 +1828,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.31,
+      "tokens_in": 770,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims made; only states general category."
+      }
     },
     {
       "name": "Banza",
@@ -840,7 +1848,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 1.96,
+      "tokens_in": 734,
+      "tokens_out": 84,
+      "desc": "Banza is a privately held food company known for producing pasta made primarily from chickpeas, offering a high-protein, high-fiber alternative to traditional wheat-based pasta. The company markets its products under the Banza brand and focuses on providing gluten-free, plant-based options to consumers seeking alternative food products. Banza is headquartered in Detroit, Michigan, and distributes its products through retail grocery chains and online channels.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of Banza."
+      }
     },
     {
       "name": "Banza",
@@ -848,7 +1868,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 1.87,
+      "tokens_in": 734,
+      "tokens_out": 87,
+      "desc": "Banza is a private food company known for producing chickpea-based pasta and other plant-based food products marketed as a healthier alternative to traditional grain-based pasta. The company focuses on providing gluten-free, high-protein, and low-net-carb options to meet consumer demand for nutritious and functional foods. Banza products are widely available in retail grocery stores across the United States and are positioned within the growing category of alternative food brands.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Description is accurate and well-grounded in public knowledge."
+      }
     },
     {
       "name": "Banza",
@@ -856,7 +1888,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 5.16,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Banza",
@@ -864,7 +1908,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 4.62,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Banza",
@@ -872,7 +1928,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 1.65,
+      "tokens_in": 815,
+      "tokens_out": 75,
+      "desc": "Banza is an organization that produces chickpea-based pasta as a gluten-free alternative to traditional pasta. The company has partnered with Campbell's to develop a condensed gluten-free soup product that incorporates its pasta, formulated to retain texture when cooked in broth. Banza's products are positioned in the natural and specialty foods market, focusing on high-protein, plant-based options.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "All claims are well-known public facts about Banza."
+      }
     },
     {
       "name": "Banza",
@@ -880,7 +1948,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.03,
+      "tokens_in": 815,
+      "tokens_out": 85,
+      "desc": "Banza is a food company known for producing chickpea-based pasta and other plant-powered alternatives to traditional grain products. The company collaborates with established food brands, such as Campbell's, to develop innovative products like gluten-free soups featuring Banza's pasta, which is designed to retain texture in liquid. Banza's offerings are marketed as high-protein, high-fiber alternatives that cater to health-conscious consumers.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded description of Banza."
+      }
     },
     {
       "name": "Banza",
@@ -888,7 +1968,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.72,
+      "tokens_in": 827,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Banza",
@@ -896,7 +1988,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.69,
+      "tokens_in": 827,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -904,7 +2008,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.72,
+      "tokens_in": 736,
+      "tokens_out": 80,
+      "desc": "Uni Express Inc. is a logistics and package delivery company that provides shipping services domestically and internationally, specializing in time-definite transportation for small to medium-sized businesses. The company operates a network of distribution centers and transport vehicles to support e-commerce and supply chain clients across North America. Uni Express Inc. focuses on technology-driven solutions for tracking, routing, and customer service in the fast-paced delivery industry.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general description for a logistics company."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -912,7 +2028,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.78,
+      "tokens_in": 736,
+      "tokens_out": 70,
+      "desc": "Uni Express Inc. is a logistics and package delivery company that provides domestic and international shipping services, specializing in express delivery solutions for businesses and individual customers. The company operates a network of distribution centers and transportation infrastructure to support time-sensitive deliveries across multiple regions. Uni Express Inc. is known for its focus on technology-driven logistics management and customer service efficiency.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general description for a logistics company."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -920,7 +2048,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.01,
+      "tokens_in": 741,
+      "tokens_out": 7,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -928,7 +2068,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.84,
+      "tokens_in": 741,
+      "tokens_out": 7,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -936,7 +2088,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.16,
+      "tokens_in": 761,
+      "tokens_out": 78,
+      "desc": "Uni Express Inc. is a name that may be used by various private companies or organizations, often in the transportation, logistics, or delivery services sector. Without specific corroborating information, it cannot be definitively associated with a known, publicly traded, or widely recognized entity. Such companies typically operate on a regional or niche basis and may not be widely documented in public financial or regulatory databases.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Cautious, generic description; no specific claims made."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -944,7 +2108,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.67,
+      "tokens_in": 761,
+      "tokens_out": 68,
+      "desc": "Uni Express Inc. is a name that may refer to a business operating in the logistics or courier services sector, providing delivery and transportation solutions. Without verified details, it cannot be confirmed as a publicly traded company or major international entity. Such organizations typically offer shipping, package handling, and supply chain support, often at regional or local levels.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Stays safely within general category; no specific unsupported claims."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -952,7 +2128,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.81,
+      "tokens_in": 768,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Uni Express Inc.",
@@ -960,7 +2148,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.74,
+      "tokens_in": 768,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -968,7 +2168,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.33,
+      "tokens_in": 737,
+      "tokens_out": 67,
+      "desc": "Paragon Acura is an automotive dealership that sells and services Acura vehicles, offering new and pre-owned cars along with financing and maintenance support. It operates as part of the Paragon Automotive Group, which owns and manages multiple car dealerships across the United States. The organization serves customers in the luxury and performance vehicle market segment.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Safe general description for a dealership."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -976,7 +2188,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.63,
+      "tokens_in": 737,
+      "tokens_out": 74,
+      "desc": "Paragon Acura is an automotive dealership that sells and services Acura vehicles, operating as part of the Paragon Automotive Group. The organization provides new and pre-owned car sales, maintenance, and repair services to customers, primarily in the Greater Toronto Area. As a franchise dealer, it is authorized by Acura to offer manufacturer-backed warranties and certified pre-owned programs.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Description is safe and general; no specific unsupported claims."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -984,7 +2208,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.71,
+      "tokens_in": 741,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -992,7 +2228,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.94,
+      "tokens_in": 741,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -1000,7 +2248,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.53,
+      "tokens_in": 762,
+      "tokens_out": 54,
+      "desc": "Paragon Acura is an automotive dealership organization that sells and services Acura vehicles. Such dealerships typically offer new and pre-owned car sales, financing, and maintenance support. Without specific public details, it is categorized as a local retail business within the automotive industry.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general-category description; no specific unsupported claims."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -1008,7 +2268,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.36,
+      "tokens_in": 762,
+      "tokens_out": 54,
+      "desc": "Paragon Acura is an automotive dealership organization that sells and services Acura vehicles. Such dealerships typically offer new and pre-owned cars, routine maintenance, and repair services to customers. As with similar entities, it likely operates under franchise agreements with the vehicle manufacturer.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -1016,7 +2288,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.62,
+      "tokens_in": 768,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Paragon Acura",
@@ -1024,7 +2308,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.94,
+      "tokens_in": 768,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "TARA",
@@ -1032,7 +2328,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 1.61,
+      "tokens_in": 734,
+      "tokens_out": 71,
+      "desc": "TARA is a nonprofit organization focused on advancing financial inclusion and sustainable development through digital innovation and partnerships in emerging markets. It operates primarily in South Asia, supporting initiatives in digital identity, fintech, and inclusive governance. The organization collaborates with governments, multilateral agencies, and private sector stakeholders to build scalable, technology-driven solutions for underserved populations.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "TARA",
@@ -1040,7 +2348,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.19,
+      "tokens_in": 734,
+      "tokens_out": 69,
+      "desc": "TARA is an organization focused on advancing financial inclusion and digital payment solutions, primarily in emerging markets. It operates as a technology and advisory services provider to support the development of secure, scalable, and interoperable payment infrastructures. TARA collaborates with governments, financial institutions, and international development partners to promote accessible and efficient digital financial ecosystems.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general description for an unknown organization."
+      }
     },
     {
       "name": "TARA",
@@ -1048,7 +2368,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.87,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "TARA",
@@ -1056,7 +2388,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 5.12,
+      "tokens_in": 740,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "TARA",
@@ -1064,7 +2408,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.15,
+      "tokens_in": 807,
+      "tokens_out": 73,
+      "desc": "TARA is a conversational AI assistant developed by Tradeweb Markets for its institutional trading platform, designed to provide real-time market intelligence and workflow insights from U.S. credit trading data. It is integrated directly into the platform to assist institutional clients with data-driven decision-making. TARA enhances user experience by enabling natural language interactions to access analytics and trading information.",
+      "judge": {
+        "fabricated_claims": 2,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 2,
+        "note": "Invented specific product details for unknown entity TARA."
+      }
     },
     {
       "name": "TARA",
@@ -1072,7 +2428,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 1.94,
+      "tokens_in": 807,
+      "tokens_out": 68,
+      "desc": "TARA is a conversational AI assistant developed by Tradeweb Markets and embedded in its institutional trading platform to provide real-time market intelligence and workflow insights. It is designed to analyze U.S. credit trading data, helping institutional clients make informed trading decisions. TARA enhances user experience by integrating AI-driven analysis directly into the trading workflow.",
+      "judge": {
+        "fabricated_claims": 3,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 2,
+        "note": "Invented specific developer, platform, and function for unknown entity TARA."
+      }
     },
     {
       "name": "TARA",
@@ -1080,7 +2448,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.14,
+      "tokens_in": 817,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 3,
+        "completeness": 2,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "TARA",
@@ -1088,7 +2468,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.36,
+      "tokens_in": 817,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general category; no specific claims made."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1096,7 +2488,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.86,
+      "tokens_in": 739,
+      "tokens_out": 80,
+      "desc": "Guotai Haitong Securities is a Chinese securities firm formed through the merger of Guotai Junan Securities and Haitong Securities, two major financial institutions in China. The company provides a range of financial services including securities trading, investment banking, asset management, and securities research. It operates under regulatory oversight of the China Securities Regulatory Commission and serves a broad client base across China\u2019s capital markets.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate general description of a Chinese securities firm."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1104,7 +2508,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.66,
+      "tokens_in": 739,
+      "tokens_out": 64,
+      "desc": "Guotai Haitong Securities is a Chinese securities firm engaged in brokerage, investment banking, asset management, and proprietary trading services. It operates as a joint venture between Guotai Junan Securities and Haitong Securities, two major Chinese financial institutions. The company serves individual and institutional clients across China's capital markets.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Description is reasonable and well-grounded."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1112,7 +2528,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.75,
+      "tokens_in": 744,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1120,7 +2548,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.24,
+      "tokens_in": 744,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category; safe description."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1128,7 +2568,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.93,
+      "tokens_in": 764,
+      "tokens_out": 59,
+      "desc": "Guotai Haitong Securities is a Chinese financial services company operating in the securities and investment banking sector. It provides brokerage, asset management, and investment advisory services to clients within China's capital markets. As a securities firm, it is part of the broader financial industry regulated by Chinese authorities.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Safe general description; no specific unsupported claims."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1136,7 +2588,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.95,
+      "tokens_in": 764,
+      "tokens_out": 76,
+      "desc": "Guotai Haitong Securities is a financial services firm operating in the securities industry, offering services such as brokerage, investment banking, asset management, and securities trading. It functions as a subsidiary within a larger financial group and operates under the regulatory framework of China's securities market. The firm serves individual and institutional clients in mainland China, focusing on capital markets and wealth management solutions.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Description is appropriately generic and safe."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1144,7 +2608,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.61,
+      "tokens_in": 771,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "Guotai Haitong Securities",
@@ -1152,7 +2628,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.05,
+      "tokens_in": 771,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "No specific unsupported claims; safe general description."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1160,7 +2648,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.65,
+      "tokens_in": 736,
+      "tokens_out": 98,
+      "desc": "Morgan & Morgan is a U.S.-based law firm headquartered in Orlando, Florida, known for its large-scale personal injury, mass tort, and class action litigation practices. It operates multiple offices across the United States and is recognized for its aggressive advertising campaigns and focus on plaintiff-side legal representation. The firm is one of the largest in the United States by number of attorneys and handles a wide range of civil litigation matters, including product liability, medical malpractice, and consumer protection cases.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 5,
+        "note": "Description is accurate and well-grounded in public knowledge."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1168,7 +2668,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.37,
+      "tokens_in": 736,
+      "tokens_out": 93,
+      "desc": "Morgan & Morgan is a prominent American law firm headquartered in Orlando, Florida, known for its extensive practice in personal injury, class action, and mass tort litigation. It operates as a plaintiff-side firm with numerous offices across the United States and handles a high volume of cases involving consumer protection, medical malpractice, and product liability. The firm is consistently recognized as one of the largest plaintiff law firms in the U.S. by number of attorneys and case filings.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Well-grounded, no fabricated claims."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1176,7 +2688,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.89,
+      "tokens_in": 741,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is safe and general."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1184,7 +2708,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.58,
+      "tokens_in": 741,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is safe and general."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1192,7 +2728,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.91,
+      "tokens_in": 761,
+      "tokens_out": 69,
+      "desc": "Morgan & Morgan is a law firm based in the United States, known for handling a wide range of legal matters including personal injury, class action, and product liability cases. The firm operates as a private partnership and has multiple offices across the country. It is recognized for its large-scale advertising presence and representation of individual plaintiffs in civil litigation.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Description is accurate and well-grounded in general knowledge."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1200,7 +2748,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.32,
+      "tokens_in": 761,
+      "tokens_out": 68,
+      "desc": "Morgan & Morgan is a law firm based in the United States, known for handling a wide range of legal matters including personal injury, class action, and product liability cases. It operates as a private partnership with multiple office locations across the country. The firm is recognized for its large-scale advertising campaigns and representation of clients in civil litigation.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Description is accurate and well-grounded in general knowledge."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1208,7 +2768,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.72,
+      "tokens_in": 768,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Morgan & Morgan",
@@ -1216,7 +2788,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.51,
+      "tokens_in": 768,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabricated claims; description is appropriately general."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1224,7 +2808,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.95,
+      "tokens_in": 736,
+      "tokens_out": 79,
+      "desc": "Mark Meador is an American business executive who serves as the Chief Financial Officer of Workday, Inc., a leading provider of enterprise cloud applications for finance and human resources. He joined Workday in 2018 and has held various leadership roles within the finance organization prior to becoming CFO. Meador is responsible for overseeing the company's global finance, accounting, and investor relations functions.",
+      "judge": {
+        "fabricated_claims": 4,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented entire career: CFO of Workday, joined 2018, etc."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1232,7 +2828,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 4.26,
+      "tokens_in": 736,
+      "tokens_out": 94,
+      "desc": "Mark Meador is an American business executive who serves as the Chief Financial Officer of Nike, Inc., a position he assumed in 2023. He previously held senior financial roles at Nike, including Vice President of Finance for the Americas region and Chief Financial Officer of the Global Operations and Supply Chain division. Meador has been with Nike since the early 2000s and has played a key role in the company's financial strategy and transformation initiatives.",
+      "judge": {
+        "fabricated_claims": 5,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Entire biography is fabricated; no evidence for any claim."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1240,7 +2848,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 5.01,
+      "tokens_in": 741,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1248,7 +2868,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 4.07,
+      "tokens_in": 741,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1256,7 +2888,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 4.85,
+      "tokens_in": 793,
+      "tokens_out": 73,
+      "desc": "Mark Meador is a Commissioner of the U.S. Federal Trade Commission (FTC), serving as one of its five voting members. He was appointed to the bipartisan commission, which enforces federal consumer protection laws and promotes competition, alongside fellow Republican Andrew Ferguson. As an FTC Commissioner, Meador participates in decisions on enforcement actions, settlements, and regulatory initiatives.",
+      "judge": {
+        "fabricated_claims": 2,
+        "hallucination": 2,
+        "grounding": 2,
+        "accuracy": 1,
+        "completeness": 2,
+        "note": "Invented FTC role and colleague Andrew Ferguson."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1264,7 +2908,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 3.36,
+      "tokens_in": 793,
+      "tokens_out": 64,
+      "desc": "Mark Meador is a Commissioner of the U.S. Federal Trade Commission, serving as one of its five voting members. He is a member of the Republican Party and joined the FTC in 2024. As a commissioner, he participates in decisions regarding antitrust, consumer protection, and regulatory enforcement actions.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Accurate, well-grounded, no fabrication."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1272,7 +2928,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 6.26,
+      "tokens_in": 803,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Mark Meador",
@@ -1280,7 +2948,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": true,
+      "latency_s": 2.17,
+      "tokens_in": 803,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims beyond general category."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1288,7 +2968,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.85,
+      "tokens_in": 737,
+      "tokens_out": 80,
+      "desc": "Allison McNeely is a professional in the financial services industry, known for her leadership roles in asset management and investment advisory firms. She has held positions of increasing responsibility, including serving as a chief executive officer at a registered investment advisor, where she focused on strategic growth and client portfolio management. McNeely is recognized for her expertise in wealth management and her contributions to advancing women in finance.",
+      "judge": {
+        "fabricated_claims": 3,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented CEO role, wealth management expertise, and women in finance contributions."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1296,7 +2988,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.86,
+      "tokens_in": 737,
+      "tokens_out": 64,
+      "desc": "Allison McNeely is a financial services executive known for her leadership roles in asset management and investment operations. She has held senior positions at prominent firms including BlackRock and Barclays, where she focused on portfolio management and client solutions. McNeely is recognized for her expertise in fixed income and multi-asset strategies.",
+      "judge": {
+        "fabricated_claims": 3,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented specific roles at BlackRock and Barclays without any context."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1304,7 +3008,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.29,
+      "tokens_in": 742,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims; only states general category."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1312,7 +3028,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.47,
+      "tokens_in": 742,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1320,7 +3048,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.0,
+      "tokens_in": 762,
+      "tokens_out": 78,
+      "desc": "Allison McNeely is a name that may refer to an individual in a professional or public capacity, but without corroborating information, no specific role or achievements can be verified. It is possible the name corresponds to someone in fields such as business, academia, or public service, but no established public profile is confirmed. As such, the identity remains indeterminate based on available sources.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims made; appropriately cautious."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1328,7 +3068,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.52,
+      "tokens_in": 762,
+      "tokens_out": 63,
+      "desc": "Allison McNeely is a name associated with no widely recognized public figure in prominent financial, corporate, or regulatory contexts. Without verified information, the individual cannot be definitively categorized as a known executive, investor, or public official. Descriptions beyond this would involve speculation and are not supported by public records.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Correctly avoids fabrication for unknown person."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1336,7 +3088,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.65,
+      "tokens_in": 769,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Allison McNeely",
@@ -1344,7 +3108,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.38,
+      "tokens_in": 769,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1352,7 +3128,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.99,
+      "tokens_in": 738,
+      "tokens_out": 63,
+      "desc": "Vinayak Hegde is a financial services professional with experience in capital markets and investment banking. He has held leadership roles in equity capital markets and corporate advisory, focusing on transactions involving public and private companies. Hegde is known for his expertise in IPOs, mergers and acquisitions, and strategic financial consulting.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 3,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general category description; no specific unsupported claims."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1360,7 +3148,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.65,
+      "tokens_in": 738,
+      "tokens_out": 60,
+      "desc": "Vinayak Hegde is a financial services professional with experience in investment banking and capital markets. He has held leadership roles in firms focused on mergers and acquisitions, corporate advisory, and equity capital markets. His career spans several years in the financial industry, primarily in Asia and the Middle East.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general category description; no specific unsupported claims."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1368,7 +3168,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.3,
+      "tokens_in": 742,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1376,7 +3188,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.5,
+      "tokens_in": 742,
+      "tokens_out": 8,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1384,7 +3208,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 6.39,
+      "tokens_in": 763,
+      "tokens_out": 78,
+      "desc": "Vinayak Hegde is a name associated with the financial services industry, typically linked to roles in investment management or wealth advisory based on public professional profiles. Without corroborating news or official affiliations, no specific organizational or biographical details can be verified. Individuals with this name may hold professional designations common in finance, but no public figure by this name has a widely documented profile.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Stays safely within general category; no specific claims made."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1392,7 +3228,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 6.72,
+      "tokens_in": 763,
+      "tokens_out": 81,
+      "desc": "Vinayak Hegde is a name that may refer to an individual in a professional or academic capacity, though no widely recognized public figure by this name is documented in major financial, regulatory, or corporate leadership contexts. Without verified affiliations or public roles, the identity remains unconfirmed in prominent business or economic spheres. Descriptions of specific achievements, positions, or contributions cannot be provided without reliable sourcing.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Appropriately cautious; no specific claims invented."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1400,7 +3248,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.16,
+      "tokens_in": 769,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims made; safe generic statement."
+      }
     },
     {
       "name": "Vinayak Hegde",
@@ -1408,7 +3268,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.71,
+      "tokens_in": 769,
+      "tokens_out": 6,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims made; safe general description."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1416,7 +3288,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.45,
+      "tokens_in": 735,
+      "tokens_out": 58,
+      "desc": "Stephen Sheldon is an American investor and the founder of SRS Investment Management, a private investment firm. He is known for his value-oriented investment approach and has maintained a low public profile throughout his career. Sheldon has been recognized for achieving strong long-term returns, particularly through concentrated equity investments.",
+      "judge": {
+        "fabricated_claims": 2,
+        "hallucination": 2,
+        "grounding": 2,
+        "accuracy": 1,
+        "completeness": 2,
+        "note": "Invented founder role and firm; no context support."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1424,7 +3308,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.92,
+      "tokens_in": 735,
+      "tokens_out": 88,
+      "desc": "Stephen Sheldon is an American investor and financial executive who serves as a director and former Chief Financial Officer of several publicly traded companies, primarily in the technology and healthcare sectors. He is known for his involvement with firms such as Coherus BioSciences and Quantum-Si Incorporated, where he has held executive and board-level positions. Sheldon has a background in finance and corporate strategy, with experience spanning over two decades in public and private companies.",
+      "judge": {
+        "fabricated_claims": 3,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 2,
+        "note": "Invented career, companies, and roles for unknown person."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1432,7 +3328,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.5,
+      "tokens_in": 740,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1440,7 +3348,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.09,
+      "tokens_in": 740,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1448,7 +3368,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.59,
+      "tokens_in": 760,
+      "tokens_out": 64,
+      "desc": "Stephen Sheldon is a name that may refer to individuals in various professional or personal capacities, but no publicly verifiable details are available to confirm a specific identity or role. Without corroborating information, the name does not correspond to a widely recognized public figure in available sources. As such, no definitive description can be provided.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims made; safe general response."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1456,7 +3388,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.25,
+      "tokens_in": 760,
+      "tokens_out": 56,
+      "desc": "Stephen Sheldon is a name associated with no widely recognized public figure or established professional profile in publicly available sources. Without verifiable context, it may refer to an individual without notable public presence or could be a private person. As such, no specific role or achievement can be confirmed.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Appropriately states lack of public information."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1464,7 +3408,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.59,
+      "tokens_in": 767,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims made; safe general description."
+      }
     },
     {
       "name": "Stephen Sheldon",
@@ -1472,7 +3428,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.5,
+      "tokens_in": 767,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 1,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented specific biography for unknown person."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1480,7 +3448,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.68,
+      "tokens_in": 735,
+      "tokens_out": 56,
+      "desc": "Jennifer Schultz is a fictional or non-public individual not widely recognized in publicly available sources as of the latest update. Without verifiable information about her professional role or public contributions, a factual description cannot be provided. For privacy reasons, personal details about non-public figures are not disclosed.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Correctly avoids inventing details for unknown person."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1488,7 +3468,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.17,
+      "tokens_in": 735,
+      "tokens_out": 57,
+      "desc": "Jennifer Schultz is a fictional or non-public individual not widely recognized in publicly available sources as of the latest update. Without verifiable information about her professional role or public contributions, a factual description cannot be provided. For public figures, descriptions are based on established and documented roles or achievements.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Correctly states lack of public information."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1496,7 +3488,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.22,
+      "tokens_in": 740,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 1,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented specific career details for an unknown person."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1504,7 +3508,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 4.32,
+      "tokens_in": 740,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 1,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented specific career details for an unknown person."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1512,7 +3528,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.01,
+      "tokens_in": 760,
+      "tokens_out": 55,
+      "desc": "Jennifer Schultz is a name associated with multiple individuals in public records and professional directories. Without additional context, it may refer to a person in academia, public service, or another professional field. Specific details about accomplishments, affiliations, or roles cannot be confirmed without reliable sources.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "Safe, cautious description; no invented specifics."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1520,7 +3548,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.71,
+      "tokens_in": 760,
+      "tokens_out": 62,
+      "desc": "Jennifer Schultz is a name associated with multiple individuals in public records, including professionals in academia, public service, and business. Without additional context, it is not possible to specify a particular person or role. The name does not correspond to a widely recognized public figure in major financial, corporate, or regulatory contexts.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 4,
+        "note": "No fabrication; correctly states ambiguity."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1528,7 +3568,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.54,
+      "tokens_in": 767,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Jennifer Schultz",
@@ -1536,7 +3588,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.2,
+      "tokens_in": 767,
+      "tokens_out": 10,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe generic description."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1544,7 +3608,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 5.11,
+      "tokens_in": 736,
+      "tokens_out": 62,
+      "desc": "Nacho Traves is a Spanish entrepreneur and technology executive known for his leadership roles in digital innovation and fintech ventures. He has been associated with companies focused on blockchain, digital identity, and decentralized technologies in Europe. Traves is recognized for promoting technological sovereignty and digital transformation initiatives within the European startup ecosystem.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 4,
+        "accuracy": 4,
+        "completeness": 3,
+        "note": "Safe general category description; no specific unsupported claims."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1552,7 +3628,19 @@
       "stratum": "obscure",
       "arm": "235b",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.6,
+      "tokens_in": 736,
+      "tokens_out": 73,
+      "desc": "Nacho Traves is a Spanish entrepreneur and technology executive known for his leadership roles in digital innovation and software development. He is the co-founder and CEO of Badi, a mobile-first platform for shared housing that connects room seekers with verified listings across multiple cities. Under his direction, Badi has expanded internationally, focusing on leveraging technology to improve urban living experiences.",
+      "judge": {
+        "fabricated_claims": 2,
+        "hallucination": 2,
+        "grounding": 2,
+        "accuracy": 2,
+        "completeness": 2,
+        "note": "Claims co-founder/CEO of Badi and platform details not in context."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1560,7 +3648,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.68,
+      "tokens_in": 742,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1568,7 +3668,19 @@
       "stratum": "obscure",
       "arm": "gemini",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.44,
+      "tokens_in": 742,
+      "tokens_out": 9,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 1,
+        "hallucination": 2,
+        "grounding": 1,
+        "accuracy": 1,
+        "completeness": 1,
+        "note": "Invented a specific career for an unknown person."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1576,7 +3688,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 1.58,
+      "tokens_in": 761,
+      "tokens_out": 60,
+      "desc": "Nacho Traves is not a publicly known figure with verifiable professional or public roles in widely recognized sources. As such, no established facts can be confirmed regarding this individual's identity or affiliations. Descriptions of specific achievements, positions, or contributions cannot be provided without reliable corroboration.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Appropriately declines to invent facts for unknown person."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1584,7 +3708,19 @@
       "stratum": "obscure",
       "arm": "235b+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 2.2,
+      "tokens_in": 761,
+      "tokens_out": 60,
+      "desc": "Nacho Traves is a person whose public profile and professional background are not widely documented in publicly available sources. Without verified information, no specific details about their role, achievements, or affiliations can be confirmed. Individuals with limited public presence may not have established recognition in major media or official records.",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "Appropriately cautious; no fabricated claims."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1592,7 +3728,19 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 0,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.35,
+      "tokens_in": 769,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 3,
+        "note": "No specific claims; safe general description."
+      }
     },
     {
       "name": "Nacho Traves",
@@ -1600,8 +3748,20 @@
       "stratum": "obscure",
       "arm": "gemini+news",
       "run": 1,
-      "err": "__ERR__ HTTP Error 401: Unauthorized"
+      "has_news": false,
+      "latency_s": 3.17,
+      "tokens_in": 769,
+      "tokens_out": 11,
+      "desc": "",
+      "judge": {
+        "fabricated_claims": 0,
+        "hallucination": 0,
+        "grounding": 5,
+        "accuracy": 5,
+        "completeness": 1,
+        "note": "No specific claims made; only states general category."
+      }
     }
   ],
-  "total_api_calls": 180
+  "total_api_calls": 360
 }
