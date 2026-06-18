@@ -208,6 +208,60 @@ non-claim (McNeely). Both branches are already exercised in the prototype prompt
 
 ---
 
+## Part 5 — Implementation plan (ready to execute; news-grounding on 235b)
+
+Fully mapped against the live code. Every new arg is **defaulted (`= None`)** → forward-compatible, each
+layer lands independently. **Do NOT touch `structured_enrichment_consumer_main.py`** (active sibling
+session, R42). Suggested order (leaf → root), one commit + tests per step:
+
+**1. `libs/ml-clients/src/ml_clients/adapters/deepinfra_description.py`** (the QA-proven core)
+- `generate_description(...)` + `_build_prompt(...)`: add `news_context: list[str] | None = None`.
+- In `_build_prompt`, after the base line, append the grounding block when snippets exist:
+  *"## Recent news context (ground your description in these facts; state nothing they do not support):"*
+  then up to 3 sanitized, ≤300-char snippets wrapped as data; **else** the no-news guard:
+  *"## No corroborating news found. If not independently certain of specifics, describe only the general
+  category/type — do not invent roles, titles, affiliations, or biographical detail."*
+  (Sanitize each snippet with the existing `_NAME_CONTROL_CHAR_RE` + length cap — evidence_text is
+  untrusted news → prompt-injection surface; keep the system prompt static for KV-cache.)
+- Keep the BP-339 note: still **no** `reasoning_effort` on Qwen3 (empty-output trap).
+
+**2. `libs/ml-clients/src/ml_clients/adapters/gemini_description.py`** — mirror the `news_context` arg for
+parity (defaulted). (Gemini stays rejected, but the protocol must be uniform.)
+
+**3. Protocol/forwarding:** `description_client.py` (`EntityDescriptionClient`, `NullDescriptionAdapter`)
+and `chained_description.py` (`ChainedDescriptionAdapter` — forward `news_context=news_context` at the
+call site): add the defaulted arg.
+
+**4. `services/knowledge-graph/.../infrastructure/intelligence_db/adapters/entity_enrichment_adapter.py`**
+- New read method `fetch_recent_evidence(entity_id, limit=3) -> list[str]`, opening its **own read
+  session via `self._read_session_factory()`** (exact pattern of `list_unenriched`; R27 read replica):
+  ```sql
+  SELECT evidence_text, extracted_at FROM relation_evidence_raw
+  WHERE (subject_entity_id = :eid OR object_entity_id = :eid)
+    AND evidence_text IS NOT NULL AND length(btrim(evidence_text)) > 0
+  ORDER BY extracted_at DESC LIMIT :fetch   -- fetch ~10, dedup in Python, take top 3
+  ```
+  Dedup verbatim duplicates (Valaris-style repeats), truncate ~300 chars.
+
+**5. `services/knowledge-graph/.../application/use_cases/structured_enrichment.py`**
+- `DescriptionLlmClientProtocol.generate_description`: add `news_context: list[str] | None = None`.
+- In Step 3, **before** the `generate_description` call (still Phase-2, but a quick open/close read that
+  is NOT held during the LLM I/O): `news = await self._adapter.fetch_recent_evidence(entity.entity_id)`;
+  pass `news_context=news`. Wrap in try/except → on read failure, log + proceed with `news_context=None`
+  (grounding is best-effort, never blocks enrichment).
+- Mirror the same 2-line fetch+pass in `DefinitionRefreshWorker` (Worker 13D-1) for the non-company path.
+
+**6. Tests** (one per layer): adapter builds the NEWS CONTEXT block when snippets present / the guard when
+empty (+ injection-sanitization test, extending `test_deepinfra_description_prompt_safety.py`); chained
+forwards `news_context`; `fetch_recent_evidence` dedup/limit/empty; use case passes fetched snippets and
+degrades to `None` on read error. **7. Docs:** `docs/services/knowledge-graph.md` (enrichment Step 3 now
+news-grounded) + this audit's verdict.
+
+Acceptance: re-run `results/desc_grounding_eval/eval.py` `235b+news` arm against the shipped path —
+expect obscure-person fab ≤ ~0.2 (from 1.83), grounding ≥ ~4.5.
+
+---
+
 ## Bottom line — prioritized
 
 1. **(b) Add news-grounding — DO THIS FIRST.** Biggest fabrication reduction, attacks the root cause,
