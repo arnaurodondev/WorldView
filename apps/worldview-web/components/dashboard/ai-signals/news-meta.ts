@@ -17,10 +17,18 @@ import type { NewsMomentumItem } from "./types";
  * label for a row's count change vs the prior window.
  *
  * WHY this is the headline number (not relevance): the feed is ranked by surge,
- * so the trend is what makes a row notable. We show the signed delta_pct when a
- * baseline exists (e.g. ↑200%); when prior_count was 0 the percentage is
- * unbounded-but-finite (server floors the denominator at 1), so we prefer the
- * absolute "+N" reading ("new" coverage) which is more honest than "↑400%".
+ * so the trend is what makes a row notable. We always show a PERCENTAGE (e.g.
+ * ↑200%) — the financial convention used by every other mover widget in the
+ * dashboard. The label is capped at 999% so it never overflows the fixed ~w-[44px]
+ * slot even for explosive new-coverage tickers. The raw article counts are still
+ * available in the hover tooltip (trendTitle / rowTitle) so no absolute info is
+ * lost by switching to % here.
+ *
+ * WHY we no longer special-case prior_count===0 with "+N": prior=0 is valid data
+ * (new coverage), but emitting an absolute integer while other rows emit a % means
+ * the SAME widget shows mixed units — a display inconsistency that breaks at a
+ * glance comparison. The server floors the prior denominator at 1, so delta_pct is
+ * always finite and safe to display as a %.
  *
  * Color: §15.11 semantic utilities — text-positive (rising), text-negative
  * (falling), muted (flat). Arrow + color encode the same bit (WCAG 1.4.1) so
@@ -37,8 +45,12 @@ export function trendMeta(item: NewsMomentumItem): {
   const pct = item.delta_pct ?? 0;
 
   if (delta > 0) {
-    // New coverage (no prior baseline) reads better as "+N new" than a giant %.
-    const label = prior === 0 ? `+${delta}` : `↑${Math.round(pct)}%`;
+    // Always emit a percentage — consistent with every other mover widget.
+    // Cap at 999% so the label never overflows the fixed ~w-[44px] slot.
+    // NOTE: do NOT switch to "+N" when prior===0 — that breaks unit consistency
+    // (absolute count vs percentage in the same widget). Raw counts live in the
+    // tooltip (trendTitle / rowTitle) so the absolute info isn't lost.
+    const label = `↑${Math.min(Math.round(pct), 999)}%`;
     return { arrow: "↑", text: "text-positive", label, word: "rising" };
   }
   if (delta < 0) {
