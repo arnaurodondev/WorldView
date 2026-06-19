@@ -120,6 +120,24 @@ class Settings(BaseSettings):
     # Set INSTRUMENT_POLICY_SYNC_ENABLED=false to disable without redeploying.
     instrument_policy_sync_enabled: bool = True
     instrument_policy_sync_interval_hours: float = 6.0
+
+    # InsiderUniverseRefreshWorker (PRD-0089 L-4b): weekly re-runs the
+    # InsiderUniverseLoader, which expands the insider-transactions polling
+    # universe to the OHLCV-covered set via market-data's internal endpoint.
+    #
+    # GATED OFF BY DEFAULT (deliberately): enabling this starts spending EODHD
+    # credits — ~2,830 credits/month at weekly cadence for this environment's
+    # ~654 OHLCV-covered universe (1 credit/call). The "~13k/month for 3000
+    # instruments" figure in older docs is stale. The spend decision stays the
+    # operator's: set MARKET_INGESTION_INSIDER_UNIVERSE_REFRESH_ENABLED=true to
+    # opt in once budget is confirmed. BP-608: never ship a credit-spending
+    # scheduled worker enabled by default.
+    insider_universe_refresh_enabled: bool = False
+    # Weekly slot, in UTC. day_of_week follows datetime.weekday()
+    # (Monday=0 .. Sunday=6); default Sunday 05:00 UTC (quiet window, after the
+    # 03:00 UTC 90d insider rollup).
+    insider_universe_refresh_day_of_week: int = 6
+    insider_universe_refresh_hour_utc: int = 5
     fundamentals_refresh_top_n: int = 500
     fundamentals_refresh_provider: str = "eodhd"
     fundamentals_refresh_variant: str = "quarterly"
