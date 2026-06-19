@@ -57,6 +57,129 @@ _CACHE_TTL = 86400
 # this constant is the seconds equivalent.
 _LASTGOOD_TTL = 7 * 86400
 
+# ── Cache-poisoning guard (2026-06-19 empty-AI-brief investigation) ───────────
+# A "low-context refusal" brief is one the generator produced WITHOUT any usable
+# upstream context: every section reads "No specific items today" and the
+# confidence collapses to 0.0.  This happens on a transient auth/upstream blip
+# (e.g. the gateway service-token mint returning 503, or all upstreams 401'ing).
+#
+# Such a brief MUST NOT overwrite the ``briefing:morning:lastgood:{user_id}``
+# key — doing so clobbers the last KNOWN-GOOD brief and leaves the dashboard
+# blank until the next successful generation.  The matching pregeneration worker
+# already guards its lastgood write (``_looks_empty`` in
+# morning_brief_pregeneration_worker.py); the on-demand GET cold-gen path and
+# the POST /briefings/morning/generate force-regen path did NOT — so a single
+# blip while a user hit "Regenerate" could poison lastgood.  This guard closes
+# that gap.
+#
+# The substring is the deterministic placeholder the use case emits for an empty
+# section (see GenerateBriefingUseCase low-context branch).  We keep it here as a
+# module constant so the test can assert against the exact text.
+_LOW_CONTEXT_PLACEHOLDER = "No specific items today"
+
+
+def _is_low_context_brief(response: PublicBriefingResponse) -> bool:
+    """Return True if ``response`` is a zero-context refusal that must not be
+    written to the last-known-good cache key.
+
+    A brief is treated as low-context when BOTH hold:
+
+    1. ``confidence`` is 0.0 (the generator's signal that it had no real data),
+       AND
+    2. it carries no usable structure — no citations, no real sections (every
+       section body is the "No specific items today" placeholder).
+
+    Requiring confidence==0 AND no citations keeps the guard conservative: a
+    genuine-but-sparse brief (one real citation, or a real section with a
+    positive confidence) still passes through and updates lastgood as normal.
+    We never want to REJECT a good brief — only refuse to let a refusal stomp
+    a previously-good one.
+    """
+    # Signal 1: confidence collapsed to zero. ``confidence`` defaults to 1.0 in
+    # the schema, so a real brief never accidentally trips this.
+    if (response.confidence or 0.0) > 0.0:
+        return False
+
+    # Signal 2a: any citation at all means the brief grounded in real data.
+    if response.citations:
+        return False
+
+    # Signal 2b: any section whose BODY is NOT the empty placeholder means the
+    # generator found real content for at least one section.  We inspect only
+    # body/content fields — NOT the section title (titles like "Portfolio" /
+    # "News" are static labels present even on an empty brief and would falsely
+    # pass the guard if scanned).
+    body_keys = ("body", "content", "text", "markdown", "summary")
+    for section in response.sections or []:
+        # Sections are dicts (list[dict] in the schema), but read defensively in
+        # case a BriefSection model leaks through on some call path.
+        if isinstance(section, dict):
+            section_dict = section
+        elif hasattr(section, "model_dump"):
+            section_dict = section.model_dump()
+        else:
+            section_dict = {}
+        for key in body_keys:
+            value = section_dict.get(key)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped and _LOW_CONTEXT_PLACEHOLDER not in stripped:
+                    return False
+            elif isinstance(value, list):
+                # Bullet lists: any non-placeholder bullet string is real content.
+                for item in value:
+                    if isinstance(item, str):
+                        text = item
+                    elif isinstance(item, dict):
+                        text = str(item.get("text", ""))
+                    else:
+                        text = ""
+                    if text.strip() and _LOW_CONTEXT_PLACEHOLDER not in text:
+                        return False
+
+    # confidence==0, no citations, every section empty/placeholder → refusal.
+    return True
+
+
+async def _write_brief_caches(
+    valkey: Any,
+    *,
+    cache_key: str,
+    lastgood_key: str,
+    response: PublicBriefingResponse,
+) -> None:
+    """Write the fresh brief to ``cache_key`` and (conditionally) ``lastgood_key``.
+
+    The fresh key is ALWAYS written — the caller asked for this brief and should
+    see it immediately, even if it is a low-context refusal (so the frontend can
+    render the EmptyState / Regenerate affordance rather than serving an even
+    older payload).
+
+    The lastgood key is written ONLY when the brief is NOT a low-context refusal
+    (see ``_is_low_context_brief``).  This preserves the previous known-good
+    brief across a transient upstream/auth blip — the core cache-poisoning fix.
+
+    WHY model_dump_json (not json.dumps): avoids stringifying nested Pydantic
+    models to non-deserialisable reprs (BP-319).
+    """
+    if valkey is None:
+        return
+    try:
+        payload_json = response.model_dump_json()
+        # Fresh key: always — the caller wants this exact result back.
+        await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
+        # Lastgood key: only for real briefs, never for a zero-context refusal.
+        if _is_low_context_brief(response):
+            log.warning(  # type: ignore[no-any-return]
+                "briefing_lastgood_write_skipped_low_context",
+                key=lastgood_key,
+                confidence=response.confidence,
+            )
+        else:
+            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
+    except Exception as exc:  # — cache write is best-effort
+        log.warning("briefing_cache_write_failed", error=str(exc), key=cache_key)  # type: ignore[no-any-return]
+
 
 # ── PLAN-0066 Wave B: history response schemas ────────────────────────────────
 
@@ -387,18 +510,16 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     resp = PublicBriefingResponse(**response_data)
 
     # ── Write to cache ────────────────────────────────────────────────────────
-    # WHY model_dump_json: avoids json.dumps(..., default=str) which stringifies
-    # Pydantic models (BriefSection, BriefBullet) to repr strings that cannot be
-    # re-deserialized on cache read (BP-319).
-    # PLAN-0094 W2: also write the lastgood key so a future regen failure has
-    # a known-good payload to fall back on.
-    if valkey is not None:
-        try:
-            payload_json = resp.model_dump_json()
-            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
-            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
-        except Exception as e:
-            log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
+    # PLAN-0094 W2: write the lastgood key so a future regen failure has a
+    # known-good payload to fall back on. 2026-06-19: gate the lastgood write on
+    # ``_is_low_context_brief`` so a zero-context refusal does not clobber the
+    # previous good brief (cache-poisoning guard).
+    await _write_brief_caches(
+        valkey,
+        cache_key=cache_key,
+        lastgood_key=lastgood_key,
+        response=resp,
+    )
 
     return resp
 
@@ -800,13 +921,17 @@ async def generate_morning_brief(request: Request) -> Any:
         is_stale=False,
         summary_paragraph=result.get("summary_paragraph"),
     )
-    if valkey is not None:
-        try:
-            payload_json = fresh_resp.model_dump_json()
-            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
-            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
-        except Exception as exc:
-            log.warning("briefing_cache_write_failed", error=str(exc), key=cache_key)  # type: ignore[no-any-return]
+    # 2026-06-19 cache-poisoning guard: a force-regen that lands a zero-context
+    # refusal (e.g. a transient gateway/upstream auth blip) must NOT overwrite
+    # the user's last-known-good brief. ``_write_brief_caches`` always writes the
+    # fresh key (so the follow-up GET serves this result) but skips lastgood for
+    # a low-context refusal.
+    await _write_brief_caches(
+        valkey,
+        cache_key=cache_key,
+        lastgood_key=lastgood_key,
+        response=fresh_resp,
+    )
 
     log.info(  # type: ignore[no-any-return]
         "generate_morning_brief_queued",

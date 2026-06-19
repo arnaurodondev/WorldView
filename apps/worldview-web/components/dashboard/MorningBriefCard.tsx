@@ -363,7 +363,61 @@ export function MorningBriefCard() {
   const safeSummaryParagraph = stripStaleMetadata(
     stripCitationMarkers(brief?.summary_paragraph?.trim() ?? ""),
   );
-  if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
+  // ── Empty-guard: zero-context / all-placeholder brief (2026-06-19) ──────────
+  // BACKGROUND (empty-AI-brief investigation): when the backend cannot reach any
+  // upstream data source (e.g. a transient gateway/auth blip), it still returns a
+  // 200 with a non-empty `narrative` made entirely of the literal placeholder
+  // "No specific items today." under each section heading, and `confidence: 0`.
+  // The old guard below only checked for EMPTY strings, so such a brief slipped
+  // through and rendered six dead lines that look broken to the user.
+  //
+  // This helper recognises that degenerate shape so we can fall through to the
+  // named EmptyState (with a Regenerate affordance) instead. We treat a brief as
+  // "all-placeholder" only when it has NO real signal at all:
+  //   - confidence is exactly 0 (the backend's "I had no data" marker — a real
+  //     brief carries a positive confidence), AND
+  //   - it has no usable structured sections (no section carries a real bullet),
+  //     AND
+  //   - every remaining line of the narrative is the placeholder sentence (or a
+  //     bare "## Heading"). If even one narrative line is real prose, we keep
+  //     rendering the brief — we never want to hide a genuine, if sparse, brief.
+  const PLACEHOLDER_LINE = "No specific items today";
+
+  function isAllPlaceholderBrief(): boolean {
+    // Only engage when the backend explicitly signalled zero confidence. A brief
+    // with confidence === undefined (older cache) or > 0 is treated as real.
+    if (brief?.confidence !== 0) return false;
+
+    // Any section with at least one real bullet means there IS content → not empty.
+    const hasRealSection = (brief.sections ?? []).some((section) =>
+      (section.bullets ?? []).some(
+        (bullet) =>
+          bullet.text.trim().length > 0 &&
+          !bullet.text.includes(PLACEHOLDER_LINE),
+      ),
+    );
+    if (hasRealSection) return false;
+
+    // Scan the cleaned narrative line-by-line. Anything that is not a markdown
+    // heading ("## ...") and not the placeholder sentence counts as real prose.
+    const realNarrativeLine = safeNarrative
+      .split("\n")
+      .map((line) => line.trim())
+      .some(
+        (line) =>
+          line.length > 0 &&
+          !line.startsWith("#") &&
+          !line.includes(PLACEHOLDER_LINE),
+      );
+    // If no real narrative line exists, the whole brief is placeholder → empty.
+    return !realNarrativeLine;
+  }
+
+  if (
+    !brief ||
+    (!safeNarrative && !safeSummary && !safeSummaryParagraph) ||
+    isAllPlaceholderBrief()
+  ) {
     // Round 1 foundation: NAMED empty state — icon + headline + last-attempt
     // timestamp + Regenerate action — replaces the bare one-liner.
     //
