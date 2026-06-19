@@ -58,8 +58,10 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { EmptyState } from "@/components/primitives/EmptyState";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-// HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses ≥$1M prices to a suffix ("$1.20M") so they
+// never overflow the fixed slot. formatChangePct: bounds extreme % moves to fit
+// the fixed w-[52px] %-change slot (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 
 type Period = "1D" | "1W" | "1M";
 
@@ -539,7 +541,10 @@ function MoverRow({ mover, side, onClick }: MoverRowProps) {
   return (
     <div
       // Round 3 (item 5): inset focus-visible ring for keyboard tabbing.
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden CLIP overflow within the
+      // 22px row so the two-column layout (gainers | losers) never bleeds across
+      // the column divider (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-[22px] min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
@@ -551,24 +556,27 @@ function MoverRow({ mover, side, onClick }: MoverRowProps) {
       {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
           rendering on dark themes — 600-weight is the maximum for terminal chrome text
           at small sizes (Bloomberg density rule) */}
-      <span className="w-[40px] shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">
+      {/* overflow-hidden + whitespace-nowrap: clip a long fallback ticker to
+          40px instead of bleeding into the name span. */}
+      <span className="w-[40px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] font-semibold tabular-nums text-foreground">
         {mover.ticker}
       </span>
       <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
         {mover.name}
       </span>
-      <span className="w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {formatPrice(mover.price)}
+      {/* whitespace-nowrap + compact price: keep on one line, fit the 52px slot. */}
+      <span className="w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {formatPriceCompact(mover.price)}
       </span>
       <span
         className={cn(
-          "w-[52px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums",
           side === "gainer" ? "text-positive" : "text-negative",
         )}
       >
-        {mover.changePct != null
-          ? `${mover.changePct >= 0 ? "+" : ""}${mover.changePct.toFixed(2)}%`
-          : "—"}
+        {/* formatChangePct returns "—" for null and bounds extreme moves so the
+            string always fits this fixed 52px slot. */}
+        {formatChangePct(mover.changePct)}
       </span>
     </div>
   );

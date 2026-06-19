@@ -30,7 +30,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses ≥$1M prices to a suffix ("$1.20M") so price
+// fits its slot. formatChangePct: bounds extreme % moves (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 import type { Mover } from "@/types/api";
 // PLAN-0048 Wave F-2: shared sector pill list (re-used by F-1 SectorHeatmap and
 // future Wave E WatchlistMoversWidget) so all three widgets keep identical
@@ -449,7 +451,10 @@ function MoverRow({ mover, side }: MoverRowProps) {
     // faint hover tint follows the terminal hover-state convention.
     // WHY role="button" + tabIndex: keyboard nav — traders can Tab and Enter to navigate.
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden clip overflow within the
+      // 22px row so extreme prices/% never bleed past the column edge
+      // (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-[22px] min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => { if (e.key === "Enter") router.push(`/instruments/${navId}`); }}
       role="button"
@@ -457,15 +462,17 @@ function MoverRow({ mover, side }: MoverRowProps) {
       aria-label={`Navigate to ${mover.ticker} instrument page`}
     >
 
-      {/* Ticker — fixed 38px for column alignment */}
-      <span className="w-[38px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+      {/* Ticker — fixed 38px for column alignment. overflow-hidden +
+          whitespace-nowrap: clip a long ticker to 38px rather than bleed. */}
+      <span className="w-[38px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-foreground">
         {mover.ticker}
       </span>
 
       {/* Price — right-aligned in a fixed slot; muted so % change remains primary */}
-      {/* WHY text-muted-foreground: price is context, change% is the signal */}
-      <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {formatPrice(mover.price)}
+      {/* WHY text-muted-foreground: price is context, change% is the signal.
+          formatPriceCompact + whitespace-nowrap keep high-price stocks on one line. */}
+      <span className="w-[48px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {formatPriceCompact(mover.price)}
       </span>
 
       {/* Spacer — pushes the change% to the right edge */}
@@ -474,14 +481,14 @@ function MoverRow({ mover, side }: MoverRowProps) {
       {/* Change % — right-aligned, colored by direction */}
       <span
         className={cn(
-          "shrink-0 font-mono text-[11px] tabular-nums",
+          "shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums",
           // WHY explicit side check rather than mover.change_pct sign:
           // the API already segregated gainers/losers by type; trust that.
           side === "gainer" ? "text-positive" : "text-negative",
         )}
       >
-        {mover.change_pct >= 0 ? "+" : ""}
-        {mover.change_pct.toFixed(2)}%
+        {/* formatChangePct bounds extreme moves to keep the % compact. */}
+        {formatChangePct(mover.change_pct)}
       </span>
 
     </div>
