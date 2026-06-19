@@ -397,6 +397,31 @@ class TestContradictionRepository:
         params = session.execute.call_args_list[0][0][1]
         assert params["opposite_polarity"] == "negative"
 
+    def test_fetch_active_for_subject_joins_claims_not_relation_evidence_raw(self) -> None:
+        """Regression (2026-06-16 data-pipeline-gaps Gap 1).
+
+        ``relation_contradiction_links.relation_evidence_id`` holds a
+        ``claims.claim_id``, so the confidence-formula lookup must resolve the
+        subject via ``claims`` (``c.claim_id = rcl.relation_evidence_id``), not
+        via ``relation_evidence_raw.raw_id`` (which matched 0/7180 rows). Pin
+        the correct join so it can't silently revert.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
+            ContradictionRepository,
+        )
+
+        session = _make_session(fetchall_return=[])
+        repo = ContradictionRepository(session)
+        asyncio.run(repo.fetch_active_for_subject(subject_entity_id=uuid4()))
+
+        sql = str(session.execute.call_args_list[0][0][0]).lower()
+        assert "join claims c on c.claim_id = rcl.relation_evidence_id" in sql
+        assert "c.subject_entity_id = :subject_entity_id" in sql
+        assert "relation_evidence_raw" not in sql
+        assert "rer.raw_id = rcl.relation_evidence_id" not in sql
+
 
 # ---------------------------------------------------------------------------
 # OutboxRepository

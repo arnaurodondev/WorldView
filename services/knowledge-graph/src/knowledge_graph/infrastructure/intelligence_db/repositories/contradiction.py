@@ -93,6 +93,17 @@ ORDER BY created_at DESC
         """Insert a contradiction link into ``relation_contradiction_links``.
 
         Temporal weights are NOT cached — computed on read.
+
+        COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1): despite its
+        name, ``relation_evidence_id`` does NOT hold a
+        ``relation_evidence_raw.raw_id``. The caller
+        (``contradiction_batch.py`` Worker 13B) passes the *subject claim's*
+        ``claims.claim_id`` here. There is no FK constraint enforcing either
+        interpretation. All read paths therefore resolve the subject by joining
+        ``claims`` (``c.claim_id = rcl.relation_evidence_id``), NOT
+        ``relation_evidence_raw``. Do not "fix" the join back to ``raw_id``
+        without first changing the write to store a real ``raw_id`` and adding
+        the FK (see report follow-up: rename migration recommended).
         """
         result = await self._session.execute(
             text("""
@@ -134,13 +145,24 @@ WHERE relation_evidence_id = :rel_ev_id AND claim_id = :claim_id
         subject_entity_id: UUID,
         window_days: int = _CONTRADICTION_WINDOW_DAYS,
     ) -> list[dict[str, object]]:
-        """Fetch active contradiction links for the top-K calculation (confidence formula)."""
+        """Fetch active contradiction links for the top-K calculation (confidence formula).
+
+        COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1):
+        ``relation_contradiction_links.relation_evidence_id`` is named like a
+        ``relation_evidence_raw.raw_id`` FK but actually holds the subject
+        ``claims.claim_id`` written by ``insert_link`` from
+        ``contradiction_batch.py:99`` (no FK constraint → silently accepted;
+        7180/7180 links match ``claims.claim_id``, 0/7180 match
+        ``relation_evidence_raw.raw_id``). The previous join via
+        ``rer.raw_id = rcl.relation_evidence_id`` returned NOTHING for every
+        subject. We resolve the subject through ``claims`` on the stored value.
+        """
         result = await self._session.execute(
             text("""
 SELECT rcl.link_id, rcl.strength, rcl.detected_at
 FROM relation_contradiction_links rcl
-JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
-WHERE rer.subject_entity_id = :subject_entity_id
+JOIN claims c ON c.claim_id = rcl.relation_evidence_id
+WHERE c.subject_entity_id = :subject_entity_id
   AND rcl.invalidated_at IS NULL
   AND rcl.detected_at    >= now() - make_interval(days => :window_days)
 ORDER BY rcl.detected_at DESC

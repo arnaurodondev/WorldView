@@ -98,10 +98,20 @@ LIMIT :top_k
     ) -> list[ContradictionData]:
         """Return active contradiction links where the entity is the subject.
 
-        Joins ``relation_contradiction_links`` → ``relation_evidence_raw``
-        → ``claims`` (both sides) to produce a two-sided contradiction view.
-        Side A = the new evidence's claim (LEFT JOIN — claim_id may be NULL).
-        Side B = the opposing existing claim.
+        Joins ``relation_contradiction_links`` → ``claims`` (both sides) to
+        produce a two-sided contradiction view.
+        Side A = the subject claim referenced by ``rcl.relation_evidence_id``.
+        Side B = the opposing existing claim (``rcl.claim_id``).
+
+        COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1):
+        ``relation_contradiction_links.relation_evidence_id`` is named like a
+        ``relation_evidence_raw.raw_id`` FK but actually stores the subject
+        ``claims.claim_id`` written by contradiction_batch.py:99 (no FK
+        constraint → mismatch silently accepted; 7180/7180 links match
+        ``claims.claim_id``, 0/7180 match ``relation_evidence_raw.raw_id``).
+        The previous query joined ``rer.raw_id = rcl.relation_evidence_id`` and
+        therefore returned NOTHING for every entity. We join ``claims`` directly
+        on the value actually stored, matching the write path.
 
         BP-069 / API-008: The original query used
           ``AND (:claim_type IS NULL OR rcl.contradiction_type = :claim_type)``
@@ -115,7 +125,7 @@ LIMIT :top_k
         # Build WHERE clause dynamically — only add :claim_type when it is
         # supplied so asyncpg always receives a typed string value.
         conditions = [
-            "rer.subject_entity_id = :entity_id",
+            "ca.subject_entity_id = :entity_id",
             "rcl.invalidated_at IS NULL",
         ]
         params: dict[str, object] = {"entity_id": str(entity_id), "top_k": top_k}
@@ -142,8 +152,9 @@ SELECT rcl.link_id,
        cb.claim_text            AS side_b_claim_text,
        cb.created_at            AS side_b_date
 FROM relation_contradiction_links rcl
-JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
-LEFT JOIN claims ca ON ca.claim_id = rer.claim_id
+-- Side A = the subject claim; rcl.relation_evidence_id holds its claim_id
+-- (LEFT JOIN keeps a row even on the rare chance the subject claim was deleted).
+LEFT JOIN claims ca ON ca.claim_id = rcl.relation_evidence_id
 JOIN claims cb ON cb.claim_id = rcl.claim_id
 WHERE {where_clause}
 ORDER BY rcl.strength DESC
