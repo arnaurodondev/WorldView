@@ -9,32 +9,53 @@
 
 ## What it does
 
-Sweeps all instruments where `has_ohlcv = true` and computes 8 derived market
-metrics into `fundamental_metrics`:
+Sweeps all instruments where `has_ohlcv = true` and computes **10** derived
+market metrics into `fundamental_metrics` (`period_type='SNAPSHOT'`,
+`section='computed_returns'`). The metric NAMES below are the exact strings
+written to `fundamental_metrics.metric` — an operator query MUST use these
+(earlier versions of this runbook listed wrong names like `distance_52w_high`
+and a 252-day `return_1y`; those return zero rows):
 
-| Metric | Lookback | Notes |
-|--------|----------|-------|
-| `return_1m` | 21 trading days | LATERAL JOIN, COALESCE(adj, close) on both sides |
-| `return_3m` | 63 trading days | same shape |
-| `return_6m` | 126 trading days | same shape |
+| Metric (exact name) | Lookback | Notes |
+|---------------------|----------|-------|
+| `return_1m` | 30 calendar days | LATERAL JOIN, COALESCE(adj, close) on both sides |
+| `return_3m` | 90 calendar days | same shape |
+| `return_6m` | 182 calendar days | same shape |
 | `return_ytd` | DATE_TRUNC('year') | Calendar anchor — on Jan 1 the anchor equals latest → 0.0 (expected) |
-| `return_1y` | 252 trading days | **Slowest formula** — start here when debugging |
-| `distance_52w_high` | 252-day MAX | LATERAL JOIN window |
-| `distance_52w_low` | 252-day MIN | LATERAL JOIN window |
-| `volatility_30d` | 21-day stddev of log returns | Window function |
+| `return_1y` | 365 calendar days | **Slowest formula** — start here when debugging |
+| `return_3y` | 1095 calendar days | Often empty in dev (needs ~3y of bars) |
+| `dist_from_52w_high_pct` | 365-day MAX | LATERAL JOIN window; `(close/max)-1` |
+| `dist_from_52w_low_pct` | 365-day MIN | LATERAL JOIN window; `(close/min)-1` |
+| `volatility_30d` | last 30 trading-day bars | `STDDEV_SAMP(daily returns) * sqrt(252)` (annualised); window function |
+| `returns_adjustment_quality` | latest bar | `1.0` = adjusted_close present (returns correct); `0.0` = raw-close fallback (returns may be wrong across splits/dividends) |
 
-All formulas use `COALESCE(adjusted_close, close)` on both the numerator and the
-anchor. The summary field `fallback_adjusted_close_count` tracks the number of
-distinct instruments where `adjusted_close` was `NULL` for any metric.
+> Note: the lookbacks for `return_*` are **calendar** days (the LATERAL JOIN
+> selects the most recent bar at or before `latest - N days`, absorbing
+> weekends/holidays), NOT trading days. `volatility_30d` uses the last 30
+> **bars** (≈ 30 trading sessions).
+
+All return/distance/volatility formulas use `COALESCE(adjusted_close, close)` on
+both the numerator and the anchor. The summary field
+`fallback_adjusted_close_count` tracks the number of distinct instruments where
+`adjusted_close` was `NULL` for any metric; `returns_adjustment_quality` exposes
+the same signal PER INSTRUMENT so the screener can badge unadjusted returns.
 
 ---
 
 ## Schedule
 
 - **Trigger**: daily at **02:00 UTC** (controlled by `COMPUTED_METRICS_REFRESH_HOUR_UTC`).
-- **Runner**: lifespan-task in `market_data.app._computed_metrics_scheduler_task`.
+- **Runner**: lifespan-task `market_data.app._computed_metrics_refresh_loop`.
 - **Guard**: if a previous run finished within the last 20 hours, the scheduler
-  skips and logs a WARNING (`computed_metrics_backfill.skipped_recent_run`).
+  skips and logs `computed_metrics_skip_too_recent` (INFO) and increments
+  `computed_metrics_worker_runs_total{outcome="skipped"}`. The last-success
+  timestamp is now persisted DURABLY in the `worker_runs` table (migration 040),
+  so the guard survives a container restart (previously it was an in-process
+  variable wiped on every restart, defeating its own purpose).
+- **Watchdog**: each run is wrapped in `asyncio.wait_for(..., timeout=3600s)`. A
+  run that hangs (e.g. a wedged asyncpg connection) raises `TimeoutError` into
+  the loop's except branch instead of silently wedging the nightly refresh — it
+  increments `computed_metrics_worker_runs_total{outcome="failed"}`.
 
 ---
 
@@ -43,25 +64,36 @@ distinct instruments where `adjusted_close` was `NULL` for any metric.
 | Scale | Wall-clock |
 |-------|------------|
 | Smoke test (50 instruments × 800 bars) | < 30 s (asserted by `tests/integration/test_computed_metrics_worker_perf.py`) |
-| Production (3000 instruments × ~1100 bars) | ≈ 5–15 min |
+| **Measured prod (654 instruments, 2026-06-19)** | **≈ 5.4 s** (`metrics_written≈4344`, `fallback_adjusted_close_count≈601`) |
+| Projected at 3000 instruments | low minutes (linear-ish) — re-measure when the universe grows |
 
 The smoke threshold is **not** a production SLO — it is a regression tripwire.
-If the smoke test starts taking > 30 s, expect production to take roughly 10×
-that wall-clock.
+The earlier "5–15 min" estimate was unmeasured and is ~100× high at the current
+654-instrument scale; the measured baseline above replaces it.
 
 ---
 
 ## Watch metrics
 
-Per-run telemetry is logged at INFO as `computed_metrics_backfill.summary` with
-fields:
+### Prometheus (scrape `/metrics`)
+
+| Metric | Type | Use |
+|--------|------|-----|
+| `computed_metrics_worker_last_success_timestamp_utc_seconds` | Gauge | UTC epoch seconds of the last successful run. Seeded from `worker_runs` on boot. **Alert: `time() - <gauge> > 26*3600`** (one daily cadence + slack) → the nightly refresh has silently stalled. |
+| `computed_metrics_worker_runs_total{outcome}` | Counter | `outcome` ∈ `success` \| `skipped` \| `failed`. Alert on any `failed` increase over 1 day. |
+| `computed_metrics_worker_fallback_adjusted_close_ratio` | Gauge | Fraction of instruments using raw-close fallback (no `adjusted_close`). `1.0` = all unadjusted. At ~0.92 today this should already fire — it is the canary for the upstream split/dividend-adjustment gap. |
+
+### Per-run log telemetry
+
+Logged at INFO as `computed_metrics_refresh_completed` (loop) and
+`computed_metrics_backfill.completed` (worker) with fields:
 
 - `instruments_processed` — should match `SELECT count(*) FROM instruments WHERE has_ohlcv = true`
-- `metrics_written` — expected ≈ `instruments_processed × 8`
+- `metrics_written` — expected ≈ `instruments_processed × <metrics with enough history>` (≤ 10; `return_3y` is usually absent in dev)
 - `failed_instruments` — non-zero means batches threw an exception (with `continue_on_error=True` the run continues)
-- `skipped_short_history_count` — instruments with insufficient history for a given lookback (e.g., < 252 bars for `return_1y`)
-- `fallback_adjusted_close_count` — **investigate when this is > 0**; signals OHLCV adjustment gap upstream (split / dividend not yet applied)
-- `runtime_seconds` — alert if > 3600 (1 hour); the 20h skip-guard prevents next-day overlap, but a long run delays freshness
+- `skipped_short_history_count` — instruments with insufficient history for a given lookback (e.g., short OHLCV history for `return_1y`/`return_3y`, or < 2 bars for `volatility_30d`)
+- `fallback_adjusted_close_count` — **investigate when this is > 0**; signals OHLCV adjustment gap upstream (split / dividend not yet applied). Also exposed as the `..._fallback_adjusted_close_ratio` gauge.
+- `runtime_seconds` — the run is hard-capped at 3600 s by the watchdog; a long run delays freshness even though the 20h skip-guard prevents next-day overlap.
 
 ---
 
@@ -83,7 +115,18 @@ Diagnose:
 
 ### 2. `fallback_adjusted_close_count` spike
 
-Symptoms: logged at WARNING (`computed_metrics_backfill.fallback_used`).
+Symptoms: logged at WARNING (`computed_metrics_backfill.adjusted_close_fallback`)
+and surfaced as the `computed_metrics_worker_fallback_adjusted_close_ratio` gauge.
+
+> **Known live state (2026-06-18)**: ~92% of instruments (601/654) use the
+> raw-close fallback because `adjusted_close` is NULL on essentially all recent
+> OHLCV bars. Root cause is **upstream** — `market-ingestion` is not populating
+> `adjusted_close` (only EODHD `/eod/` end-of-day bars carry it; the Alpaca 1m
+> write-through and intraday bars do not). market-data persists `adjusted_close`
+> faithfully when the provider sends it (see `ohlcv_consumer.py`), so the fix
+> belongs in the market-ingestion provider adapters. Until then,
+> `returns_adjustment_quality=0.0` correctly flags the affected instruments so
+> the screener does not present unadjusted returns as truth.
 
 Risk: returns computed on raw `close` instead of `adjusted_close` will misstate
 post-split / post-dividend periods.
@@ -132,9 +175,9 @@ For a partial re-run (e.g., one instrument range), use
 
 ## Heavy-SQL reference
 
-The 8 LATERAL JOIN formulas are committed in
-`computed_metrics_worker.py:127-241` (`_RETURN_FORMULA_SQL`, `_YTD_RETURN_SQL`,
-`_DISTANCE_52W_SQL`). When performance degrades:
+The formulas are committed in `computed_metrics_worker.py`
+(`_RETURN_FORMULA_SQL`, `_YTD_RETURN_SQL`, `_DISTANCE_52W_SQL`,
+`_VOLATILITY_30D_SQL`, `_ADJUSTMENT_QUALITY_SQL`). When performance degrades:
 
 ```sql
 -- Run against market_data_db with a real instrument_id and lookback.

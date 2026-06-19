@@ -1264,3 +1264,17 @@ return (
 **Prevention**: When two systems exchange signal/event type enums, keep both lookup sets and the enum definition in sync. Add a comment citing the source of truth. When adding a new LLM extraction schema, immediately add its output labels to the downstream label mapping.
 
 **Reference**: `services/api-gateway/src/api_gateway/routes/proxy.py` (_POSITIVE/_NEGATIVE sets), `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py` (_enqueue_signal_events), `services/nlp-pipeline/src/nlp_pipeline/application/blocks/deep_extraction.py` (event_type enum).
+
+## BP-702 — Screener column-catalogue desync (ColDefs vs DEFAULT_COLUMNS)
+
+**Context**: The screener has **two independent column lists that must agree**: (1) AG-Grid `ColDef`s in `components/screener/ag-screener-columns.tsx` define render + the `hide` default; (2) `DEFAULT_COLUMNS` in `lib/screener-columns.ts` is the catalogue `ColumnSettingsPopover` lists, and the **only** set of colIds `app/(app)/screener/page.tsx` feeds to `gridApi.applyColumnState`.
+
+**Symptom**: IB-L3/L4/L5 columns (returns, 52W-distance, analyst/insider/ownership, NEWS 7D, BRIEF SCORE) are defined and would render, but the gear popover never lists them and the user can never unhide them — the filters work server-side while the columns are dead. Conversely, 8 popover keys (`avgVol`, `epsTtm`, `fcf`, `fcfMargin`, `interestCoverage`, `netDebtToEbitda`, `creditRating`, `evEbitda`) appear in the popover but have no matching ColDef, so toggling them does nothing.
+
+**Root cause**: The 16 IB-L3/L4/L5 ColDefs (`hide:true`) were added to `ag-screener-columns.tsx` but never registered in `DEFAULT_COLUMNS`; 8 catalogue keys were left in the popover with no backing ColDef. The two lists drifted despite the file headers explicitly warning "a column must be declared in BOTH places."
+
+**Fix**: Add the IB-L3/L4/L5 colIds to `DEFAULT_COLUMNS` (`visible:false`, grouped); remove or back the 8 orphan popover keys with real ColDefs.
+
+**Prevention**: Add an architecture/Vitest test asserting `set(DEFAULT_COLUMNS keys) === set(ColDef colIds)` so the two lists can never drift again. Group the popover by column group once >30 columns exist. Same "two lists that must agree but don't" family as BP-458.
+
+**Reference**: `apps/worldview-web/components/screener/ag-screener-columns.tsx`, `apps/worldview-web/lib/screener-columns.ts` (`DEFAULT_COLUMNS`), `apps/worldview-web/components/screener/ColumnSettingsPopover.tsx`, `apps/worldview-web/app/(app)/screener/page.tsx` (`applyColumnState`); `docs/audits/2026-06-16-prd0089-screener-frontend.md`.

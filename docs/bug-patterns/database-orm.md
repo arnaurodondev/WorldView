@@ -1476,3 +1476,33 @@ return UUID(str(row[0])) if row else None
 **Regression test**: Add a unit test to `test_canonical_entity_repository.py` that inserts a `financial_instrument` entity then attempts to create an entity with the same lowercase canonical name but `entity_type='company'` — assert the second call returns the existing entity, not a new row.
 
 ---
+## BP-703 — `adjusted_close` NULL → derived returns silently computed on raw `close`
+
+**Context**: The `ComputedMetricsBackfillWorker` (market-data) computes `return_1m/3m/6m/ytd/1y/3y` and 52W-distance metrics with `COALESCE(adjusted_close, close)` per OHLCV bar, then feeds them to the screener.
+
+**Symptom**: Returns are wrong across corporate actions. ~92% of bars fall back (601/654 instruments; 99.997% of recent `ohlcv_bars` have `adjusted_close IS NULL`), so virtually every return is computed on **unadjusted** prices. An instrument that did a 4:1 split reads as a fake −75% 1Y return; the screener surfaces these as spurious outliers / mis-rankings.
+
+**Root cause**: The upstream market-ingestion split/dividend-adjustment data is essentially absent, so the `COALESCE` always picks raw `close`. The worker logs a `fallback_adjusted_close_count` the runbook says to "investigate when > 0", but at 92% it has never been alerted on — a silent data-correctness defect masquerading as "all green."
+
+**Fix**: Confirm/repair the market-ingestion adjustment pipeline so `adjusted_close` is populated; treat returns as suspect until then.
+
+**Prevention**: Expose a `fallback_adjusted_close_ratio` gauge and alert when it is non-trivial; never let a high silent-fallback rate pass as normal. Surface `as_of_date` in the IB-L3 screener columns so stale/wrong data degrades visibly.
+
+**Reference**: `services/market-data/src/market_data/infrastructure/db/computed_metrics_worker.py` (fallback warn ~L531), `market_data_db.ohlcv_bars.adjusted_close`; `docs/audits/2026-06-16-prd0089-l3-computed-metrics-ops.md`.
+
+---
+## BP-704 — Operator-only worker INSERTs into a renamed-away table (`sched_policies` → `polling_policies`)
+
+**Context**: `InsiderUniverseLoader` (market-ingestion) is an operator-invoked worker (`python -m …insider_universe_loader`) that upserts polling policies so EODHD will fetch insider transactions for a universe of tickers.
+
+**Symptom**: Running the loader raises `UndefinedTableError: relation "sched_policies" does not exist` — it has **never run successfully** against the current schema. The L-4b insider universe therefore never expanded via this worker.
+
+**Root cause**: `upsert_insider_policies()` SQL targets a table named `sched_policies` (`to_regclass('public.sched_policies')` → NULL), a copy-paste from an older name that was renamed to `polling_policies` (the ORM `polling_policy.py` declares `__tablename__="polling_policies"`, and the sibling `instrument_policy_sync_worker.py` uses it correctly). The bug survived because the loader is operator-only, unscheduled, and has no DB-backed test, so CI never exercised the SQL. It also inserts `enabled=FALSE`, so even after the table-name fix a separate enable step is required.
+
+**Fix**: Rename the raw SQL target to `polling_policies`; add a testcontainers-backed smoke test that runs the loader and asserts rows land; decide the enable step.
+
+**Prevention**: Any operator-only/unscheduled worker still needs a smoke test exercising its real SQL against a real DB. When a table is renamed, grep every raw-SQL string (not just ORM models) for the old name. Related BP-700 (input-form-vs-lookup-form), BP-462/BP-464 (workers that "succeed" doing nothing).
+
+**Reference**: `services/market-ingestion/src/market_ingestion/infrastructure/workers/insider_universe_loader.py` (`sched_policies` ~L171), `services/market-ingestion/src/market_ingestion/infrastructure/db/models/polling_policy.py`; `docs/audits/2026-06-16-prd0089-l4b-insider-universe.md`.
+
+---
