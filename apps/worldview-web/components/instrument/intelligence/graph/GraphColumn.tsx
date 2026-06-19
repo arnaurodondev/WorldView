@@ -126,7 +126,13 @@ export function GraphColumn({
   focusNonce = 0,
 }: GraphColumnProps) {
   const { accessToken } = useAuth();
-  const [depth, setDepth] = useState<number>(2);
+  // Default to depth=1 (data-pipeline QA 2026-06-16): depth=2 AGE traversal on
+  // hub entities (e.g. AAPL) exceeds the server's ~20s statement timeout → 504 →
+  // the canvas fails-soft to EMPTY (the "75% black Intelligence tab" the QA
+  // flagged). depth=1 returns ~33 nodes / ~40 edges in <1s, so the graph renders
+  // immediately; the user can still step up to depth=2/3 via the depth control
+  // (the per-depth timeout + "Reduce depth" recovery handle the deeper cases).
+  const [depth, setDepth] = useState<number>(1);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   // WHY latencyRef + latencyMs state: we measure wall-clock time for the graph
   // fetch and surface it in GraphStats. The ref accumulates the raw measurement

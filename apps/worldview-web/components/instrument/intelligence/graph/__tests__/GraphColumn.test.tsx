@@ -128,34 +128,27 @@ describe("GraphColumn timeout fallback", () => {
     expect(screen.queryByTestId("entity-graph-stub")).not.toBeInTheDocument();
   });
 
-  it("offers a 'Reduce depth' action that refires the graph query one depth cheaper", async () => {
-    // First fetch (depth 2, the default) times out; the action click must
-    // drop to depth 1 and refire — the registry ctaLabel rendered as a REAL
-    // onClick action (Round-3 item 1), not a passive hint.
+  it("at the default depth (1) a timeout shows the named state WITHOUT a 'Reduce depth' CTA", async () => {
+    // 2026-06-16 data-pipeline QA: the default depth is now 1 (depth=2 timed out
+    // on hub entities → empty canvas). depth=1 is the floor, so the timeout state
+    // must NOT offer "Reduce depth" (the `depth > 1` guard) — there is nothing
+    // cheaper to drop to. The first (and only) fetch at depth 1 times out here.
     mockGateway.getEntityGraph.mockRejectedValue(new Error("GRAPH_TIMEOUT"));
     render(
       <Wrapper>
         <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
       </Wrapper>,
     );
-    const reduce = await screen.findByRole("button", { name: /reduce depth/i });
-    // Next fetch succeeds with a minimal 2-node graph so we can observe the
-    // depth-1 call going out (and the fallback clearing).
-    mockGateway.getEntityGraph.mockResolvedValue({
-      entity_id: "ent-001",
-      nodes: [
-        { id: "ent-001", label: "Root", type: "financial_instrument" },
-        { id: "ent-002", label: "Peer", type: "financial_instrument" },
-      ],
-      edges: [{ id: "e1", source: "ent-001", target: "ent-002", label: "peer_of" }],
-    });
-    fireEvent.click(reduce);
+    // Wait for the timeout state to settle (the named EmptyState renders).
     await waitFor(() => {
-      // Second call carries the reduced depth (2 → 1).
-      expect(mockGateway.getEntityGraph).toHaveBeenLastCalledWith("ent-001", 1);
+      expect(mockGateway.getEntityGraph).toHaveBeenCalled();
     });
+    // The first fetch went out at depth 1 (the new default).
+    expect(mockGateway.getEntityGraph).toHaveBeenCalledWith("ent-001", 1);
+    // At the floor depth there is NO reduce-depth CTA (the `depth > 1` guard) —
+    // nothing cheaper to drop to.
     await waitFor(() => {
-      expect(screen.getByTestId("entity-graph-stub")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /reduce depth/i })).not.toBeInTheDocument();
     });
   });
 
