@@ -181,7 +181,28 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   // by the one-time migration in loadColumnPrefs (SCORE_HIDDEN_MIGRATION_KEY).
   Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: false }),
   Object.freeze({ key: "range52w",      label: "52W Range",   sortable: false, align: "right",                                visible: true }),
-  Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: true }),
+  // ── sparkline (TREND 30d): demoted to opt-in (DESIGN-QA S-1, 2026-06-18) ────
+  // WHY visible: false (was true): the TREND (30d) sparkline column shipped ON
+  // by default but rendered EMPTY on every row in the deployed build — the
+  // design audit's single biggest "this looks broken" finding on the flagship
+  // page. A trend/sparkline column must render real data or not exist by
+  // default; it must never sit as a dead placeholder at rest (cross-cutting
+  // global rule #1 in DESIGN-QA.md).
+  //
+  // WHY OPT-IN (not deleted): the data path IS real — useScreenerSparklines
+  // batches POST /v1/quotes/bars/batch and MiniChart renders a proper coloured
+  // line whenever bars arrive. The column simply has no reliable per-row bar
+  // coverage in this deployment yet. Same treatment as `score`/`forwardPe`:
+  // keep it first-class and selectable in ColumnSettingsPopover so a user can
+  // opt in (and a "Momentum" saved screen can include it) the moment coverage
+  // lands — no code change needed. When OFF, MiniChart never mounts, so no
+  // empty cells are shown by default.
+  //
+  // DENSITY: removing one default-visible column here is offset by promoting
+  // `briefScore` (a real IB-L5 data column) below, keeping the §6.3 cap at
+  // exactly 14 AND swapping a dead column for a populated one (helps S-2:
+  // fills the right-side whitespace with information instead of a void).
+  Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: false }),
 
   // ════════════════════════════════════════════════════════════════════════════
   // CATALOGUE-RECONCILIATION (2026-06-18, screener-frontend audit §2.5)
@@ -257,7 +278,15 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   // news7d is DEFAULT-VISIBLE (the headline intelligence-moat column EQS cannot
   // express); briefScore is opt-in to stay within the 14-column cap.
   Object.freeze({ key: "news7d",        label: "News 7d",     sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "briefScore",    label: "Brief Score", sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  // ── briefScore: promoted to default-visible (DESIGN-QA S-1/S-2, 2026-06-18) ──
+  // WHY visible: true (was false): it takes the default-visible slot freed by
+  // demoting the dead `sparkline` column above. briefScore renders REAL data
+  // (display_relevance_7d_weighted from the L-5b rollup) so it fills the
+  // right-side whitespace with an intelligence signal EQS-style screeners
+  // cannot express — exactly the "richer default columns" S-2 asks for —
+  // instead of a perpetually-empty trend cell. Net default-visible count stays
+  // at the §6.3 cap of 14 (sparkline −1, briefScore +1).
+  Object.freeze({ key: "briefScore",    label: "Brief Score", sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
 
   // ── volume: had a ColDef but no catalogue entry → could not be hidden. Now
   //    selectable (opt-in). ────────────────────────────────────────────────────

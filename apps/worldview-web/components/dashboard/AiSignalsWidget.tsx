@@ -37,6 +37,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/primitives/EmptyState";
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+// DESIGN-QA D-1 "Skeletons that never resolve": cap the skeleton so a hung
+// trending-entities request yields to the empty/error state, not an infinite
+// loading column on the dashboard hero row.
+import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 import { cn } from "@/lib/utils";
 import { Radar } from "lucide-react";
 import { NewsMomentumRow } from "@/components/dashboard/ai-signals/NewsMomentumRow";
@@ -117,8 +121,13 @@ export function AiSignalsWidget() {
     />
   );
 
+  // DESIGN-QA D-1: after the max-wait budget, stop showing the skeleton and let
+  // the render fall through to the error branch (if the query errored) or the
+  // empty state below. If data still arrives, isLoading→false resets this.
+  const skeletonTimedOut = useSkeletonTimeout(isLoading);
+
   // ── Loading state ───────────────────────────────────────────────────────────
-  if (isLoading) {
+  if (isLoading && !skeletonTimedOut) {
     return (
       <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
         {header}

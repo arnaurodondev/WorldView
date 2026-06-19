@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 const mockUseEntityEvents = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api/intelligence", () => ({
@@ -99,6 +99,28 @@ describe("EventsBlock states", () => {
     setHookState({ isLoading: true });
     render(<EventsBlock entityId="ent-001" />);
     expect(screen.getByTestId("events-skeleton")).toBeInTheDocument();
+  });
+
+  it("times the skeleton out to the empty state when loading hangs (DESIGN-QA I-1)", () => {
+    // A wedged request keeps isLoading=true forever. Before the fix the rail
+    // showed its skeleton indefinitely; now useSkeletonTimeout flips after the
+    // budget and the rail falls through to the named empty state (data is null
+    // while still "loading", so events == [] → "No events for this entity").
+    vi.useFakeTimers();
+    try {
+      setHookState({ isLoading: true, data: null });
+      render(<EventsBlock entityId="ent-001" />);
+      // Initially the skeleton is shown.
+      expect(screen.getByTestId("events-skeleton")).toBeInTheDocument();
+      // Advance past the 12s max-wait budget (act flushes the state update the
+      // timer fires so the re-render happens before we assert).
+      act(() => vi.advanceTimersByTime(12_500));
+      // Skeleton is gone; the designed empty terminal state is shown instead.
+      expect(screen.queryByTestId("events-skeleton")).toBeNull();
+      expect(screen.getByTestId("events-empty")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders the NAMED empty state for zero events (role=status + icon)", () => {

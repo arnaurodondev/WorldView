@@ -210,16 +210,20 @@ function BetaCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>
     );
   }
-  // > 1.5 = elevated risk (warning tint); < 0.5 = defensive (muted).
-  const isHigh = v > 1.5;
-  const isLow = v < 0.5;
+  // DESIGN-QA S-4 (2026-06-18) — BETA is NON-DIRECTIONAL: render it NEUTRAL.
+  //
+  // WHY: beta was previously tinted `text-warning` (amber) at >1.5. Amber is
+  // visually near-identical to the brand/active `--primary` yellow, so a "high
+  // beta" heat signal collided with the column-active / preset-active yellow
+  // and read ambiguously. More fundamentally, beta is a magnitude (volatility
+  // vs the market), not a direction — there is no "good" or "bad" end the way
+  // there is for a return. The design rule is to reserve teal/red/amber for
+  // genuinely directional values (returns, day change, %-change) and keep
+  // level metrics in neutral `text-foreground` tabular numbers. Users who want
+  // to surface high-beta names can sort the column; colour is no longer doing
+  // (ambiguous) double-duty.
   return (
-    <span
-      className={cn(
-        "font-mono text-[11px] tabular-nums",
-        isHigh ? "text-warning" : isLow ? "text-muted-foreground" : "text-foreground",
-      )}
-    >
+    <span className="font-mono text-[11px] tabular-nums text-foreground">
       {v.toFixed(2)}
     </span>
   );
@@ -716,14 +720,27 @@ function News7dCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   if (v == null) {
     return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
   }
-  // ≥5 = active coverage (positive); 0 = dark (muted); 1–4 = normal
-  const isActive = v >= 5;
+  // DESIGN-QA S-3 (2026-06-18) — a news COUNT is NON-DIRECTIONAL: do not tint
+  // it bull-green.
+  //
+  // WHY: this column was rendered `text-positive` (teal) at ≥5 articles. Teal
+  // means "up / bullish" everywhere else in the terminal, so a high article
+  // count looked like a positive *price* signal — it is not. High coverage can
+  // be good (liquidity/attention) OR bad (a scandal breaking). Reusing the
+  // bull/bear palette here dilutes what green/red mean on the columns where
+  // they ARE directional (returns, CHG%).
+  //
+  // WHAT WE KEEP: a single NEUTRAL emphasis split — full-strength foreground
+  // for any coverage, and a dimmed tint for the "dark" (0 articles) case so a
+  // no-coverage row visibly recedes. This is brightness/heat, not bull/bear
+  // colour, so it carries the "where is the action" scan value the audit
+  // endorses without overloading the directional palette.
   const isDark = v === 0;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums",
-        isActive ? "text-positive" : isDark ? "text-muted-foreground/50" : "text-foreground",
+        isDark ? "text-muted-foreground/50" : "text-foreground",
       )}
     >
       {v}
@@ -746,13 +763,23 @@ function BriefScoreCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   if (v == null) {
     return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
   }
-  const isHigh = v >= 0.7;
+  // DESIGN-QA S-3 (2026-06-18) — the brief/relevance score is NON-DIRECTIONAL:
+  // do not tint it bull-green.
+  //
+  // WHY: a high relevance score (0.84) was rendered `text-positive` (teal),
+  // making it read as a bullish price signal. Relevance is a 0–1 quality
+  // measure of how much active-narrative coverage an instrument has — high
+  // relevance is just as likely to flag a name in crisis as one rallying. Same
+  // reasoning as News7d above: reserve teal/red for directional values.
+  //
+  // WHAT WE KEEP: a neutral brightness split only — full foreground for any
+  // score, dimmed for the low-relevance (<0.30) tail so quiet rows recede.
   const isLow = v < 0.3;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums",
-        isHigh ? "text-positive" : isLow ? "text-muted-foreground/60" : "text-foreground",
+        isLow ? "text-muted-foreground/60" : "text-foreground",
       )}
     >
       {v.toFixed(2)}
@@ -924,6 +951,27 @@ export function createAgScreenerColumns(
       headerName: "NAME",
       field: "name",
       sortable: true,
+      // DESIGN-QA S-2 (2026-06-18) — fill the right-side whitespace.
+      //
+      // WHY flex on NAME: with the default column set the summed fixed widths
+      // stopped well short of the viewport, leaving ~35-40% of the grid as a
+      // black void on the right — the audit's most "unfinished" look. AG Grid
+      // distributes leftover horizontal space to any column with `flex`, so
+      // marking NAME flexible makes the grid ALWAYS span the full container
+      // width regardless of how many columns the user has toggled on. NAME is
+      // the natural absorber: company names are variable-length text that
+      // genuinely benefit from extra room (less truncation), unlike the
+      // fixed-width numeric columns where a stretched cell would just add dead
+      // padding around a right-aligned number.
+      //
+      // WHY keep `width` as the flex BASIS + a minWidth floor: `width` still
+      // seeds the initial/basis size and minWidth stops NAME from collapsing
+      // below readability when many opt-in columns are enabled and the grid
+      // overflows into horizontal scroll (at which point flex yields and the
+      // fixed minimum applies). When few columns are shown, NAME simply grows
+      // to consume the slack instead of leaving a gutter.
+      flex: 1,
+      minWidth: SCREENER_AG_COL_WIDTHS.name,
       width: SCREENER_AG_COL_WIDTHS.name,
       cellRenderer: NameCellRenderer,
     } satisfies ColDef<ScreenerResult>,
@@ -1168,7 +1216,12 @@ export function createAgScreenerColumns(
       children: [
         {
           colId: "analystTarget",
-          headerName: "ANALYST TGT",
+          // DESIGN-QA S-5 (2026-06-18): "ANALYST TGT" + "ANALYST UPSIDE" both
+          // truncated to "ANALYST …" in the 76/72px columns, leaving two
+          // indistinguishable headers. Use short, distinct labels that fit:
+          // the group band already reads OWNERSHIP, so the per-column unit is
+          // what disambiguates ("TGT $" = target price, "UPSIDE %" = upside).
+          headerName: "TGT $",
           headerTooltip: "Analyst consensus target price (USD)",
           field: "analyst_target_price",
           sortable: true,
@@ -1178,7 +1231,8 @@ export function createAgScreenerColumns(
         },
         {
           colId: "analystUpside",
-          headerName: "ANALYST UPSIDE",
+          // DESIGN-QA S-5: distinct short label (see analystTarget above).
+          headerName: "UPSIDE %",
           headerTooltip: "Analyst upside: (target / price) - 1. Derived client-side.",
           // ROUND-1 item 5 (2026-06-10): previously `sortable: false` because
           // there is no single backend field to sort on. AG Grid's valueGetter

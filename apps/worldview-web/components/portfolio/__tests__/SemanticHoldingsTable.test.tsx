@@ -120,6 +120,57 @@ describe("holdingsAgColumns (14-column spec — PLAN-0108 W4-T401)", () => {
     expect(typeof assetCol?.cellRenderer).toBe("function");
   });
 
+  // ── P-1 regression: row-overlap guard (2026-06-18 design QA) ──────────────
+  // The DESIGN-QA found rows 4–6 visually overlapping/double-drawing in the
+  // deployed 22px-row table. Root cause: cell content was not height-clamped /
+  // overflow-clipped, so a cell taller than the 22px row painted over the row
+  // below. The fix attaches an overflow-hidden + fixed-height cellClass to
+  // EVERY column. These tests pin that contract so a future column edit cannot
+  // silently drop the clamp and reintroduce the overlap.
+  describe("P-1 row-overlap guard — every cell is height-clamped + overflow-clipped", () => {
+    // Helper: AG Grid cellClass may be a string, an array, or a function. For
+    // this surface every clamp is a static string, so we normalise to a string.
+    function cellClassString(col: (typeof holdingsAgColumns)[number]): string {
+      const cc = col.cellClass;
+      if (typeof cc === "string") return cc;
+      if (Array.isArray(cc)) return cc.join(" ");
+      return "";
+    }
+
+    it("every column defines a cellClass", () => {
+      for (const col of holdingsAgColumns) {
+        expect(
+          col.cellClass,
+          `column "${col.colId}" must set cellClass (P-1 overlap guard)`,
+        ).toBeDefined();
+      }
+    });
+
+    it("every column's cellClass clips overflow and pins row height", () => {
+      // overflow-hidden = no child can bleed into the next row.
+      // h-full = the cell box is exactly the (fixed) row height.
+      for (const col of holdingsAgColumns) {
+        const cls = cellClassString(col);
+        expect(cls, `column "${col.colId}" must clip overflow`).toContain(
+          "overflow-hidden",
+        );
+        expect(cls, `column "${col.colId}" must pin to the row height`).toContain(
+          "h-full",
+        );
+      }
+    });
+
+    it("text columns drop the inherited 1.5x line-height (leading-none)", () => {
+      // The >22px line box on the text cells (NAME, SECTOR) was the primary
+      // source of the double-draw. leading-none collapses it so the line box
+      // can never exceed the 22px row.
+      for (const colId of ["name", "sector"]) {
+        const col = holdingsAgColumns.find((c) => c.colId === colId)!;
+        expect(cellClassString(col)).toContain("leading-none");
+      }
+    });
+  });
+
   it("renamed columns still have their original colIds (localStorage column-state compat)", () => {
     // WHY: the LAST, MKT VALUE, UNREAL $, and UNREAL % columns were renamed
     // from CURRENT, VALUE, P&L $, P&L %. Their colIds must not change, or every

@@ -47,6 +47,35 @@ import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
 import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
 import { AssetTypeCellRenderer } from "./cells/AssetTypeCellRenderer";
 
+// ── Row-overlap guard (P-1 fix, 2026-06-18 design QA) ─────────────────────────
+// SYMPTOM (DESIGN-QA P-1): in the deployed 22px-row holdings table, rows 4–6
+// visually overlapped — adjacent rows' text superimposed ("Vetsflxn Inc." =
+// "Netflix"+"Tesla" drawn on top of each other; "$6$618.24" = two MKT VALUE
+// cells double-drawn). AG Grid (legacy theme) positions every `.ag-row`
+// absolutely with `transform: translateY(rowIndex * rowHeight)` and a FIXED
+// `height: rowHeight`. The overlap appears when a cell's *rendered content*
+// is taller than the 22px row box and is NOT clipped: the overflowing content
+// paints over the next row's box, which sits only 22px below. The default
+// AG Grid `.ag-cell` does not hard-clip its children's vertical overflow, and
+// our custom renderers inject spans/divs (sparkline SVG, weight bar) whose
+// natural line-box can exceed 22px at certain font-metric/zoom combinations.
+//
+// FIX: attach this cellClass to EVERY column so every `.ag-cell` becomes a
+// fixed-height, overflow-clipped flex box. `overflow-hidden` guarantees no
+// child can bleed into the row below; `h-full` + `items-center` pins content
+// to the row's exact height and vertically centres it; `leading-none` drops
+// the inherited 1.5× line-height that was the main source of the >22px line
+// box on the text cells (NAME, SECTOR). This is the audit's prescribed
+// "fixed --data-row-height + per-cell overflow-hidden" remedy, applied at the
+// only layer this surface owns (the ColDef array — the AgGridBase wrapper and
+// the shared theme CSS are owned by other agents).
+//
+// WHY a constant (not inline): every column shares the exact same clamp, and a
+// single source means a future row-height change is a one-line edit. Renderer
+// spans keep their own `text-right w-full block` etc.; this class only governs
+// the OUTER cell box, never the inner alignment.
+const CELL_CLAMP = "!flex items-center h-full overflow-hidden leading-none";
+
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
 // Renderers use this to switch between normal cell content and totals content.
@@ -118,8 +147,12 @@ function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   // the span truncates only at the real cell boundary, with the FULL name
   // in the native tooltip for the cases where truncation genuinely remains.
   return (
+    // min-w-0: the NAME cell is now a flex container (CELL_CLAMP). A flex child
+    // must be allowed to shrink (min-w-0) for `truncate` to clip; otherwise a
+    // long company name overflows the cell and double-draws over the next row
+    // (this cell produced the "Vetsflxn Inc." overlap in the P-1 screenshot).
     <span
-      className="text-[11px] text-foreground truncate block"
+      className="min-w-0 text-[11px] text-foreground truncate block"
       title={params.data?.h.name}
     >
       {params.data?.h.name}
@@ -267,7 +300,9 @@ function WeightCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   }
   const weight = params.data?.weight ?? 0;
   return (
-    <div className="flex items-center gap-1.5 justify-end">
+    // w-full: the cell is now a flex container (CELL_CLAMP); w-full makes this
+    // inner row span the whole cell so justify-end pins the bar+% to the right.
+    <div className="flex w-full items-center gap-1.5 justify-end">
       {/* WHY w-[48px] bar: fixed width keeps all bars on the same scale. */}
       <div className="w-[48px] h-[3px] rounded-[1px] bg-muted/50 shrink-0">
         <div
@@ -290,8 +325,12 @@ function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   // ("Communication Services") — truncation here is unavoidable, so the full
   // label rides the native tooltip (house rule: never clip without a tooltip).
   return (
+    // min-w-0 + truncate: inside the flex CELL_CLAMP wrapper a flex child only
+    // truncates when it is allowed to shrink below its content (min-w-0). Without
+    // it the long "Communication Services" label would force the cell wider and
+    // reintroduce overflow. block keeps the ellipsis behaviour.
     <span
-      className="text-[11px] text-muted-foreground truncate block"
+      className="min-w-0 text-[11px] text-muted-foreground truncate block"
       title={params.data?.sector ?? undefined}
     >
       {params.data?.sector ?? "—"}
@@ -312,6 +351,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     resizable: false,
     width: HOLDINGS_AG_COL_WIDTHS.ticker,
+    cellClass: CELL_CLAMP, // P-1: clip + fix height so rows cannot overlap
     cellRenderer: TickerCellRenderer,
   },
 
@@ -328,6 +368,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     flex: 1,
     minWidth: HOLDINGS_AG_COL_WIDTHS.name,
+    cellClass: CELL_CLAMP, // P-1: clip overflow (the NAME cell was the worst double-draw offender)
     cellRenderer: NameCellRenderer,
   },
 
@@ -337,6 +378,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "QTY",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.qty,
+    cellClass: CELL_CLAMP, // P-1
     valueGetter: (params) => params.data?.h.quantity ?? 0,
     cellRenderer: QtyCellRenderer,
   },
@@ -347,6 +389,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "AVG COST",
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.avgCost,
+    cellClass: CELL_CLAMP, // P-1
     cellRenderer: AvgCostCellRenderer,
   },
 
@@ -361,6 +404,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "LAST",
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.current,
+    cellClass: CELL_CLAMP, // P-1
     cellRenderer: CurrentCellRenderer,
   },
 
@@ -373,6 +417,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "DAY Δ$",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChange,
+    cellClass: CELL_CLAMP, // P-1
     valueGetter: (params) => params.data?.dayChangeValue ?? 0,
     cellRenderer: DayChangeCellRenderer,
   },
@@ -383,6 +428,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "DAY Δ%",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChangePct,
+    cellClass: CELL_CLAMP, // P-1
     valueGetter: (params) => params.data?.dayChangePct ?? 0,
     cellRenderer: DayChangePctCellRenderer,
   },
@@ -406,6 +452,10 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.spark,
     headerClass: "!text-center",
+    // P-1: same clamp + centre the 16px SVG inside the 22px row. The 60×16 SVG
+    // is shorter than the row, but without overflow-hidden a future taller
+    // renderer (or a sub-pixel rounding spike) could still bleed downward.
+    cellClass: `${CELL_CLAMP} justify-center`,
     cellRenderer: SparklineCellRenderer,
   },
 
@@ -419,6 +469,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "MKT VALUE",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.value,
+    cellClass: CELL_CLAMP, // P-1 (this column showed the "$6$618.24" double-draw)
     valueGetter: (params) => params.data?.value ?? 0,
     cellRenderer: ValueCellRenderer,
   },
@@ -433,6 +484,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "UNREAL $",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.pnl,
+    cellClass: CELL_CLAMP, // P-1
     valueGetter: (params) => params.data?.pnl ?? 0,
     cellRenderer: PnlCellRenderer,
   },
@@ -444,6 +496,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "UNREAL %",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.pnlPct,
+    cellClass: CELL_CLAMP, // P-1
     valueGetter: (params) => params.data?.pnlPct ?? 0,
     cellRenderer: PnlPctCellRenderer,
   },
@@ -454,6 +507,10 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "WEIGHT",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.weight,
+    // P-1: the weight cell renders a 3px bar + % inside a flex row; justify-end
+    // keeps it right-aligned (matching the numeric columns) while the clamp
+    // guarantees the bar+label never exceed the 22px box.
+    cellClass: `${CELL_CLAMP} justify-end`,
     valueGetter: (params) => params.data?.weight ?? 0,
     cellRenderer: WeightCellRenderer,
   },
@@ -464,6 +521,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "SECTOR",
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.sector,
+    cellClass: CELL_CLAMP, // P-1
     cellRenderer: SectorCellRenderer,
   },
 
@@ -489,7 +547,12 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.asset,
     headerClass: "!text-center",
+    // P-1: the inline cellStyle already makes this cell a centred flex box; the
+    // cellClass adds the overflow clip + flat line-height so the asset chip can
+    // never spill into the row below. (We keep the inline flex here rather than
+    // CELL_CLAMP's `!flex` so the existing justify-center stays in one place.)
     cellStyle: { display: "flex", alignItems: "center", justifyContent: "center" },
+    cellClass: "overflow-hidden h-full leading-none",
     cellRenderer: AssetTypeCellRenderer,
   },
 ];

@@ -23,6 +23,9 @@
 import { CalendarClock } from "lucide-react";
 import { useEntityEvents } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
+// DESIGN-QA I-1 (2026-06-18): the EVENTS rail must time out to a terminal
+// state instead of showing a skeleton forever when the events fetch hangs.
+import { useSkeletonTimeout } from "../useSkeletonTimeout";
 import { cn, formatDate } from "@/lib/utils";
 import type { EntityEventItem } from "@/lib/api/knowledge-graph";
 
@@ -94,6 +97,13 @@ function EventRow({ event }: { event: EntityEventItem }) {
 
 export function EventsBlock({ entityId }: EventsBlockProps) {
   const { data, isLoading, isError, refetch } = useEntityEvents(entityId);
+  // Max-wait guard (DESIGN-QA I-1): if the events request hangs, isLoading
+  // stays true and the rail would render its skeleton forever (the QA screenshot
+  // showed EVENTS stuck on skeleton bars). After the budget we stop showing the
+  // skeleton and fall through to the settled branches below — an error → the
+  // named retry; otherwise the "No events for this entity" empty state (a hung
+  // load surfaces as data == null → events == [], the truthful designed state).
+  const eventsTimedOut = useSkeletonTimeout(isLoading);
 
   // Accent-bar header — always rendered (the rail's section skeleton must not
   // jump when data lands); the count badge fills in once loaded.
@@ -108,7 +118,7 @@ export function EventsBlock({ entityId }: EventsBlockProps) {
     </div>
   );
 
-  if (isLoading) {
+  if (isLoading && !eventsTimedOut) {
     return (
       <section aria-label="Entity events loading">
         {header}

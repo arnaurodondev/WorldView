@@ -32,6 +32,10 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+// DESIGN-QA P-3: when the SPY benchmark chain fails we collapse the panel to a
+// TWR-only layout and surface a single compact note instead of a whole column
+// of "SPY —" / "—" dashes (which read as per-row missing data, i.e. "broken").
+import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 // WHY createGateway + useAuth (NOT useBenchmarkSeries/useApiClient): this
 // panel mounts on the DEFAULT Holdings tab, whose render tree and page-level
 // tests are built on the createGateway pattern (no ApiClientProvider is
@@ -196,6 +200,56 @@ export function PerformancePeriodsPanel({ portfolioId }: PerformancePeriodsPanel
           <span className="font-mono text-[10px] text-muted-foreground">
             Not enough history yet — returns appear after 2+ daily snapshots.
           </span>
+        </div>
+      ) : spyFailed ? (
+        // ── DESIGN-QA P-3: benchmark-unavailable collapse ─────────────────────
+        // When SPY can't be loaded the previous layout drew a "SPY —" cell and
+        // a "—" excess cell on EVERY row — a column of dashes that reads as
+        // per-row missing data ("the panel is broken"). Instead we collapse to
+        // a TWR-only layout (label + portfolio return) and name the gap ONCE
+        // with an InlineEmptyState note. The portfolio's own returns are real
+        // and still shown — only the comparison is absent.
+        <div
+          data-testid="performance-periods-twr-only"
+          className="flex flex-col px-3 py-1"
+        >
+          {rows.map((row) => (
+            <div
+              key={row.label}
+              data-testid={`period-row-${row.label}`}
+              className="flex h-[24px] w-full max-w-[340px] items-center gap-2"
+            >
+              {/* Window label */}
+              <span className="w-[24px] shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
+                {row.label}
+              </span>
+              {/* Portfolio TWR only — left-aligned now that the SPY/excess
+                  columns are gone, so the single value doesn't float in dead
+                  space on the right. Same "—" rule for uncovered windows. */}
+              <span
+                title={
+                  row.portfolioFlowArtifact
+                    ? "Suppressed — the TWR series contains a cash-flow artifact inside this window (a deposit/position import was counted as return)."
+                    : undefined
+                }
+                className={cn(
+                  "font-mono text-[11px] tabular-nums",
+                  row.portfolio == null
+                    ? "text-muted-foreground"
+                    : row.portfolio >= 0
+                      ? "text-positive"
+                      : "text-negative",
+                )}
+              >
+                {row.portfolio == null ? "—" : fmtPct(row.portfolio)}
+              </span>
+            </div>
+          ))}
+          {/* The single, named gap message (replaces N per-row dashes). */}
+          <InlineEmptyState
+            message="Benchmark unavailable — SPY comparison could not be loaded."
+            className="py-1 text-[9px]"
+          />
         </div>
       ) : (
         <div className="flex flex-col px-3 py-1">

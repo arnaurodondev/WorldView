@@ -105,6 +105,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 // EmptyState primitive (§15.12) — icon + action props landed in Round 2, so
 // the bespoke icon/headline/CTA block here became a duplicate of it.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// DESIGN-QA D-1 "Skeletons that never resolve": cap how long this card may
+// show its loading skeleton. After the budget the skeleton yields to the
+// designed empty/unavailable state so the dashboard hero never spins forever
+// when S8's briefing endpoint hangs (rather than 503-ing cleanly).
+import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 // WHY import BriefingResponse (not MorningBrief): PLAN-0034 unified the briefing
 // response type — both morning and instrument briefs now return BriefingResponse
 // which includes citations, risk_summary, and cached flag.
@@ -201,8 +206,15 @@ export function MorningBriefCard() {
     return () => clearTimeout(timer);
   }, [queryClient]);
 
+  // DESIGN-QA D-1: once the loading skeleton has shown for longer than the
+  // max-wait budget we stop trusting `isLoading` and let the render fall
+  // through to the settled branches below (error if the query errored, else
+  // the "AI brief unavailable" empty state). If the brief still arrives later,
+  // TanStack flips isLoading→false, this resets, and the real brief renders.
+  const skeletonTimedOut = useSkeletonTimeout(isLoading);
+
   // ── Loading state ──────────────────────────────────────────────────────────
-  if (isLoading) {
+  if (isLoading && !skeletonTimedOut) {
     return (
       // WHY flex flex-col h-full: component must fill its grid cell height so
       // Row 1 height is driven by the cell, not by the brief content length.

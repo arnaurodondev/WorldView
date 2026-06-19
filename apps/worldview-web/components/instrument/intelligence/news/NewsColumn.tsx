@@ -20,6 +20,9 @@ import { useEntityNewsInfinite } from "@/components/instrument/hooks/useEntityNe
 import { EmptyState } from "@/components/primitives/EmptyState";
 import { CompactArticleRow } from "./CompactArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
+// DESIGN-QA I-1 (2026-06-18): the NEWS rail must time out to a terminal state
+// instead of showing a skeleton forever when the news fetch hangs.
+import { useSkeletonTimeout } from "../useSkeletonTimeout";
 
 interface NewsColumnProps {
   entityId: string;
@@ -39,6 +42,13 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
       sentiment: sentiment ?? undefined,
       timeRange,
     });
+
+  // Max-wait guard (DESIGN-QA I-1): if the cold news fetch hangs, isLoading
+  // stays true and the rail would render its skeleton forever. After the budget
+  // we stop showing the skeleton and fall through to the settled branches — an
+  // error → the named retry; otherwise the "no articles" empty state (a hung
+  // load surfaces as data == undefined → articles == [], the designed state).
+  const newsTimedOut = useSkeletonTimeout(isLoading);
 
   // Flatten paginated pages for render.
   const allArticles = data?.pages.flatMap((p) => p.articles) ?? [];
@@ -89,7 +99,7 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
   // Round-4 item 4: STATIC bars per DS §6.2 — raw animate-pulse is banned for
   // skeletons. data-testid lets tests target "loading" without coupling to
   // the (now animation-free) class list.
-  if (isLoading) {
+  if (isLoading && !newsTimedOut) {
     return (
       <div className="flex flex-col h-full">
         {filterStrip}

@@ -131,7 +131,24 @@ function MiniChartInner({
 
   // ── Empty / insufficient-data render ───────────────────────────────────────
   if (!valid) {
-    // WHY a flat grey line (not nothing): preserves row height, signals "no data".
+    // DESIGN-QA S-1 (2026-06-18) — clean empty-state, NOT a dotted "broken" line.
+    //
+    // WHY THE CHANGE: the previous empty-state drew a DASHED (strokeDasharray
+    // "2 2") baseline. Against a black terminal grid a faint dotted line reads
+    // as a chart that is *perpetually loading / broken* — the single biggest
+    // "this looks unfinished" signal the design audit flagged on the flagship
+    // screener page (every row showed it, because the TREND column ships with
+    // no live bars in this deployment).
+    //
+    // WHY A SOLID, FAINTER BASELINE (not dotted, not nothing):
+    //   - Solid 1px line at low opacity = the universal terminal "flat / no
+    //     movement" resting state (Bloomberg/Koyfin draw a quiet baseline, not
+    //     a dotted placeholder). It reads as "nothing to show here", not "still
+    //     loading".
+    //   - Keeping a line at all preserves the 18px row rhythm so the column
+    //     never collapses and mis-aligns its neighbours.
+    //   - Lower opacity (0.18 vs the old 0.3) recedes further so a screen full
+    //     of empty cells does not draw the eye away from real data.
     return (
       <svg
         width={width}
@@ -150,9 +167,11 @@ function MiniChartInner({
           // §15.11: hsl(var(--chart-*)) is the canonical SVG consumption —
           // the bare triplet var was an invalid color (see WHY above).
           stroke="hsl(var(--chart-neutral))"
-          strokeOpacity={0.3}
+          strokeOpacity={0.18}
           strokeWidth={1}
-          strokeDasharray="2 2"
+          // NO strokeDasharray: a SOLID baseline is the resting "flat / no
+          // data" state; a dashed line reads as "loading / broken" (S-1).
+          strokeLinecap="round"
         />
       </svg>
     );

@@ -504,6 +504,13 @@ export function HoldingsTab({
           // R2 sprint: map lifted to the sectorsByInstrument useMemo above
           // (shared with the filter) — content unchanged.
           sectors={sectorsByInstrument}
+          // P-2 (design-QA 2026-06-16): per-row SECTOR was `—` for every holding
+          // because `sectorsByInstrument` is null in this deployment, while the
+          // SECTOR EXPOSURE panel derives sectors from /sector-breakdown segments.
+          // Pass that same segment-derived map as an additive fallback so the
+          // table SECTOR column matches the panel (SemanticHoldingsTable inverts
+          // it to instrument_id→sector and uses it only when `sectors` is null).
+          sectorIdMap={sectorIdMap}
           // R2 sprint: filtered total so the pinned TOTAL row + WEIGHT
           // column describe the visible rows (weights sum to 100% within
           // the filtered view). Equals kpi.totalValue when unfiltered.

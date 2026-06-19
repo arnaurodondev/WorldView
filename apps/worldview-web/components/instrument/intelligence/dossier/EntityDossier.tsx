@@ -46,6 +46,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/primitives/EmptyState";
 import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { RelatedEntitiesPanel } from "../context/RelatedEntitiesPanel";
+// DESIGN-QA I-1 (2026-06-18): a rail skeleton must time out to a terminal
+// state instead of spinning forever when the entity-detail request hangs.
+import { useSkeletonTimeout } from "../useSkeletonTimeout";
 import { cn, formatDate } from "@/lib/utils";
 import type { EntityDetailEnriched } from "@/lib/api/knowledge-graph";
 import type { BriefingResponse, EntityGraph } from "@/types/api";
@@ -148,8 +151,22 @@ export function EntityDossier({
     retry: 0,
   });
 
+  // ── Max-wait guard (DESIGN-QA I-1) ────────────────────────────────────────
+  // If the entity-detail request hangs, detailQuery.isLoading stays true and
+  // this rail would render its skeleton forever (the QA screenshot showed the
+  // DOSSIER rail stuck on skeleton bars over black). After the budget elapses
+  // we stop showing the skeleton and fall through to the settled branches: an
+  // error → the named "Couldn't load" retry; otherwise the no-data EmptyState.
+  // We bias a stuck-but-not-errored load toward the empty branch (entity == null
+  // → "no entity context yet"), which is the truthful designed terminal state.
+  const detailTimedOut = useSkeletonTimeout(detailQuery.isLoading);
+  // Same guard for the AI-brief sub-section: a hung brief fetch must not leave
+  // a perpetual skeleton inside an otherwise-rendered dossier. After the budget
+  // the brief block falls through to its "No AI brief generated yet" empty copy.
+  const briefTimedOut = useSkeletonTimeout(briefQuery.isLoading);
+
   // ── Loading skeleton (shape-matched: header row + text lines) ─────────────
-  if (detailQuery.isLoading) {
+  if (detailQuery.isLoading && !detailTimedOut) {
     return (
       <section className="p-0 space-y-2" aria-label="Entity dossier loading">
         <SectionHeader label="Dossier" />
@@ -337,7 +354,7 @@ export function EntityDossier({
       {/* ════ AI BRIEF ═══════════════════════════════════════════════════ */}
       <SectionHeader label="AI Brief" />
       <div className="px-2 py-2">
-        {briefQuery.isLoading ? (
+        {briefQuery.isLoading && !briefTimedOut ? (
           // Shape-matched static skeleton (DS §6.2: skeletons never animate).
           <div className="space-y-1.5" data-testid="dossier-brief-skeleton" aria-hidden>
             <Skeleton className="h-3 w-full" />

@@ -63,8 +63,20 @@ export function Sparkline({
   trend = "auto",
   label,
 }: SparklineProps): ReactNode {
-  // Empty/short series — render the dotted-line loading skeleton equivalent.
-  // Finance UX: never render a blank box where data is expected.
+  // Empty/short series — render a CLEAN FLAT BASELINE, not a dotted "loading"
+  // line. Design QA (DESIGN-QA.md S-1 / cross-cutting #1, 2026-06-18): a dotted
+  // grey placeholder reads as a broken/perpetually-loading chart — the single
+  // biggest "this looks unfinished" signal across the screener/dashboard/
+  // prediction surfaces. The resting empty state must look intentional.
+  //
+  // We draw ONE solid 1px line at the vertical midpoint in muted-foreground/25:
+  // a calm, flat baseline that says "no movement / no data" the way a real flat
+  // series would, with no dashes that mimic a spinner. Same 40×16 footprint so
+  // dense rows keep their rhythm (no layout shift vs. a rendered sparkline).
+  //
+  // This is purely INTERNAL — the props/signature are unchanged, so every other
+  // caller (watchlist, holdings, dashboard, peer comparison) inherits the
+  // cleaner empty state with no edits on their side.
   if (data.length < 2) {
     return (
       <svg width={width} height={height} role="img" aria-label={label ?? "no data"}>
@@ -74,8 +86,10 @@ export function Sparkline({
           y1={height / 2}
           y2={height / 2}
           stroke="currentColor"
-          strokeDasharray="2 2"
-          className="text-muted-foreground/30"
+          // Solid (no strokeDasharray) so it reads as a flat baseline, not a
+          // dotted loading indicator. Muted enough to recede, visible enough to
+          // confirm the cell rendered (vs. an empty void).
+          className="text-muted-foreground/25"
         />
       </svg>
     );

@@ -151,7 +151,10 @@ describe("PerformancePeriodsPanel", () => {
     expect(screen.queryByText(/\+2[0-9]\.\d{2}%/)).toBeNull();
   });
 
-  it("announces SPY unavailability instead of failing silently", async () => {
+  it("collapses to a TWR-only layout with a single named gap when SPY is unavailable (P-3)", async () => {
+    // DESIGN-QA P-3: the old behaviour drew a "SPY —" cell + a "—" excess cell
+    // on every row — a column of dashes that reads as per-row missing data.
+    // The panel now collapses to a TWR-only layout and names the gap ONCE.
     mockResolveTickersBatch.mockRejectedValue(new Error("resolve down"));
     render(wrap(<PerformancePeriodsPanel portfolioId="p-1" />));
 
@@ -159,11 +162,22 @@ describe("PerformancePeriodsPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("period-row-1W")).toBeInTheDocument(),
     );
+    // The TWR-only container is mounted (not the full comparison layout).
+    expect(
+      screen.getByTestId("performance-periods-twr-only"),
+    ).toBeInTheDocument();
+    // The header still flags the degradation...
     expect(
       await screen.findByTestId("performance-spy-unavailable"),
     ).toBeInTheDocument();
-    // Benchmark cells degrade to "SPY —".
-    expect(screen.getByTestId("period-row-1W")).toHaveTextContent("SPY —");
+    // ...and the body names it ONCE instead of a per-row dash column.
+    expect(
+      screen.getByText(/benchmark unavailable/i),
+    ).toBeInTheDocument();
+    // The real portfolio return is still shown (the book's numbers are honest).
+    expect(screen.getByTestId("period-row-1W")).toHaveTextContent("+6.86%");
+    // No "SPY —" per-row dash cell remains anywhere in the panel.
+    expect(screen.queryByText(/SPY —/)).toBeNull();
   });
 
   it("named gap state for a brand-new portfolio (<2 TWR points)", async () => {

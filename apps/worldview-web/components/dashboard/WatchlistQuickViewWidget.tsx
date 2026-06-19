@@ -56,6 +56,8 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 // portfolios/holdings fetch fell through to the "Track your top positions
 // here" cold-start state — misleading for users who DO have positions.
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+// DESIGN-QA D-1: skeleton max-wait so this widget never spins forever.
+import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 import { Wallet } from "lucide-react";
 import { Sparkline } from "@/components/primitives/Sparkline";
 import { cn } from "@/lib/utils";
@@ -253,6 +255,10 @@ export function WatchlistQuickViewWidget() {
   });
 
   const isLoading = portfoliosLoading || holdingsLoading || quotesLoading;
+  // DESIGN-QA D-1 "Skeletons that never resolve": cap how long the skeleton
+  // may show. After the budget we fall through to the data or the named
+  // empty/cold-start state instead of spinning if a holdings/quotes leg hangs.
+  const skeletonTimedOut = useSkeletonTimeout(isLoading);
 
   // ── Shared panel chrome ────────────────────────────────────────────────────
   // Header carries the /portfolio link in BOTH data and empty states — the
@@ -295,7 +301,7 @@ export function WatchlistQuickViewWidget() {
   }
 
   // ── Loading state — fixed-height skeleton rows prevent layout jump ────────
-  if (isLoading && !holdingsResp) {
+  if (isLoading && !holdingsResp && !skeletonTimedOut) {
     return (
       // Round 4 (item 2): role="region" + aria-label on every return branch.
       <div className="flex h-full flex-col bg-background" role="region" aria-label="Top positions">
@@ -463,14 +469,24 @@ function QuickViewRow({ holding, quote, displayTicker, sparkline }: QuickViewRow
       </span>
 
       {/* 5-day sparkline — trend="auto" tints by first-vs-last delta.
-          Renders its own dashed placeholder when the series is missing. */}
-      <span className="flex shrink-0 items-center">
-        <Sparkline
-          data={sparkline ?? []}
-          width={48}
-          height={14}
-          label={`${displayTicker ?? "position"} 5-day trend`}
-        />
+          DESIGN-QA D-4 "Dead sparkline columns": the shared <Sparkline>
+          renders a dotted grey placeholder line when it has <2 points, which
+          the QA flagged as a "dead column" that reads as broken/loading at
+          rest. We instead render the sparkline ONLY when there are ≥2 real
+          points; otherwise we keep an empty fixed-size slot so the price/P&L
+          columns stay aligned, but show NO dotted placeholder. */}
+      <span
+        className="flex shrink-0 items-center"
+        style={{ width: 48, height: 14 }}
+      >
+        {sparkline && sparkline.length >= 2 ? (
+          <Sparkline
+            data={sparkline}
+            width={48}
+            height={14}
+            label={`${displayTicker ?? "position"} 5-day trend`}
+          />
+        ) : null}
       </span>
 
       {/* Price — flex-1 right-aligned so the two money columns scan as columns */}

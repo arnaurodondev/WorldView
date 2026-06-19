@@ -7,17 +7,17 @@
  *   by `news_count_7d` and `display_relevance_7d_weighted`. The columns have
  *   colour-coded rendering rules that must not drift:
  *
- *   NEWS 7D:
- *     ≥5 articles  → text-positive (active coverage)
- *     1–4 articles → text-foreground (normal)
- *     0 articles   → text-muted-foreground/50 (dark / no coverage)
- *     null         → "—"
+ *   NEWS 7D (DESIGN-QA S-3, 2026-06-18 — NON-DIRECTIONAL, neutral palette):
+ *     ≥1 articles → text-foreground (has coverage)
+ *     0 articles  → text-muted-foreground/50 (dark / no coverage)
+ *     null        → "—"
+ *     (NOTE: no bull-green tint — a news count is not a price direction.)
  *
- *   BRIEF SCORE:
- *     ≥0.70  → text-positive (high relevance)
- *     0.30–0.69 → text-foreground (neutral)
- *     <0.30  → text-muted-foreground/60 (low relevance)
- *     null   → "—"
+ *   BRIEF SCORE (DESIGN-QA S-3 — NON-DIRECTIONAL, neutral palette):
+ *     ≥0.30 → text-foreground
+ *     <0.30 → text-muted-foreground/60 (low relevance)
+ *     null  → "—"
+ *     (NOTE: no bull-green tint — relevance is a quality level, not direction.)
  *
  * These are also verified through column-def visibility (no `hide: true`).
  *

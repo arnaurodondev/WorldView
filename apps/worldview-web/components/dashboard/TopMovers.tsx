@@ -424,14 +424,21 @@ function MoverRow({ mover, sparkline }: MoverRowProps) {
           WHY NOT aria-hidden: the <Sparkline> svg carries role="img" + a
           per-ticker aria-label ("NVDA 5-day trend") — it conveys real trend
           information to screen-reader users, so it must stay in the a11y tree. */}
-      <span className="shrink-0">
-        <Sparkline
-          data={sparkline ?? []}
-          width={40}
-          height={14}
-          trend={isUp ? "positive" : "negative"}
-          label={`${mover.ticker} 5-day trend`}
-        />
+      {/* DESIGN-QA D-4 "Dead sparkline columns": only render the shared
+          <Sparkline> when there are ≥2 real points. With <2 points it draws a
+          dotted grey placeholder that reads as a perpetually "loading"/broken
+          column at rest — so we render an empty fixed-size slot instead, which
+          keeps the price/% columns aligned without the dead dotted line. */}
+      <span className="shrink-0" style={{ width: 40, height: 14 }}>
+        {sparkline && sparkline.length >= 2 ? (
+          <Sparkline
+            data={sparkline}
+            width={40}
+            height={14}
+            trend={isUp ? "positive" : "negative"}
+            label={`${mover.ticker} 5-day trend`}
+          />
+        ) : null}
       </span>
 
       {/* Price — right-aligned, muted: context, not the signal.

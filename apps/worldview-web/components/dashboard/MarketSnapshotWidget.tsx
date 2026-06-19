@@ -46,6 +46,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 // fetch previously fell through to "instruments not yet ingested" (a lie:
 // the data exists, the REQUEST failed) with no recovery path.
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+// DESIGN-QA D-1 "Skeletons that never resolve": the two-step resolve→overview
+// fan-out can stay `isLoading` indefinitely if a leg hangs. Cap the skeleton
+// so the panel falls through to its data/empty render instead of spinning.
+import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 import { Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
@@ -226,6 +230,15 @@ export function MarketSnapshotWidget() {
   //     rather than waiting for every ticker to respond. A trader with 5/9
   //     tickers loaded should see LIVE, not a blank header.
   const isLoading = idsLoading || overviewQueries.some((q) => q.isLoading);
+  // DESIGN-QA D-1: cap the skeleton's lifetime. After the budget the panel
+  // stops showing skeleton rows and renders the data branch (real prices, or
+  // truthful "—" rows when a leg hasn't resolved) so a wedged resolve/overview
+  // fan-out can never leave the hero row spinning forever. We deliberately do
+  // NOT swap to a full empty state here: the existing contract (and round-4
+  // tests) is that unresolved tickers render as "—" rows with a truthful
+  // footer, which is itself a designed settled state — just not a skeleton.
+  const skeletonTimedOut = useSkeletonTimeout(isLoading);
+  const showSkeleton = isLoading && !skeletonTimedOut;
   // WHY .some (not .every): shows LIVE when at least one ticker is resolved.
   // The previous implicit behavior (tied to isLoading=false) required ALL
   // tickers to finish before the badge appeared — a single slow ticker (e.g.
@@ -326,7 +339,7 @@ export function MarketSnapshotWidget() {
             onRetry={() => void refetchIds()}
             retrying={idsFetching}
           />
-        ) : isLoading ? (
+        ) : showSkeleton ? (
           // Loading skeletons — 2 groups × (1 label + N rows)
           // Round 3 (item 3): the skeleton mirrors the loaded layout EXACTLY —
           // including the two 18px group-label separator rows and the loaded
@@ -401,7 +414,7 @@ export function MarketSnapshotWidget() {
               REQUEST failed, sending the trader to the wrong triage path. */}
           {idsError
             ? "snapshot feed error"
-            : isLoading
+            : showSkeleton
               ? "loading..."
               : Object.keys(instrumentMap ?? {}).length === 0
                 ? "instruments not yet ingested"
