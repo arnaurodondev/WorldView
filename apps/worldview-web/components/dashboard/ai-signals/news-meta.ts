@@ -41,7 +41,6 @@ export function trendMeta(item: NewsMomentumItem): {
   word: string;
 } {
   const delta = item.delta ?? 0;
-  const prior = item.prior_count ?? 0;
   const pct = item.delta_pct ?? 0;
 
   if (delta > 0) {
