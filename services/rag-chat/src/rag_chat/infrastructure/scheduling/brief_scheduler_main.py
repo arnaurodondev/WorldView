@@ -211,6 +211,9 @@ async def _run_loop(settings: Settings) -> None:
         llm_chain=llm_chain,
         valkey=valkey,
         context_gatherer=context_gatherer,
+        # FIX-LIVE-BRIEF: reasoning-model-safe synthesis budgets (env-tunable).
+        morning_brief_max_tokens=settings.morning_brief_synthesis_max_tokens,
+        instrument_brief_max_tokens=settings.instrument_brief_synthesis_max_tokens,
     )
 
     # PLAN-0094 W2 follow-up (BP-303 variant): mint a short-lived service JWT

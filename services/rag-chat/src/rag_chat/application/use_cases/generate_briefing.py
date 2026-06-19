@@ -67,10 +67,23 @@ class GenerateBriefingUseCase:
         valkey: ValkeyClient,  # type: ignore[name-defined]
         context_gatherer: BriefingContextGatherer | None = None,  # optional — degrades gracefully
         brief_archive: BriefArchivePort | None = None,  # PLAN-0066 Wave B — optional persistence
+        *,
+        morning_brief_max_tokens: int = 8000,  # FIX-LIVE-BRIEF — reasoning-model budget
+        instrument_brief_max_tokens: int = 6000,  # FIX-LIVE-BRIEF — reasoning-model budget
     ) -> None:
         self._llm_chain = llm_chain
         self._valkey = valkey
         self._context_gatherer = context_gatherer  # None when wired without context gathering
+        # FIX-LIVE-BRIEF (2026-06-19): the synthesis completion model is a
+        # REASONING model (gpt-oss-120b live / DeepSeek-*-Thinking by default)
+        # whose chain-of-thought tokens count against ``max_tokens``.  The old
+        # hardcoded 2000/1500 budgets were eaten by reasoning on the heavy
+        # brief prompt, truncating the structured ``## section`` answer
+        # (finish_reason=length) → 0 parsed sections → all-placeholder 300-char
+        # output.  These budgets are env-tunable (config.py) so the floor moves
+        # with the model, never the prompt.
+        self._morning_brief_max_tokens = morning_brief_max_tokens
+        self._instrument_brief_max_tokens = instrument_brief_max_tokens
         # WHY NullBriefArchive default: callers that do not wire a real archive
         # (e.g. unit tests, email briefing path) continue to work without any
         # code change. Production wires BriefArchiveRepository via DI.
@@ -446,7 +459,7 @@ class GenerateBriefingUseCase:
 
         # ── 4. LLM completion (collect streaming tokens) ──────────────────────
         chunks: list[str] = []
-        async for chunk in self._llm_chain.stream(prompt, max_tokens=2000, temperature=0.1):
+        async for chunk in self._llm_chain.stream(prompt, max_tokens=self._morning_brief_max_tokens, temperature=0.1):
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 
@@ -763,7 +776,9 @@ class GenerateBriefingUseCase:
 
         # ── LLM completion ────────────────────────────────────────────────────
         chunks: list[str] = []
-        async for chunk in self._llm_chain.stream(prompt, max_tokens=1500, temperature=0.1):
+        async for chunk in self._llm_chain.stream(
+            prompt, max_tokens=self._instrument_brief_max_tokens, temperature=0.1
+        ):
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 

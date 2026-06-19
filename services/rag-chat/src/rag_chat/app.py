@@ -732,6 +732,9 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
         valkey=valkey_client,
         context_gatherer=context_gatherer,
         brief_archive=brief_archive,
+        # FIX-LIVE-BRIEF: reasoning-model-safe synthesis budgets (env-tunable).
+        morning_brief_max_tokens=settings.morning_brief_synthesis_max_tokens,
+        instrument_brief_max_tokens=settings.instrument_brief_synthesis_max_tokens,
     )
 
 
