@@ -110,6 +110,7 @@ import { applyClientFilters } from "@/features/screener/lib/apply-client-filters
 import { qk } from "@/lib/query/keys";
 // PRD-0089 Wave I — new components
 import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
+import { NlScreenerSearch } from "@/components/screener/NlScreenerSearch";
 import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
 import { ScreenerHeader } from "@/components/screener/ScreenerHeader";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
@@ -377,6 +378,20 @@ export default function ScreenerPage() {
     [accumulator, appliedFilters],
   );
 
+  // ── IB-L5 stale-data indicator (T-IB5-04) ─────────────────────────────────
+  // WHY read from the first accumulated row (not the response root): the
+  // intelligence rollup timestamp `intelligence_rollup_synced_at` is a per-row
+  // snapshot column on ScreenerResult, identical across every row in a single
+  // sync. A sibling agent is adding it to the API; until then this is `undefined`
+  // and the IntelligenceFilterGroup pill simply never renders (defensive no-op).
+  // WHY accumulator[0] (not filteredRows[0]): client filters can empty the
+  // visible set while the rollup timestamp is still known — the freshness signal
+  // shouldn't disappear just because the user filtered everything out.
+  const rollupSyncedAt = useMemo(
+    () => accumulator[0]?.intelligence_rollup_synced_at ?? undefined,
+    [accumulator],
+  );
+
   // ── Sparklines ────────────────────────────────────────────────────────────
   const SPARKLINE_ROW_LIMIT = 200;
   const sparklineColumnVisible = useMemo(
@@ -559,6 +574,12 @@ export default function ScreenerPage() {
         }}
       />
 
+      {/* ── Natural-language screen builder (PLAN-0091) ───────────────────── */}
+      {/* WHY above the chip strip: it's the fastest entry point — type a screen
+          in English and it flows through handleApply, populating the chip strip
+          below with the translated filters (which stay editable). */}
+      <NlScreenerSearch onApply={handleApply} />
+
       {/* ── Filter chip strip (PRD-0089 Wave I) ────────────────────────── */}
       {/* WHY FilterChipStrip before ScreenerFilterBar: the chip strip is the
           always-visible "what's active" summary row. The FilterBar slides in
@@ -578,6 +599,7 @@ export default function ScreenerPage() {
         totalResults={serverTotal}
         loadedCount={loadedDisplayed}
         isLoading={isLoading}
+        rollupSyncedAt={rollupSyncedAt}
       />
 
       {/* ── AG Grid table ────────────────────────────────────────────────── */}

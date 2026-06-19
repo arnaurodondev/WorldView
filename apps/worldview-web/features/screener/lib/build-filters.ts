@@ -10,7 +10,7 @@
  */
 
 import type { ScreenerFilter } from "@/types/api";
-import type { FilterState } from "./filter-state";
+import { DEFAULT_FILTERS, type FilterState } from "./filter-state";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -159,7 +159,19 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   // `news_count_7d` is not a known computed metric — the INNER JOIN path drops
   // unmatched rows. Same merge pattern used for `sector` below.
   // Reference: services/market-data/.../api/schemas/fundamental_metrics.py:115-124.
-  const intel: Partial<ScreenerFilter> = {};
+  // WHY a local intersection type (not new fields on the shared ScreenerFilter):
+  // the IB-L5c calendar columns (next_earnings_within_days / next_dividend_
+  // within_days) are not yet on types/api.ts ScreenerFilter, and this sprint runs
+  // several surface agents concurrently against that shared file. An additive
+  // local type keeps the change inside the screener surface — the fields
+  // serialise identically (JSON.stringify ignores the nominal type), exactly the
+  // precedent set by SnapshotOwnershipFields / SnapshotVolumeFields below.
+  interface IntelFilterFields extends Partial<ScreenerFilter> {
+    // SCALAR "≤ N days" filters — NOT a _min/_max pair (see calendar block below).
+    next_earnings_within_days?: number;
+    next_dividend_within_days?: number;
+  }
+  const intel: IntelFilterFields = {};
   if (f.newsCount7dMin !== undefined) intel.news_count_7d_min = f.newsCount7dMin;
   if (f.newsCount7dMax !== undefined) intel.news_count_7d_max = f.newsCount7dMax;
   if (f.llmRelevance7dMin !== undefined) intel.llm_relevance_7d_max_min = f.llmRelevance7dMin;
@@ -170,6 +182,20 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   if (f.contradictionsMax !== undefined) intel.recent_contradiction_count_max = f.contradictionsMax;
   if (f.hasAiBrief === true) intel.has_ai_brief = true;
   if (f.hasActiveAlert === true) intel.has_active_alert = true;
+  // ── Calendar windows (IB-L5c) ──────────────────────────────────────────────
+  // CONTRACT (verified 2026-06-16 against
+  // services/market-data/.../api/schemas/fundamental_metrics.py:80-81): unlike
+  // news_count_7d (a _min/_max pair), the calendar windows are SCALAR upper-bound
+  // filters — `next_earnings_within_days: int (ge=0 le=365)` already means
+  // "earnings within the next N days". So a "≤ N days" UI control maps DIRECTLY
+  // to the scalar field; there is no _max sibling (sending one is silently
+  // dropped by the backend → the filter would no-op).
+  if (f.upcomingEarningsWithinDays !== undefined) {
+    intel.next_earnings_within_days = f.upcomingEarningsWithinDays;
+  }
+  if (f.upcomingDividendWithinDays !== undefined) {
+    intel.next_dividend_within_days = f.upcomingDividendWithinDays;
+  }
   if (Object.keys(intel).length > 0) {
     if (filters.length > 0) {
       filters[0] = { ...filters[0], ...intel };
@@ -238,4 +264,104 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   // path and only populated the market_cap column, leaving all others "—".
 
   return filters;
+}
+
+// ── NL-translate reverse mapping (PLAN-0091) ───────────────────────────────────
+
+/**
+ * METRIC_TO_FILTER_STATE — backend metric name → the FilterState min/max keys.
+ *
+ * WHY a table (not a switch): the NL-translate endpoint returns ScreenerFilter[]
+ * keyed by the SAME canonical backend metric names buildScreenerFilters emits
+ * above. To apply those through the normal pipeline we must map them BACK onto
+ * FilterState's `*Min`/`*Max` pairs. This table is the inverse of the
+ * pushIfRange() calls above — keep the two in sync (a metric added there should
+ * be added here so NL queries can drive it).
+ *
+ * Deliberately covers the valuation / profitability / growth / performance /
+ * market-cap metrics (the ones an NL prompt realistically asks for). The
+ * snapshot-column named fields (ownership / intelligence) are handled separately
+ * below because they ride on the filter object, not as `{metric, min, max}` rows.
+ */
+const METRIC_TO_FILTER_STATE: Record<
+  string,
+  { min: keyof FilterState; max: keyof FilterState }
+> = {
+  market_capitalization: { min: "marketCapMin", max: "marketCapMax" },
+  pe_ratio: { min: "peMin", max: "peMax" },
+  pb_ratio: { min: "pbMin", max: "pbMax" },
+  price_sales_ttm: { min: "psMin", max: "psMax" },
+  dividend_yield: { min: "divYieldMin", max: "divYieldMax" },
+  forward_pe: { min: "forwardPeMin", max: "forwardPeMax" },
+  roe_ttm: { min: "roeMin", max: "roeMax" },
+  profit_margin: { min: "netMarginMin", max: "netMarginMax" },
+  operating_margin_ttm: { min: "opMarginMin", max: "opMarginMax" },
+  quarterly_revenue_growth_yoy: { min: "revGrowthMin", max: "revGrowthMax" },
+  quarterly_earnings_growth_yoy: { min: "earningsGrowthMin", max: "earningsGrowthMax" },
+  dist_from_52w_high_pct: { min: "dist52wHighPctMin", max: "dist52wHighPctMax" },
+  dist_from_52w_low_pct: { min: "dist52wLowPctMin", max: "dist52wLowPctMax" },
+  return_1m: { min: "return1mMin", max: "return1mMax" },
+  return_3m: { min: "return3mMin", max: "return3mMax" },
+  return_6m: { min: "return6mMin", max: "return6mMax" },
+  return_ytd: { min: "returnYtdMin", max: "returnYtdMax" },
+  return_1y: { min: "return1yMin", max: "return1yMax" },
+  return_3y: { min: "return3yMin", max: "return3yMax" },
+};
+
+/**
+ * nlFiltersToFilterState — map a backend ScreenerFilter[] (from the NL-translate
+ * endpoint) back onto a FilterState the screener UI can apply + display.
+ *
+ * WHY this exists: the page's whole pipeline (chip strip, saved screens, active
+ * counts, the request builder) is driven by FilterState — NOT raw
+ * ScreenerFilter[]. Translating NL → FilterState (instead of bypassing the
+ * pipeline with a raw request) means the NL result shows up in the chip strip,
+ * is editable, and is saveable, exactly like a hand-built screen.
+ *
+ * MAPPING RULES:
+ *   - `{metric, min_value, max_value}` rows → the METRIC_TO_FILTER_STATE pair.
+ *   - `sector` on any filter → FilterState.sector.
+ *   - The IB-L5 named intelligence siblings (news_count_7d_min, has_ai_brief, …)
+ *     → their FilterState fields, so an NL "high news volume" query round-trips.
+ *   - Unknown metrics are SKIPPED (not thrown) — a forward-compatible backend may
+ *     send metrics this build doesn't know yet; dropping them degrades
+ *     gracefully rather than crashing the apply.
+ *
+ * Starts from DEFAULT_FILTERS so the result is a complete, clean FilterState
+ * (applying it REPLACES the current screen, matching preset semantics).
+ */
+export function nlFiltersToFilterState(filters: ScreenerFilter[]): FilterState {
+  const out: FilterState = { ...DEFAULT_FILTERS };
+
+  for (const f of filters) {
+    // Metric range rows → FilterState min/max pairs.
+    if (f.metric && METRIC_TO_FILTER_STATE[f.metric]) {
+      const { min, max } = METRIC_TO_FILTER_STATE[f.metric];
+      if (typeof f.min_value === "number") (out[min] as number) = f.min_value;
+      if (typeof f.max_value === "number") (out[max] as number) = f.max_value;
+    }
+
+    // Sector restriction (rides on any filter object).
+    if (typeof f.sector === "string" && f.sector) out.sector = f.sector;
+
+    // IB-L5 intelligence named siblings → FilterState intelligence fields.
+    if (typeof f.news_count_7d_min === "number") out.newsCount7dMin = f.news_count_7d_min;
+    if (typeof f.news_count_7d_max === "number") out.newsCount7dMax = f.news_count_7d_max;
+    if (typeof f.display_relevance_7d_weighted_min === "number") {
+      out.displayRelevance7dMin = f.display_relevance_7d_weighted_min;
+    }
+    if (typeof f.display_relevance_7d_weighted_max === "number") {
+      out.displayRelevance7dMax = f.display_relevance_7d_weighted_max;
+    }
+    if (typeof f.recent_contradiction_count_min === "number") {
+      out.contradictionsMin = f.recent_contradiction_count_min;
+    }
+    if (typeof f.recent_contradiction_count_max === "number") {
+      out.contradictionsMax = f.recent_contradiction_count_max;
+    }
+    if (f.has_ai_brief === true) out.hasAiBrief = true;
+    if (f.has_active_alert === true) out.hasActiveAlert = true;
+  }
+
+  return out;
 }

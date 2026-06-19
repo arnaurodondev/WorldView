@@ -131,6 +131,12 @@ interface ScreenerFilterBarProps {
   loadedCount?: number;
   /** Whether the query is currently loading (initial isFetching) */
   isLoading: boolean;
+  /**
+   * IB-L5 stale-data indicator (T-IB5-04). ISO-8601 UTC timestamp of the last
+   * intelligence rollup sync, threaded straight through to IntelligenceFilterGroup.
+   * Optional + defensive — see IntelligenceFilterGroup.rollupSyncedAt.
+   */
+  rollupSyncedAt?: string | null;
 }
 
 // ── ScreenerFilterBar ─────────────────────────────────────────────────────────
@@ -143,6 +149,7 @@ export function ScreenerFilterBar({
   totalResults,
   loadedCount,
   isLoading,
+  rollupSyncedAt,
 }: ScreenerFilterBarProps) {
   // WHY local form state: filter values are pending until the user clicks Apply.
   // Storing them locally prevents partial filters from triggering API calls while
@@ -939,7 +946,7 @@ export function ScreenerFilterBar({
           </Section>
 
           {/* ── INTELLIGENCE FILTERS (IB-L5 ✓) ─────────────────────────── */}
-          <IntelligenceFilterGroup value={form} onChange={setForm} />
+          <IntelligenceFilterGroup value={form} onChange={setForm} rollupSyncedAt={rollupSyncedAt} />
 
           {/* ── BOTTOM TOOLBAR ──────────────────────────────────────────── */}
           <div className="flex h-9 items-center gap-2 px-2 bg-background">

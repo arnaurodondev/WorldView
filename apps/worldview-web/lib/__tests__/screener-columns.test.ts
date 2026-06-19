@@ -24,13 +24,17 @@ describe("screener-columns DEFAULT_COLUMNS", () => {
   // every change. If you need to ship a new default-visible column, drop an
   // existing one in the same PR and update this number with rationale in the
   // commit body.
-  // WHY 13 (was 14, Wave-2 2026-06-10): the SCORE column was demoted to
-  // opt-in because market_impact_score has NO backend data source (the column
-  // rendered "—" on 100% of rows). The cap REMAINS ≤14 — 13 leaves exactly
-  // one slot of headroom for the next default-visible column.
-  it("exposes exactly 13 default-visible columns (PRD-0089 §6.3 density cap)", () => {
+  // WHY 14 (was 13, catalogue-reconciliation 2026-06-18): the screener-frontend
+  // audit §2.5 reconciled the catalogue against the AG-Grid ColDefs (every
+  // ColDef is now selectable in the popover). As part of that, the IB-L5
+  // `news7d` column — the headline intelligence-moat column EQS cannot express —
+  // was promoted to default-visible. That fills the one slot of headroom the
+  // Wave-2 SCORE demotion left, landing the count at EXACTLY the §6.3 cap of 14.
+  // The cap is a HARD ceiling: shipping a new default-visible column now requires
+  // demoting an existing one in the same PR.
+  it("exposes exactly 14 default-visible columns (PRD-0089 §6.3 density cap)", () => {
     const visibleCount = DEFAULT_COLUMNS.filter((c) => c.visible).length;
-    expect(visibleCount).toBe(13);
+    expect(visibleCount).toBe(14);
   });
 
   // ── Opt-in safety net ──────────────────────────────────────────────────────

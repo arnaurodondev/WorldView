@@ -106,4 +106,32 @@ export const SCREENER_PRESETS: readonly ScreenerPreset[] = Object.freeze([
       hasFundamentals: true,
     },
   },
+  {
+    // ── "Live Catalysts" — the intelligence-moat preset (2026-06-18) ──────────
+    // WHY THIS PRESET IS STRATEGIC: it composes three IB-L5 intelligence signals
+    // that a Bloomberg EQS terminal structurally CANNOT express, because EQS has
+    // no news-velocity, no live-alert, and no knowledge-graph-contradiction
+    // fields. This single chip surfaces exactly the names that are "in play right
+    // now": heavy recent coverage + an active alert + a narrative conflict.
+    //   - news_count_7d ≥ 5          → active media coverage in the past week
+    //   - has_active_alert = true    → the platform is already watching it (S10)
+    //   - recent_contradiction_count ≥ 1 → the knowledge graph found conflicting
+    //                                  narratives/claims (a volatility tell)
+    // All three map to live IB-L5 server-side filters (see build-filters.ts), so
+    // the preset is a pure FilterState — applying it is identical to any other
+    // preset (onApply(preset.filters), no special code path).
+    //
+    // DATA NOTE: these columns are gated on the L-5b rollup worker; until it
+    // populates the snapshot universe-wide, the preset returns few/zero rows.
+    // That is the honest output — it does not erode trust because the user
+    // explicitly opted into an intelligence screen (vs a default view full of "—").
+    id: "live-catalysts",
+    label: "Live Catalysts",
+    filters: {
+      ...DEFAULT_FILTERS,
+      newsCount7dMin: 5,
+      hasActiveAlert: true,
+      contradictionsMin: 1,
+    },
+  },
 ] as const);

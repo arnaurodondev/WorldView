@@ -182,37 +182,86 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: false }),
   Object.freeze({ key: "range52w",      label: "52W Range",   sortable: false, align: "right",                                visible: true }),
   Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: true }),
-  // ── Opt-in columns (hidden by default — user reveals via ⚙ popover) ─────────
-  // WHY hidden by default: these metrics are valuable for specific strategies but
-  // add column width that crowds the 12-column default layout at 1440px.
-  Object.freeze({ key: "opMargin",      label: "OP MGN%",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
-  Object.freeze({ key: "evEbitda",      label: "EV/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
-  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-05): fundamentals snapshot opt-ins ──
-  // WHY listed here AS WELL as in `ag-screener-columns.tsx`:
-  //   - The popover (gear ⚙ icon) reads from THIS file to show toggle rows.
-  //   - The AG-Grid columns file reads from ITSELF for the ColDef factory.
-  //   - The page maps user prefs → AG-Grid visibility via colId === key.
-  // So a column must be declared in BOTH places to (a) appear in the popover
-  // and (b) actually have a ColDef. The key field must match the colId.
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // CATALOGUE-RECONCILIATION (2026-06-18, screener-frontend audit §2.5)
+  // ════════════════════════════════════════════════════════════════════════════
+  // WHY THIS WHOLE BLOCK CHANGED:
+  //   The audit (docs/audits/2026-06-16-prd0089-screener-frontend.md §2.5) found
+  //   the screener had TWO column lists that must agree but had silently drifted:
+  //     1. The AG-Grid ColDefs (components/screener/ag-screener-columns.tsx) —
+  //        these define which columns actually RENDER + their cell renderers.
+  //     2. This DEFAULT_COLUMNS catalogue — the ONLY list ColumnSettingsPopover
+  //        shows the user, and the ONLY set of colIds page.tsx feeds to
+  //        gridApi.applyColumnState() to toggle visibility.
+  //   The drift meant:
+  //     - 16 real ColDefs (all IB-L3 returns, all IB-L4 ownership, the two IB-L5
+  //       intelligence columns, plus `revenue` and `volume`) had NO catalogue
+  //       entry → the user could never reveal them via the ⚙ popover, even though
+  //       the data + renderers existed. Permanently-hidden dead columns.
+  //     - 8 catalogue keys (evEbitda, avgVol, epsTtm, fcf, fcfMargin,
+  //       interestCoverage, netDebtToEbitda, creditRating) had NO matching
+  //       ColDef → toggling them in the popover was a silent no-op (nothing to
+  //       show/hide). Those 8 dead keys are REMOVED below.
   //
-  // FORMATTER MAPPING:
-  //   - "compact"  → 50M / $1.2B style (no decimals on avg-vol, 1dp on FCF).
-  //   - "number"   → fixed 2dp (eps_ttm: 6.32) / fixed 1dp (multiples).
-  //   - "percent"  → 28.4% (FCF margin).
-  //   - "text"     → raw string (credit rating, badge-rendered by colDef).
-  // The popover doesn't use these directly today — they're recorded for the
-  // future legacy TanStack table renderer if it gets resurrected. The AG-Grid
-  // path picks its renderer per-column from ag-screener-columns.tsx.
-  Object.freeze({ key: "avgVol",           label: "Avg Vol",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
-  Object.freeze({ key: "epsTtm",           label: "EPS (TTM)",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
-  Object.freeze({ key: "fcf",              label: "FCF",         sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
-  Object.freeze({ key: "fcfMargin",        label: "FCF Mgn%",    sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
-  Object.freeze({ key: "interestCoverage", label: "Int Cov",     sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
-  Object.freeze({ key: "netDebtToEbitda",  label: "ND/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
-  // creditRating uses a custom badge renderer (no formatter). sortable=false —
-  // see ag-screener-columns.tsx CreditRatingCellRenderer for the rationale
-  // (lexical sort would mis-order tiers).
-  Object.freeze({ key: "creditRating",     label: "Credit Rating", sortable: false, align: "right",                                visible: false }),
+  // RECONCILIATION RULE (now guarded by a test — see
+  //   lib/__tests__/screener-columns.test.ts "ColDef/catalogue parity"):
+  //     The set of catalogue keys MUST exactly equal the set of leaf ColDef
+  //     colIds. Every ColDef is now selectable in the popover; every popover key
+  //     maps to a real ColDef. This invariant cannot silently regress again.
+  //
+  // VISIBILITY POLICY (the 14-column default-visible cap, §6.3):
+  //   The catalogue's `visible` flags are AUTHORITATIVE at runtime — page.tsx's
+  //   applyColumnState() overrides each ColDef's own `hide` default. So even
+  //   though `revenue`/`volume`/`briefScore` ColDefs have no `hide:true`, they
+  //   render HIDDEN until the user opts in, because their catalogue entries are
+  //   visible:false. Only `news7d` is promoted to default-visible (the single
+  //   highest-signal IB-L5 column — see the IB-L5 group comment in
+  //   ag-screener-columns.tsx), keeping the default-visible count at exactly 14.
+  //
+  // WHY `formatter` is omitted on the bar/visual columns (range52w handled above,
+  //   news7d/briefScore/range): those use custom AG-Grid cell renderers, not the
+  //   legacy TanStack formatter path — same convention as `score` above.
+
+  // ── opMargin: opt-in (was already in the catalogue; kept) ───────────────────
+  Object.freeze({ key: "opMargin",      label: "OP MGN%",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+
+  // ── revenue: had a ColDef but NO catalogue entry → could not be hidden. Now
+  //    selectable (opt-in: REV YoY% covers the common case; raw revenue is a
+  //    power-user column). ────────────────────────────────────────────────────
+  Object.freeze({ key: "revenue",       label: "Revenue",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+
+  // ── IB-L3 — Performance / Returns + 52W distance (opt-in) ───────────────────
+  // All 8 had ColDefs + renderers + live server-side filters but were
+  // unreachable from the popover before this fix.
+  Object.freeze({ key: "dist52wHigh",   label: "52W% ↑",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "dist52wLow",    label: "52W% ↓",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "return1m",      label: "1M RTN",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "return3m",      label: "3M RTN",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "return6m",      label: "6M RTN",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "returnYtd",     label: "YTD RTN",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "return1y",      label: "1Y RTN",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "return3y",      label: "3Y RTN",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+
+  // ── IB-L4 — Analyst / Insider / Ownership (opt-in) ──────────────────────────
+  // 5 backend fields + 1 client-derived (analystUpside). All had ColDefs but no
+  // catalogue entry.
+  Object.freeze({ key: "analystTarget",    label: "Analyst Tgt",    sortable: true,  align: "right", formatter: "price" as const,   visible: false }),
+  Object.freeze({ key: "analystUpside",    label: "Analyst Upside", sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "analystConsensus", label: "Consensus",      sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "insiderNet90d",    label: "Insider 90d",    sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  Object.freeze({ key: "instOwn",          label: "Inst Own%",      sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "shortPct",         label: "Short %",        sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+
+  // ── IB-L5 — Intelligence rollup ─────────────────────────────────────────────
+  // news7d is DEFAULT-VISIBLE (the headline intelligence-moat column EQS cannot
+  // express); briefScore is opt-in to stay within the 14-column cap.
+  Object.freeze({ key: "news7d",        label: "News 7d",     sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  Object.freeze({ key: "briefScore",    label: "Brief Score", sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+
+  // ── volume: had a ColDef but no catalogue entry → could not be hidden. Now
+  //    selectable (opt-in). ────────────────────────────────────────────────────
+  Object.freeze({ key: "volume",        label: "Volume",      sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
 ]) as readonly ScreenerColumn[];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

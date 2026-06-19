@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildScreenerFilters } from "../build-filters";
+import { buildScreenerFilters, nlFiltersToFilterState } from "../build-filters";
 import type { FilterState } from "../filter-state";
 import type { ScreenerFilter } from "@/types/api";
 
@@ -545,5 +545,80 @@ describe("buildScreenerFilters — ownership snapshot fields (named-field range)
     expect(f.has_ai_brief).toBe(true);
     expect(f.avg_volume_30d_min).toBe(2_000_000);
     expect(f.short_percent_max).toBe(0.1);
+  });
+});
+
+// ── IB-L5c calendar windows (2026-06-18) ──────────────────────────────────────
+
+describe("buildScreenerFilters — IB-L5c calendar windows", () => {
+  it("maps upcomingEarningsWithinDays to the scalar next_earnings_within_days", () => {
+    // Backend contract: next_earnings_within_days is a SCALAR "≤ N days" filter
+    // (not a _min/_max pair) — fundamental_metrics.py:80. Send N directly.
+    const filters = buildScreenerFilters(makeFilters({ upcomingEarningsWithinDays: 7 }));
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_earnings_within_days).toBe(7);
+    expect(f.next_earnings_within_days_max).toBeUndefined(); // the wrong field must NOT be sent
+    expect(f.metric).toBe("market_capitalization"); // synthetic carrier
+  });
+
+  it("maps upcomingDividendWithinDays to the scalar next_dividend_within_days", () => {
+    const filters = buildScreenerFilters(makeFilters({ upcomingDividendWithinDays: 14 }));
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_dividend_within_days).toBe(14);
+    expect(f.next_dividend_within_days_max).toBeUndefined();
+  });
+
+  it("omits both calendar fields when unset", () => {
+    const filters = buildScreenerFilters(makeFilters({ peMin: 10 }));
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_earnings_within_days).toBeUndefined();
+    expect(f.next_dividend_within_days).toBeUndefined();
+  });
+});
+
+// ── NL-translate reverse mapping (PLAN-0091) ───────────────────────────────────
+
+describe("nlFiltersToFilterState", () => {
+  it("maps a metric range row back to its FilterState min/max pair", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "pe_ratio", min_value: 5, max_value: 20 },
+    ]);
+    expect(fs.peMin).toBe(5);
+    expect(fs.peMax).toBe(20);
+  });
+
+  it("maps multiple metrics + sector across several filter rows", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "market_capitalization", min_value: 10_000_000_000 },
+      { metric: "dividend_yield", min_value: 0.02, sector: "Information Technology" },
+    ]);
+    expect(fs.marketCapMin).toBe(10_000_000_000);
+    expect(fs.divYieldMin).toBe(0.02);
+    expect(fs.sector).toBe("Information Technology");
+  });
+
+  it("maps IB-L5 intelligence named siblings (news + alert)", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "market_capitalization", news_count_7d_min: 5, has_active_alert: true },
+    ]);
+    expect(fs.newsCount7dMin).toBe(5);
+    expect(fs.hasActiveAlert).toBe(true);
+  });
+
+  it("skips unknown metrics without throwing (forward-compatible)", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "some_future_metric_we_dont_know", min_value: 1 },
+      { metric: "pe_ratio", max_value: 15 },
+    ]);
+    // Unknown dropped; known one still applied.
+    expect(fs.peMax).toBe(15);
+  });
+
+  it("returns clean DEFAULT_FILTERS-based state for an empty filter list", () => {
+    const fs = nlFiltersToFilterState([]);
+    expect(fs.search).toBe("");
+    expect(fs.capTier).toBe("ALL");
+    expect(fs.peMin).toBeUndefined();
   });
 });

@@ -2,32 +2,36 @@
  * components/screener/__tests__/IntelligenceFilterGroup.test.tsx
  * (PRD-0089 Wave I-A · Block D · T-IA-12 / IB-L5 update)
  *
- * WHY THIS FILE: IntelligenceFilterGroup ships 7 filter rows. In the IB-L5
- * baseline 5 rows are live (no badge, enabled inputs) and 2 remain backend-
- * pending (badge, disabled input). This file pins both states so a regression
- * that accidentally re-disables a live row (or enables a pending one) cannot
- * ship silently.
+ * WHY THIS FILE: IntelligenceFilterGroup ships 7 filter rows. At the IB-L5c
+ * baseline ALL 7 rows are live (no badge, enabled inputs) — IB-L5c wired the
+ * last 2 calendar rows (upcomingEarnings / upcomingDividend). This file pins
+ * that state so a regression that accidentally re-disables a live row cannot
+ * ship silently, AND verifies the backendReady override still re-gates rows
+ * for incident-rollback scenarios.
  *
  * Test layout:
- *   1. IB-L5 default state — 5 live rows, 2 pending, 2 badges visible.
- *   2. Full override — all 7 backendReady=true → 0 badges.
+ *   1. IB-L5c default state — all 7 rows live, 0 badges visible.
+ *   2. Full override — all 7 backendReady=true → 0 badges (same as default now).
  *   3. Full override — all 7 backendReady=false → 7 badges.
- *   4. Partial override — re-gate one live row → back to 3 badges.
- *   5. Live rows — enabled inputs respond to onChange.
- *   6. Pending rows — inputs are disabled.
+ *   4. Partial override — re-gate one live row → 1 badge.
+ *   5. Live rows — enabled inputs respond to onChange (incl. the 2 calendar rows).
  */
 
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilterGroup";
+import {
+  IntelligenceFilterGroup,
+  computeRollupStaleHours,
+  STALE_ROLLUP_THRESHOLD_MS,
+} from "@/components/screener/IntelligenceFilterGroup";
 import { DEFAULT_FILTERS } from "@/features/screener/lib/filter-state";
 
 // ── IB-L5 default state ───────────────────────────────────────────────────────
 
-describe("IntelligenceFilterGroup — IB-L5 default state (backendReady omitted)", () => {
-  it("shows exactly 2 BackendPendingBadges (upcomingEarnings + upcomingDividend)", () => {
-    // WHY 2: IB_L5_DEFAULTS sets newsCount7d/aiBrief/activeAlert/contradictions/
-    // llmRelevance to true; only upcomingEarnings and upcomingDividend remain false.
+describe("IntelligenceFilterGroup — IB-L5c default state (backendReady omitted)", () => {
+  it("shows ZERO BackendPendingBadges (all 7 rows live at the IB-L5c baseline)", () => {
+    // WHY 0: IB_L5_DEFAULTS now sets ALL 7 flags to true — IB-L5c wired the last
+    // 2 calendar rows (upcomingEarnings + upcomingDividend), so no row is pending.
     render(
       <IntelligenceFilterGroup
         value={DEFAULT_FILTERS}
@@ -35,25 +39,21 @@ describe("IntelligenceFilterGroup — IB-L5 default state (backendReady omitted)
       />,
     );
     // BackendPendingBadge renders with role="status" (see backend-pending-badge.tsx).
-    expect(screen.getAllByRole("status")).toHaveLength(2);
+    expect(screen.queryAllByRole("status")).toHaveLength(0);
   });
 
-  it("renders 2 disabled text inputs for the 2 pending rows", () => {
+  it("renders enabled number inputs for the 2 calendar rows (upcomingEarnings + upcomingDividend)", () => {
     render(
       <IntelligenceFilterGroup
         value={DEFAULT_FILTERS}
         onChange={() => {}}
       />,
     );
-    // WHY /filter \(backend pending\)/i (not /backend pending/i): the
-    // BackendPendingBadge itself also carries aria-label="Backend pending".
-    // Using the input-specific pattern (which includes the word "filter")
-    // isolates just the <input> elements without picking up the badge spans.
-    const pendingInputs = screen.getAllByLabelText(/filter \(backend pending\)/i);
-    expect(pendingInputs).toHaveLength(2);
-    for (const input of pendingInputs) {
-      expect(input).toBeDisabled();
-    }
+    // The two calendar rows are now live number inputs (no longer disabled text).
+    const earningsInput = screen.getByLabelText(/maximum days until next earnings/i);
+    const dividendInput = screen.getByLabelText(/maximum days until next dividend/i);
+    expect(earningsInput).not.toBeDisabled();
+    expect(dividendInput).not.toBeDisabled();
   });
 
   it("renders enabled number inputs for the 3 live numeric-range rows (newsCount7d, contradictions, llmRelevance)", () => {
@@ -163,9 +163,9 @@ describe("IntelligenceFilterGroup — all backendReady=false (original Wave I-A 
 // ── Partial override ──────────────────────────────────────────────────────────
 
 describe("IntelligenceFilterGroup — partial backendReady override", () => {
-  it("re-gating one live row via backendReady adds 1 badge (total 3)", () => {
-    // WHY: verifies the merge logic — IB_L5_DEFAULTS has 5 live rows;
-    // overriding { newsCount7d: false } should give 3 badges (2 defaults + 1 re-gated).
+  it("re-gating one live row via backendReady shows exactly 1 badge", () => {
+    // WHY 1: IB_L5_DEFAULTS now has all 7 rows live; overriding
+    // { newsCount7d: false } re-gates exactly one row → exactly one badge.
     render(
       <IntelligenceFilterGroup
         value={DEFAULT_FILTERS}
@@ -173,7 +173,7 @@ describe("IntelligenceFilterGroup — partial backendReady override", () => {
         backendReady={{ newsCount7d: false }}
       />,
     );
-    expect(screen.getAllByRole("status")).toHaveLength(3);
+    expect(screen.getAllByRole("status")).toHaveLength(1);
   });
 });
 
@@ -254,5 +254,100 @@ describe("IntelligenceFilterGroup — onChange wiring for live rows", () => {
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ contradictionsMin: 2 }),
     );
+  });
+
+  it("Upcoming earnings input calls onChange with upcomingEarningsWithinDays (IB-L5c)", () => {
+    const onChange = vi.fn();
+    render(
+      <IntelligenceFilterGroup
+        value={DEFAULT_FILTERS}
+        onChange={onChange}
+      />,
+    );
+    const earningsInput = screen.getByLabelText(/maximum days until next earnings/i);
+    fireEvent.change(earningsInput, { target: { value: "7" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ upcomingEarningsWithinDays: 7 }),
+    );
+  });
+
+  it("Upcoming dividend input calls onChange with upcomingDividendWithinDays (IB-L5c)", () => {
+    const onChange = vi.fn();
+    render(
+      <IntelligenceFilterGroup
+        value={DEFAULT_FILTERS}
+        onChange={onChange}
+      />,
+    );
+    const dividendInput = screen.getByLabelText(/maximum days until next dividend/i);
+    fireEvent.change(dividendInput, { target: { value: "14" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ upcomingDividendWithinDays: 14 }),
+    );
+  });
+});
+
+// ── IB-L5 stale-data indicator (T-IB5-04) ─────────────────────────────────────
+
+describe("computeRollupStaleHours — defensive freshness logic", () => {
+  const NOW = Date.parse("2026-06-18T12:00:00Z");
+
+  it("returns null for an absent / null / empty timestamp (no-op)", () => {
+    expect(computeRollupStaleHours(undefined, NOW)).toBeNull();
+    expect(computeRollupStaleHours(null, NOW)).toBeNull();
+    expect(computeRollupStaleHours("", NOW)).toBeNull();
+  });
+
+  it("returns null for an unparseable timestamp (never crashes)", () => {
+    expect(computeRollupStaleHours("not-a-date", NOW)).toBeNull();
+  });
+
+  it("returns null when the rollup is fresh (within the 25h threshold)", () => {
+    const tenHoursAgo = new Date(NOW - 10 * 60 * 60 * 1000).toISOString();
+    expect(computeRollupStaleHours(tenHoursAgo, NOW)).toBeNull();
+  });
+
+  it("returns the integer age in hours when stale (past 25h)", () => {
+    const thirtyHoursAgo = new Date(NOW - 30 * 60 * 60 * 1000).toISOString();
+    expect(computeRollupStaleHours(thirtyHoursAgo, NOW)).toBe(30);
+  });
+
+  it("uses 25h as the staleness threshold", () => {
+    expect(STALE_ROLLUP_THRESHOLD_MS).toBe(25 * 60 * 60 * 1000);
+    // Exactly at the threshold = still fresh (boundary is inclusive of fresh).
+    const exactlyAtThreshold = new Date(NOW - STALE_ROLLUP_THRESHOLD_MS).toISOString();
+    expect(computeRollupStaleHours(exactlyAtThreshold, NOW)).toBeNull();
+  });
+});
+
+describe("IntelligenceFilterGroup — stale-data pill rendering", () => {
+  it("does NOT render the stale pill when rollupSyncedAt is omitted", () => {
+    render(<IntelligenceFilterGroup value={DEFAULT_FILTERS} onChange={() => {}} />);
+    // No stale pill text anywhere (all 7 rows live → no badges either).
+    expect(screen.queryByText(/stale/i)).toBeNull();
+  });
+
+  it("does NOT render the stale pill for a fresh timestamp", () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    render(
+      <IntelligenceFilterGroup
+        value={DEFAULT_FILTERS}
+        onChange={() => {}}
+        rollupSyncedAt={oneHourAgo}
+      />,
+    );
+    expect(screen.queryByText(/stale/i)).toBeNull();
+  });
+
+  it("renders the stale pill for a >25h-old timestamp", () => {
+    const thirtyHoursAgo = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+    render(
+      <IntelligenceFilterGroup
+        value={DEFAULT_FILTERS}
+        onChange={() => {}}
+        rollupSyncedAt={thirtyHoursAgo}
+      />,
+    );
+    expect(screen.getByText(/\d+h stale/i)).toBeInTheDocument();
   });
 });

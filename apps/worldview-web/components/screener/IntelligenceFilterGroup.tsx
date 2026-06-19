@@ -60,8 +60,14 @@ export interface IntelligenceBackendReady {
 }
 
 /**
- * IB_L5_DEFAULTS — the post-IB-L5 baseline. All 5 rollup fields are live;
- * the 2 calendar fields still default false.
+ * IB_L5_DEFAULTS — the post-IB-L5c baseline. ALL 7 rollup/calendar fields are
+ * now live.
+ *
+ * WHY upcomingEarnings/upcomingDividend flipped to true (IB-L5c, 2026-06-18):
+ * the L-5c backend shipped the calendar columns next_earnings_within_days /
+ * next_dividend_within_days on instrument_fundamentals_snapshot, so the last 2
+ * BackendPendingBadge rows are wired live (see ROW 6/7 below). No backend-pending
+ * rows remain at the IB-L5c baseline.
  *
  * WHY a named constant (not inline): the test suite imports this to verify
  * the default state without re-declaring it. Keeps tests in sync automatically
@@ -73,8 +79,8 @@ export const IB_L5_DEFAULTS: IntelligenceBackendReady = {
   activeAlert: true,
   contradictions: true,
   llmRelevance: true,
-  upcomingEarnings: false,
-  upcomingDividend: false,
+  upcomingEarnings: true,
+  upcomingDividend: true,
 };
 
 export interface IntelligenceFilterGroupProps {
@@ -83,11 +89,55 @@ export interface IntelligenceFilterGroupProps {
   /** Patch handler — called with the full updated FilterState. */
   onChange: (next: FilterState) => void;
   /**
-   * Per-row gating flags. When omitted, IB_L5_DEFAULTS applies (5 rows live,
-   * 2 still pending). Pass `{ newsCount7d: false }` to re-disable a row if
-   * needed for testing or staged rollouts.
+   * Per-row gating flags. When omitted, IB_L5_DEFAULTS applies (all 7 rows live
+   * at the IB-L5c baseline). Pass `{ newsCount7d: false }` to re-disable a row
+   * if needed for testing or staged rollouts.
    */
   backendReady?: Partial<IntelligenceBackendReady>;
+  /**
+   * IB-L5 stale-data indicator (T-IB5-04). ISO-8601 UTC timestamp of the last
+   * S7→S3 intelligence rollup sync (`intelligence_rollup_synced_at`), read from
+   * the screener response when present.
+   *
+   * WHY OPTIONAL + DEFENSIVE: a sibling agent is adding this field to the API;
+   * it may be absent (older payloads, field not yet shipped). The stale pill
+   * renders ONLY when the value parses to a real date AND its age exceeds the
+   * 25h freshness threshold (the rollup runs nightly, so >25h means a missed
+   * run). Absent/unparseable/fresh → nothing renders (no-op), so this never
+   * shows a misleading "stale" warning on healthy or unknown data.
+   */
+  rollupSyncedAt?: string | null;
+}
+
+/**
+ * STALE_ROLLUP_THRESHOLD_MS — age past which the intelligence rollup is "stale".
+ *
+ * WHY 25h: the L-5b/L-5c rollup is a nightly job. One full day plus a 1h grace
+ * window means the pill only fires when a scheduled run was actually MISSED,
+ * not merely because the clock crossed midnight. Exported so a test can pin the
+ * threshold without re-deriving the arithmetic.
+ */
+export const STALE_ROLLUP_THRESHOLD_MS = 25 * 60 * 60 * 1000;
+
+/**
+ * computeRollupStaleHours — pure helper: given the sync timestamp and "now",
+ * return the integer age in hours IF the data is stale, else null.
+ *
+ * WHY a pure exported function (not inline in the component): it encodes the
+ * entire "should we warn?" decision (parse-guard + threshold) in one testable
+ * unit, so the defensive behaviour (absent / unparseable / fresh → null) is
+ * pinned by tests rather than buried in JSX.
+ */
+export function computeRollupStaleHours(
+  rollupSyncedAt: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!rollupSyncedAt) return null; // absent / null / "" → no-op
+  const synced = Date.parse(rollupSyncedAt);
+  if (Number.isNaN(synced)) return null; // unparseable → no-op (never crash)
+  const ageMs = now - synced;
+  if (ageMs <= STALE_ROLLUP_THRESHOLD_MS) return null; // fresh → no pill
+  return Math.floor(ageMs / (60 * 60 * 1000));
 }
 
 // ── Internal shared style helpers ─────────────────────────────────────────────
@@ -109,7 +159,11 @@ export function IntelligenceFilterGroup({
   value,
   onChange,
   backendReady,
+  rollupSyncedAt,
 }: IntelligenceFilterGroupProps) {
+  // IB-L5 stale-data indicator (T-IB5-04). null when fresh/absent/unparseable
+  // (the common case) → the pill is not rendered at all.
+  const staleHours = computeRollupStaleHours(rollupSyncedAt);
   // WHY merge with IB_L5_DEFAULTS (not with all-false): the parent may pass
   // a partial override (e.g. `{ newsCount7d: false }` to re-gate one field
   // during an incident). Missing keys inherit the IB-L5 live baseline.
@@ -129,7 +183,10 @@ export function IntelligenceFilterGroup({
     rangeCount(value.displayRelevance7dMin, value.displayRelevance7dMax) +
     rangeCount(value.contradictionsMin, value.contradictionsMax) +
     (value.hasAiBrief === true ? 1 : 0) +
-    (value.hasActiveAlert === true ? 1 : 0);
+    (value.hasActiveAlert === true ? 1 : 0) +
+    // IB-L5c calendar windows — each set "≤ N days" counts as one active filter.
+    (value.upcomingEarningsWithinDays !== undefined ? 1 : 0) +
+    (value.upcomingDividendWithinDays !== undefined ? 1 : 0);
 
   // ── Patch helper ──────────────────────────────────────────────────────────
   // WHY spread-merge (not Object.assign): keeps `value` immutable and produces
@@ -147,7 +204,25 @@ export function IntelligenceFilterGroup({
   }
 
   return (
-    <Section title="Intelligence" activeCount={activeCount}>
+    <Section
+      title="Intelligence"
+      activeCount={activeCount}
+      headerExtra={
+        // Stale-data pill — only mounts when the rollup is provably stale
+        // (>25h). WHY warning tint + title tooltip: it is an advisory, not an
+        // error — the filters still work, but the intelligence signals may be
+        // up to N hours old. The native `title` gives a zero-dependency hover.
+        staleHours != null ? (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1 rounded-[2px] bg-warning/10 px-1 py-px text-[9px] font-mono uppercase tracking-[0.06em] text-warning"
+            title={`Intelligence rollup last synced ${staleHours}h ago — signals may be stale (nightly sync expected within 24h).`}
+          >
+            {staleHours}h stale
+          </span>
+        ) : undefined
+      }
+    >
       <div className="flex flex-col gap-1.5">
 
         {/* ── ROW 1: NEWS COUNT 7D (IB-L5 ✓) ─────────────────────────────
@@ -286,31 +361,50 @@ export function IntelligenceFilterGroup({
           {!ready.llmRelevance && <BackendPendingBadge />}
         </div>
 
-        {/* ── ROW 6: UPCOMING EARNINGS (future — backend pending) ──────────
-          * Placeholder: S3 earnings calendar field not yet in the rollup.
-          * WHY still rendered: discoverability (users see the roadmap). */}
+        {/* ── ROW 6: UPCOMING EARNINGS (IB-L5c ✓) ─────────────────────────
+          * Integer "≤ N days" filter → next_earnings_within_days.
+          * WHY only a max ("≤"): the canonical query is "names reporting in the
+          * next N days" (an upper bound). build-filters maps it to the backend's
+          * next_earnings_within_days_max named sibling. */}
         <div className="flex items-center gap-2 h-6" aria-disabled={!ready.upcomingEarnings}>
           <span className={labelCls}>Earnings ≤</span>
           <input
-            type="text"
-            aria-label="Earnings filter (backend pending)"
+            type="number"
+            min={0}
+            step={1}
+            aria-label={
+              ready.upcomingEarnings
+                ? "Maximum days until next earnings"
+                : "Earnings filter (backend pending)"
+            }
             placeholder="days"
-            disabled
-            className={inputDisabledCls}
+            disabled={!ready.upcomingEarnings}
+            value={value.upcomingEarningsWithinDays ?? ""}
+            onChange={(e) => patch({ upcomingEarningsWithinDays: parseNum(e.target.value) })}
+            className={ready.upcomingEarnings ? inputCls : inputDisabledCls}
           />
           {!ready.upcomingEarnings && <BackendPendingBadge />}
         </div>
 
-        {/* ── ROW 7: UPCOMING DIVIDEND (future — backend pending) ───────────
-          * Placeholder: S3 dividend calendar field not yet in the rollup. */}
+        {/* ── ROW 7: UPCOMING DIVIDEND (IB-L5c ✓) ──────────────────────────
+          * Integer "≤ N days" filter → next_dividend_within_days. Same
+          * upper-bound pattern as the earnings row above. */}
         <div className="flex items-center gap-2 h-6" aria-disabled={!ready.upcomingDividend}>
           <span className={labelCls}>Dividend ≤</span>
           <input
-            type="text"
-            aria-label="Dividend filter (backend pending)"
+            type="number"
+            min={0}
+            step={1}
+            aria-label={
+              ready.upcomingDividend
+                ? "Maximum days until next dividend"
+                : "Dividend filter (backend pending)"
+            }
             placeholder="days"
-            disabled
-            className={inputDisabledCls}
+            disabled={!ready.upcomingDividend}
+            value={value.upcomingDividendWithinDays ?? ""}
+            onChange={(e) => patch({ upcomingDividendWithinDays: parseNum(e.target.value) })}
+            className={ready.upcomingDividend ? inputCls : inputDisabledCls}
           />
           {!ready.upcomingDividend && <BackendPendingBadge />}
         </div>

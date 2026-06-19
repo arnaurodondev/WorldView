@@ -4,6 +4,7 @@
 
 import type {
   ScreenerField,
+  ScreenerFilter,
   ScreenerRequest,
   ScreenerResponse,
   ScreenerResult,
@@ -250,6 +251,18 @@ export function createScreenerApi(t: string | undefined) {
           recent_contradiction_count: num(
             metrics["recent_contradiction_count"] ?? row["recent_contradiction_count"],
           ),
+          // ── IB-L5 stale-data indicator (T-IB5-04) ───────────────────────────
+          // WHY propagated even though no renderer reads it: the screener page
+          // reads `intelligence_rollup_synced_at` off the first row to drive the
+          // IntelligenceFilterGroup "N h stale" pill. Without forwarding it here
+          // the field would be dropped by the flatten step (the spread does NOT
+          // include unmapped keys), so the pill could never fire. Defensive:
+          // resolves to a string when the backend (sibling agent's work) ships
+          // it, otherwise stays undefined and the pill no-ops.
+          intelligence_rollup_synced_at:
+            (row["intelligence_rollup_synced_at"] as string | undefined) ??
+            (metrics["intelligence_rollup_synced_at"] as string | undefined) ??
+            null,
           // WHY ScreenerRowEnriched (not plain ScreenerResult): the three
           // Wave-2 fields above (volume, high_52w, low_52w) are typed on the
           // local extension interface — the cast documents that every
@@ -265,6 +278,43 @@ export function createScreenerApi(t: string | undefined) {
         offset: (request as { offset?: number }).offset ?? 0,
         limit: (request as { limit?: number }).limit ?? flattened.length,
       };
+    },
+
+    /**
+     * nlTranslate — natural-language → screener filters (PLAN-0091).
+     *
+     * WHY THIS EXISTS: the backend POST /v1/screener/nl-translate is shipped but
+     * was under-surfaced. It turns a plain-English prompt ("large cap tech with
+     * P/E under 20 and a dividend") into structured ScreenerFilter[] the existing
+     * screen endpoint already understands. This is a genuine EQS-beating
+     * affordance — Bloomberg has no NL screen builder.
+     *
+     * WHY a DEFENSIVE response parse (not a strict typed contract): the exact
+     * response envelope is owned by the backend agent and may evolve. We tolerate
+     * the two plausible shapes — a top-level `filters` array, or one nested under
+     * `result` — and surface the raw `ScreenerFilter[]` for the caller to apply.
+     * `explanation` (if present) lets the UI echo back how it interpreted the
+     * query. Anything unparseable yields an empty filter list (the caller treats
+     * that as "no constraints understood" rather than crashing).
+     */
+    async nlTranslate(
+      query: string,
+    ): Promise<{ filters: ScreenerFilter[]; explanation?: string }> {
+      const raw = await apiFetch<
+        {
+          filters?: ScreenerFilter[];
+          result?: { filters?: ScreenerFilter[] };
+          explanation?: string;
+        } & Record<string, unknown>
+      >("/v1/screener/nl-translate", {
+        method: "POST",
+        body: { query },
+        token: t,
+      });
+      const filters = raw.filters ?? raw.result?.filters ?? [];
+      const explanation =
+        typeof raw.explanation === "string" ? raw.explanation : undefined;
+      return { filters, explanation };
     },
   };
 }

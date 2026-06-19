@@ -191,6 +191,17 @@ export interface FilterState {
   contradictionsMax?: number;
   hasAiBrief?: boolean;                 // has_ai_brief (BOOLEAN, TRUE = brief exists in S8)
   hasActiveAlert?: boolean;             // has_active_alert (BOOLEAN, TRUE = live alert in S10)
+
+  // ── Calendar windows (SERVER_SIDE — IB-L5c) ─────────────────────────────────
+  // WHY these 2 fields: L-5c shipped the earnings/dividend calendar columns on
+  // instrument_fundamentals_snapshot (next_earnings_within_days /
+  // next_dividend_within_days). They are "≤ N days" upper-bound filters — the
+  // canonical query is "names reporting earnings in the next 7 days". Both are
+  // INTEGER day-counts; the backend exposes them as per-filter named siblings of
+  // min_value/max_value on ScreenFilterRequest (same merge pattern as the rest
+  // of the intelligence rollup block above).
+  upcomingEarningsWithinDays?: number;  // next_earnings_within_days (≤ N days)
+  upcomingDividendWithinDays?: number;  // next_dividend_within_days (≤ N days)
 }
 
 /** DEFAULT_FILTERS — used by the page initial state and the Reset button. */
