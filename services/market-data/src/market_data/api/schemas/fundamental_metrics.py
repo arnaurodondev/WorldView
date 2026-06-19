@@ -102,6 +102,19 @@ class ScreenFilterRequest(BaseModel):
     return_1y_max: float | None = None
     return_3y_min: float | None = None
     return_3y_max: float | None = None
+    # ── L-3 ops follow-up: realised volatility + adjusted-close quality ───────
+    # ``volatility_30d`` = annualised stddev of daily returns over the last 30
+    # trading days (a fraction, e.g. 0.35 = 35% annualised vol). Range filter so
+    # callers can screen "low-vol quality" or "high-vol momentum".
+    volatility_30d_min: float | None = None
+    volatility_30d_max: float | None = None
+    # ``returns_adjustment_quality`` = 1.0 when the instrument's returns are
+    # computed on real split/dividend-adjusted close, 0.0 when they fell back to
+    # raw close (and so may be wrong across corporate actions). Filter
+    # ``returns_adjustment_quality_min=1.0`` to screen to instruments with
+    # trustworthy (adjusted) returns only.
+    returns_adjustment_quality_min: float | None = None
+    returns_adjustment_quality_max: float | None = None
     # ── Wave L-4b: insider 90d rollup range filter ──────────────────────────
     # Inclusive min/max on ``instrument_fundamentals_snapshot.insider_net_buy_90d``.
     # Negative values are valid (net selling); the column is signed.

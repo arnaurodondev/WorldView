@@ -221,6 +221,9 @@ async def screen_instruments(
         "return_ytd",
         "return_1y",
         "return_3y",
+        # L-3 ops follow-up: realised volatility + adjusted-close quality flag.
+        "volatility_30d",
+        "returns_adjustment_quality",
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
@@ -304,17 +307,25 @@ async def screen_instruments(
         "return_ytd",
         "return_1y",
         "return_3y",
+        # L-3 ops follow-up: realised volatility + adjusted-close quality flag.
+        "volatility_30d",
+        "returns_adjustment_quality",
     )
     existing_filter_metrics = {f.metric for f in screen_filters}
     for _field in computed_fields:
         min_attr = f"{_field}_min"
         max_attr = f"{_field}_max"
+        # ``getattr(..., None)`` default: not every computed field has a dedicated
+        # ``<field>_min/_max`` on ScreenFilterRequest (e.g. the return metrics are
+        # expanded purely for sort/projection, with no shorthand range input). The
+        # default keeps the loop from raising AttributeError on those fields while
+        # still picking up the explicit shorthand where it exists (volatility_30d).
         _min = next(
-            (getattr(f, min_attr) for f in body.filters if getattr(f, min_attr) is not None),
+            (getattr(f, min_attr, None) for f in body.filters if getattr(f, min_attr, None) is not None),
             None,
         )
         _max = next(
-            (getattr(f, max_attr) for f in body.filters if getattr(f, max_attr) is not None),
+            (getattr(f, max_attr, None) for f in body.filters if getattr(f, max_attr, None) is not None),
             None,
         )
         # Also inject a no-bound filter if sort_by references the metric so the

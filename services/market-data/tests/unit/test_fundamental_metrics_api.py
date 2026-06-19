@@ -11,7 +11,7 @@ Covers:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -365,6 +365,34 @@ def test_screen_no_results_returns_empty() -> None:
     assert body["count"] == 0
     assert body["total"] == 0
     assert body["results"] == []
+
+
+def test_screen_projects_intelligence_rollup_synced_at_as_iso_string() -> None:
+    """L-5b freshness: ``intelligence_rollup_synced_at`` is serialised to ISO-8601.
+
+    The query layer projects the snapshot ``timestamptz`` column into the
+    ``ScreenResult.metrics`` dict as a Python ``datetime``; the router must emit
+    it as an ISO-8601 string (datetime is a subclass of ``date`` so the existing
+    ``isinstance(v, date)`` branch handles it). This unblocks the IB-L5 stale-data
+    tooltip, which previously always received ``null``.
+    """
+    from datetime import datetime
+
+    synced = datetime(2026, 6, 18, 4, 0, 0, tzinfo=UTC)
+    results = [
+        ScreenResult(
+            instrument_id="instr-001",
+            metrics={"pe_ratio": Decimal("15.0"), "intelligence_rollup_synced_at": synced},
+        ),
+    ]
+    _, client = _make_app(mock_screen_uc=_make_screen_uc(results, total=1))
+    resp = client.post("/api/v1/fundamentals/screen", json={"filters": []})
+    assert resp.status_code == 200
+    body = resp.json()
+    metrics = body["results"][0]["metrics"]
+    # Serialised as an ISO-8601 string, NOT coerced to float (which would crash)
+    # and NOT silently dropped.
+    assert metrics["intelligence_rollup_synced_at"] == synced.isoformat()
 
 
 # ── GET /fundamentals/metrics/{instrument_id} ─────────────────────────────────

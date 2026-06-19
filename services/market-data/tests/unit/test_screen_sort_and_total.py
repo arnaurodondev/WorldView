@@ -431,6 +431,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     Wave L-3 added 8 computed OHLCV-derived metrics → 37.
     Wave L-4b added ``insider_net_buy_90d`` → 38.
     Wave L-5b added 6 intelligence rollup fields → 44.
+    L-3 ops follow-up added ``volatility_30d`` (migration 041) → 45.
     The test name is historical (original assertion was =12); the assertion
     has been migrated through each L-wave per R19 (never delete tests).
     """
@@ -444,8 +445,10 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "fields" in body
-    assert len(body["fields"]) == 44
+    assert len(body["fields"]) == 45
     names = {f["name"] for f in body["fields"]}
+    # L-3 ops follow-up: realised volatility
+    assert "volatility_30d" in names
     # Original fields still present
     assert "pe_ratio" in names
     assert "current_ratio" in names

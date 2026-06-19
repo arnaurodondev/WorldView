@@ -24,7 +24,7 @@ Also covers the snapshot writer side:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -228,6 +228,56 @@ async def test_query_screen_result_includes_calendar_fields_when_present() -> No
     r = results[0]
     assert r.metrics.get("next_earnings_date") == date(2026, 2, 12)
     assert r.metrics.get("next_dividend_date") == date(2026, 2, 25)
+
+
+@pytest.mark.asyncio
+async def test_query_screen_projects_intelligence_rollup_synced_at() -> None:
+    """L-5b: ``intelligence_rollup_synced_at`` snapshot column is projected.
+
+    Regression guard for the residual L-5b gap (audit 2026-06-16-l5b): the
+    freshness stamp lived in the ORM model + migration 035 but was never added
+    to ``_SNAP_FIELDS``, so it never reached the screener response and the IB-L5
+    stale-data tooltip always saw ``null``.
+    """
+    from datetime import datetime
+
+    synced = datetime(2026, 6, 18, 4, 0, 0, tzinfo=UTC)
+    row = MagicMock()
+    row.instrument_id = "instr-int"
+    row.ticker = "AAPL"
+    row.name = "Apple Inc."
+    row.exchange = "NASDAQ"
+    row.sector = "Technology"
+    row.total_count = 1
+    row.pe_ratio = 25.0
+    # All other snap fields NULL so only the freshness stamp surfaces.
+    for sf in (
+        "avg_volume_30d",
+        "eps_ttm",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+        "credit_rating",
+        "next_earnings_date",
+        "next_dividend_date",
+    ):
+        setattr(row, f"snap_{sf}", None)
+    row.snap_intelligence_rollup_synced_at = synced
+
+    session = _make_capture_session_with_rows([row])
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    results, _ = await query_screen(session, filters)
+
+    assert results[0].metrics.get("intelligence_rollup_synced_at") == synced
+
+
+def test_intelligence_rollup_synced_at_registered_in_snap_fields() -> None:
+    """Static guard: the field is in ``_SNAP_FIELDS`` (projection driver)."""
+    from market_data.infrastructure.db.repositories.fundamental_metrics_query import _SNAP_FIELDS
+
+    assert "intelligence_rollup_synced_at" in _SNAP_FIELDS
 
 
 @pytest.mark.asyncio

@@ -141,6 +141,99 @@ async def test_backfill_idempotent_summary_contract() -> None:
     assert s1.instruments_processed == s2.instruments_processed
 
 
+def _make_dispatch_session_factory(
+    rows_by_sql_substring: dict[str, list[dict[str, Any]]],
+) -> tuple[Any, list[Any]]:
+    """Build a session_factory that returns rows when the SQL contains a key.
+
+    ``rows_by_sql_substring`` maps a unique SQL substring (e.g. ``"STDDEV_SAMP"``)
+    to the rows that query should return on its FIRST batch (subsequent batches
+    return empty so the loop terminates). All other queries return empty.
+
+    Returns (factory, upserted_metric_rows) where the second element accumulates
+    every MetricRow passed to ``repo.upsert_metrics`` so a test can assert which
+    metric names were written.
+    """
+    upserted: list[Any] = []
+    served: set[str] = set()
+
+    async def _execute(stmt: Any, _params: Any | None = None) -> MagicMock:
+        sql = str(stmt)
+        out: list[dict[str, Any]] = []
+        for needle, rows in rows_by_sql_substring.items():
+            if needle in sql and needle not in served:
+                served.add(needle)
+                out = rows
+                break
+        result = MagicMock()
+        result.mappings = MagicMock(return_value=MagicMock(all=MagicMock(return_value=out)))
+        result.all = MagicMock(return_value=out)
+        return result
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    session.commit = AsyncMock()
+
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    return factory, upserted
+
+
+@pytest.mark.asyncio
+async def test_backfill_emits_volatility_30d_metric(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker computes and upserts a ``volatility_30d`` metric row."""
+    import market_data.infrastructure.db.computed_metrics_worker as worker_mod
+
+    captured: list[Any] = []
+
+    async def _capture_upsert(self: Any, rows: list[Any]) -> None:
+        captured.extend(rows)
+
+    monkeypatch.setattr(worker_mod.PgFundamentalMetricsRepository, "upsert_metrics", _capture_upsert)
+
+    # The volatility SQL is uniquely identifiable by STDDEV_SAMP.
+    vol_rows = [{"instrument_id": "inst-1", "as_of_date": date(2026, 6, 18), "value_numeric": 0.42}]
+    factory, _ = _make_dispatch_session_factory({"STDDEV_SAMP": vol_rows})
+
+    await run_computed_metrics_backfill(factory)
+
+    vol = [r for r in captured if r.metric == "volatility_30d"]
+    assert len(vol) == 1
+    assert vol[0].value_numeric == Decimal("0.42")
+    assert vol[0].as_of_date == date(2026, 6, 18)
+
+
+@pytest.mark.asyncio
+async def test_backfill_emits_returns_adjustment_quality_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker writes a per-instrument 0.0/1.0 adjustment-quality flag.
+
+    0.0 (raw-close fallback) must NOT be dropped as "no data" — it is a real,
+    informative value the screener uses to badge unadjusted returns.
+    """
+    import market_data.infrastructure.db.computed_metrics_worker as worker_mod
+
+    captured: list[Any] = []
+
+    async def _capture_upsert(self: Any, rows: list[Any]) -> None:
+        captured.extend(rows)
+
+    monkeypatch.setattr(worker_mod.PgFundamentalMetricsRepository, "upsert_metrics", _capture_upsert)
+
+    # The quality SQL is uniquely identifiable by the CASE WHEN adjusted_close.
+    quality_rows = [
+        {"instrument_id": "inst-adj", "as_of_date": date(2026, 6, 18), "value_numeric": 1.0},
+        {"instrument_id": "inst-raw", "as_of_date": date(2026, 6, 18), "value_numeric": 0.0},
+    ]
+    factory, _ = _make_dispatch_session_factory({"WHEN latest.adjusted_close IS NULL": quality_rows})
+
+    await run_computed_metrics_backfill(factory)
+
+    quality = {r.instrument_id: r.value_numeric for r in captured if r.metric == "returns_adjustment_quality"}
+    assert quality == {"inst-adj": Decimal("1.0"), "inst-raw": Decimal("0.0")}
+
+
 @pytest.mark.asyncio
 async def test_backfill_options_continue_on_error_true_by_default() -> None:
     """Default ComputedMetricsBackfillOptions has continue_on_error=True."""

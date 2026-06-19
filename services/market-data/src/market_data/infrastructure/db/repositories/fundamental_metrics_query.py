@@ -69,6 +69,13 @@ _KEY_METRICS: tuple[str, ...] = (
     "return_ytd",
     "return_1y",
     "return_3y",
+    # L-3 ops follow-up: 30-trading-day annualised realised volatility +
+    # per-instrument adjusted-close data-quality flag (1.0 adjusted / 0.0
+    # raw-close fallback). Both are SNAPSHOT-period fundamental_metrics rows
+    # written by computed_metrics_worker. ``returns_adjustment_quality`` lets
+    # the screener badge "unadjusted" instead of silently showing wrong returns.
+    "volatility_30d",
+    "returns_adjustment_quality",
 )
 
 # Snapshot metric columns selected from instrument_fundamentals_snapshot (L-2).
@@ -106,6 +113,15 @@ _SNAP_FIELDS: tuple[str, ...] = (
     "recent_contradiction_count",
     "has_active_alert",
     "has_ai_brief",
+    # Freshness stamp for the intelligence rollup (migration 035). Projected so
+    # the IB-L5 stale-data tooltip can show "Intel as of <ts> — N h old" and turn
+    # amber when ``now - synced_at`` exceeds the nightly cadence. It is a
+    # ``timestamptz`` column; the router serialises ``datetime`` via
+    # ``isinstance(v, date)`` (datetime is a subclass of date) → ISO-8601 string.
+    # NULL means the rollup has never run for this instrument. NOT sortable /
+    # filterable — display-only freshness metadata (so it is intentionally absent
+    # from the sort/filter whitelists in the router and query WHERE-clauses).
+    "intelligence_rollup_synced_at",
 )
 
 if TYPE_CHECKING:

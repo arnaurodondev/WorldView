@@ -438,6 +438,20 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # ── L-3 ops follow-up: 30-trading-day realised volatility ────────────
+        # The 8th computed metric (the runbook/plan said "8 metrics" but the
+        # worker historically emitted 7). LOCK-STEP with migration 041's seed
+        # row — divergence makes the 6h refresh loop silently overwrite it.
+        ScreenFieldMetadata(
+            name="volatility_30d",
+            label="VOL 30D",
+            field_type="numeric",
+            unit="percent_1",
+            description="Annualised realised volatility over the trailing 30 trading days (a fraction)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
         # ── Wave L-4b: insider 90d rollup column ─────────────────────────────
         # field_type='numeric' (CHECK constraint admits only 'numeric'/'text');
         # unit='currency_compact' → frontend renders compact $1.2M / $5B.
@@ -693,6 +707,14 @@ async def _intelligence_rollup_loop(
 _COMPUTED_METRICS_MIN_INTERVAL_SECONDS = 20 * 3600
 _COMPUTED_METRICS_RETRY_SECONDS = 300  # 5-min back-off on failure
 _COMPUTED_METRICS_DEFAULT_HOUR_UTC = 2
+# Watchdog: a single backfill run must finish well within the daily window. At
+# current scale a run is ~5s; we cap it at 1h so a wedged asyncpg connection (no
+# statement timeout inside the worker) raises TimeoutError into the loop's
+# except branch — incrementing the ``failed`` counter — instead of hanging the
+# scheduler forever and silently aging the screener data (audit §5.2 Lens 2).
+_COMPUTED_METRICS_RUN_TIMEOUT_SECONDS = 3600
+# Stable identifier for the durable last-success row in ``worker_runs``.
+_COMPUTED_METRICS_WORKER_NAME = "computed_metrics_backfill"
 
 
 def _seconds_until_next_hour_utc(target_hour: int, now: object) -> float:
@@ -726,9 +748,21 @@ async def _computed_metrics_refresh_loop(
     var, 0-23, default 2). The 20-hour minimum-interval guard prevents
     duplicate runs after a container restart inside the same daily window.
     """
+    from datetime import datetime as _dt
+
     from common.time import utc_now  # type: ignore[import-untyped]
     from market_data.infrastructure.db.computed_metrics_worker import (
         run_computed_metrics_backfill,
+    )
+    from market_data.infrastructure.db.worker_runs import read_last_success, record_success
+    from market_data.infrastructure.metrics.prometheus import (
+        computed_metrics_worker_fallback_adjusted_close_ratio as _fallback_ratio_gauge,
+    )
+    from market_data.infrastructure.metrics.prometheus import (
+        computed_metrics_worker_last_success_timestamp_utc_seconds as _last_success_gauge,
+    )
+    from market_data.infrastructure.metrics.prometheus import (
+        computed_metrics_worker_runs_total as _runs_total,
     )
 
     # Read schedule hour from env once at startup. Out-of-range values fall back
@@ -745,7 +779,16 @@ async def _computed_metrics_refresh_loop(
         )
         target_hour = _COMPUTED_METRICS_DEFAULT_HOUR_UTC
 
-    last_success_at: object | None = None  # datetime | None — kept as object for forward-ref typing
+    # Seed the skip-guard + liveness gauge from the DURABLE store so they survive
+    # a container restart (audit §5.2 Lens 2: the old in-process variable was
+    # wiped on every restart, defeating the very guard it backed).
+    last_success_at: _dt | None = await read_last_success(write_factory, _COMPUTED_METRICS_WORKER_NAME)
+    if last_success_at is not None:
+        _last_success_gauge.set(last_success_at.timestamp())
+        log.info(  # type: ignore[attr-defined]
+            "computed_metrics_last_success_loaded",
+            last_success_at=last_success_at.isoformat(),
+        )
 
     while True:
         try:
@@ -753,13 +796,11 @@ async def _computed_metrics_refresh_loop(
             sleep_seconds = _seconds_until_next_hour_utc(target_hour, now)
             await asyncio.sleep(sleep_seconds)
 
-            # 20-hour minimum-interval guard. Cheap defence against the loop
-            # waking up twice in the same 24-hour window after a container restart.
+            # 20-hour minimum-interval guard. Now durable (seeded from worker_runs
+            # above), so it correctly suppresses a double-run inside the same 24h
+            # window even immediately after a container restart.
             now_after_sleep = utc_now()
             if last_success_at is not None:
-                from datetime import datetime as _dt  # local import to keep top of file lean
-
-                assert isinstance(last_success_at, _dt)
                 delta = (now_after_sleep - last_success_at).total_seconds()
                 if delta < _COMPUTED_METRICS_MIN_INTERVAL_SECONDS:
                     log.info(  # type: ignore[attr-defined]
@@ -767,17 +808,40 @@ async def _computed_metrics_refresh_loop(
                         last_success_at=last_success_at.isoformat(),
                         seconds_since=delta,
                     )
+                    _runs_total.labels(outcome="skipped").inc()
                     continue
 
-            summary = await run_computed_metrics_backfill(write_factory)
-            last_success_at = utc_now()
+            # Watchdog: bound the run so a wedged connection raises instead of
+            # hanging the scheduler forever (audit §5.2 recommendation 5).
+            summary = await asyncio.wait_for(
+                run_computed_metrics_backfill(write_factory),
+                timeout=_COMPUTED_METRICS_RUN_TIMEOUT_SECONDS,
+            )
+
+            completed_at = utc_now()
+            last_success_at = completed_at
+            # Persist durably FIRST so a crash before the next iteration does not
+            # lose the success record (and thus re-run unnecessarily on restart).
+            await record_success(write_factory, _COMPUTED_METRICS_WORKER_NAME, completed_at)
+
+            # Observability: liveness gauge + success counter + data-quality canary.
+            _last_success_gauge.set(completed_at.timestamp())
+            _runs_total.labels(outcome="success").inc()
+            if summary.instruments_processed > 0:
+                _fallback_ratio_gauge.set(summary.fallback_adjusted_close_count / summary.instruments_processed)
+
             log.info(  # type: ignore[attr-defined]
                 "computed_metrics_refresh_completed",
                 instruments_processed=summary.instruments_processed,
                 metrics_written=summary.metrics_written,
                 runtime_seconds=summary.runtime_seconds,
+                fallback_adjusted_close_count=summary.fallback_adjusted_close_count,
             )
         except Exception as exc:
+            # Covers both a raised backfill AND the watchdog asyncio.TimeoutError
+            # (a hung run): both increment the ``failed`` counter so a wedged
+            # nightly refresh is visible rather than silently aging the data.
+            _runs_total.labels(outcome="failed").inc()
             log.error("computed_metrics_refresh_error", error=str(exc))  # type: ignore[attr-defined]
             await asyncio.sleep(_COMPUTED_METRICS_RETRY_SECONDS)
 

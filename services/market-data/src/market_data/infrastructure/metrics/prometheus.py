@@ -7,7 +7,7 @@ consumer where a hand-readable name aids dashboard discovery.
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # ── Cache counters ────────────────────────────────────────────────────────────
 
@@ -71,4 +71,47 @@ tape_symbol_data_source = Counter(
     "tape_symbol_data_source_total",
     "Which fallback tier served each tape symbol (intraday/prior_close/unavailable).",
     labelnames=("symbol", "source"),
+)
+
+
+# ── Computed-metrics nightly worker — liveness + outcome + data-quality ───────
+# PLAN-0089 L-3 ops follow-up (audit 2026-06-16-prd0089-l3-computed-metrics-ops
+# §5.2). The nightly ComputedMetricsBackfillWorker feeds the IB-L3 screener
+# Returns + 52W-distance columns. Without instrumentation a silent stall (a
+# wedged connection or an unraised hang) ages ``fundamental_metrics`` invisibly
+# while the screener keeps rendering last-good values — the textbook
+# "all-green / silent stall" pattern this codebase has repeatedly been bitten by.
+#
+# Liveness gauge: the UTC epoch seconds of the last SUCCESSFUL run. Seeded on
+# boot from the durable ``worker_runs`` row so a restart reports the real age
+# immediately. Alert: ``time() - <gauge> > 26*3600`` (one daily cadence + slack)
+# converts "silently 3 days stale" into a page.
+computed_metrics_worker_last_success_timestamp_utc_seconds = Gauge(
+    "computed_metrics_worker_last_success_timestamp_utc_seconds",
+    "UTC epoch seconds of the last successful computed-metrics backfill run. "
+    "Alert when (time() - this) exceeds ~26h (one daily cadence + slack).",
+)
+
+# Run-outcome counter. ``outcome`` is one of:
+#   success — the backfill completed and wrote metrics.
+#   skipped — the 20h minimum-interval guard short-circuited the run.
+#   failed  — the run raised OR exceeded the watchdog timeout (asyncio.wait_for).
+# Dashboard: rate(computed_metrics_worker_runs_total{outcome="failed"}[1d]) > 0.
+computed_metrics_worker_runs_total = Counter(
+    "computed_metrics_worker_runs_total",
+    "Computed-metrics backfill run outcomes (success/skipped/failed).",
+    labelnames=("outcome",),
+)
+
+# Data-quality canary: fraction of processed instruments where the worker had to
+# fall back to raw ``close`` because ``adjusted_close`` was NULL (split/dividend
+# adjustment missing upstream). At ~0.92 today this should fire — it ties the
+# screener's returns correctness to the OHLCV-adjustment pipeline (audit §7.3 /
+# Lens 3). Range 0.0 (all adjusted) .. 1.0 (all raw-close fallback).
+computed_metrics_worker_fallback_adjusted_close_ratio = Gauge(
+    "computed_metrics_worker_fallback_adjusted_close_ratio",
+    "Fraction of instruments whose computed returns used raw close because "
+    "adjusted_close was NULL (1.0 = all unadjusted). High = upstream "
+    "split/dividend-adjustment gap; screener returns are wrong across "
+    "split/dividend events for those names.",
 )

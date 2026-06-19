@@ -144,8 +144,9 @@ def test_app_static_field_matches_expected(field_name: str) -> None:
     assert f.description == exp_desc, f"{field_name} description: got {f.description!r}, expected {exp_desc!r}"
 
 
-def test_static_field_count_is_44() -> None:
-    """Total field count must be 38 (pre-L5b) + 6 (L-5b) = 44."""
+def test_static_field_count_is_45() -> None:
+    """Total field count: 38 (pre-L5b) + 6 (L-5b) + 1 (volatility_30d, L-3 ops
+    follow-up, migration 041) = 45."""
     from market_data.app import _get_static_screen_fields
 
-    assert len(_get_static_screen_fields()) == 44
+    assert len(_get_static_screen_fields()) == 45
