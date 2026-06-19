@@ -116,3 +116,8 @@ arnau_*.pdf
 .claude/thesis/
 .claude/backend-audit/
 .claude/frontend-audit/
+
+# Eval run artifacts (large, machine-generated) — keep on disk, do not track
+results/chat_model_eval/
+results/desc_grounding_eval/
+results/kg_desc_eval/
