@@ -122,9 +122,21 @@ articles share a recent time-prefix (correlated window); budget judge (screening
 recent articles may be in-distribution-easy. Treat as a strong directional signal, not a
 final precision figure. A larger, time-diverse sample would tighten the bound.
 
-## Remaining open item (new, surfaced by the re-A/B)
+## Reliability hardening (2026-06-20) — addresses the ≈29% api_error rate
 
-- **≈29% extraction `api_error` rate** under load at `gpt-oss-120b` @ `medium` effort
-  (DeepInfra 429s exhausting backoff). This is a separate *reliability/throughput*
-  concern from extraction *quality* — worth a dedicated look (effort tuning, concurrency
-  caps, or fallback-model wiring) since dropped windows degrade recall silently.
+The re-A/B surfaced a **≈29% extraction `api_error` rate** under load at `gpt-oss-120b`
+@ `medium` (DeepInfra 429 `engine_overloaded`). This is a *reliability/throughput*
+issue, not a *quality* one, but dropped windows degrade recall silently, so it was
+hardened:
+
+- The shared adapter (`ml_clients.adapters.deepseek_extraction`) already has bounded
+  in-adapter retry (Task #36) + a fallback-model hop. The fallback was already
+  `openai/gpt-oss-20b@low` in the dev/prod env; the only gap was the retry count.
+- **`NLP_PIPELINE_EXTRACTION_MAX_ATTEMPTS` raised 2 → 3** (1 initial + 2 retries) in the
+  local `docker.env`, gitops `env/dev/nlp-pipeline.env`, and `values/nlp-pipeline.yaml`
+  (gitops commit `5a7fa9c`). The dominant failure is fast-fail 429s (<5s), which fit the
+  existing 320s per-model budget; the adapter's budget-guard still caps slow retries so
+  the 720s consumer watchdog is safe. The config *default* stays 2 (conservative for the
+  eval env's Qwen baseline + existing tests); the env override drives the live value.
+- Flow on a transient failure: retry on the primary up to 3× → on persistent 429/timeout,
+  hop to `gpt-oss-20b@low` with a fresh budget → only then DLQ. No silent empty result.
