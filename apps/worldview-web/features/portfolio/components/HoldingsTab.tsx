@@ -48,7 +48,7 @@
 // WHY "use client": uses multiple React hooks (useState, useCallback, useMemo)
 // and child components are client components requiring React context.
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 // R2 sprint: X icon for the dismissible sector-filter chip.
 import { X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -71,6 +71,26 @@ import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTa
 import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
 // ── PRD-0108 W4 bottom strip cluster ──────────────────────────────────────────
 import { BottomStripCluster } from "@/components/portfolio/BottomStripCluster";
+// ── PRD-0114 W4: empty states + brokerage sync badges ─────────────────────────
+// WHY ManualPortfolioEmptyState: MANUAL portfolios with 0 holdings need a
+// context-aware call-to-action (not the brokerage CTA that would mislead them).
+import { ManualPortfolioEmptyState } from "@/components/portfolio/ManualPortfolioEmptyState";
+// WHY BrokerageEmptyState variant="awaiting-sync": BROKERAGE portfolios with 0
+// holdings have a connection but haven't received their first sync yet — copy
+// should reassure, not prompt them to connect (they already connected).
+import { BrokerageEmptyState } from "@/components/portfolio/BrokerageEmptyState";
+// WHY LastSyncedBadge: surfaces brokerage_last_synced_at from the holdings
+// response so BROKERAGE users can see when their data is fresh without leaving
+// the tab. Previously this field was returned by S9 but never rendered (G-4).
+import { LastSyncedBadge } from "@/components/portfolio/LastSyncedBadge";
+// WHY SyncErrorBadge: unresolved sync errors are only visible in the brokerage
+// settings modal today. The badge brings the count into the holdings toolbar
+// and provides a one-click scroll to the BrokerageStatusBanner (G-7).
+import { SyncErrorBadge } from "@/components/portfolio/SyncErrorBadge";
+// WHY BrokerageStatusBanner: already used in the brokerage settings page —
+// imported here to show the per-portfolio error detail directly inside the
+// Holdings tab, anchored below the sync-status strip.
+import { BrokerageStatusBanner } from "@/components/portfolio/BrokerageStatusBanner";
 import { useTopMovers } from "@/features/portfolio/hooks/useTopMovers";
 // ── Wave G: Holding detail slide-over (preserved from PLAN-0088) ──────────────
 // WHY keep slide-over: the ticker-pill row + slide-over is orthogonal to the
@@ -128,6 +148,21 @@ interface HoldingsTabProps {
   sectorSegments?: SectorBreakdownSegment[];
   /** sector label → instrument_ids (exact-ID filter join, sprint gap #2). */
   sectorIdMap?: Record<string, string[]>;
+  /**
+   * PRD-0114 W4 (FR-5, FR-7): portfolio kind from the active portfolio object.
+   * Used to select the correct empty state (manual vs. brokerage) and to
+   * conditionally render the brokerage sync-status strip.
+   * WHY lowercase: PortfolioKind StrEnum serialises as "manual"/"brokerage"/"root".
+   * Optional — older call sites (tests, page.tsx pre-W4) render without kind-aware UI.
+   */
+  portfolioKind?: "manual" | "brokerage" | "root" | null;
+  /**
+   * PRD-0114 W4 (FR-8): callback from the page to open the AddPositionDialog.
+   * The ManualPortfolioEmptyState CTA calls this so the dialog open state stays
+   * in page.tsx (single source of truth, avoids prop drilling).
+   * Optional — undefined when portfolioKind === "root" (read-only root portfolio).
+   */
+  onOpenAddPosition?: () => void;
 }
 
 export function HoldingsTab({
@@ -154,6 +189,8 @@ export function HoldingsTab({
   onClearSectorFilter,
   sectorSegments,
   sectorIdMap,
+  portfolioKind = null,
+  onOpenAddPosition,
 }: HoldingsTabProps) {
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
@@ -298,6 +335,23 @@ export function HoldingsTab({
   // WHY null (not undefined): null is the explicit "no holding selected" signal.
   const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
   const handleCloseSlideOver = useCallback(() => setSelectedHolding(null), []);
+
+  // ── PRD-0114 W4: brokerage sync metadata ───────────────────────────────────
+  // These fields come from the /holdings S9 response (added in W3). We coerce
+  // undefined → null / 0 so downstream components receive clean types.
+  const brokerageLastSyncedAt = holdingsResp?.brokerage_last_synced_at ?? null;
+  const brokerageSyncErrorCount = holdingsResp?.brokerage_sync_error_count ?? 0;
+
+  // WHY useRef on the BrokerageStatusBanner container: SyncErrorBadge's onClick
+  // should scroll the user to the error detail panel without navigating away.
+  // scrollIntoView on the ref node is the correct DOM API (no router dependency).
+  const brokerageStatusBannerRef = useRef<HTMLDivElement>(null);
+  const handleScrollToErrors = useCallback(() => {
+    brokerageStatusBannerRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, []);
 
   // ── Loading skeleton ───────────────────────────────────────────────────────
   if (holdingsLoading && !holdingsResp) {
@@ -451,6 +505,40 @@ export function HoldingsTab({
         onFilterVisibleChange={setFilterVisible}
       />
 
+      {/* ══ PRD-0114 W4: brokerage sync-status strip ══════════════════════════
+          WHY conditional on portfolioKind="brokerage": sync metadata fields only
+          have meaningful values for BROKERAGE portfolios. Rendering them for
+          MANUAL or ROOT portfolios would show "Never synced" which is misleading.
+          WHY !holdingsLoading: avoids a flash of "Never synced" while the first
+          response is in-flight (brokerage_last_synced_at is undefined until then).
+          WHY h-[22px]: matches all other strip rows for density consistency. */}
+      {portfolioKind === "brokerage" && !holdingsLoading && (
+        <div
+          data-testid="brokerage-sync-status-strip"
+          className="flex h-[22px] shrink-0 items-center gap-3 border-b border-border bg-card px-3"
+        >
+          <LastSyncedBadge lastSyncedAt={brokerageLastSyncedAt} />
+          <SyncErrorBadge
+            errorCount={brokerageSyncErrorCount}
+            onClickScrollToErrors={handleScrollToErrors}
+          />
+        </div>
+      )}
+
+      {/* ══ PRD-0114 W4: BrokerageStatusBanner (error detail) ════════════════
+          WHY below the strip (not above): the banner is a detail panel that
+          expands with error rows. Placing it above the table would push the
+          table down and reduce the visible holding count. Below the chrome row
+          keeps the table at maximum height in the error-free case (banner has
+          no DOM presence when there are no errors).
+          WHY activePortfolioId guard: BrokerageStatusBanner fires a useQuery
+          internally and requires a valid portfolioId prop. */}
+      {portfolioKind === "brokerage" && activePortfolioId && (
+        <div ref={brokerageStatusBannerRef}>
+          <BrokerageStatusBanner portfolioId={activePortfolioId} />
+        </div>
+      )}
+
       {/* ══ 6. SemanticHoldingsTable (flex-1 min-h-0) ════════════════════════
           WHY flex-1 min-h-0: takes all remaining vertical space so the AG Grid
           fills the viewport. min-h-0 is required for the overflow-y within
@@ -465,7 +553,19 @@ export function HoldingsTab({
             SemanticHoldingsTable's "No holdings yet — connect a brokerage"
             empty state (the user HAS holdings; the filter excluded them).
             Named state + the chip row above give the user the exit path. */}
+        {/* ── Decision tree for the table slot ─────────────────────────────
+            Priority order matters:
+            1. Sector filter active + no matches → sector-specific message
+               (user HAS holdings; the filter excluded them — different from
+               the truly-empty case below).
+            2. No holdings + MANUAL portfolio → ManualPortfolioEmptyState
+               (explains transaction→holdings async path; offers the dialog CTA).
+            3. No holdings + BROKERAGE portfolio → BrokerageEmptyState
+               (reassures the user their connection is active, sync is pending).
+            4. Holdings present (or kind unrecognised / root) → table.
+        ─────────────────────────────────────────────────────────────────── */}
         {sectorFilter && visibleHoldings.length === 0 && enrichedHoldings.length > 0 ? (
+          // Case 1: sector filter active + no matches.
           // R3 polish: this stays a LOCAL named state (not the shared
           // EmptyState primitive) because the copy interpolates the live
           // sector name — registry copy must be static (DS §15.12: "surfaces
@@ -495,7 +595,24 @@ export function HoldingsTab({
               </button>
             )}
           </div>
+        ) : enrichedHoldings.length === 0 && portfolioKind === "manual" ? (
+          // Case 2: MANUAL portfolio with no holdings yet.
+          // WHY ManualPortfolioEmptyState (not a generic empty-state): MANUAL
+          // portfolios are populated via transactions → consumer → holdings.
+          // The empty state must explain this async path AND provide the CTA
+          // to record the first transaction. A generic "No data" copy would
+          // leave the user wondering what to do next.
+          <ManualPortfolioEmptyState
+            onOpenAddPosition={onOpenAddPosition ?? (() => {})}
+          />
+        ) : enrichedHoldings.length === 0 && portfolioKind === "brokerage" ? (
+          // Case 3: BROKERAGE portfolio that hasn't received its first sync yet.
+          // WHY "awaiting-sync" variant (not "no-connection"): the brokerage IS
+          // connected (the portfolio was created via SnapTrade OAuth). The user
+          // should not be prompted to connect again — they should be reassured.
+          <BrokerageEmptyState variant="awaiting-sync" />
         ) : (
+        // Case 4: holdings present (or portfolioKind is "root" / null).
         <SemanticHoldingsTable
           // R2 sprint: visibleHoldings = enrichedHoldings when no sector
           // filter (same reference), or the sector subset when filtered.

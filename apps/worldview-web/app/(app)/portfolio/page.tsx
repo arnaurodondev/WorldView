@@ -588,6 +588,15 @@ export default function PortfolioPage() {
             // exact-ID sector-filter join.
             sectorSegments={sectorSegments}
             sectorIdMap={sectorIdMap}
+            // PRD-0114 W4 (FR-5, FR-7, FR-8): portfolio kind + dialog callback.
+            // portfolioKind drives the empty state (manual/brokerage) and the
+            // brokerage sync-status strip visibility.
+            portfolioKind={activePortfolio?.kind ?? null}
+            // onOpenAddPosition: undefined for root portfolios (S1 rejects
+            // transactions on root; the CTA would create a dead end).
+            onOpenAddPosition={
+              activeIsRoot ? undefined : () => setAddPositionOpen(true)
+            }
           />
         </TabsContent>
 
@@ -715,6 +724,8 @@ export default function PortfolioPage() {
           }}
           portfolioId={activePortfolioId}
           accessToken={accessToken}
+          // PRD-0114 W4 (FR-8): kind-aware success toast copy.
+          portfolioKind={activePortfolio?.kind ?? null}
         />
       )}
     </div>
