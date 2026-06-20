@@ -212,14 +212,13 @@ class ComputeManualHoldingsUseCase:
             deleted=result.deleted,
         )
 
-        # ── 6. Prometheus counter ─────────────────────────────────────────────
-        import contextlib
-
-        with contextlib.suppress(Exception):
-            from portfolio.infrastructure.metrics.prometheus import MANUAL_HOLDINGS_RECOMPUTED_TOTAL
-
-            MANUAL_HOLDINGS_RECOMPUTED_TOTAL.labels(trigger=cmd.trigger).inc()
-
+        # NOTE: Prometheus counter increment is intentionally NOT here.
+        # This use case is in the application layer; importing from
+        # portfolio.infrastructure.metrics violates R25 (IG-LAYER-002 —
+        # application layer must not depend on infrastructure).
+        # The counter is incremented by the caller (ManualHoldingsRecomputeConsumer
+        # or ManualHoldingsWorker) which live in the infrastructure layer and are
+        # the correct place for observability side-effects.
         return ComputeManualHoldingsResult(
             upserted=result.upserted,
             deleted=result.deleted,

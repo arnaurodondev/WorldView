@@ -23,10 +23,12 @@ Changes:
 Safety:
 - Both columns are additive nullable — no NOT NULL, no server_default needed;
   existing rows stay NULL and the ORM treats NULL as None.
-- CONCURRENTLY index creation cannot run inside a transaction; alembic must
-  skip the implicit transaction for this migration (``transaction_per_migration``
-  is set to False via ``op.execute`` with the BEGIN/COMMIT stripped out by the
-  ``connection.execute`` path).
+- CONCURRENTLY index creation cannot run inside a transaction block. We wrap the
+  CREATE/DROP INDEX CONCURRENTLY calls in ``op.get_context().autocommit_block()``
+  which instructs Alembic to commit the preceding transaction, execute the DDL
+  outside any transaction, and then start a new transaction for subsequent steps.
+  This is the canonical pattern used across the codebase (see 0026 and
+  intelligence-migrations/alembic/versions/0011_concurrent_alias_norm_index.py).
 """
 
 from __future__ import annotations
@@ -59,19 +61,29 @@ def upgrade() -> None:
     # CONCURRENTLY builds the index without a table lock at the cost of
     # requiring two table scans and not running inside a transaction.
     #
-    # Alembic does not support CONCURRENTLY natively — we drop to raw DDL.
+    # WHY autocommit_block: PostgreSQL raises
+    #   "ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block"
+    # if the DDL executes inside Alembic's default implicit transaction.
+    # op.get_context().autocommit_block() commits the surrounding transaction
+    # first, runs this DDL outside any transaction, then re-opens a transaction
+    # for any subsequent steps. This is the canonical pattern in this codebase.
     # IF NOT EXISTS avoids a duplicate-index error on repeated migrations
     # (idempotent — safe to run twice).
-    op.execute(
-        sa.text(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
-            "ix_transactions_portfolio_executed_instrument "
-            "ON transactions(portfolio_id, executed_at, instrument_id)"
+    with op.get_context().autocommit_block():
+        op.execute(
+            sa.text(
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+                "ix_transactions_portfolio_executed_instrument "
+                "ON transactions(portfolio_id, executed_at, instrument_id)"
+            )
         )
-    )
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DROP INDEX CONCURRENTLY IF EXISTS ix_transactions_portfolio_executed_instrument"))
+    # WHY autocommit_block: same constraint as upgrade — CONCURRENTLY cannot run
+    # inside a transaction block. Drop index first (outside transaction), then
+    # drop the nullable columns (inside the default transaction is fine).
+    with op.get_context().autocommit_block():
+        op.execute(sa.text("DROP INDEX CONCURRENTLY IF EXISTS ix_transactions_portfolio_executed_instrument"))
     op.drop_column("holdings", "total_cost_basis")
     op.drop_column("holdings", "cost_basis_per_unit")

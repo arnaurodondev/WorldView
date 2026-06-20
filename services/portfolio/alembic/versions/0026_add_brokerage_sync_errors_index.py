@@ -30,8 +30,13 @@ from __future__ import annotations
 from alembic import op
 
 # revision identifiers, used by Alembic.
+# WHY down_revision="0025" (not "0023"): 0024 and 0025 already depend on 0023
+# (chain: 0023→0024→0025). Setting down_revision to 0023 would create a two-head
+# branch that Alembic refuses to apply ("Multiple head revisions"). 0026 is a
+# linear successor of 0025 — the CONCURRENTLY index has no DDL dependency on
+# 0024/0025, so this ordering is safe.
 revision = "0026"
-down_revision = "0023"
+down_revision = "0025"
 branch_labels = None
 depends_on = None
 

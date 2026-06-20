@@ -127,6 +127,14 @@ import { TransactionsTab } from "@/features/portfolio/components/TransactionsTab
 // a visible blank flash when the user first clicks Analytics.
 import { AnalyticsTab } from "@/features/portfolio/components/AnalyticsTab";
 import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
+// PRD-0114 W5 (FR-10): server-side transaction filter state. Calling this hook
+// at page level (not inside TransactionsTab) is required because:
+//   1. The backendFilterParams must be available to usePortfolioData so the
+//      transactions query key includes the active filters (cache per filter set).
+//   2. The accessToken for the ExportTransactionsButton lives at page level.
+//   3. nuqs URL params should be owned at the highest common ancestor to avoid
+//      conflicts with other hook instances reading the same URL params.
+import { useTransactionsFilterState } from "@/features/portfolio/hooks/useTransactionsFilterState";
 // PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
 import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
 
@@ -189,6 +197,19 @@ export default function PortfolioPage() {
   // null = no filter. The default string parser keeps any sector name
   // round-trippable without an enum (sector labels come from live data).
   const [sectorFilter, setSectorFilter] = useQueryState("sector");
+
+  // ── PRD-0114 W5 FR-10: server-side transaction filters ─────────────────
+  // WHY at page level (not inside TransactionsTab): the derived backendFilterParams
+  // must feed into usePortfolioData so the transactions query key includes the
+  // active filters — each filter combination is a distinct cache entry. The hook
+  // also owns URL state (nuqs) which must be called unconditionally at the same
+  // React component level on every render (Rules of Hooks).
+  const {
+    filters: txFilters,
+    setFilters: setTxFilters,
+    resetFilters: resetTxFilters,
+    toBackendParams: txToBackendParams,
+  } = useTransactionsFilterState();
 
   // PLAN-0059 G-3: tab switches mount/unmount whole panel trees (Holdings
   // alone renders ~7 child surfaces — equity-curve chart, holdings table,
@@ -619,6 +640,17 @@ export default function PortfolioPage() {
             // R1 sprint: server-side pager. Offset changes flow back into the
             // usePortfolioData transactions query (key includes the offset).
             onTxOffsetChange={setTxOffset}
+            // PRD-0114 W5 FR-10: server-side filter bar + export button.
+            // filterState/onFilterChange/onFilterReset drive the TransactionsFilterBar;
+            // backendFilterParams feeds the S9 API call so filters reach the backend
+            // (previously this was dead code — the filter bar never rendered).
+            filterState={txFilters}
+            onFilterChange={setTxFilters}
+            onFilterReset={resetTxFilters}
+            backendFilterParams={txToBackendParams()}
+            // accessToken is needed by ExportTransactionsButton for the auth-gated
+            // CSV download endpoint — S9 requires a Bearer token on GET /v1/transactions/export.
+            accessToken={accessToken}
           />
         </TabsContent>
 

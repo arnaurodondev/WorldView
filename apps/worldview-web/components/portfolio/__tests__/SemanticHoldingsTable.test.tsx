@@ -1,12 +1,13 @@
 /**
  * components/portfolio/__tests__/SemanticHoldingsTable.test.tsx
  *
- * WHY THIS EXISTS: Verifies the 14-column spec introduced in PLAN-0108 W4-T401.
+ * WHY THIS EXISTS: Verifies the 15-column spec introduced in PLAN-0108 W4-T401
+ * and updated in PLAN-0114 W6 (divYld column added via FR-12).
  * The tests guard against:
- *   - Accidental column removal (holdingsAgColumns.length must be 14)
+ *   - Accidental column removal (holdingsAgColumns.length must be 15)
  *   - SPARK column missing its colId (regression: colId "spark" added in W4-T401)
  *   - ASSET column missing its colId (regression: colId "asset" added in W4-T401)
- *   - Header label regressions for the two new columns
+ *   - Header label regressions for the new columns
  *
  * WHY we test holdingsAgColumns directly (not the rendered AgGrid component):
  *   AG Grid is a heavy browser library that requires DOM APIs unavailable in
@@ -24,20 +25,21 @@
  *   reference (context.holdingsSeries keyed by ticker), confirming the wiring
  *   contract without needing a mounted component.
  *
- * PLAN-0108 W4-T401
+ * PLAN-0108 W4-T401 | PLAN-0114 W6 divYld (FR-12)
  */
 
 import { describe, it, expect } from "vitest";
 import { holdingsAgColumns, HOLDINGS_AG_COL_WIDTHS } from "../ag-holdings-columns";
 
-// ── holdingsAgColumns — 14-column spec ───────────────────────────────────────
+// ── holdingsAgColumns — 15-column spec ───────────────────────────────────────
 
-describe("holdingsAgColumns (14-column spec — PLAN-0108 W4-T401)", () => {
-  it("SemanticHoldingsTable has 14 columns", () => {
-    // WHY 14: the spec added SPARK (col 8) and ASSET (col 14) to the original
-    // 12-column table. Any deviation means a column was accidentally dropped or
-    // added without updating this test.
-    expect(holdingsAgColumns).toHaveLength(14);
+describe("holdingsAgColumns (15-column spec — PLAN-0114 W6 divYld added)", () => {
+  it("SemanticHoldingsTable has 15 columns", () => {
+    // WHY 15: PLAN-0108 W4-T401 added SPARK (col 8) and ASSET (col 14) to the
+    // original 12-column table (14 total). PLAN-0114 W6 FR-12 added divYld
+    // (col 15). Any deviation means a column was accidentally dropped or added
+    // without updating this test.
+    expect(holdingsAgColumns).toHaveLength(15);
   });
 
   it("SemanticHoldingsTable renders SPARK column header", () => {
@@ -55,10 +57,10 @@ describe("holdingsAgColumns (14-column spec — PLAN-0108 W4-T401)", () => {
     expect(assetCol?.headerName).toBe("ASSET");
   });
 
-  it("column order matches the 14-column spec", () => {
+  it("column order matches the 15-column spec — PLAN-0114 W6 divYld added", () => {
     // WHY explicit order check: order matters for the trader's eye-scan path.
     // SPARK must come after DAY Δ% (col 7) and before MKT VALUE (col 9).
-    // ASSET must be last (col 14).
+    // ASSET must be second-to-last (col 14); DIV YLD is last (col 15, FR-12).
     const ids = holdingsAgColumns.map((c) => c.colId);
     expect(ids).toEqual([
       "ticker",      // 1
@@ -75,6 +77,7 @@ describe("holdingsAgColumns (14-column spec — PLAN-0108 W4-T401)", () => {
       "weight",      // 12
       "sector",      // 13
       "asset",       // 14 — NEW: ASSET
+      "divYld",      // 15 — NEW: DIV YLD (PLAN-0114 W6 FR-12)
     ]);
   });
 

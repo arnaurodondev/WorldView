@@ -180,9 +180,10 @@ export function ClosePositionDialog({
       //   2. Call onSuccess so the parent can invalidate + refetch.
       //   3. Close the dialog.
       toast.success("Position closed", {
+        // WHY no duration override: centralized Toaster in app/providers.tsx
+        // sets duration=4000 for all toasts (DESIGN_SYSTEM.md §6.16 + toast-config.test.ts).
         description:
           "Holdings will update within seconds once the recompute event is processed.",
-        duration: 5000,
       });
 
       onSuccess();
@@ -191,8 +192,9 @@ export function ClosePositionDialog({
       const message =
         error instanceof Error ? error.message : "Failed to close position. Please try again.";
       toast.error("Close position failed", {
+        // WHY no duration override: centralized Toaster in app/providers.tsx
+        // sets duration=4000 for all toasts (DESIGN_SYSTEM.md §6.16 + toast-config.test.ts).
         description: message,
-        duration: 8000,
       });
     } finally {
       setIsSubmitting(false);

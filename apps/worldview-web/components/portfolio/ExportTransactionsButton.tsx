@@ -175,9 +175,9 @@ export function ExportTransactionsButton({
       const message =
         error instanceof Error ? error.message : "Export failed. Please try again.";
       toast.error("CSV export failed", {
+        // WHY no duration override: centralized Toaster in app/providers.tsx
+        // sets duration=4000 for all toasts (DESIGN_SYSTEM.md §6.16 + toast-config.test.ts).
         description: message,
-        // 8-second duration gives the user enough time to read and act.
-        duration: 8000,
       });
     } finally {
       // Always clear the loading state so the button is re-enabled even if

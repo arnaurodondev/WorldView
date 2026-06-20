@@ -34,6 +34,8 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
+from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.use_cases.compute_manual_holdings import (
     ComputeManualHoldingsCommand,
@@ -44,6 +46,11 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _CONSUMER_GROUP = "portfolio-manual-holdings-recompute"
 _TOPIC = "portfolio.holding.recompute_requested.v1"
+
+# WHY module-level: find_schema_dir() resolves the canonical schema directory
+# once at import time (avoids repeated filesystem calls per message). The schema
+# file for this topic is portfolio_holding_recompute_requested.v1.avsc.
+_SCHEMA_DIR = find_schema_dir()
 
 
 class ManualHoldingsRecomputeConsumer(BaseKafkaConsumer[None]):
@@ -164,6 +171,17 @@ class ManualHoldingsRecomputeConsumer(BaseKafkaConsumer[None]):
                 upserted=result.upserted,
                 deleted=result.deleted,
             )
+            # WHY metrics increment here (not in the use case): R25 forbids
+            # application-layer modules from importing infrastructure.
+            # The consumer is in the infrastructure layer and is the correct
+            # place for Prometheus side-effects (analogous to other consumers
+            # that call metrics after a successful use-case invocation).
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                from portfolio.infrastructure.metrics.prometheus import MANUAL_HOLDINGS_RECOMPUTED_TOTAL
+
+                MANUAL_HOLDINGS_RECOMPUTED_TOTAL.labels(trigger="event").inc()
 
     async def process_message_from_failure(self, failure: FailureInfo[None]) -> None:
         """Re-process a stored failure (no-op: payload not stored for this consumer)."""
@@ -212,12 +230,40 @@ class ManualHoldingsRecomputeConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
-        """Deserialize message value — JSON fallback (Avro payload for future SR support)."""
+        """Deserialize Confluent-Avro bytes for portfolio.holding.recompute_requested.v1.
+
+        WHY Avro (not JSON): R28 mandates Avro on the wire for all Kafka topics
+        that have a registered .avsc schema. The producer (RecordTransactionUseCase
+        / ManualHoldingsOutboxDispatcher) serialises via serialization.py which
+        emits Confluent-Avro wire format (magic byte 0x00 + 4-byte schema ID +
+        Avro payload). A bare json.loads() call would break on that prefix and
+        silently discard all messages once the producer moves to SR registration.
+
+        We fall back to JSON only if no schema_path is found (e.g. during local
+        dev with the schema registry disabled) — this mirrors the pattern used by
+        InstrumentEventConsumer and other portfolio consumers.
+        """
+        if schema_path:
+            try:
+                return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
+            except Exception:
+                logger.debug(  # type: ignore[no-any-return]
+                    "manual_holdings_consumer_avro_deserialize_failed_falling_back_to_json",
+                    schema_path=schema_path,
+                )
         return cast("dict[str, Any]", json.loads(raw))
 
     def get_schema_path(self, topic: str) -> str | None:
-        """Return None — this consumer currently uses JSON serialization."""
-        return None
+        """Return the canonical Avro schema path for portfolio.holding.recompute_requested.v1.
+
+        WHY dot-to-underscore mapping: the schema registry and local schema files
+        use underscores (portfolio_holding_recompute_requested.v1.avsc) while
+        Kafka topic names use dots. This matches the find_schema_dir() convention.
+        """
+        # Convert dot-separated topic name to the underscore filename used by avsc files.
+        schema_file = f"{topic.replace('.', '_')}.avsc"
+        path = _SCHEMA_DIR / schema_file
+        return str(path) if path.exists() else None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))
