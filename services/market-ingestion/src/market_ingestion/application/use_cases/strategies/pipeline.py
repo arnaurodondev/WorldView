@@ -365,7 +365,12 @@ async def commit_transaction(
         if locked is not None:
             watermark = locked
 
-        data_changed = watermark.has_changed(new_sha256)
+        # The content hash distinguishes a genuinely-empty / identical re-fetch
+        # (same SHA256 => nothing new to publish) from a fetch that produced
+        # bars.  This is the ONLY legitimate "no change" guard for the outbox
+        # emit — it must NOT be conflated with the watermark-advance decision
+        # below (see BP-701).
+        content_changed = watermark.has_changed(new_sha256)
         # FIX-FUTURE-WM: clamp the watermark to wall-clock now.  Incremental
         # daily tasks carry range_end = tomorrow-midnight; advancing the
         # watermark into the FUTURE made every same-day follow-up look stale
@@ -375,15 +380,35 @@ async def commit_transaction(
         if watermark.current_bar_ts is None or new_ts > watermark.current_bar_ts:
             watermark.advance_bar_ts(new_ts)
         else:
+            # BP-701: the watermark does NOT advance for a BACKFILL of an
+            # older/already-covered range (range_end <= current watermark).
+            # That is a legitimate, expected case — NOT "no data".  Previously
+            # this branch also forced ``data_changed = False``, which silently
+            # suppressed the outbox event even though bars were fetched and
+            # written to MinIO — so a deep historical backfill (e.g. the 618
+            # dropped SPY bars) stored data that NEVER materialized downstream,
+            # requiring manual watermark resets.  We now keep the watermark
+            # advance gated on ``new_ts`` (correct) but DECOUPLE the outbox
+            # emit, which is driven solely by "did we produce bars to publish"
+            # (``row_count`` + ``content_changed``).  Downstream S5 upserts are
+            # idempotent, so re-publishing backfilled bars is safe.
             log.debug(
                 "skip_stale_watermark_update",
                 current_bar_ts=watermark.current_bar_ts.isoformat(),
                 task_bar_ts=new_ts.isoformat(),
             )
-            data_changed = False
         watermark.content_hash = new_sha256
 
-        if data_changed:
+        # BP-701: emit the outbox event whenever this fetch produced bars to
+        # publish (``row_count > 0``) and the payload is not a byte-identical
+        # duplicate (``content_changed``), regardless of whether the watermark
+        # advanced.  This covers the incremental path (new bars advance the
+        # watermark) AND the backfill path (older range, watermark unchanged,
+        # but bars are present and must materialize downstream).  A genuinely
+        # empty fetch (row_count == 0) or an identical re-fetch (same SHA256) is
+        # still correctly suppressed.
+        should_emit = row_count > 0 and content_changed
+        if should_emit:
             # SOURCE-PROVENANCE FIX: emit the provider that ACTUALLY fetched the
             # data, not the provider the task was originally scheduled for.
             # ``task.provider`` is the scheduled/policy provider (e.g. ``eodhd``
@@ -420,7 +445,14 @@ async def commit_transaction(
             )
             await uow.outbox.add(events=[event])
         else:
-            log.debug("skip_outbox_unchanged_sha256", sha256_prefix=new_sha256[:8] if new_sha256 else "")
+            # Suppressed either because the fetch was empty (no bars) or the
+            # payload is byte-identical to what we already published.
+            log.debug(
+                "skip_outbox_no_new_bars",
+                row_count=row_count,
+                content_changed=content_changed,
+                sha256_prefix=new_sha256[:8] if new_sha256 else "",
+            )
 
         await uow.watermarks.save(watermark)
         original_lease_owner = task.lease_owner
