@@ -113,6 +113,33 @@ class SqlAlchemyBrokerageConnectionRepository(BrokerageConnectionRepository):
         result = await self._session.execute(stmt)
         return [self._to_entity(r) for r in result.scalars()]
 
+    async def get_by_portfolio_id(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> BrokerageConnection | None:
+        """Return the brokerage connection for a portfolio, or None (W3 - FR-4).
+
+        WHY a dedicated query method instead of reusing ``list_by_user`` with a
+        portfolio_id filter: ``list_by_user`` always requires a ``user_id`` parameter,
+        which the GetHoldingsUseCase does not have at the point it needs the connection.
+        This method only uses the portfolio_id + tenant_id index (unique per portfolio),
+        which is cheaper and avoids a JOIN through the users table.
+
+        A portfolio should have at most one active brokerage connection. If multiple
+        rows exist (data integrity violation), ``scalar_one_or_none`` will raise
+        ``MultipleResultsFound`` -- we accept this as a loud failure rather than
+        silently picking one, because the holdings display would be ambiguous.
+        """
+        result = await self._session.execute(
+            select(BrokerageConnectionModel).where(
+                BrokerageConnectionModel.portfolio_id == portfolio_id,
+                BrokerageConnectionModel.tenant_id == tenant_id,
+            ),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
     async def list_active_or_error(self) -> list[BrokerageConnection]:
         result = await self._session.execute(
             select(BrokerageConnectionModel).where(

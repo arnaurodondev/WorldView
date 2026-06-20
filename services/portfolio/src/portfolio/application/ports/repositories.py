@@ -538,6 +538,25 @@ class BrokerageConnectionRepository(ABC):
         ...
 
     @abstractmethod
+    async def get_by_portfolio_id(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> BrokerageConnection | None:
+        """Return the connection for this portfolio, or None if none exists.
+
+        W3 (FR-4): used by GetHoldingsUseCase to surface brokerage_last_synced_at
+        in the holdings response envelope without requiring an extra use case or
+        a user_id parameter that the holdings route doesn't have at this point.
+
+        A portfolio has at most one connection (enforced by the DB unique constraint
+        on brokerage_connections.portfolio_id). Implementations MUST raise
+        MultipleResultsFound if the invariant is violated -- silent first-row
+        selection would hide data integrity issues.
+        """
+        ...
+
+    @abstractmethod
     async def save(self, connection: BrokerageConnection) -> None:
         """INSERT or UPDATE (upsert on id)."""
         ...
@@ -549,6 +568,19 @@ class BrokerageTransactionSyncErrorRepository(ABC):
 
     @abstractmethod
     async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]: ...
+
+    @abstractmethod
+    async def count_for_connection(self, connection_id: UUID) -> int:
+        """Return total count of sync errors for this connection.
+
+        W3 (FR-7): used by GetHoldingsUseCase to surface brokerage_sync_error_count
+        in the holdings response envelope. Implementations should use a scalar COUNT(*)
+        backed by the ix_brokerage_sync_errors_connection_id index (migration 0026).
+
+        Returns 0 (never None) -- the caller uses this as an integer for display logic
+        (badge visibility, error count UI) and should not need to null-check.
+        """
+        ...
 
 
 class AuthAuditLogRepository(ABC):

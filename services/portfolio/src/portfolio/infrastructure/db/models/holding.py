@@ -29,3 +29,5 @@ class HoldingModel(Base):
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     currency: Mapped[str]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    cost_basis_per_unit: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True, default=None)
+    total_cost_basis: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True, default=None)

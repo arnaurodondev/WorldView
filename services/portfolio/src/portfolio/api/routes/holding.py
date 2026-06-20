@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from portfolio.api.dependencies import ReadUoWDep
-from portfolio.api.schemas import HoldingResponse, PaginatedResponse
+from portfolio.api.schemas import HoldingResponse, HoldingsListResponse
 from portfolio.application.use_cases.read_models import GetHoldingsUseCase
 
 router = APIRouter(tags=["holdings"])
@@ -35,7 +35,7 @@ def _extract_owner_id(request: Request) -> UUID:
 
 @router.get(
     "/holdings/{portfolio_id}",
-    response_model=PaginatedResponse[HoldingResponse],
+    response_model=HoldingsListResponse,
 )
 async def get_holdings(
     portfolio_id: UUID,
@@ -44,12 +44,12 @@ async def get_holdings(
     include_closed: bool = Query(
         default=False,
         description=(
-            "Include zero-quantity (closed) positions. Default false — only"
+            "Include zero-quantity (closed) positions. Default false -- only"
             " active positions are returned, matching the typical UI view."
             " Set true for tax/audit reporting that needs historic legs."
         ),
     ),
-) -> PaginatedResponse[HoldingResponse]:
+) -> HoldingsListResponse:
     """List holdings for a portfolio.
 
     F-011 (QA 2026-04-28): the response now uses the same paginated
@@ -59,19 +59,26 @@ async def get_holdings(
     tolerates both shapes during the transition window.
 
     F-303 (QA iter-3 2026-04-28): zero-quantity rows are hidden by
-    default — they're either closed positions (sold flat) or orphans
+    default -- they're either closed positions (sold flat) or orphans
     from a sparse broker resync after the F-201 repair script. Pro users
     pass ``?include_closed=true`` to see them.
 
     There's no built-in pagination on holdings (a portfolio rarely has
     more than ~50 positions), so the envelope reports ``total ==
-    len(items)`` and a fixed ``limit`` of 1000 — meaning the response is
+    len(items)`` and a fixed ``limit`` of 1000 -- meaning the response is
     always complete even when the envelope is in use.
+
+    W3 (FR-4, FR-7): the response now includes ``brokerage_last_synced_at``
+    and ``brokerage_sync_error_count`` at the envelope level. These are
+    populated by ``GetHoldingsUseCase`` for BROKERAGE portfolios (two cheap
+    indexed reads) and are None/0 for MANUAL and ROOT portfolios.
     """
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
     uc = GetHoldingsUseCase()
-    enriched_holdings = await uc.execute(
+    # W3: uc.execute() now returns HoldingsResponse (envelope + metadata),
+    # not a bare list. Unpack .holdings for item serialization.
+    result = await uc.execute(
         portfolio_id,
         owner_id,
         x_tenant_id,
@@ -90,9 +97,18 @@ async def get_holdings(
             name=eh.name,
             entity_id=eh.entity_id,
             # 2026-06-10 gap #1: asset_class enriched via the same instruments
-            # LEFT JOIN as ticker/name — None when the instrument is absent.
+            # LEFT JOIN as ticker/name -- None when the instrument is absent.
             asset_class=eh.asset_class,
         )
-        for eh in enriched_holdings
+        for eh in result.holdings
     ]
-    return PaginatedResponse(items=items, total=len(items), limit=1000, offset=0)
+    return HoldingsListResponse(
+        items=items,
+        total=len(items),
+        limit=1000,
+        offset=0,
+        # W3: propagate brokerage metadata from the use case envelope to the
+        # API response. The frontend gates display on portfolio.kind === "brokerage".
+        brokerage_last_synced_at=result.brokerage_last_synced_at,
+        brokerage_sync_error_count=result.brokerage_sync_error_count,
+    )

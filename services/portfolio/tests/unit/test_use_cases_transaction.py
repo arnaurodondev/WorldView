@@ -599,10 +599,10 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
     assert len(uow._transactions.saved) == 1
-    # T-G-1-02 (PLAN-0046 update): outbox must have exactly 1 record now —
-    # only TransactionRecorded. HoldingChanged is no longer emitted by this
-    # use case (BP-264; ownership moved to UpsertHoldingsFromSnapshotUseCase).
-    assert len(uow._outbox.saved) == 1, "outbox must not be doubled by a duplicate idempotent call"
+    # T-G-1-02 (PLAN-0046 update / PLAN-0114 W1):
+    # First call emits 2 outbox records: TransactionRecorded + PortfolioHoldingRecomputeRequested.
+    # Second (idempotent) call returns early and saves nothing new — total stays 2.
+    assert len(uow._outbox.saved) == 2, "outbox must not be doubled by a duplicate idempotent call"
     # PLAN-0046 / BP-264: holdings table is no longer touched here.
     holdings = await uow._holdings.list_by_portfolio(cmd_with_key.portfolio_id)
     assert len(holdings) == 0

@@ -43,6 +43,6 @@ BROKERAGE_PENDING_CONNECTIONS_AGE = Gauge(
 
 MANUAL_HOLDINGS_RECOMPUTED_TOTAL = Counter(
     "s1_manual_holdings_recomputed_total",
-    "Manual holdings recomputation outcomes",
-    ["status"],  # success | skipped | error
+    "Manual holdings recomputation outcomes by trigger source",
+    ["trigger"],  # event | scheduled
 )

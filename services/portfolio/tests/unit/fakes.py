@@ -672,6 +672,24 @@ class FakeBrokerageConnectionRepository(BrokerageConnectionRepository):
 
         return [c for c in self._store.values() if c.status in (ConnectionStatus.ACTIVE, ConnectionStatus.ERROR)]
 
+    async def get_by_portfolio_id(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> BrokerageConnection | None:
+        """W3 (FR-4): return the connection whose portfolio_id matches, or None.
+
+        Mirrors the SQL implementation's scalar_one_or_none semantics --
+        if two connections share a portfolio_id (data integrity violation)
+        this returns the first one found, which is fine for tests because
+        the scoping correctness test (test_brokerage_error_count_is_scoped_*)
+        seeds connections with different portfolio_ids by design.
+        """
+        for c in self._store.values():
+            if c.portfolio_id == portfolio_id and c.tenant_id == tenant_id:
+                return c
+        return None
+
     async def save(self, connection: BrokerageConnection) -> None:
         self._store[connection.id] = connection
 
@@ -688,6 +706,19 @@ class FakeBrokerageTransactionSyncErrorRepository(BrokerageTransactionSyncErrorR
     async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]:
         results = [e for e in self._store if e.connection_id == connection_id]
         return sorted(results, key=lambda e: e.created_at, reverse=True)[:limit]
+
+    async def count_for_connection(self, connection_id: UUID) -> int:
+        """W3 (FR-7): return the number of sync errors for this connection.
+
+        The production implementation does a scalar COUNT(*) backed by the
+        ix_brokerage_sync_errors_connection_id index (migration 0026). Here
+        we iterate the in-memory list -- same O(n) semantics but acceptable
+        for tests where n is tiny.
+
+        Returns 0 (not None) to match production invariant -- callers must
+        not need to null-check the return value.
+        """
+        return sum(1 for e in self._store if e.connection_id == connection_id)
 
 
 class FakeBrokerageClient:
@@ -944,6 +975,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def notification_preferences(self) -> FakeNotificationPreferencesRepository:
         return self._notification_preferences
+
+    async def try_advisory_lock(self, portfolio_id: object) -> bool:
+        """Fake advisory lock — always returns True (lock acquired)."""
+        return True
 
     async def commit(self) -> None:
         self.committed = True

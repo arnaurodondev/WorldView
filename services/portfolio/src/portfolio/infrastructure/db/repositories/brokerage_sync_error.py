@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from portfolio.application.ports.repositories import BrokerageTransactionSyncErrorRepository
 from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
@@ -60,3 +60,24 @@ class SqlAlchemyBrokerageTransactionSyncErrorRepository(BrokerageTransactionSync
             .limit(limit),
         )
         return [self._to_entity(r) for r in result.scalars()]
+
+    async def count_for_connection(self, connection_id: UUID) -> int:
+        """Return total sync error count for a brokerage connection (W3 - FR-7).
+
+        Uses a scalar COUNT(*) against the brokerage_sync_errors table filtered by
+        brokerage_connection_id. The new index added in Alembic migration 0026
+        (``ix_brokerage_sync_errors_connection_id``) makes this O(1) on a bounded
+        error set rather than a full table scan.
+
+        Returns 0 (not None) when no errors exist -- the API layer propagates this
+        as an integer field with a default of 0 so the frontend can do arithmetic
+        without null-checking.
+        """
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(BrokerageTransactionSyncErrorModel)
+            .where(
+                BrokerageTransactionSyncErrorModel.connection_id == connection_id,
+            ),
+        )
+        return result.scalar_one() or 0

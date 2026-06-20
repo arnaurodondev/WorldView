@@ -31,6 +31,8 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             average_cost=row.average_cost,
             currency=row.currency,
             updated_at=row.updated_at,
+            cost_basis_per_unit=getattr(row, "cost_basis_per_unit", None),
+            total_cost_basis=getattr(row, "total_cost_basis", None),
         )
 
     async def get(self, portfolio_id: UUID, instrument_id: UUID) -> Holding | None:
@@ -182,12 +184,16 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
                 average_cost=holding.average_cost,
                 currency=holding.currency,
                 updated_at=holding.updated_at,
+                cost_basis_per_unit=holding.cost_basis_per_unit,
+                total_cost_basis=holding.total_cost_basis,
             )
             self._session.add(row)
         else:
             row.quantity = holding.quantity
             row.average_cost = holding.average_cost
             row.updated_at = holding.updated_at
+            row.cost_basis_per_unit = holding.cost_basis_per_unit
+            row.total_cost_basis = holding.total_cost_basis
 
     async def delete(self, portfolio_id: UUID, instrument_id: UUID) -> None:
         """Delete one holding row by composite key.

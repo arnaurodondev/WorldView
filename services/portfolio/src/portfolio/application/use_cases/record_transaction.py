@@ -10,7 +10,7 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
-from portfolio.application.messaging.mapper import transaction_recorded_to_dict
+from portfolio.application.messaging.mapper import holding_recompute_requested_to_dict, transaction_recorded_to_dict
 from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.repositories import OutboxRecord
 from portfolio.domain.entities.transaction import Transaction
@@ -25,7 +25,7 @@ from portfolio.domain.errors import (
     TenantInactiveError,
     UserInactiveError,
 )
-from portfolio.domain.events import TransactionRecorded
+from portfolio.domain.events import PortfolioHoldingRecomputeRequested, TransactionRecorded
 
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
@@ -225,6 +225,28 @@ class RecordTransactionUseCase:
                 lease_expires=None,
             ),
         )
+
+        # PLAN-0114 W1: for MANUAL portfolios emit a recompute event atomically.
+        if portfolio.kind == PortfolioKind.MANUAL:
+            recompute_event = PortfolioHoldingRecomputeRequested(
+                tenant_id=cmd.tenant_id,
+                portfolio_id=cmd.portfolio_id,
+                owner_id=cmd.owner_id,
+                correlation_id=cmd.correlation_id,
+            )
+            await uow.outbox.save(
+                OutboxRecord(
+                    id=new_uuid(),
+                    tenant_id=cmd.tenant_id,
+                    event_type=PortfolioHoldingRecomputeRequested.EVENT_TYPE,
+                    topic=EVENT_TOPIC_MAP[PortfolioHoldingRecomputeRequested.EVENT_TYPE],
+                    payload=holding_recompute_requested_to_dict(recompute_event),
+                    status="pending",
+                    attempt_count=0,
+                    lease_owner=None,
+                    lease_expires=None,
+                ),
+            )
 
         # Catch IntegrityError from concurrent same-key commits (TOCTOU race post-BP-035).
         # Both requests passed create_if_not_exists (neither had committed yet), then one

@@ -495,6 +495,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         assert self._notification_preferences is not None, "UnitOfWork not entered"
         return self._notification_preferences
 
+    async def try_advisory_lock(self, portfolio_id: object) -> bool:
+        """Non-blocking pg_try_advisory_xact_lock keyed on portfolio_id."""
+        import hashlib
+
+        from sqlalchemy import text
+
+        digest = hashlib.blake2b(str(portfolio_id).encode("utf-8"), digest_size=8).digest()
+        lock_key = int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
+        result = await self._session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key})
+        return bool(result.scalar())
+
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"
         await self._session.commit()

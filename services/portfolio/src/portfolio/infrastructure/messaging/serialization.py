@@ -39,6 +39,7 @@ _AVSC_MAP: dict[str, str] = {
     "watchlist.deleted": "watchlist.deleted.v1.avsc",
     "watchlist.item_added": "watchlist.item_added.v1.avsc",
     "watchlist.item_deleted": "watchlist.item_deleted.v1.avsc",
+    "portfolio.holding.recompute_requested": "portfolio_holding_recompute_requested.v1.avsc",
 }
 
 
