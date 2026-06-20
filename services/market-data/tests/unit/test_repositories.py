@@ -186,6 +186,148 @@ class TestOHLCVBulkUpsertChunking:
         return len(numeric) if numeric else 1
 
 
+def _make_bar(
+    *,
+    instrument_id: str = "inst-1",
+    minute: int = 0,
+    priority: int = 100,
+    open_: str = "100",
+    source: str = "alpaca",
+    timeframe: Timeframe = Timeframe.ONE_MIN,
+) -> OHLCVBar:
+    """A single OHLCV bar; ``minute`` controls the (conflict-key) bar_date."""
+    return OHLCVBar(
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        bar_date=datetime(2026, 6, 19, 0, minute, tzinfo=UTC),
+        open=Decimal(open_),
+        high=Decimal("105"),
+        low=Decimal("99"),
+        close=Decimal("103"),
+        volume=1000,
+        source=source,
+        provider_priority=ProviderPriority(provider=source, priority=priority),
+    )
+
+
+def _compiled_rows(stmt) -> list[dict]:
+    """Reconstruct the per-row VALUES dicts from a compiled multi-row INSERT.
+
+    Lets a test assert WHICH rows survived dedup (and their winning values),
+    not just how many — params are named ``open_m0``, ``open_m1``, ... for
+    multi-row inserts and bare ``open`` for a single row.
+    """
+    compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+    params = compiled.params
+    cols = ("bar_date", "open", "provider_priority", "source")
+    # Single-row insert → bare column names.
+    if "open" in params:
+        return [{c: params.get(c) for c in cols}]
+    # Multi-row insert → suffixed names; collect distinct row indices.
+    idxs = sorted({int(k.rsplit("_m", 1)[-1]) for k in params if k.startswith("open_m")})
+    return [{c: params.get(f"{c}_m{i}") for c in cols} for i in idxs]
+
+
+@pytest.mark.unit
+class TestOHLCVUpsertDedup:
+    """Regression: within-batch duplicate conflict keys must be collapsed.
+
+    A bulk ``ON CONFLICT DO UPDATE`` that sees the same
+    ``(instrument_id, timeframe, bar_date)`` key twice in one statement raises
+    ``CardinalityViolationError: ON CONFLICT DO UPDATE command cannot affect row
+    a second time``.  Overlapping crypto backfill/replay windows (e.g. ARB-USD
+    re-published with overlapping ranges) produce exactly this, crash-looping the
+    ohlcv-consumer (2_686 restarts).  The repo dedupes by conflict key BEFORE the
+    upsert, keeping the winner the ON CONFLICT clause would have resolved to.
+    """
+
+    async def test_priority_path_keeps_highest_priority_winner(self):
+        """Duplicate keys collapse to one row; the highest-priority value wins."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        # Two bars, SAME conflict key, different priority. The priority-guarded
+        # ON CONFLICT would keep the higher-priority value → so must dedup.
+        bars = [
+            _make_bar(minute=0, priority=50, open_="111", source="yahoo"),
+            _make_bar(minute=0, priority=100, open_="222", source="alpaca"),
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1, "duplicate key must collapse to a single VALUES row"
+        assert rows[0]["open"] == Decimal("222")  # higher-priority winner
+        assert rows[0]["provider_priority"] == 100
+
+    async def test_priority_path_equal_priority_keeps_last(self):
+        """On equal priority the LAST occurrence wins (mirrors ON CONFLICT order)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, priority=100, open_="111"),
+            _make_bar(minute=0, priority=100, open_="333"),  # last → wins
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("333")
+
+    async def test_priority_path_lower_priority_does_not_overwrite(self):
+        """A later LOWER-priority dup must NOT displace the earlier higher one."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, priority=100, open_="222"),  # higher → wins
+            _make_bar(minute=0, priority=50, open_="111"),
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("222")
+        assert rows[0]["provider_priority"] == 100
+
+    async def test_distinct_keys_all_survive(self):
+        """Distinct conflict keys are untouched by dedup."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [_make_bar(minute=m, priority=100) for m in range(5)]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 5
+
+    async def test_dedup_composes_with_chunking(self):
+        """A batch full of dups dedupes FIRST, then chunks the deduped result.
+
+        2_000 distinct keys each duplicated 3x = 6_000 input rows.  Dedup must
+        collapse to 2_000 rows → a single chunk (no CardinalityViolation, and no
+        spurious extra chunk from the pre-dedup 6_000 count).
+        """
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars: list[OHLCVBar] = []
+        for m in range(2_000):
+            for _ in range(3):  # 3 copies of each conflict key
+                bars.append(_make_bar(minute=m % 60, instrument_id=f"i{m}", priority=100))
+        await repo.bulk_upsert_with_priority(bars)
+        # 2_000 deduped rows fit in a single chunk.
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 2_000
+
+    async def test_derived_path_dedupes_last_wins(self):
+        """The derived (unconditional) path keeps the LAST occurrence per key."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, timeframe=Timeframe.ONE_WEEK, open_="111", priority=10),
+            _make_bar(minute=0, timeframe=Timeframe.ONE_WEEK, open_="333", priority=5),  # last → wins
+        ]
+        await repo.bulk_upsert_derived(bars)
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("333")  # unconditional → last wins regardless of priority
+
+
 class TestInstrumentSearch:
     """Verify that instrument search generates correct WHERE clauses."""
 

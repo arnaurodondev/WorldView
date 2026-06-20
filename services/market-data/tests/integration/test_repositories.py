@@ -388,6 +388,57 @@ class TestPgOHLCVRepository:
         # High-priority data must be preserved
         assert results[0].close == Decimal(305)
 
+    async def test_bulk_upsert_within_batch_duplicate_keys_no_cardinality_error(self, uow) -> None:
+        """A single batch carrying DUPLICATE conflict keys must upsert cleanly.
+
+        Regression for the crash-loop: overlapping crypto backfill/replay windows
+        published the same (instrument_id, timeframe, bar_date) twice in one
+        batch, so the bulk ``ON CONFLICT DO UPDATE`` raised
+        ``CardinalityViolationError: ON CONFLICT DO UPDATE command cannot affect
+        row a second time`` — crash-looping the ohlcv-consumer 2_686x. The repo
+        now dedupes by conflict key first, keeping the highest-priority (tie →
+        last) row, so this batch lands a single bar with the winning value.
+        """
+        from datetime import date
+
+        from market_data.domain.entities import OHLCVBar
+        from market_data.domain.enums import Timeframe
+        from market_data.domain.value_objects import ProviderPriority
+
+        instr_id = await self._make_instrument(uow)
+        bar_date = _utc(2026, 6, 19)
+
+        def _bar(close: int, priority: int, source: str) -> OHLCVBar:
+            return OHLCVBar(
+                instrument_id=instr_id,
+                timeframe=Timeframe.ONE_MIN,
+                bar_date=bar_date,
+                open=Decimal(close),
+                high=Decimal(close),
+                low=Decimal(close),
+                close=Decimal(close),
+                volume=10,
+                source=source,
+                provider_priority=ProviderPriority(provider=source, priority=priority),
+            )
+
+        # Three rows, SAME conflict key, in one batch. Highest priority (300) wins.
+        await uow.ohlcv.bulk_upsert_with_priority(
+            [
+                _bar(close=111, priority=80, source="yahoo"),
+                _bar(close=333, priority=300, source="polygon"),  # winner
+                _bar(close=222, priority=80, source="yahoo"),
+            ]
+        )
+        await uow.commit()
+
+        results = await uow.ohlcv.find_by_instrument_timeframe_range(
+            instr_id, Timeframe.ONE_MIN, date(2026, 6, 19), date(2026, 6, 19)
+        )
+        # Exactly one row stored (dedup), carrying the highest-priority winner.
+        assert len(results) == 1
+        assert results[0].close == Decimal(333)
+
 
 # ── Quote repository ──────────────────────────────────────────────────────────
 

@@ -54,6 +54,53 @@ def _chunk_rows(values: list[dict[str, Any]], chunk_size: int = _UPSERT_CHUNK_RO
         yield values[start : start + chunk_size]
 
 
+# The conflict key of the ``ohlcv_bars`` unique index that ``ON CONFLICT`` targets.
+_CONFLICT_KEY = ("instrument_id", "timeframe", "bar_date")
+
+
+def _dedupe_by_conflict_key(values: list[dict[str, Any]], *, priority_guarded: bool) -> list[dict[str, Any]]:
+    """Collapse rows sharing the ON CONFLICT key to one winner per key.
+
+    PostgreSQL rejects an ``INSERT ... ON CONFLICT DO UPDATE`` whose VALUES list
+    contains the SAME conflict key ``(instrument_id, timeframe, bar_date)`` more
+    than once — ``CardinalityViolationError: ON CONFLICT DO UPDATE command cannot
+    affect row a second time``.  Backfill / replay batches routinely carry
+    duplicate keys (overlapping crypto 1m windows, e.g. ARB-USD re-published with
+    overlapping ranges), so without this dedup the chunk dies and crash-loops the
+    consumer (it re-reads the same poison batch on restart; 2_686 restarts seen).
+
+    The dedup must reproduce the *final state* the upsert would have reached if
+    Postgres allowed dup keys, so dedup-then-upsert is observationally identical:
+
+    * ``priority_guarded`` (``bulk_upsert_with_priority``): the upsert's WHERE
+      clause only overwrites when ``EXCLUDED.provider_priority >=`` the stored
+      priority.  Within a single statement Postgres processes the VALUES in order,
+      so the surviving value for a key is the one with the highest priority, and
+      on a tie the LAST occurrence (most recent in the batch) wins.  We keep that
+      winner: ``new`` replaces the kept row when its priority is ``>=`` the kept
+      row's priority.
+    * non-guarded (``bulk_upsert_derived``): the upsert overwrites
+      unconditionally, so the LAST occurrence of a key wins.
+
+    Order is preserved by first-seen position so chunking downstream stays stable.
+    """
+    winners: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in values:
+        key = tuple(row[k] for k in _CONFLICT_KEY)
+        existing = winners.get(key)
+        if existing is None:
+            winners[key] = row
+            continue
+        if not priority_guarded:
+            # Unconditional overwrite → last occurrence wins.
+            winners[key] = row
+        elif row["provider_priority"] >= existing["provider_priority"]:
+            # Priority-guarded overwrite (>= mirrors the ON CONFLICT WHERE):
+            # higher priority wins; equal priority → last occurrence wins.
+            winners[key] = row
+    return list(winners.values())
+
+
 class PgOHLCVRepository(OHLCVRepository):
     """SQLAlchemy-backed implementation of OHLCVRepository."""
 
@@ -111,6 +158,14 @@ class PgOHLCVRepository(OHLCVRepository):
             }
             for bar in bars
         ]
+
+        # Collapse within-batch duplicate conflict keys BEFORE chunking.  A bulk
+        # ON CONFLICT DO UPDATE that sees the same (instrument_id, timeframe,
+        # bar_date) twice in one statement raises CardinalityViolationError, which
+        # crash-looped the consumer on overlapping backfill/replay windows.  We
+        # keep the highest-priority (tie → last) row per key, matching what the
+        # priority-guarded ON CONFLICT WHERE would have resolved to.
+        values = _dedupe_by_conflict_key(values, priority_guarded=True)
 
         # Chunk the VALUES list so no single INSERT exceeds Postgres's 65_535
         # bound-parameter wire limit (see ``_UPSERT_CHUNK_ROWS``).  Each chunk is
@@ -251,6 +306,12 @@ class PgOHLCVRepository(OHLCVRepository):
             }
             for bar in bars
         ]
+
+        # Dedupe within-batch duplicate conflict keys BEFORE chunking (same
+        # CardinalityViolationError risk as the priority path).  The derived
+        # upsert overwrites unconditionally, so the LAST occurrence of a key is
+        # the winner — mirror that here.
+        values = _dedupe_by_conflict_key(values, priority_guarded=False)
 
         # Same param-limit chunking as ``bulk_upsert_with_priority`` — the derived
         # VALUES row is the widest here (13 columns), so ``_UPSERT_CHUNK_ROWS``
