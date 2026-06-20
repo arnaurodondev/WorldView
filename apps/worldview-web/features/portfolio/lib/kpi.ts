@@ -246,11 +246,16 @@ export function computeAllocations(
     sectorMap[sector] =
       (sectorMap[sector] ?? 0) + (valueByInstrument[h.instrument_id] ?? 0);
   }
+  // WHY pct is a 0-1 fraction (not 0-100): AllocationSlice.pct must match the
+  // server sector-breakdown `weight` field (0-1) so the client-fallback path
+  // and the server path are interchangeable. All live consumers
+  // (SectorAllocationBar, ConcentrationSectorTeaseStrip) treat pct as 0-1 and
+  // multiply by 100 at render time via formatPercent. (BP-487)
   const bySector: AllocationSlice[] = Object.entries(sectorMap)
-    .map(([label, value]) => ({ label, value, pct: (value / totalVal) * 100 }))
+    .map(([label, value]) => ({ label, value, pct: value / totalVal }))
     .sort((a, b) => b.pct - a.pct); // largest sector first
 
-  const byType: AllocationSlice[] = [{ label: "Equity", value: totalVal, pct: 100 }];
+  const byType: AllocationSlice[] = [{ label: "Equity", value: totalVal, pct: 1 }];
 
   return { bySector, byType };
 }

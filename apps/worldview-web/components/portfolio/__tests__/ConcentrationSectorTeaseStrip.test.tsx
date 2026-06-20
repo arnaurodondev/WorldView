@@ -81,11 +81,11 @@ function makeConc(hhi: number, positionsCount = 5) {
   };
 }
 
-/** Minimal sector slices — 3 entries, pct is 0-100 scale. */
+/** Minimal sector slices — 3 entries, pct is a 0-1 fraction (BP-487). */
 const MOCK_SECTORS: AllocationSlice[] = [
-  { label: "Technology", value: 50000, pct: 50 },
-  { label: "Health Care", value: 30000, pct: 30 },
-  { label: "Financials", value: 20000, pct: 20 },
+  { label: "Technology", value: 50000, pct: 0.5 },
+  { label: "Health Care", value: 30000, pct: 0.3 },
+  { label: "Financials", value: 20000, pct: 0.2 },
 ];
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -204,6 +204,14 @@ describe("ConcentrationSectorTeaseStrip sector tease", () => {
     expect(screen.getByText(/TECH/)).toBeDefined();
     expect(screen.getByText(/HEAL/)).toBeDefined();
     expect(screen.getByText(/FINA/)).toBeDefined();
+
+    // BP-487 regression guard: pct is a 0-1 fraction (0.5) and must render as
+    // "+50.0%" via formatPercent (× 100). The pre-fix formatPercentDirect bug
+    // rendered the raw value as "+0.5%". Pin the rendered percentages so a
+    // scale regression fails loudly.
+    expect(screen.getByText(/TECH\s+\+50\.0%/)).toBeDefined();
+    expect(screen.getByText(/HEAL\s+\+30\.0%/)).toBeDefined();
+    expect(screen.getByText(/FINA\s+\+20\.0%/)).toBeDefined();
   });
 
   it("shows positions count ('names') from the API", async () => {
