@@ -19,6 +19,7 @@ from typing import Any
 
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
+    create_ml_metrics,
     get_logger,
     log_runtime_banner,
     start_metrics_server,
@@ -57,6 +58,14 @@ async def main() -> None:
         service_name="nlp-pipeline-article-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
     )
+
+    # ML metrics for the extraction adapter (Prometheus namespace ``nlp_pipeline``,
+    # mirroring app.py). WITHOUT this the DeepSeekExtractionAdapter is constructed with
+    # metrics=None and silently emits NO ml_api_* series, so the extraction error-rate /
+    # fallback / latency panels of the "Extraction Health — S6" Grafana dashboard stay
+    # empty. Registered on the default registry the metrics server above already exposes;
+    # scrape reads the registry live, so post-start registration is fine.
+    ml_metrics = create_ml_metrics(settings.service_name)
 
     stop_event = asyncio.Event()
 
@@ -207,6 +216,10 @@ async def main() -> None:
             total_budget_s=settings.extraction_total_budget_s,
             max_connections=settings.deepinfra_max_connections,
             max_keepalive_connections=settings.deepinfra_max_keepalive,
+            # Emit ml_api_requests_total / ml_api_latency_seconds / tokens / cost,
+            # labelled by the ACTUAL serving model (primary gpt-oss-120b vs fallback
+            # gpt-oss-20b). Powers the extraction error-rate + fallback + latency panels.
+            metrics=ml_metrics,
         )
         log.info(
             "extraction_deepinfra_adapter_selected",
