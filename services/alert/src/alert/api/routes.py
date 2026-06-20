@@ -13,22 +13,31 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+
+if TYPE_CHECKING:
+    from alert.domain.enums import RuleType
 
 from alert.api.dependencies import (
     AckAlertUseCaseDep,
     AckUseCaseDep,
     CreateAlertUseCaseDep,
+    CreateRuleUseCaseDep,
     CurrentUserIdDep,
     DbSessionDep,
+    DeleteRuleUseCaseDep,
     GetPendingAlertsUseCaseDep,
+    GetRuleUseCaseDep,
     HistoryUseCaseDep,
+    ListRulesUseCaseDep,
     ReadDbSessionDep,
     SnoozeUseCaseDep,
     TenantUserDep,
+    UpdateRuleUseCaseDep,
 )
 from alert.api.schemas import (
     AcknowledgeAlertRequest,
@@ -36,6 +45,10 @@ from alert.api.schemas import (
     AlertCreatedResponse,
     AlertHistoryResponse,
     AlertResponse,
+    AlertRuleCreateRequest,
+    AlertRuleListResponse,
+    AlertRuleResponse,
+    AlertRuleUpdateRequest,
     CreateAlertRequest,
     PendingAlertResponse,
     PendingAlertsResponse,
@@ -415,6 +428,238 @@ async def list_alert_history(
         offset=offset,
         has_more=offset + len(alerts) < total,
     )
+
+
+# ── Alert Rules CRUD (PLAN-0113) ─────────────────────────────────────────────
+#
+# Routes call only use cases (R25). The discriminated ``condition`` is validated
+# here at the boundary so we can return a precise 400/422; keying fields
+# (entity_id / node_a / node_b) are derived from the validated condition.
+
+
+def _rule_to_response(rule: object) -> AlertRuleResponse:
+    """Map a domain AlertRule to the wire schema."""
+    from alert.domain.entities import AlertRule
+
+    assert isinstance(rule, AlertRule)
+    return AlertRuleResponse(
+        rule_id=rule.rule_id,
+        tenant_id=rule.tenant_id,
+        user_id=rule.user_id,
+        rule_type=str(rule.rule_type),
+        name=rule.name,
+        entity_id=rule.entity_id,
+        node_a_entity_id=rule.node_a_entity_id,
+        node_b_entity_id=rule.node_b_entity_id,
+        condition=rule.condition,
+        severity=str(rule.severity),
+        enabled=rule.enabled,
+        cooldown_seconds=rule.cooldown_seconds,
+        notify_in_app=rule.notify_in_app,
+        notify_email=rule.notify_email,
+        last_state=rule.last_state,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
+def _parse_rule_type(raw: str) -> RuleType:
+    from alert.domain.enums import RuleType
+
+    try:
+        return RuleType(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="rule_type must be one of PRICE_CROSS|NEWS_COUNT|NEWS_MOMENTUM|KG_CONNECTION|FUNDAMENTAL_CROSS",
+        ) from None
+
+
+def _validate_condition_and_keys(rule_type_raw: str, condition_raw: dict) -> tuple[RuleType, dict, dict]:  # type: ignore[type-arg]
+    """Validate the discriminated condition; derive keying fields.
+
+    Returns ``(rule_type, validated_condition_dict, keying_kwargs)`` where
+    keying_kwargs is one of ``{entity_id=...}`` or
+    ``{node_a_entity_id=..., node_b_entity_id=...}``. Raises HTTPException 400
+    on a bad shape, 422 on the node_a==node_b semantic violation.
+    """
+    from pydantic import ValidationError
+
+    from alert.domain.enums import RuleType
+    from alert.domain.rule_conditions import parse_condition
+
+    rule_type = _parse_rule_type(rule_type_raw)
+    try:
+        condition = parse_condition(rule_type, condition_raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid condition: {exc.errors()}") from None
+
+    cond_dict = condition.model_dump(mode="json")
+    if rule_type is RuleType.KG_CONNECTION:
+        if cond_dict["source_entity_id"] == cond_dict["target_entity_id"]:
+            raise HTTPException(status_code=422, detail="source_entity_id must differ from target_entity_id")
+        keys = {
+            "node_a_entity_id": UUID(cond_dict["source_entity_id"]),
+            "node_b_entity_id": UUID(cond_dict["target_entity_id"]),
+        }
+    else:
+        key_field = "instrument_id" if "instrument_id" in cond_dict else "entity_id"
+        keys = {"entity_id": UUID(cond_dict[key_field])}
+    return rule_type, cond_dict, keys
+
+
+@router.post("/alert-rules", response_model=AlertRuleResponse, status_code=201)
+async def create_alert_rule(
+    body: AlertRuleCreateRequest,
+    uc: CreateRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertRuleResponse:
+    """Create a standing alert rule (PLAN-0113).
+
+    Validates the discriminated ``condition`` at the boundary, derives keying
+    fields, and persists owner-scoped. Returns 400 (bad condition), 409
+    (duplicate identical rule), 422 (node_a==node_b), 429 (per-user cap).
+    """
+    from alert.application.use_cases.manage_rules import CreateRuleInput
+    from alert.domain.enums import AlertSeverity
+    from alert.domain.errors import RuleLimitExceededError
+
+    tenant_id, user_id = tenant_user
+    rule_type, cond_dict, keys = _validate_condition_and_keys(body.rule_type, body.condition)
+
+    try:
+        severity = AlertSeverity(body.severity)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="severity must be low|medium|high|critical") from None
+
+    name = body.name or f"{rule_type.value} rule"
+    try:
+        rule = await uc.execute(
+            CreateRuleInput(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                rule_type=rule_type,
+                name=name,
+                condition=cond_dict,
+                severity=severity,
+                enabled=body.enabled,
+                cooldown_seconds=body.cooldown_seconds,
+                notify_in_app=body.notify_in_app,
+                notify_email=body.notify_email,
+                **keys,
+            )
+        )
+    except RuleLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from None
+
+    logger.info("alert_rule_created", rule_id=str(rule.rule_id), rule_type=rule_type.value)  # type: ignore[no-any-return]
+    return _rule_to_response(rule)
+
+
+@router.get("/alert-rules", response_model=AlertRuleListResponse)
+async def list_alert_rules(
+    uc: ListRulesUseCaseDep,
+    tenant_user: TenantUserDep,
+    enabled: bool | None = Query(default=None),
+    rule_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AlertRuleListResponse:
+    """List the caller's alert rules (read replica, R27)."""
+    tenant_id, user_id = tenant_user
+    rt = _parse_rule_type(rule_type) if rule_type is not None else None
+    rules, total = await uc.execute(
+        tenant_id, user_id, enabled=enabled, rule_type=rt, limit=limit, offset=offset
+    )
+    return AlertRuleListResponse(items=[_rule_to_response(r) for r in rules], total=total)
+
+
+@router.get("/alert-rules/{rule_id}", response_model=AlertRuleResponse)
+async def get_alert_rule(
+    rule_id: UUID,
+    uc: GetRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertRuleResponse:
+    """Get a single owned rule (404 if missing or cross-owner)."""
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+    try:
+        rule = await uc.execute(rule_id, tenant_id, user_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return _rule_to_response(rule)
+
+
+@router.patch("/alert-rules/{rule_id}", response_model=AlertRuleResponse)
+async def update_alert_rule(
+    rule_id: UUID,
+    body: AlertRuleUpdateRequest,
+    get_uc: GetRuleUseCaseDep,
+    uc: UpdateRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertRuleResponse:
+    """Partial-update an owned rule. Changing ``condition`` re-arms (last_state=null).
+
+    ``rule_type`` is immutable; a ``condition`` change is validated against the
+    rule's existing type.
+    """
+    from alert.application.use_cases.manage_rules import UpdateRuleInput
+    from alert.domain.enums import AlertSeverity
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+
+    severity: AlertSeverity | None = None
+    if body.severity is not None:
+        try:
+            severity = AlertSeverity(body.severity)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="severity must be low|medium|high|critical") from None
+
+    patch = UpdateRuleInput(
+        name=body.name,
+        severity=severity,
+        enabled=body.enabled,
+        cooldown_seconds=body.cooldown_seconds,
+        notify_in_app=body.notify_in_app,
+        notify_email=body.notify_email,
+    )
+
+    if body.condition is not None:
+        # Resolve the rule's immutable type, then validate the new condition.
+        try:
+            existing = await get_uc.execute(rule_id, tenant_id, user_id)
+        except RuleNotFoundError:
+            raise HTTPException(status_code=404, detail="Rule not found") from None
+        _, cond_dict, keys = _validate_condition_and_keys(str(existing.rule_type), body.condition)
+        patch.condition = cond_dict
+        patch.entity_id = keys.get("entity_id")
+        patch.node_a_entity_id = keys.get("node_a_entity_id")
+        patch.node_b_entity_id = keys.get("node_b_entity_id")
+
+    try:
+        rule = await uc.execute(rule_id, tenant_id, user_id, patch)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return _rule_to_response(rule)
+
+
+@router.delete("/alert-rules/{rule_id}", status_code=204)
+async def delete_alert_rule(
+    rule_id: UUID,
+    uc: DeleteRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> Response:
+    """Delete an owned rule (204; 404 if missing or cross-owner)."""
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+    try:
+        await uc.execute(rule_id, tenant_id, user_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return Response(status_code=204)
 
 
 # ── WebSocket: /api/v1/alerts/stream ─────────────────────────────────────────

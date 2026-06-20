@@ -13,8 +13,8 @@ from uuid import UUID
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from alert.domain.entities import Alert, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
-    from alert.domain.enums import AlertSeverity
+    from alert.domain.entities import Alert, AlertRule, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
+    from alert.domain.enums import AlertSeverity, RuleType
 
 
 class DLQRepositoryPort(ABC):
@@ -127,6 +127,58 @@ class AlertSaveRepositoryPort(ABC):
 
     @abstractmethod
     async def save(self, alert: Alert) -> None: ...
+
+
+class IAlertRuleRepository(ABC):
+    """Port for ``alert_rules`` persistence (PLAN-0113, R25 ABC).
+
+    Use cases depend only on this interface; the concrete ``AlertRuleRepository``
+    is wired in the DI factory layer.
+    """
+
+    @abstractmethod
+    async def save(self, rule: AlertRule) -> None:
+        """Insert a new rule row (flush, no commit — route/UoW owns the txn)."""
+
+    @abstractmethod
+    async def get_by_id(self, rule_id: UUID, tenant_id: UUID, user_id: UUID) -> AlertRule | None:
+        """Fetch a rule scoped to its owner; None if missing or not owned."""
+
+    @abstractmethod
+    async def list_by_owner(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        *,
+        enabled: bool | None = None,
+        rule_type: RuleType | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AlertRule]:
+        """List the owner's rules with optional filters, newest first."""
+
+    @abstractmethod
+    async def count_by_owner(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        *,
+        enabled: bool | None = None,
+        rule_type: RuleType | None = None,
+    ) -> int:
+        """Count the owner's rules matching the same filters as ``list_by_owner``."""
+
+    @abstractmethod
+    async def update(self, rule: AlertRule) -> bool:
+        """Persist a mutated rule (owner-scoped). Returns True iff a row updated."""
+
+    @abstractmethod
+    async def delete(self, rule_id: UUID, tenant_id: UUID, user_id: UUID) -> bool:
+        """Delete an owned rule. Returns True iff a row was removed."""
+
+    @abstractmethod
+    async def list_enabled_by_type(self, rule_type: RuleType) -> list[AlertRule]:
+        """All enabled rules of a type across all owners (poller scan)."""
 
 
 class EmailPreferenceRepositoryPort(ABC):

@@ -10,6 +10,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from api_gateway.clients import (
+    create_alert_rule,
+    delete_alert_rule,
+    get_alert_rule,
+    list_alert_rules,
+    update_alert_rule,
+)
 from api_gateway.routes.helpers import _auth_headers, _clients
 from api_gateway.schemas import AlertResponse
 
@@ -230,6 +237,87 @@ async def create_alert(request: Request) -> Response:
         content=body,
         headers=headers,
     )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ── Alert-rule CRUD proxies (PLAN-0113) ──────────────────────────────────────
+#
+# /v1/alert-rules → S10 /api/v1/alert-rules. Auth-gated; the verified internal
+# JWT is forwarded so S10 derives tenant_id/user_id from the token. Mutations
+# carry Cache-Control: no-store (user-specific writes must never be cached).
+
+
+@router.post("/alert-rules", status_code=201)
+async def create_rule(request: Request) -> Response:
+    """Proxy POST /api/v1/alert-rules → S10 (create a standing rule)."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    resp = await create_alert_rule(_clients(request), body=body, headers=_auth_headers(request))
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/alert-rules")
+async def list_rules(request: Request) -> Response:
+    """Proxy GET /api/v1/alert-rules → S10 (list the caller's rules)."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    resp = await list_alert_rules(
+        _clients(request), params=dict(request.query_params), headers=_auth_headers(request)
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/alert-rules/{rule_id}")
+async def get_rule(rule_id: str, request: Request) -> Response:
+    """Proxy GET /api/v1/alert-rules/{rule_id} → S10."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    resp = await get_alert_rule(_clients(request), rule_id=rule_id, headers=_auth_headers(request))
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.patch("/alert-rules/{rule_id}")
+async def update_rule(rule_id: str, request: Request) -> Response:
+    """Proxy PATCH /api/v1/alert-rules/{rule_id} → S10 (partial update)."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    resp = await update_alert_rule(_clients(request), rule_id=rule_id, body=body, headers=_auth_headers(request))
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.delete("/alert-rules/{rule_id}", status_code=204)
+async def delete_rule(rule_id: str, request: Request) -> Response:
+    """Proxy DELETE /api/v1/alert-rules/{rule_id} → S10."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    resp = await delete_alert_rule(_clients(request), rule_id=rule_id, headers=_auth_headers(request))
     return Response(
         content=resp.content,
         status_code=resp.status_code,

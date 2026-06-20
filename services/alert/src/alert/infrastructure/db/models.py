@@ -184,6 +184,62 @@ class DeadLetterQueueModel(Base):
 
 
 # ---------------------------------------------------------------------------
+# alert_rules (PLAN-0113 — standing user rules)
+# ---------------------------------------------------------------------------
+
+
+class AlertRuleModel(Base):
+    __tablename__ = "alert_rules"
+
+    rule_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    # rule_type stored as VARCHAR + CHECK (BP-007) — never a PG enum.
+    rule_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    node_a_entity_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    node_b_entity_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    condition: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
+    severity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="medium")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    cooldown_seconds: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    notify_in_app: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    notify_email: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    last_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[type-arg]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "rule_type IN ('PRICE_CROSS','NEWS_COUNT','NEWS_MOMENTUM','KG_CONNECTION','FUNDAMENTAL_CROSS')",
+            name="ck_alert_rules_rule_type",
+        ),
+        CheckConstraint(
+            "severity IN ('low','medium','high','critical')",
+            name="ck_alert_rules_severity",
+        ),
+        CheckConstraint("cooldown_seconds >= 0", name="ck_alert_rules_cooldown"),
+        # Keying invariant (PRD §6.4): KG needs both distinct nodes; others need entity_id.
+        CheckConstraint(
+            "(rule_type = 'KG_CONNECTION' AND node_a_entity_id IS NOT NULL "
+            "AND node_b_entity_id IS NOT NULL AND node_a_entity_id <> node_b_entity_id) "
+            "OR (rule_type <> 'KG_CONNECTION' AND entity_id IS NOT NULL)",
+            name="ck_alert_rules_keying",
+        ),
+        Index("idx_alert_rules_type_enabled", "rule_type", postgresql_where="enabled"),
+        Index("idx_alert_rules_entity_enabled", "entity_id", postgresql_where="enabled"),
+        Index(
+            "idx_alert_rules_nodes_enabled",
+            "node_a_entity_id",
+            "node_b_entity_id",
+            postgresql_where="enabled",
+        ),
+        Index("idx_alert_rules_owner", "tenant_id", "user_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # email_preferences
 # ---------------------------------------------------------------------------
 

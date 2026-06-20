@@ -100,9 +100,9 @@ builds a **real standing-rule engine** and delivers **5 user-creatable alert typ
 |---------|--------|
 | **S10 alert** | New `alert_rules` table (migration 0010) + `AlertRule` entity + `RuleType` enum + discriminated-union condition schema; `RuleEvaluator` registry + 5 evaluators; new `alert-rule-poller` process; extend intelligence consumer for `KG_CONNECTION`; `FireRuleAlertUseCase`; rule CRUD routes; S3/S6/S7 internal clients for evaluation. |
 | **S9 api-gateway** | Proxy routes for `/api/v1/alert-rules` CRUD (auth-gated, inject internal JWT) → `clients.alert.*`. |
-| **S3 market-data** | **No code change** — consumed read-only via existing `POST /internal/v1/price/batch`, `GET /api/v1/fundamentals/timeseries`, `GET /api/v1/fundamentals/metrics/{id}`. |
-| **S6 nlp-pipeline** | **No code change** — consumed read-only via `GET /internal/v1/instruments/{id}/news-rollup-7d` and `GET /api/v1/news/trending-entities`. |
-| **S7 knowledge-graph** | **No code change for v1** — consumed read-only via the existing pairwise path / relation API to confirm A↔B edges. (Optional additive `new_edges` enrichment to `graph.state.changed.v1` is v2.) |
+| **S3 market-data** | **No code change** — consumed read-only via existing `POST /internal/v1/price/batch` (1–50 ids/call), `GET /api/v1/fundamentals/timeseries?instrument_id=&metric=`, and `GET /api/v1/fundamentals/screen/fields` (metric vocabulary). All verified present in `api/routers/{price_snapshot,fundamental_metrics}.py`. |
+| **S6 nlp-pipeline** | **No code change** — consumed read-only via `GET /internal/v1/instruments/{id}/news-rollup-7d` (7d count) and `GET /api/v1/news/trending-entities?window_hours=24\|72\|168` (delta_pct + count). Both verified in `api/routes/{internal_news_rollup,trending_entities}.py`. |
+| **S7 knowledge-graph** | **No code change for v1** — consumed read-only via the existing `GET /api/v1/paths/between?source=&target=&max_hops=1..3` (returns `connected: bool` + ranked paths; `api/paths.py`) to confirm A↔B edges. (Optional additive `new_edges` enrichment to `graph.state.changed.v1` is v2.) |
 | **worldview-web** | `lib/api/alertRules.ts` (real CRUD), `AlertWizard` + per-type condition editors, shared `EntityPicker` + `MetricPicker`, NL summary, new entry points; retire the localStorage rule layer. |
 | **infra** | New compose service `alert-rule-poller` (same image as S10, different command); config vars (poll cadences, cooldowns). |
 
@@ -209,7 +209,7 @@ NewsMomentumCondition     { entity_id: UUID, window_hours: 24|72|168, delta_pct:
 KgConnectionCondition     { source_entity_id: UUID, target_entity_id: UUID, max_hops: int(1..3)=3, relation_type?: str }
 FundamentalCrossCondition { instrument_id: UUID, metric_key: str, operator: "above"|"below", value: float }
 ```
-- Validated at the API boundary (replaces today's free-text `condition` + unvalidated `threshold`). `metric_key` validated against the S3 fundamentals metric vocabulary (the screener catalogue / `docs/audits/2026-04-29-screener-metric-gap.md` names). `window` for NEWS_COUNT v1 supports `7d` exactly (source rollup) + `24h/72h/168h` via trending; others 422 until v2.
+- Validated at the API boundary (replaces today's free-text `condition` + unvalidated `threshold`). `metric_key` validated against the S3 fundamentals metric vocabulary returned by `GET /api/v1/fundamentals/screen/fields` (the canonical screener field metadata; the frontend `MetricPicker` reads the same source). `window_hours` for NEWS_MOMENTUM is restricted to the trending endpoint's supported set `{24, 72, 168}`. NEWS_COUNT `window` v1 supports `7d` exactly (source rollup) + `24h/72h/168h` via trending; others 422 until v2.
 
 #### 6.5.4 Evaluation: `RuleEvaluator` registry (`application/rules/`)
 ```
@@ -231,10 +231,12 @@ EVALUATOR_REGISTRY: dict[RuleType, RuleEvaluator]   # the single registration po
   - **NewsMomentumEvaluator** (poll): `GET /api/v1/news/trending-entities?window_hours=`;
     fire when `delta_pct ≥ threshold AND count ≥ min_count`.
   - **KgConnectionEvaluator** (event): on `graph.state.changed.v1`, pre-filter
-    `affected_entity_ids ⊇ {A,B}` (or touching A/B), then confirm via S7 pairwise path
-    (`max_hops`, optional `relation_type`); latch `connected=true` (fires once).
-  - **FundamentalCrossEvaluator** (poll): `GET /api/v1/fundamentals/timeseries?metric=`;
-    fire on metric edge transition vs `last_value`.
+    `affected_entity_ids` touches A and/or B, then confirm via S7
+    `GET /api/v1/paths/between?source=A&target=B&max_hops=` (read its `connected` flag;
+    if `relation_type` set, require a matching edge in the returned paths); latch
+    `connected=true` (fires once).
+  - **FundamentalCrossEvaluator** (poll): `GET /api/v1/fundamentals/timeseries?instrument_id=&metric=`
+    → latest `value_numeric`; fire on metric edge transition vs `last_value`.
 
 #### 6.5.5 Use case: `FireRuleAlertUseCase` (NEW)
 Given a rule + `EvalResult` that passed `should_fire`: in **one transaction** write an `alerts`
@@ -264,13 +266,18 @@ memory in DB).
 - **`components/alerts/condition-editors/`** (NEW) — `PriceCrossEditor`, `NewsVolumeEditor`,
   `NewsMomentumEditor`, `KgConnectionEditor`, `FundamentalCrossEditor`. Each renders the
   structured fields from §6.5.3.
-- **`components/common/EntityPicker.tsx`** (NEW, extracted from `PathBetweenPanel`) — debounced
-  `searchFundamentals` → real KG `entity_id`. Used by news/momentum/connection editors (two
-  instances for connection). `TickerPicker` reused for price/fundamental (instrument_id).
-- **`components/alerts/MetricPicker.tsx`** (NEW) — wraps the screener fundamental-metric
-  catalogue; emits a backend-valid `metric_key`.
-- **`lib/alerts/format.ts`** (EXTEND) — per-type `ruleToNaturalLanguage(rule)` for the live
-  summary + list rendering.
+- **`components/common/EntityPicker.tsx`** (NEW, extracted from the inline `EntityPicker`
+  function in `components/intelligence/PathBetweenPanel.tsx`) — debounced `searchFundamentals`
+  (from `lib/api/search.ts`, which enriches to a real KG `entity_id`). Used by
+  news/momentum/connection editors (two instances for connection). `TickerPicker`
+  (`components/workspace/TickerPicker.tsx`, uses `searchInstruments`) reused for
+  price/fundamental (instrument_id).
+- **`components/alerts/MetricPicker.tsx`** (NEW) — fetches the S3 metric vocabulary from
+  `GET /api/v1/fundamentals/screen/fields` (via the gateway) and emits a backend-valid
+  `metric_key`. (Same source the backend validates against; do not hard-code from the
+  screener `FilterState`.)
+- **`lib/alerts/format.ts`** (EXTEND) — add a NEW per-type `ruleToNaturalLanguage(rule)` for the
+  live summary + list rendering (the file currently exports only `formatAlertTitle`).
 - **Entry points (NEW):** ＋ Alert on the instrument detail header (opens wizard pre-scoped to
   the instrument, defaulting to price/fundamental/news types); ＋ Alert on the KG graph / Path
   panel (opens wizard pre-scoped to KG_CONNECTION with the two entities prefilled); existing
@@ -329,7 +336,9 @@ alerts-page tests (entry points). No existing fired-alert delivery test changes.
   S10 (existing `InternalJWTMiddleware`). Poller/consumer use the service account.
 - **Resource abuse:** per-user rule cap (config, default 200) + CRUD rate limit (60/min);
   poller only reads enabled rules; batch reads bounded (≤ 50 ids/call).
-- **No secrets in rules;** S3/S6/S7 reads use the existing internal clients (signed JWT).
+- **No secrets in rules;** S3/S6/S7 reads go through internal clients with the service-account
+  signed JWT (S3 client extends the existing `S3MarketDataClient`; S6 + S7 graph-path clients are
+  NEW — the existing `S7EntityResolver` only resolves names, not paths).
 
 ## 10. Failure Modes (cross-ref BUG_PATTERNS.md)
 

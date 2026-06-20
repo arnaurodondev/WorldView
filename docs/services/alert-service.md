@@ -46,6 +46,20 @@ injects the correct `user_id` from the JWT.
 | Intelligence consumer | `python -m alert.infrastructure.messaging.consumers.intelligence_consumer_main` | `alert-intelligence-consumer` |
 | Watchlist consumer | `python -m alert.infrastructure.messaging.consumers.watchlist_consumer_main` | `alert-watchlist-consumer` |
 | Email scheduler | `python -m alert.infrastructure.email.scheduler_main` | `alert-email-scheduler` |
+| Alert-rule poller | `python -m alert.infrastructure.rules.poller_main` | `alert-rule-poller` |
+
+The **alert-rule poller** (PLAN-0113) is the 5th process (R22). It runs an
+APScheduler interval loop (base tick `ALERT_RULE_POLL_TICK_SECONDS`, default 60s)
+that loads enabled poll-type rules (`PRICE_CROSS`, `FUNDAMENTAL_CROSS`,
+`NEWS_COUNT`, `NEWS_MOMENTUM`), throttles each by its per-type cadence
+(`AlertRule.is_due`), and resolves an evaluator from `EVALUATOR_REGISTRY`.
+Wave 1 ships the loop with the registry empty (no-op); Waves 2/3 wire the
+evaluators + firing. KG_CONNECTION is event-driven (intelligence consumer), not
+polled. Observability per BP-705: `s10_rule_poller_last_success_timestamp_seconds`
+(liveness gauge), `s10_rule_poller_runs_total{outcome}`, `s10_rule_poller_due_rules`,
+and a per-cycle `asyncio.wait_for` watchdog (`ALERT_RULE_POLLER_WATCHDOG_SECONDS`).
+Set `ALERT_RULE_POLLER_ENABLED=false` to disable evaluation instantly (rules
+stay stored but dormant). Metrics on `:9101`.
 
 ### WebSocket Cross-Process Architecture (Valkey Pub/Sub)
 
@@ -84,6 +98,28 @@ channel for the user it is serving.
 | PATCH | `/api/v1/alerts/{alert_id}/acknowledge` | X-Internal-JWT | Tenant-level alert ack (idempotent) |
 | PATCH | `/api/v1/alerts/{alert_id}/snooze` | X-Internal-JWT | Set `snooze_until` (max 30 days) |
 | GET | `/api/v1/alerts/history` | X-Internal-JWT | Paginated tenant alert history |
+
+### Alert-Rule Endpoints (PLAN-0113)
+
+Standing user rules. The `condition` is a discriminated union validated at the
+boundary by `rule_type` (§6.5.3). `tenant_id`/`user_id` come from the JWT, never
+the body. Owner-scoped: a cross-owner read/update/delete is a 404. Proxied by S9
+at `/v1/alert-rules` (auth-gated, `Cache-Control: no-store`).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/alert-rules` | X-Internal-JWT | Create a standing rule (201; 400 bad condition / unknown rule_type / bad severity; 422 node_a==node_b; 429 per-user cap) |
+| GET | `/api/v1/alert-rules` | X-Internal-JWT | List the caller's rules (`?enabled=`, `?rule_type=`, `?limit=&offset=`) → `{items, total}` |
+| GET | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Get one owned rule (404 if missing/cross-owner) |
+| PATCH | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Partial update; changing `condition` re-arms (`last_state=null`); `rule_type` immutable |
+| DELETE | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Delete an owned rule (204; 404 if missing/cross-owner) |
+
+**Rule types** (`rule_type`, VARCHAR+CHECK per BP-007): `PRICE_CROSS`,
+`NEWS_COUNT`, `NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`. The
+read path (List/Get) uses the read replica (`ReadDbSessionDep`, R27); writes use
+`DbSessionDep`. Reads/writes go only through use cases in
+`application/use_cases/manage_rules.py` (R25), behind the `IAlertRuleRepository`
+ABC port.
 
 #### `POST /api/v1/alerts`
 
@@ -248,6 +284,36 @@ CREATE TABLE alerts (
     snooze_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- PLAN-0113 (migration 0010): standing user rules backing the rule engine.
+CREATE TABLE alert_rules (
+    rule_id UUID PRIMARY KEY,              -- UUIDv7
+    tenant_id UUID NOT NULL,
+    user_id UUID NOT NULL,                 -- rule owner (delivery target)
+    rule_type VARCHAR(50) NOT NULL,        -- VARCHAR+CHECK (BP-007), 5 RuleType values
+    name VARCHAR(255) NOT NULL,
+    entity_id UUID,                        -- instrument/entity key (non-KG types)
+    node_a_entity_id UUID,                 -- KG_CONNECTION source
+    node_b_entity_id UUID,                 -- KG_CONNECTION target
+    condition JSONB NOT NULL,              -- discriminated union per rule_type (§6.5.3)
+    severity VARCHAR(10) NOT NULL DEFAULT 'medium',
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+    notify_in_app BOOLEAN NOT NULL DEFAULT true,
+    notify_email BOOLEAN NOT NULL DEFAULT false,
+    last_state JSONB,                      -- edge-trigger memory (was_above/last_count/connected/last_fired_at/...)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- keying CHECK: KG needs two distinct nodes; others need entity_id
+    CONSTRAINT ck_alert_rules_keying CHECK (
+        (rule_type = 'KG_CONNECTION' AND node_a_entity_id IS NOT NULL
+            AND node_b_entity_id IS NOT NULL AND node_a_entity_id <> node_b_entity_id)
+        OR (rule_type <> 'KG_CONNECTION' AND entity_id IS NOT NULL)
+    )
+    -- + CHECK rule_type IN (...), CHECK severity IN (...), CHECK cooldown_seconds >= 0
+);
+-- Indexes: (rule_type) WHERE enabled, (entity_id) WHERE enabled,
+--          (node_a_entity_id, node_b_entity_id) WHERE enabled, (tenant_id, user_id)
 
 CREATE TABLE pending_alerts (
     pending_id UUID PRIMARY KEY,
@@ -450,7 +516,17 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 base URL for watchlist/user lookups |
 | `ALERT_S7_KNOWLEDGE_GRAPH_BASE_URL` | `http://knowledge-graph:8007` | S7 URL for entity name/ticker enrichment |
 | `ALERT_S8_BASE_URL` | `http://rag-chat:8008` | S8 URL for email digest briefing generation |
-| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data in email digests |
+| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data + rule price/fundamental reads |
+| `ALERT_S6_NLP_BASE_URL` | `http://nlp-pipeline:8006` | S6 URL for news-count/momentum rule reads (PLAN-0113, new) |
+| `ALERT_S6_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S6 calls (PLAN-0113) |
+| `ALERT_ALERT_RULE_POLLER_ENABLED` | `true` | Master switch for rule evaluation (false = rules dormant) |
+| `ALERT_ALERT_RULE_POLL_TICK_SECONDS` | `60` | Poller base tick |
+| `ALERT_ALERT_RULE_CADENCE_PRICE_SECONDS` | `60` | PRICE_CROSS poll cadence |
+| `ALERT_ALERT_RULE_CADENCE_NEWS_COUNT_SECONDS` | `3600` | NEWS_COUNT poll cadence |
+| `ALERT_ALERT_RULE_CADENCE_NEWS_MOMENTUM_SECONDS` | `3600` | NEWS_MOMENTUM poll cadence |
+| `ALERT_ALERT_RULE_CADENCE_FUNDAMENTAL_SECONDS` | `21600` | FUNDAMENTAL_CROSS poll cadence (6h) |
+| `ALERT_ALERT_RULE_MAX_PER_USER` | `200` | Per-user rule cap (PRD §9) |
+| `ALERT_ALERT_RULE_POLLER_WATCHDOG_SECONDS` | `180` | Per-cycle `asyncio.wait_for` watchdog (BP-705) |
 | `ALERT_S1_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S1 calls. **Required for watchlist lookups.** Without it, S1 returns 401. |
 | `ALERT_S7_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S7 entity enrichment. Without it, entity_name/ticker will be null in alerts. |
 | `ALERT_S8_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S8 briefing calls in email digests. **Required for email digest generation.** |

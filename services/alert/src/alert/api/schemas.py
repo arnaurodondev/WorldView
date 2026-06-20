@@ -225,3 +225,71 @@ class AlertHistoryResponse(BaseModel):
     # ``has_more`` is computed as ``offset + len(alerts) < total`` server-side
     # so the client can render "Load more" without re-deriving it.
     has_more: bool
+
+
+# ── Alert Rules (PLAN-0113) ───────────────────────────────────────────────────
+
+
+class AlertRuleCreateRequest(BaseModel):
+    """Request body for POST /api/v1/alert-rules.
+
+    ``condition`` is a raw dict validated against the discriminated union for
+    ``rule_type`` in the route handler (so we can return a precise 400/422 with
+    the field-level detail rather than a generic body-validation error).
+    ``tenant_id``/``user_id`` are NEVER in the body — they come from the JWT.
+    """
+
+    rule_type: str = Field(description="One of PRICE_CROSS|NEWS_COUNT|NEWS_MOMENTUM|KG_CONNECTION|FUNDAMENTAL_CROSS")
+    name: str | None = Field(default=None, max_length=255)
+    condition: dict  # type: ignore[type-arg]
+    severity: str = Field(default="medium", description="low|medium|high|critical")
+    enabled: bool = True
+    cooldown_seconds: int | None = Field(default=None, ge=0, le=604800)
+    notify_in_app: bool = True
+    notify_email: bool = False
+
+
+class AlertRuleUpdateRequest(BaseModel):
+    """Partial-update body for PATCH /api/v1/alert-rules/{rule_id}.
+
+    All fields optional — only provided fields change. ``rule_type`` is
+    immutable (omitted here). Changing ``condition`` re-arms the rule
+    (``last_state`` reset to null).
+    """
+
+    name: str | None = Field(default=None, max_length=255)
+    condition: dict | None = None  # type: ignore[type-arg]
+    severity: str | None = Field(default=None, description="low|medium|high|critical")
+    enabled: bool | None = None
+    cooldown_seconds: int | None = Field(default=None, ge=0, le=604800)
+    notify_in_app: bool | None = None
+    notify_email: bool | None = None
+
+
+class AlertRuleResponse(BaseModel):
+    """Full stored representation of an alert rule."""
+
+    rule_id: UUID
+    tenant_id: UUID
+    user_id: UUID
+    rule_type: str
+    name: str
+    entity_id: UUID | None
+    node_a_entity_id: UUID | None
+    node_b_entity_id: UUID | None
+    condition: dict  # type: ignore[type-arg]
+    severity: str
+    enabled: bool
+    cooldown_seconds: int
+    notify_in_app: bool
+    notify_email: bool
+    last_state: dict | None  # type: ignore[type-arg]
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlertRuleListResponse(BaseModel):
+    """Paginated list of the caller's alert rules."""
+
+    items: list[AlertRuleResponse]
+    total: int

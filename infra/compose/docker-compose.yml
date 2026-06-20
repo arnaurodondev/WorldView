@@ -2098,6 +2098,33 @@ services:
       retries: 3
       start_period: 30s
 
+  # PLAN-0113: standing-rule poller (5th S10 process). Same image as S10, runs
+  # the APScheduler evaluation loop. Exposes Prometheus metrics on 9101
+  # (s10_rule_poller_*). Disable instantly with ALERT_RULE_POLLER_ENABLED=false.
+  alert-rule-poller:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    environment:
+      METRICS_PORT: "9101"
+    command: ["python", "-m", "alert.infrastructure.rules.poller_main"]
+    expose: ["9101"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── S8 RAG/Chat Service ───────────────────────────────────────────────────────
 
   rag-chat-migrate:

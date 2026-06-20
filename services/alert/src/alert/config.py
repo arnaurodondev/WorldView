@@ -120,6 +120,30 @@ class Settings(BaseSettings):
     # for the same entity). Aligned with PLAN-0048 §B-1 spec.
     entity_resolver_cache_ttl_seconds: int = 900
 
+    # ── S6 NLP-pipeline dependency (PLAN-0113 — news-count/momentum reads) ──
+    # NEW: no S6 client existed before the rule engine. Read-only via REST.
+    s6_nlp_base_url: str = "http://nlp-pipeline:8006"
+    # PRD-0025: S6 also requires X-Internal-JWT. Same pattern as S1/S3/S7.
+    s6_internal_jwt: str = ""
+
+    # ── Alert rule engine (PLAN-0113) ──────────────────────────────────────
+    # Master switch — when False the poller boots but performs no evaluation
+    # (instant rollback; CRUD/UI keep working with dormant rules).
+    alert_rule_poller_enabled: bool = True
+    # Base poller tick — how often the loop wakes; per-type cadence throttles
+    # which rules are actually due each tick (via AlertRule.is_due).
+    alert_rule_poll_tick_seconds: int = 60
+    # Per-type poll cadences (seconds) — how often a rule of each type is read.
+    alert_rule_cadence_price_seconds: int = 60
+    alert_rule_cadence_news_count_seconds: int = 3600
+    alert_rule_cadence_news_momentum_seconds: int = 3600
+    alert_rule_cadence_fundamental_seconds: int = 21600
+    # Per-user rule cap (PRD §9).
+    alert_rule_max_per_user: int = 200
+    # Watchdog: if no successful poller cycle within this many seconds, the
+    # liveness gauge is considered stale (BP-705 staleness alert threshold).
+    alert_rule_poller_watchdog_seconds: int = 180
+
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
     service_name: str = "alert"
     log_level: str = "INFO"

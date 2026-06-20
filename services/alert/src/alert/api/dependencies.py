@@ -15,6 +15,13 @@ from alert.application.use_cases.create_alert import CreateAlertUseCase
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
 from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
 from alert.application.use_cases.list_alert_history import ListAlertHistoryUseCase
+from alert.application.use_cases.manage_rules import (
+    CreateRule,
+    DeleteRule,
+    GetRule,
+    ListRules,
+    UpdateRule,
+)
 from alert.application.use_cases.pending_alerts import AcknowledgeAlertUseCase, GetPendingAlertsUseCase
 from alert.application.use_cases.snooze_alert import SnoozeAlertUseCase
 
@@ -264,3 +271,73 @@ def get_create_alert_uc(
 
 
 CreateAlertUseCaseDep = Annotated[CreateAlertUseCase, Depends(get_create_alert_uc)]
+
+
+# ── Alert-rule CRUD use case factories (PLAN-0113 — R25 wiring, R27 split) ─────
+
+
+def get_create_rule_uc(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> CreateRule:
+    """Build CreateRule on the WRITE session (commits). Cap from settings."""
+    from alert.application.use_cases.manage_rules import CreateRule
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
+
+    max_per_user = request.app.state.settings.alert_rule_max_per_user
+    return CreateRule(AlertRuleRepository(session), session, max_per_user=max_per_user)
+
+
+CreateRuleUseCaseDep = Annotated[CreateRule, Depends(get_create_rule_uc)]
+
+
+def get_list_rules_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> ListRules:
+    """Build ListRules on the READ-replica session (R27 — query only)."""
+    from alert.application.use_cases.manage_rules import ListRules
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
+
+    return ListRules(AlertRuleRepository(session))
+
+
+ListRulesUseCaseDep = Annotated[ListRules, Depends(get_list_rules_uc)]
+
+
+def get_get_rule_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetRule:
+    """Build GetRule on the READ-replica session (R27 — query only)."""
+    from alert.application.use_cases.manage_rules import GetRule
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
+
+    return GetRule(AlertRuleRepository(session))
+
+
+GetRuleUseCaseDep = Annotated[GetRule, Depends(get_get_rule_uc)]
+
+
+def get_update_rule_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> UpdateRule:
+    """Build UpdateRule on the WRITE session (commits)."""
+    from alert.application.use_cases.manage_rules import UpdateRule
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
+
+    return UpdateRule(AlertRuleRepository(session), session)
+
+
+UpdateRuleUseCaseDep = Annotated[UpdateRule, Depends(get_update_rule_uc)]
+
+
+def get_delete_rule_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DeleteRule:
+    """Build DeleteRule on the WRITE session (commits)."""
+    from alert.application.use_cases.manage_rules import DeleteRule
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
+
+    return DeleteRule(AlertRuleRepository(session), session)
+
+
+DeleteRuleUseCaseDep = Annotated[DeleteRule, Depends(get_delete_rule_uc)]

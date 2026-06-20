@@ -27,16 +27,17 @@ Task ID format: `T-<wave>-<seq>` (e.g. T-1-01).
 | `alert-rule-poller` | process | S10 | none (template: `infrastructure/email/scheduler_main.py`) | NEW process |
 | `/api/v1/alert-rules` CRUD | API | S10 | none (`api/routes.py` has `/api/v1/alerts*` only) | NEW routes |
 | `/v1/alert-rules` proxy | API | S9 | none (`routes/alerts.py` proxies `/v1/alerts*`) | NEW proxies |
-| `s3_client.get_price_batch` | infra client | S10 | **only `get_ohlcv_bulk` + `get_fundamentals` exist** in `infrastructure/clients/s3_client.py` | NEW method (or use `get_ohlcv_bulk` last-close) |
-| S6 news-rollup/trending client | infra client | S10 | verify — may need NEW `s6_client` (S7 enrichment client exists for fanout) | NEW/verify |
-| S7 pairwise-path client | infra client | S10 | S7 enrichment client exists (fanout uses it); confirm path method | verify/extend |
-| `KG_CONNECTION` consumer branch | infra | S10 | `intelligence_consumer.py` consumes `graph.state.changed.v1`→GRAPH_CHANGE fanout | EXTEND (additive branch) |
+| `s3_client.get_price_batch` + fundamental-metric read | infra client | S10 | class is `S3MarketDataClient`; **only `get_ohlcv_bulk` + `get_fundamentals` exist** in `infrastructure/clients/s3_client.py` | NEW methods (`get_price_batch`, `get_fundamental_metric`) |
+| S6 news-rollup/trending client | infra client | S10 | **no S6 client exists** (clients dir = `s1_client.py`, `s3_client.py`, `s7_entity_resolver.py`, `s8_client.py`) | NEW `s6_client.py` |
+| S7 pairwise-path client | infra client | S10 | **only `s7_entity_resolver.py` (`S7EntityResolver.resolve()` → name/ticker via `/entities/batch`); NO path/connection method** | NEW `s7_client.py` (graph-path client) |
+| `KG_CONNECTION` consumer branch | infra | S10 | `intelligence_consumer.py` (class `IntelligenceConsumer`) consumes `graph.state.changed.v1`→`AlertType.GRAPH_CHANGE` fanout | EXTEND (additive branch) |
 | `lib/api/alertRules.ts` | frontend | web | none (`lib/alerts/rules.ts` = localStorage) | NEW + retire localStorage |
 | `AlertWizard`, condition editors, `EntityPicker`, `MetricPicker` | frontend | web | none (`RuleManagerDialog`/`AlertRuleBuilder` = free-text localStorage; `PathBetweenPanel` has an inline EntityPicker to extract; `TickerPicker` exists) | NEW components |
 
 ### Name tags (BP-405 guard)
-Verified existing: `AlertFanoutUseCase`, `IntelligenceConsumer`, `infrastructure/email/scheduler_main.py`, `s3_client.get_ohlcv_bulk`, `s3_client.get_fundamentals`, `api/routes.py`, `api/schemas.py`, `domain/enums.py`, `domain/entities.py`, S9 `routes/alerts.py`, web `PathBetweenPanel.tsx`, `TickerPicker.tsx`, `RuleManagerDialog.tsx`, `lib/alerts/rules.ts`.
-**NEW (created in this plan):** `alert_rules` table, `RuleType`, `AlertRule`, `rule_conditions` VO, `application/rules/` (registry + 5 evaluators), `FireRuleAlertUseCase`, `alert-rule-poller`, `s3_client.get_price_batch` (NEW — only ohlcv/fundamentals exist), `lib/api/alertRules.ts`, `AlertWizard`, `condition-editors/*`, shared `EntityPicker`, `MetricPicker`.
+Verified existing (git grep / ls 2026-06-20): `AlertFanoutUseCase`, `CreateAlertUseCase`, `IntelligenceConsumer` (+ `intelligence_consumer_main.py`), `infrastructure/email/scheduler_main.py` (APScheduler), `S3MarketDataClient.get_ohlcv_bulk` / `.get_fundamentals`, `S7EntityResolver.resolve` (name/ticker only), `api/routes.py` (`/api/v1/alerts*`), `api/schemas.py`, `domain/enums.py` (`AlertType`, `AlertSeverity` LOW/MEDIUM/HIGH/CRITICAL), `domain/entities.py` (`Alert`), `ReadOnlyUnitOfWork` port + `SqlaReadOnlyUnitOfWork` impl, `api/dependencies.py` deps (`DbSessionDep`, `ReadDbSessionDep`, `TenantUserDep`, use-case factory deps), S9 `routes/alerts.py` + `clients.alert` (raw httpx) + `_auth_headers()` helper, web `PathBetweenPanel.tsx` (inline `EntityPicker` fn), `components/workspace/TickerPicker.tsx`, `RuleManagerDialog.tsx`, `AlertRuleBuilder.tsx`, `lib/alerts/rules.ts` (localStorage), `lib/alerts/format.ts` (`formatAlertTitle` only), `lib/api/search.ts` (`searchInstruments`, `searchFundamentals`), `lib/api/alerts.ts`, `app/(app)/alerts/page.tsx`.
+**Corrected name facts:** S10 has **no `ReadUoWDep`/`UoWDep`** — use `ReadDbSessionDep` (read) / `DbSessionDep` (write) + use-case factory deps. S9 has **no alert client class** — `clients.alert` is a raw `httpx.AsyncClient`; add CRUD as composition functions + `_auth_headers(request)`. The screener metric catalogue lives in `features/screener/lib/filter-state.ts` (`FilterState`), but the backend-valid `metric_key` vocabulary comes from S3 `GET /api/v1/fundamentals/screen/fields`.
+**NEW (created in this plan):** `alert_rules` table, `RuleType`, `AlertRule`, `rule_conditions` VO, `application/rules/` (registry + 5 evaluators), `FireRuleAlertUseCase`, `alert-rule-poller`, `S3MarketDataClient.get_price_batch` + `.get_fundamental_metric`, **NEW `s6_client.py`**, **NEW `s7_client.py`** (graph-path; distinct from `s7_entity_resolver.py`), `IAlertRuleRepository`, `manage_rules.py` use cases, `lib/api/alertRules.ts`, `AlertWizard`, `condition-editors/*`, shared `EntityPicker`, `MetricPicker`, `ruleToNaturalLanguage` (new fn in `format.ts`).
 
 ### Pre-flight gate (Phase 0.5)
 | Check | Result |
@@ -99,15 +100,15 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Type:** impl · **depends_on:** T-1-03 · **blocks:** T-1-05
 **Target files:** `services/alert/src/alert/application/use_cases/manage_rules.py` (NEW: `CreateRule`, `ListRules`, `GetRule`, `UpdateRule`, `DeleteRule`)
 **PRD ref:** §6.2
-**Port interfaces:** `IAlertRuleRepository` (ABC, from T-1-03). **Read/Write:** List/Get = `ReadOnlyUnitOfWork` (R27); Create/Update/Delete = `UnitOfWork`. Update with `condition` change resets `last_state=null` (re-arm). Owner-scoped (tenant_id+user_id from caller); cross-owner get → not-found.
+**Port interfaces:** `IAlertRuleRepository` (ABC, from T-1-03). **Read/Write (R27):** List/Get depend on the read path (`SqlaReadOnlyUnitOfWork` / `ReadOnlyUnitOfWork` port, the read-replica session); Create/Update/Delete depend on the write `UnitOfWork`. NB the alert service exposes these to routes via session deps (`ReadDbSessionDep` / `DbSessionDep`) + use-case factory deps, **not** `ReadUoWDep`/`UoWDep` (those names do not exist here). Update with `condition` change resets `last_state=null` (re-arm). Owner-scoped (tenant_id+user_id from caller); cross-owner get → not-found.
 **Tests:** `test_crud_roundtrip`, `test_update_condition_resets_last_state`, `test_cross_owner_get_returns_none`, `test_per_user_rule_cap` (default 200, PRD §9).
 **Acceptance:** [ ] read uses ReadOnlyUoW; [ ] tenant isolation; [ ] cap enforced.
 
 #### T-1-05: API — S10 `/api/v1/alert-rules` routes + S9 proxy
 **Type:** impl · **depends_on:** T-1-04 · **blocks:** T-4-*
-**Target files:** `services/alert/src/alert/api/routes.py` (+ `api/schemas.py` request/response models), `services/api-gateway/src/api_gateway/routes/alerts.py` (proxies) + `services/api-gateway/src/api_gateway/clients/` alert client methods
+**Target files:** `services/alert/src/alert/api/routes.py` (+ `api/schemas.py` request/response models, + new use-case factory deps in `api/dependencies.py`), `services/api-gateway/src/api_gateway/routes/alerts.py` (proxies) + `services/api-gateway/src/api_gateway/clients/alert_rules.py` (NEW composition functions, re-exported in `clients/__init__.py`)
 **PRD ref:** §6.2
-**What to build:** POST/GET(list)/GET(id)/PATCH/DELETE per PRD §6.2 (status codes, errors 400/401/404/409/422, rate-limit 60/min). Routes call only use cases (R25). S9 proxies auth-gated, inject internal JWT (mirror existing `/v1/alerts*` proxies). `ReadUoWDep` for GETs, `UoWDep` for writes (R27).
+**What to build:** POST/GET(list)/GET(id)/PATCH/DELETE per PRD §6.2 (status codes, errors 400/401/404/409/422, rate-limit 60/min; PATCH for partial update — keep PATCH, not PUT). Routes call only use cases (R25). S9 proxies auth-gated via `_auth_headers(request)` on the raw `clients.alert` httpx client (mirror existing `/v1/alerts*` proxies; `no-store` on mutations). GET use cases use `ReadDbSessionDep`; write use cases use `DbSessionDep` (R27 — these are the real dep names; `ReadUoWDep`/`UoWDep` do not exist in S10).
 **Downstream test impact:** S9 alert client tests (additive). Add `services/alert/tests/api/test_alert_rules_routes.py`, `services/api-gateway/tests/` proxy test.
 **Tests:** route happy paths + each error; `test_gateway_proxy_auth` (401 unauth, 404 cross-owner).
 **Acceptance:** [ ] full CRUD via S9; [ ] discriminated condition validated at boundary; [ ] auth enforced.
@@ -116,32 +117,32 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Type:** impl · **depends_on:** T-1-02 · **blocks:** T-2-*
 **Target files:** `services/alert/src/alert/application/rules/__init__.py` + `registry.py` (NEW: `RuleEvaluator` Protocol + `EVALUATOR_REGISTRY`), `services/alert/src/alert/infrastructure/rules/poller_main.py` (NEW, template `infrastructure/email/scheduler_main.py`), `services/alert/src/alert/infrastructure/clients/s3_client.py` (add `get_price_batch` — NEW), config (`config.py` poll cadences + per-user cap + enable flag), `infra/compose/docker-compose.yml` (+ `alert-rule-poller` service, same image, command `python -m alert.infrastructure.rules.poller_main`)
 **PRD ref:** §6.5.4, §6.5.6, NFR-2/6
-**What to build:** the registry seam (empty), an APScheduler poller loop (base tick 60s, `is_due` throttle, loads enabled poll rules, no evaluators wired yet → no-op), liveness gauge + `runs_total{outcome}` + watchdog (BP-705), `s3_client.get_price_batch(instrument_ids) -> {id: last_price}` calling `POST /internal/v1/price/batch`. Process declared (R22).
+**What to build:** the registry seam (empty), an APScheduler poller loop (base tick 60s, `is_due` throttle, loads enabled poll rules, no evaluators wired yet → no-op), liveness gauge + `runs_total{outcome}` + watchdog (BP-705), `S3MarketDataClient.get_price_batch(instrument_ids) -> {id: last_price}` calling `POST /internal/v1/price/batch` (≤50 ids; the endpoint's default list shape — read `price` per `PriceSnapshotResponse`; pass `include_missing=false`). httpx timeout + `asyncio.wait_for` (BP-235). Process declared (R22).
 **Tests:** `test_poller_loads_due_rules`, `test_get_price_batch_parses`, `test_registry_lookup`.
 **Acceptance:** [ ] poller boots healthy as a 5th process; [ ] registry resolvable; [ ] price client batches ≤50.
 
 #### Pre-read (W1)
 `services/alert/src/alert/domain/{enums,entities}.py`, `application/use_cases/alert_fanout.py` + `create_alert.py`, `infrastructure/db/models.py`, `alembic/versions/0009_add_user_rule_alert_type.py`, `api/routes.py` + `api/schemas.py`, `infrastructure/email/scheduler_main.py`, `infrastructure/clients/s3_client.py`, `services/api-gateway/src/api_gateway/routes/alerts.py`.
 
-#### Validation Gate (W1)
-- [ ] ruff + mypy clean on `services/alert`, `services/api-gateway`
-- [ ] migration 0010 applies fwd + rollback; head moves 0009→0010
-- [ ] ≥ 30 new unit tests pass; CRUD integration green
-- [ ] poller + new compose service boot healthy
-- [ ] docs/services/alert.md updated (new table, CRUD endpoints, poller process)
+#### Validation Gate (W1) — DONE 2026-06-20
+- [x] ruff + mypy clean on `services/alert`, `services/api-gateway` (changed files)
+- [x] migration 0010 applies fwd + rollback; head moves 0009→0010 (verified on scratch DB: up→down→up)
+- [x] ≥ 30 new unit tests pass (39 unit); CRUD integration green (10 integration; 7 gateway proxy)
+- [x] poller declared + new compose service `alert-rule-poller` added (boots loop; registry empty no-op)
+- [x] docs/services/alert-service.md updated (new table, CRUD endpoints, poller process, config)
 
 #### Architecture Compliance (W1)
-- [ ] R25 ABC ports (`IAlertRuleRepository`); routes → use cases only
-- [ ] R27 ReadOnlyUoW for List/Get; UnitOfWork for writes
-- [ ] R10 `new_uuid7()` for `rule_id`; R11 `utc_now()` for timestamps
-- [ ] R12 structlog in poller/use cases
-- [ ] R22 poller declared as a process; R32 migration number from verified head (0010)
-- [ ] BP-007 `rule_type` VARCHAR+CHECK (not PG enum)
+- [x] R25 ABC ports (`IAlertRuleRepository`); routes → use cases only
+- [x] R27 read path (`ReadDbSessionDep`) for List/Get; write (`DbSessionDep`) for Create/Update/Delete
+- [x] R10 `new_uuid7()` for `rule_id`; R11 `utc_now()` for timestamps
+- [x] R12 structlog in poller/use cases
+- [x] R22 poller declared as a process; R32 migration number from verified head (0010)
+- [x] BP-007 `rule_type` VARCHAR+CHECK (not PG enum)
 
 #### Break Impact (W1)
 | Broken file | Why | Fix |
 |---|---|---|
-| `services/api-gateway` alert client | new proxy methods | add `create_rule/list_rules/get_rule/update_rule/delete_rule` to the alert client |
+| `services/api-gateway` alert proxy | new proxy routes | add `create_rule/list_rules/get_rule/update_rule/delete_rule` as composition functions in NEW `clients/alert_rules.py` (raw `clients.alert` httpx + `_auth_headers`), re-export in `clients/__init__.py` |
 | docs/services/alert.md | new table/endpoints/process | document `alert_rules`, `/alert-rules`, poller |
 | `services/alert/tests` conftest | new repo/UoW fixtures | add `alert_rules` fixtures |
 
@@ -177,14 +178,14 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Type:** impl · **depends_on:** T-2-01 · **blocks:** T-2-06
 **Target files:** `services/alert/src/alert/application/rules/fundamental_cross.py` (NEW) + register
 **PRD ref:** §6.5.4 (fundamental), §6.5.3 (`metric_key` vocab)
-**What to build:** poll `cadence=21600s` (6h). Read `GET /api/v1/fundamentals/timeseries?instrument_id=&metric=metric_key` (add `s3_client.get_fundamental_metric` if absent — verify) → latest value; edge vs `last_state.last_value`. `metric_key` validated against S3 vocab (screener catalogue names).
+**What to build:** poll `cadence=21600s` (6h, PRD §6.5.1 / NFR-1); cooldown default `86400s` (24h, PRD §6.5.2) — these are distinct knobs (poll cadence = how often we read; cooldown = re-arm window after firing). Add `S3MarketDataClient.get_fundamental_metric(instrument_id, metric)` (NEW) calling `GET /api/v1/fundamentals/timeseries?instrument_id=&metric=` and reading the latest `data[].value_numeric` (response sorted ASC → take last). Edge vs `last_state.last_value`. `metric_key` validated at create (T-1-01) against the S3 vocab from `GET /api/v1/fundamentals/screen/fields`.
 **Tests:** edge cross; unknown metric_key rejected at create (T-1-01); slow-cadence throttle.
 
 #### T-2-04: `NewsCountEvaluator`
 **Type:** impl · **depends_on:** T-2-01 · **blocks:** T-2-06
-**Target files:** `services/alert/src/alert/application/rules/news_count.py` (NEW) + register, `services/alert/src/alert/infrastructure/clients/s6_client.py` (NEW or extend — verify an S6 client exists)
+**Target files:** `services/alert/src/alert/application/rules/news_count.py` (NEW) + register, `services/alert/src/alert/infrastructure/clients/s6_client.py` (**NEW — no S6 client exists today**)
 **PRD ref:** §6.5.4 (news count), signal-sources §Signal 2
-**What to build:** poll `cadence=3600s`. `GET /internal/v1/instruments/{id}/news-rollup-7d` for `window=7d`; trending counts for 24/72/168h. Fire when count first ≥ threshold; re-arm when < threshold. Port `IS6NewsClient`.
+**What to build:** poll `cadence=3600s`. `GET /internal/v1/instruments/{id}/news-rollup-7d` (read `news_count_7d`) for `window=7d`; `GET /api/v1/news/trending-entities?window_hours=` counts for 24/72/168h (match by `entity_id`, read `count`). Fire when count first ≥ threshold; re-arm when < threshold. Port `IS6NewsClient` (ABC). httpx timeout + wait_for (BP-235). Config: S6 base URL (NEW).
 **Tests:** crosses threshold once; re-arm below; window allow-list.
 
 #### T-2-05: `NewsMomentumEvaluator`
@@ -200,7 +201,7 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **What to build:** poller cycle resolves each due rule's evaluator from `EVALUATOR_REGISTRY`, runs `evaluate` → `should_fire` → `FireRuleAlertUseCase`, persists `next_state`. Emit `alert_rule_evaluations_total{rule_type,outcome}`, `alert_rule_fired_total{rule_type}`. Fail-soft per evaluator (skip + error counter, no state change).
 **Tests (integration):** `test_poller_price_fires_once` (Postgres + S3 stub), per-type cadence throttling.
 
-#### Pre-read (W2): `application/use_cases/alert_fanout.py`, `infrastructure/clients/s3_client.py`, `infrastructure/rules/poller_main.py`, S3 routers `price_snapshot.py`/`fundamental_metrics.py`, S6 `internal_news_rollup.py`/`trending_entities.py`.
+#### Pre-read (W2): `application/use_cases/alert_fanout.py`, `infrastructure/clients/s3_client.py` (`S3MarketDataClient`), `infrastructure/rules/poller_main.py`, S3 routers `market-data/.../api/routers/{price_snapshot,fundamental_metrics}.py`, S6 routes `nlp-pipeline/.../api/routes/{internal_news_rollup,trending_entities}.py`.
 #### Validation Gate (W2): ruff+mypy clean; ≥ 20 new tests; poller fires edge-triggered once in integration; docs/services/alert.md evaluator table.
 #### Architecture Compliance (W2): R25 ABC client ports (`IS3PriceClient`,`IS6NewsClient`); R8 outbox in FireRuleAlertUseCase; R9 S3/S6 via REST only; R12 structlog.
 #### Break Impact (W2): none external (additive). Update alert conftest with S3/S6 client stubs.
@@ -214,21 +215,21 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Depends on:** W1 (and T-2-01 FireRuleAlertUseCase)
 **Estimated effort:** 3–4 h · **Layer:** infrastructure consumer + application
 
-#### T-3-01: S7 pairwise-path client method
+#### T-3-01: S7 graph-path client (NEW file)
 **Type:** impl · **depends_on:** T-1-06 · **blocks:** T-3-02
-**Target files:** `services/alert/src/alert/infrastructure/clients/s7_client.py` (extend; the fanout enrichment S7 client exists — add `confirm_connection(a, b, max_hops, relation_type?) -> bool`)
+**Target files:** `services/alert/src/alert/infrastructure/clients/s7_client.py` (**NEW** — the only S7 artifact today is `s7_entity_resolver.py` which resolves names/tickers, NOT paths; do not extend it). Add `confirm_connection(a, b, max_hops, relation_type?) -> bool`.
 **PRD ref:** §6.5.4 (KG), signal-sources §Signal 4
-**What to build:** call S7's existing pairwise-path endpoint; return whether a path ≤ max_hops (optionally of `relation_type`) exists. Port `IS7GraphClient`. httpx timeout + wait_for (BP-235).
-**Tests:** path present→true, absent→false, timeout→fail-closed (false).
+**What to build:** call S7 `GET /api/v1/paths/between?source=a&target=b&max_hops=<1..3>` (real endpoint, `knowledge-graph/api/paths.py`); return its `connected` boolean (if `relation_type` is set, additionally require a matching `relation_type` among the returned `paths[].path_edges[]`). Note S7 may return `503` on AGE statement timeout → treat as fail-closed (false). Port `IS7GraphClient` (ABC). httpx timeout + `asyncio.wait_for` (BP-235).
+**Tests:** `connected:true`→true, `connected:false`→false, 503/timeout→fail-closed (false), relation_type filter.
 
 #### T-3-02: `KgConnectionEvaluator` + consumer branch
 **Type:** impl · **depends_on:** T-3-01,T-2-01 · **blocks:** T-5-*
 **Target files:** `services/alert/src/alert/application/rules/kg_connection.py` (NEW) + register, `services/alert/src/alert/infrastructure/messaging/consumers/intelligence_consumer.py` (EXTEND — additive branch after existing GRAPH_CHANGE fanout)
 **PRD ref:** §6.5.4, §6.3, §8 (break surface)
-**What to build:** on `graph.state.changed.v1`, after the existing fanout, load enabled `KG_CONNECTION` rules whose `node_a/node_b` are both touched by `affected_entity_ids` (cheap pre-filter), then `confirm_connection` via S7; `should_fire` latches `connected=true` (fires once); `FireRuleAlertUseCase`. Respect `is_backfill` suppression (existing AD-10). Idempotent (rule_id dedup).
+**What to build:** on `graph.state.changed.v1`, after the existing fanout, load enabled `KG_CONNECTION` rules whose `node_a` and/or `node_b` appears in the event's `affected_entity_ids`/`primary_entity_id` (cheap pre-filter — both fields exist in the avsc), then `confirm_connection(A, B, max_hops)` via S7; `should_fire` latches `connected=true` (fires once); `FireRuleAlertUseCase`. Respect `is_backfill` suppression (event has `is_backfill` field; existing AD-10). Idempotent (rule_id dedup).
 **Tests:** `test_kg_connection_event_confirm` (Postgres + S7 stub); pre-filter skips unrelated events; latch fires once; backfill suppressed; existing GRAPH_CHANGE fanout unaffected.
 
-#### Pre-read (W3): `infrastructure/messaging/consumers/intelligence_consumer.py` + `_main.py`, `infrastructure/clients/s7_client.py`, `infra/kafka/schemas/graph.state.changed.v1.avsc`, S7 pairwise-path router.
+#### Pre-read (W3): `infrastructure/messaging/consumers/intelligence_consumer.py` + `intelligence_consumer_main.py`, `infrastructure/clients/s7_entity_resolver.py` (pattern reference for the NEW `s7_client.py`), `infra/kafka/schemas/graph.state.changed.v1.avsc`, S7 `knowledge-graph/.../api/paths.py` (`GET /api/v1/paths/between`).
 #### Validation Gate (W3): ruff+mypy; ≥ 8 new tests; existing intelligence-consumer tests still green; consumer-group unchanged.
 #### Architecture Compliance (W3): R25 ABC `IS7GraphClient`; R9 REST-only; idempotent consumer (rule_id dedup); R28 (no schema change v1).
 #### Break Impact (W3): `intelligence_consumer` tests — assert the existing GRAPH_CHANGE path is preserved (additive branch). Fix: add KG-rule branch tests without altering fanout asserts.
@@ -251,14 +252,14 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 
 #### T-4-02: Shared `EntityPicker` + `MetricPicker`
 **Type:** impl · **depends_on:** none · **blocks:** T-4-03,T-4-04,T-4-05
-**Target files:** `apps/worldview-web/components/common/EntityPicker.tsx` (NEW — extract from `PathBetweenPanel`), `apps/worldview-web/components/alerts/MetricPicker.tsx` (NEW — wrap screener catalogue)
+**Target files:** `apps/worldview-web/components/common/EntityPicker.tsx` (NEW — extract the inline `EntityPicker` function from `components/intelligence/PathBetweenPanel.tsx`), `apps/worldview-web/components/alerts/MetricPicker.tsx` (NEW)
 **PRD ref:** §6.6, UI audit §5
-**What to build:** `EntityPicker` (debounced `searchFundamentals` → real `entity_id`); `MetricPicker` (screener metric catalogue → backend-valid `metric_key`). Reuse `TickerPicker` for instrument_id types (no new component).
-**Tests:** EntityPicker returns entity_id; MetricPicker emits valid metric_key.
+**What to build:** `EntityPicker` (debounced `searchFundamentals` from `lib/api/search.ts` → real `entity_id`; 300ms debounce, matches PathBetweenPanel's existing pattern); `MetricPicker` (fetch the metric vocabulary from S3 `GET /api/v1/fundamentals/screen/fields` via the gateway → backend-valid `metric_key`; do **not** hard-code from `features/screener/lib/filter-state.ts`). Reuse `TickerPicker` (`components/workspace/TickerPicker.tsx`, uses `searchInstruments`) for instrument_id types (no new component). After extracting, repoint `PathBetweenPanel` to the shared `EntityPicker` (avoid a duplicate).
+**Tests:** EntityPicker returns entity_id; MetricPicker emits valid metric_key from the fetched vocabulary.
 
 #### T-4-03: `AlertWizard` shell (type cards + step controller) + NL summary
 **Type:** impl · **depends_on:** T-4-01 · **blocks:** T-4-04,T-4-05
-**Target files:** `apps/worldview-web/components/alerts/AlertWizard.tsx` (NEW), `apps/worldview-web/lib/alerts/format.ts` (extend `ruleToNaturalLanguage`)
+**Target files:** `apps/worldview-web/components/alerts/AlertWizard.tsx` (NEW), `apps/worldview-web/lib/alerts/format.ts` (add NEW `ruleToNaturalLanguage`; file currently exports only `formatAlertTitle`)
 **PRD ref:** §6.6, FR-10/FR-13
 **What to build:** 2-step wizard in the existing Dialog: Step 1 = 5 type cards (icon + "fires when…"); Step 2 = mount the type's editor + severity + notify toggles + **live NL summary** + Save (→ `useCreateAlertRule`). Edit mode reuses the same wizard. Per-type NL formatter.
 **Tests:** `AlertWizard.type-selection` (card → correct editor mounts); `ruleToNaturalLanguage` per type.
@@ -283,7 +284,7 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **What to build:** list/pause/edit/delete from `useAlertRules`; open `AlertWizard`; drop "local only" badge + the 4-option select.
 **Tests:** manager renders server rules; pause/delete call API.
 
-#### Pre-read (W4): `components/alerts/{RuleManagerDialog,AlertRuleBuilder}.tsx`, `lib/alerts/{rules,format}.ts`, `lib/api/alerts.ts`, `components/intelligence/PathBetweenPanel.tsx`, `components/workspace/TickerPicker.tsx`, `components/screener/ScreenerFilterBar.tsx`, `lib/api/search.ts`, `docs/ui/DESIGN_SYSTEM.md`.
+#### Pre-read (W4): `components/alerts/{RuleManagerDialog,AlertRuleBuilder}.tsx`, `lib/alerts/{rules,format}.ts`, `lib/api/alerts.ts`, `components/intelligence/PathBetweenPanel.tsx` (inline `EntityPicker`), `components/workspace/TickerPicker.tsx`, `features/screener/lib/filter-state.ts` (metric names reference) + S3 `screen/fields` shape, `lib/api/search.ts` (`searchInstruments`/`searchFundamentals`), `app/(app)/alerts/page.tsx`, `docs/ui/DESIGN_SYSTEM.md`.
 #### Validation Gate (W4): pnpm typecheck + lint clean; vitest green (≥ 15 new tests); no localStorage rule path remains.
 #### Architecture Compliance (W4): Frontend→S9 only (R14, talks to `/v1/alert-rules`); pnpm only; heavy comments.
 #### Break Impact (W4): `lib/alerts/rules` localStorage tests → rewrite to server API; type-enum tests (4→5 + structured); alerts-page tests → wizard entry.
@@ -324,7 +325,7 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 ## Cross-Cutting Concerns
 - **Contracts:** no Avro/topic changes v1 (PRD §6.3). Any v2 `new_edges` enrichment = additive (R28).
 - **Migrations:** S10 only — `0010_create_alert_rules` (head 0009→0010). No other service migrates.
-- **Config (new, `services/alert/.../config.py` + dev env example):** `ALERT_RULE_POLLER_ENABLED` (default true), `ALERT_RULE_POLL_TICK_SECONDS=60`, per-type cadences, `ALERT_RULE_MAX_PER_USER=200`, S6 base URL (if new s6_client).
+- **Config (new, `services/alert/.../config.py` + dev env example):** `ALERT_RULE_POLLER_ENABLED` (default true), `ALERT_RULE_POLL_TICK_SECONDS=60`, per-type cadences (price 60s, news-count/momentum 3600s, fundamental 21600s), `ALERT_RULE_MAX_PER_USER=200`, **S6 base URL (new — no S6 client exists today)**. Reuse the existing S3 base URL config and the existing `s7_knowledge_graph_base_url` config (already in `config.py`) for the new S7 path client — no new S7 base URL needed.
 - **Docs:** `docs/services/alert.md`, `services/alert/.claude-context.md`, `services/api-gateway/.claude-context.md`, `docs/apps/worldview-web.md`, `docs/services/api-gateway.md` (new routes).
 
 ## Risk Assessment
