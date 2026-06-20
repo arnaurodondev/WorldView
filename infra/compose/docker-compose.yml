@@ -2261,12 +2261,23 @@ services:
       API_GATEWAY_URL: http://api-gateway:8000
       NEXT_PUBLIC_ZITADEL_URL: ${ZITADEL_URL:-http://localhost:8088}
       NEXT_PUBLIC_ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID:-worldview-web}
+    # WHY /api/version (not the bare root "/"): the root path is the heavy SSR
+    # dashboard/landing route — it data-fetches on the server and can take
+    # >5s to render under load, so the old `wget http://127.0.0.1:3001` probe
+    # timed out and falsely marked the container "unhealthy" whenever the host
+    # was busy. /api/version is a pure route handler that returns a tiny JSON
+    # `{ buildId }` with no SSR, no backend calls, and no auth — it responds in
+    # milliseconds whenever the Node process has CPU, so it tracks true liveness.
+    # WHY start_period 60s: the Next.js standalone server can take ~50s to reach
+    # "Ready" on a loaded host; a 20s grace window flapped to unhealthy during
+    # normal startup. WHY timeout 10s + retries 5: absorb transient CPU
+    # starvation without a false negative.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001/api/version"]
       interval: 15s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
+      timeout: 10s
+      start_period: 60s
+      retries: 5
     restart: unless-stopped
 
   # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
