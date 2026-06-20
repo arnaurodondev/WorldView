@@ -91,6 +91,9 @@ class PortfolioResponse(BaseModel):
     # backfilled to 'manual' for historical rows).
     kind: str
     created_at: datetime
+    # PLAN-0114 W6: per-portfolio cost basis accounting method. Default "FIFO"
+    # keeps backwards-compat with clients that don't yet read this field.
+    cost_basis_method: str = "FIFO"
 
 
 class PortfolioRenameRequest(BaseModel):
@@ -744,3 +747,13 @@ class ConcentrationResponse(BaseModel):
     @field_serializer("top_3_share_pct")
     def _decimals(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+class PortfolioPatchRequest(BaseModel):
+    """Partial update payload for PATCH /portfolios/{id}.
+
+    PLAN-0114 / T-W1: allows updating mutable portfolio settings without a
+    full PUT. All fields are optional — absent fields are not updated.
+    """
+
+    cost_basis_method: str | None = None

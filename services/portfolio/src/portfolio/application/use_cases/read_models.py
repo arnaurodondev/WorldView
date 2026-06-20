@@ -14,6 +14,7 @@ from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork
     from portfolio.domain.entities import Holding, Transaction
+    from portfolio.domain.value_objects import TransactionFilter
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -129,6 +130,7 @@ class ListTransactionsUseCase:
         uow: ReadOnlyUnitOfWork,
         limit: int = 100,
         offset: int = 0,
+        tx_filter: TransactionFilter | None = None,
     ) -> tuple[list[EnrichedTransaction], int]:
         """List transactions for a portfolio with instrument enrichment.
 
@@ -139,6 +141,11 @@ class ListTransactionsUseCase:
         before holdings loaded. Mobile/3rd-party clients had no escape at
         all. Now we resolve the instruments at the application layer and
         the API surfaces the enriched fields directly.
+
+        PLAN-0114 / T-W2-03: the optional ``tx_filter`` parameter activates
+        server-side filtering. When present the filtered repository methods
+        are dispatched; when absent the existing unfiltered path is used
+        (backward compatible — existing callers keep working with no changes).
 
         Implementation note: we do NOT add a new ``list_by_instrument_ids``
         method to the InstrumentRepository — instead we read the small
@@ -155,8 +162,23 @@ class ListTransactionsUseCase:
 
         # PLAN-0046 Wave 3 / T-46-3-03: ROOT portfolios show the union of
         # transactions across the user's sub-portfolios, sorted newest-first.
-        # No aggregation — every original transaction row is preserved.
-        if portfolio.kind == PortfolioKind.ROOT:
+        # PLAN-0114 / T-W2-03: when tx_filter is supplied, dispatch to the
+        # filtered repository methods so WHERE predicates run at the DB level.
+        if tx_filter is not None:
+            if portfolio.kind == PortfolioKind.ROOT:
+                sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
+                transactions, total = await uow.transactions.list_by_portfolio_ids_filtered(
+                    sub_ids,
+                    tenant_id,
+                    tx_filter,
+                )
+            else:
+                transactions, total = await uow.transactions.list_by_portfolio_filtered(
+                    portfolio_id,
+                    tenant_id,
+                    tx_filter,
+                )
+        elif portfolio.kind == PortfolioKind.ROOT:
             sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
             transactions, total = await uow.transactions.list_by_portfolio_ids(
                 sub_ids,

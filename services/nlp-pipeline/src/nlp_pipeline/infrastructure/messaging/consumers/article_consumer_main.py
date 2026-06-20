@@ -229,7 +229,7 @@ async def main() -> None:
     )
 
     # Consumer
-    article_config = ConsumerConfig(
+    article_config = ConsumerConfig(  # type: ignore[call-arg]
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group,
         topics=[settings.topic_article_stored],

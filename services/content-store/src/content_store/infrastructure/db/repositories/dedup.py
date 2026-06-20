@@ -342,7 +342,7 @@ class DuplicateClusterRepository:
         result = await self._session.execute(
             select(
                 combined.c.doc_id,
-                func.min(combined.c.cluster_id.cast(text("text"))).cast(text("uuid")).label("cluster_id"),
+                func.min(combined.c.cluster_id.cast(text("text"))).cast(text("uuid")).label("cluster_id"),  # type: ignore[arg-type]
             ).group_by(combined.c.doc_id)
         )
         return {row.doc_id: row.cluster_id for row in result}

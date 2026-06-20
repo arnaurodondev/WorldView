@@ -23,6 +23,7 @@ from portfolio.api.schemas import (
     HoldingLotsResponse,
     PaginatedResponse,
     PortfolioCreateRequest,
+    PortfolioPatchRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
     RealizedPnLResponse,
@@ -63,6 +64,8 @@ from portfolio.application.use_cases.portfolio_ops import (
     ListPortfoliosUseCase,
     RenamePortfolioCommand,
     RenamePortfolioUseCase,
+    UpdatePortfolioCommand,
+    UpdatePortfolioUseCase,
 )
 
 router = APIRouter(tags=["portfolios"])
@@ -95,6 +98,8 @@ def _to_response(portfolio) -> PortfolioResponse:  # type: ignore[no-untyped-def
         # PLAN-0046 Wave 3 / T-46-3-01 — surface kind to API clients.
         kind=str(portfolio.kind),
         created_at=portfolio.created_at,
+        # PLAN-0114 W6: surface cost_basis_method.
+        cost_basis_method=str(portfolio.cost_basis_method),
     )
 
 
@@ -180,6 +185,35 @@ async def rename_portfolio(
             owner_id=owner_id,
             tenant_id=x_tenant_id,
             new_name=body.name,
+        ),
+        uow,
+    )
+    return _to_response(portfolio)
+
+
+@router.patch("/portfolios/{portfolio_id}", response_model=PortfolioResponse)
+async def patch_portfolio(
+    portfolio_id: UUID,
+    body: PortfolioPatchRequest,
+    uow: UoWDep,
+    request: Request,
+) -> PortfolioResponse:
+    """PLAN-0114 W6 / T-W6-01: partial-update portfolio settings.
+
+    Currently supports: ``cost_basis_method`` (FIFO | AVCO).
+    Fields omitted from the body are not touched.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    from portfolio.domain.enums import CostBasisMethod  # local import avoids circular
+
+    uc = UpdatePortfolioUseCase()
+    portfolio = await uc.execute(
+        UpdatePortfolioCommand(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+            cost_basis_method=CostBasisMethod(body.cost_basis_method) if body.cost_basis_method else None,
         ),
         uow,
     )

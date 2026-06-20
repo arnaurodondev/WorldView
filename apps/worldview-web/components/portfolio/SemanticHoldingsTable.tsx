@@ -31,7 +31,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -53,6 +53,16 @@ import type {
   SortChangedEvent,
   IRowNode,
 } from "ag-grid-community";
+
+// ── Lazy-loaded dialogs ───────────────────────────────────────────────────────
+// WHY lazy: ClosePositionDialog is only opened from the AG Grid context menu,
+// never on initial page load. React.lazy keeps it out of the initial bundle so
+// the portfolio page cold-start time is not penalised. The fallback={null}
+// means no visible flicker — the dialog appears as soon as the chunk loads
+// (typically <100ms on cached assets).
+const ClosePositionDialog = lazy(() =>
+  import("./ClosePositionDialog").then((m) => ({ default: m.ClosePositionDialog }))
+);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -102,6 +112,24 @@ export interface SemanticHoldingsTableProps {
    * AssetTypeCellRenderer "—" placeholder.
    */
   assetClasses?: Record<string, string | null>;
+
+  // ── PRD-0114 W5 Close Position wiring ────────────────────────────────────
+  /**
+   * portfolioId — S1 portfolio UUID passed to ClosePositionDialog so it can
+   * POST to the correct portfolio. Undefined for the root (aggregate) portfolio
+   * which is read-only (no add/close allowed on root).
+   */
+  portfolioId?: string;
+  /**
+   * portfolioKind — "manual" | "brokerage" | "root". Controls whether
+   * the "Close Position" context menu item is shown. Root portfolios are
+   * read-only; the Close Position option is hidden there.
+   */
+  portfolioKind?: "manual" | "brokerage" | "root";
+  /** Auth token forwarded to ClosePositionDialog for the S9 POST call. */
+  accessToken?: string | null;
+  /** Called after a successful Close Position so the parent can refetch holdings. */
+  onHoldingsRefetch?: () => void;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -121,6 +149,10 @@ export function SemanticHoldingsTable({
   totalValue,
   series,
   assetClasses,
+  portfolioId,
+  portfolioKind,
+  accessToken,
+  onHoldingsRefetch,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -131,6 +163,11 @@ export function SemanticHoldingsTable({
 
   // ── Context menu state ────────────────────────────────────────────────────
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  // PRD-0114 W5-T06: Close Position dialog state.
+  // WHY useState (not URL param): the dialog is transient — it should not persist
+  // across page refreshes. Storing the target holding in state keeps the dialog
+  // lifecycle tied to the current component mount.
+  const [closePositionHolding, setClosePositionHolding] = useState<Holding | null>(null);
 
   // useContextMenuActions must be called unconditionally at the top.
   // When ctxMenu is null, row is undefined → groups will be empty.
@@ -558,7 +595,62 @@ export function SemanticHoldingsTable({
               })}
             </div>
           ))}
+
+          {/* PRD-0114 W5-T06: "Close Position" menu item.
+              WHY separate group (not in ctxGroups): ClosePositionDialog is a W5
+              addition; the existing command-actions system is not yet aware of it.
+              Adding it here directly avoids touching the command-actions registry
+              which could break other callers. The separator + "POSITION" label
+              matches the Bloomberg-style grouping convention used by ctxGroups.
+              WHY only for non-root + quantity > 0: root portfolios are read-only
+              (S1 rejects); quantity=0 means the position is already closed. */}
+          {portfolioKind !== "root" && portfolioId && (() => {
+            // Look up the full Holding by holdingId so ClosePositionDialog has
+            // quantity + ticker + instrument_id without storing extra data in ctxMenu.
+            // WHY IIFE: allows a local variable inside JSX without a separate component.
+            const holding = holdings.find(
+              (h) => h.holding_id === ctxMenu.row.holdingId
+            );
+            if (!holding || holding.quantity <= 0) return null;
+            return (
+              <>
+                <div className="my-1 h-px bg-border" />
+                <div className="px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  Position
+                </div>
+                <button
+                  className="flex w-full cursor-default items-center gap-2 rounded-none px-3 py-1 text-[11px] text-negative hover:bg-negative/10"
+                  onClick={() => {
+                    setClosePositionHolding(holding);
+                    setCtxMenu(null);
+                  }}
+                >
+                  <span className="flex-1 text-left">Close Position</span>
+                </button>
+              </>
+            );
+          })()}
         </div>
+      )}
+
+      {/* PRD-0114 W5-T05/06: ClosePositionDialog — lazy-loaded, only mounts when
+          the user selects "Close Position" from the context menu. Suspense fallback
+          is null (no visible flicker) because the dialog doesn't need to show until
+          the chunk loads. */}
+      {closePositionHolding && portfolioId && (
+        <Suspense fallback={null}>
+          <ClosePositionDialog
+            holding={closePositionHolding}
+            portfolioId={portfolioId}
+            accessToken={accessToken}
+            onSuccess={() => {
+              // Trigger parent refetch so the holdings table refreshes with the
+              // updated quantities/values after the position is closed.
+              onHoldingsRefetch?.();
+            }}
+            onClose={() => setClosePositionHolding(null)}
+          />
+        </Suspense>
       )}
     </div>
   );

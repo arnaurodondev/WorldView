@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
-    from portfolio.domain.value_objects import AuthAuditEvent
+    from portfolio.domain.value_objects import AuthAuditEvent, TransactionFilter
 
 
 @dataclass
@@ -287,6 +287,53 @@ class TransactionRepository(ABC):
 
     @abstractmethod
     async def save(self, transaction: Transaction) -> None: ...
+
+    @abstractmethod
+    async def list_by_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """Paginated transactions for a single portfolio with server-side filter.
+
+        PLAN-0114 / T-W2-02: dispatched by ``ListTransactionsUseCase`` when
+        ``tx_filter`` is supplied. Applies ``from_date``/``to_date``/
+        ``transaction_types``/``ticker`` as DB-level WHERE predicates so only
+        matching rows are fetched. Tenant-scoped for multi-tenant safety.
+        Pagination comes from ``tx_filter.limit`` / ``tx_filter.offset``.
+        """
+        ...
+
+    @abstractmethod
+    async def list_by_portfolio_ids_filtered(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """Union of filtered transactions across multiple portfolios (ROOT case).
+
+        PLAN-0114 / T-W2-02. Same semantics as ``list_by_portfolio_ids`` but
+        applies the ``TransactionFilter`` predicates at the DB level. Empty
+        ``portfolio_ids`` returns ([], 0).
+        """
+        ...
+
+    @abstractmethod
+    async def list_all_for_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> list[Transaction]:
+        """All matching transactions ordered ASC — no pagination.
+
+        PLAN-0114 / T-W2-02. Used by ``ExportTransactionsUseCase`` which needs
+        the full filtered set in chronological order for FIFO cost-basis replay.
+        No ``limit``/``offset`` — streaming export pattern.
+        """
+        ...
 
 
 class HoldingRepository(ABC):

@@ -78,6 +78,7 @@ export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
   weight: 70,
   sector: 80,
   asset: 44,        // new (W4-T401): ASSET column (AssetTypeCellRenderer)
+  divYld: 72,       // PLAN-0114 W6: DIV YLD column (hidden by default)
 };
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
@@ -491,5 +492,30 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerClass: "!text-center",
     cellStyle: { display: "flex", alignItems: "center", justifyContent: "center" },
     cellRenderer: AssetTypeCellRenderer,
+  },
+
+  // ── PLAN-0114 W6: dividend yield ─────────────────────────────────────────
+  // WHY hide: true by default: relevant only for dividend investors. Power
+  // users can show it via the AG Grid column toggle. Hidden columns don't
+  // consume layout space so the 14-col density spec is preserved for the
+  // common case.
+  // WHY 72px: narrowest sensible width for a 4-char label "2.4%" with padding.
+  {
+    colId: "divYld",
+    headerName: "DIV YLD",
+    sortable: false,
+    hide: true,
+    width: HOLDINGS_AG_COL_WIDTHS.divYld,
+    valueGetter: (p: import("ag-grid-community").ValueGetterParams<EnrichedHoldingRow>) =>
+      p.data?.annualizedDividendYield ?? null,
+    cellRenderer: (params: ICellRendererParams<EnrichedHoldingRow>) => {
+      if (isPinnedBottom(params)) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+      const yld = params.data?.annualizedDividendYield;
+      return (
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">
+          {yld == null ? "—" : `${(yld * 100).toFixed(2)}%`}
+        </span>
+      );
+    },
   },
 ];

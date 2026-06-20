@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from portfolio.domain.enums import AuthAuditEventType
+    from portfolio.domain.enums import AuthAuditEventType, TransactionType
 
 _PRECISION = Decimal("0.00000001")  # (18,8) scale
 
@@ -120,3 +121,36 @@ class AuthAuditEvent:
     email: str | None
     detail: dict[str, str]
     ip_address: str | None = None
+
+
+@dataclass(frozen=True)
+class TransactionFilter:
+    """Server-side filter value object for ListTransactions / ExportTransactions.
+
+    PLAN-0114 / T-W2-03: all fields are optional. Absent fields are not
+    applied as WHERE predicates by the repository.
+
+    Validation (``__post_init__``):
+    - ``to_date >= from_date`` when both are present.
+    - Range <= 5 years (1826 days) to prevent runaway queries.
+    """
+
+    from_date: date | None = None
+    to_date: date | None = None
+    transaction_types: list[TransactionType] = field(default_factory=list)
+    ticker: str | None = None
+    limit: int = 50
+    offset: int = 0
+    # Non-configurable constant: 5-year cap in days.
+    _MAX_RANGE_DAYS: int = field(default=1826, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.from_date is not None and self.to_date is not None:
+            if self.to_date < self.from_date:
+                raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")
+            delta = (self.to_date - self.from_date).days
+            if delta > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"Date range {delta} days exceeds the 5-year cap ({self._MAX_RANGE_DAYS} days). "
+                    "Split the request into smaller date ranges."
+                )

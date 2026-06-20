@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Date, cast, func, select, text
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.repositories import TransactionRepository
@@ -15,6 +15,8 @@ from portfolio.infrastructure.db.models.transaction import TransactionModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from portfolio.domain.value_objects import TransactionFilter
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -167,6 +169,123 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
                 TransactionModel.portfolio_id == portfolio_id,
                 TransactionModel.tenant_id == tenant_id,
             )
+            .order_by(TransactionModel.executed_at.asc(), TransactionModel.created_at.asc()),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
+    def _build_filter_clauses(self, tx_filter: TransactionFilter) -> list:  # type: ignore[type-arg]
+        """Translate a ``TransactionFilter`` VO into SQLAlchemy WHERE clauses.
+
+        PLAN-0114 / T-W2-02. Each non-None / non-empty field produces one
+        WHERE predicate. ``from_date`` / ``to_date`` compare against
+        ``CAST(executed_at AS DATE)`` (BP-180 guard — asyncpg rejects bare
+        datetime comparisons with date parameters). ``ticker`` uses an EXISTS
+        subquery on ``instruments`` with ILIKE so partial prefix match works
+        case-insensitively without a JOIN that would change the row count.
+        """
+        clauses: list = []  # type: ignore[type-arg]
+
+        if tx_filter.from_date is not None:
+            clauses.append(cast(TransactionModel.executed_at, Date) >= tx_filter.from_date)
+        if tx_filter.to_date is not None:
+            clauses.append(cast(TransactionModel.executed_at, Date) <= tx_filter.to_date)
+        if tx_filter.transaction_types:
+            type_strings = [str(t) for t in tx_filter.transaction_types]
+            clauses.append(TransactionModel.transaction_type.in_(type_strings))
+        if tx_filter.ticker is not None:
+            ticker_pattern = tx_filter.ticker.upper() + "%"
+            clauses.append(
+                text(  # type: ignore[arg-type]
+                    "EXISTS (SELECT 1 FROM instruments "
+                    "WHERE instruments.id = transactions.instrument_id "
+                    "AND instruments.symbol ILIKE :ticker_pattern)"
+                ).bindparams(ticker_pattern=ticker_pattern)
+            )
+        return clauses
+
+    async def list_by_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """Filtered paginated transactions for a single portfolio.
+
+        PLAN-0114 / T-W2-02. Base WHERE predicates (portfolio_id + tenant_id)
+        are ANDed with the filter clauses from ``_build_filter_clauses``.
+        Pagination uses ``tx_filter.limit`` / ``tx_filter.offset``.
+        """
+        base_where = [
+            TransactionModel.portfolio_id == portfolio_id,
+            TransactionModel.tenant_id == tenant_id,
+            *self._build_filter_clauses(tx_filter),
+        ]
+        count_result = await self._session.execute(
+            select(func.count()).select_from(TransactionModel).where(*base_where),
+        )
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(
+            select(TransactionModel)
+            .where(*base_where)
+            .order_by(TransactionModel.executed_at.desc(), TransactionModel.created_at.desc())
+            .limit(tx_filter.limit)
+            .offset(tx_filter.offset),
+        )
+        return [self._to_entity(r) for r in result.scalars()], total
+
+    async def list_by_portfolio_ids_filtered(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """Filtered paginated transactions across multiple portfolios (ROOT case).
+
+        PLAN-0114 / T-W2-02. Same semantics as ``list_by_portfolio_ids`` but
+        applies the ``TransactionFilter`` predicates. Empty ``portfolio_ids``
+        returns ([], 0) immediately.
+        """
+        if not portfolio_ids:
+            return [], 0
+
+        base_where = [
+            TransactionModel.portfolio_id.in_(portfolio_ids),
+            TransactionModel.tenant_id == tenant_id,
+            *self._build_filter_clauses(tx_filter),
+        ]
+        count_result = await self._session.execute(
+            select(func.count()).select_from(TransactionModel).where(*base_where),
+        )
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(
+            select(TransactionModel)
+            .where(*base_where)
+            .order_by(TransactionModel.executed_at.desc(), TransactionModel.created_at.desc())
+            .limit(tx_filter.limit)
+            .offset(tx_filter.offset),
+        )
+        return [self._to_entity(r) for r in result.scalars()], total
+
+    async def list_all_for_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> list[Transaction]:
+        """All matching transactions in chronological order — for CSV export.
+
+        PLAN-0114 / T-W2-02. Used by ``ExportTransactionsUseCase`` which needs
+        the complete filtered set ordered ASC for correct FIFO cost-basis replay.
+        No pagination: streaming export pattern.
+        """
+        base_where = [
+            TransactionModel.portfolio_id == portfolio_id,
+            TransactionModel.tenant_id == tenant_id,
+            *self._build_filter_clauses(tx_filter),
+        ]
+        result = await self._session.execute(
+            select(TransactionModel)
+            .where(*base_where)
             .order_by(TransactionModel.executed_at.asc(), TransactionModel.created_at.asc()),
         )
         return [self._to_entity(r) for r in result.scalars()]

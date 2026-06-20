@@ -9,6 +9,7 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid as _uuid
 from collections import defaultdict
@@ -410,6 +411,61 @@ async def get_holdings(
         f"/api/v1/holdings/{portfolio_id}",
         headers=headers,
         params={"include_closed": "true"} if include_closed else None,
+    )
+    if resp.status_code != 200:
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+    # PLAN-0114 W6 / T-W6-04: fan-out to S3 to inject annualized_dividend_yield
+    # per holding. Fail-open: a None yield renders as "—" in the DIV YLD column.
+    try:
+        raw_holdings = json.loads(resp.content)
+    except Exception:
+        return Response(content=resp.content, status_code=200, media_type="application/json")
+
+    # Accept both bare list (legacy S1) and {items:[...]} paginated envelope.
+    is_envelope = isinstance(raw_holdings, dict) and "items" in raw_holdings
+    items: list[dict[str, Any]] = (
+        (raw_holdings.get("items") or []) if is_envelope else (raw_holdings if isinstance(raw_holdings, list) else [])
+    )
+
+    if items:
+        unique_iids: list[str] = list({str(h["instrument_id"]) for h in items if h.get("instrument_id") is not None})
+        s3_headers = _auth_headers(request)
+        valkey = getattr(request.app.state, "valkey", None)
+        div_yields = await _batch_fetch_dividend_yields(unique_iids, clients, s3_headers, valkey)
+        for holding in items:
+            iid = str(holding["instrument_id"]) if holding.get("instrument_id") is not None else ""
+            holding["annualized_dividend_yield"] = div_yields.get(iid)
+
+    # Re-wrap in the original envelope shape so callers that depend on {items:}
+    # continue to work without modification.
+    enriched: Any = {**raw_holdings, "items": items} if is_envelope else items
+    return Response(content=json.dumps(enriched), status_code=200, media_type="application/json")
+
+
+@router.patch("/portfolios/{portfolio_id}", status_code=200)
+async def patch_portfolio(portfolio_id: str, request: Request) -> Response:
+    """Proxy PATCH /api/v1/portfolios/{id} → S1 Portfolio service.
+
+    PLAN-0114 W6 / T-W6-02.
+
+    Partial-update of portfolio settings. Current fields: ``cost_basis_method``.
+    Requires authentication. Validates that ``portfolio_id`` is a valid UUID to
+    avoid proxying obviously bad requests downstream.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="portfolio_id must be a valid UUID") from exc
+    raw_body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        f"/api/v1/portfolios/{portfolio_id}",
+        content=raw_body,
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -864,6 +920,64 @@ def _parse_holdings(raw: Any) -> list[dict[str, Any]]:
     return []
 
 
+async def _batch_fetch_dividend_yields(
+    instrument_ids: list[str],
+    clients: Any,
+    s3_headers: dict[str, str],
+    valkey: Any,
+) -> dict[str, float | None]:
+    """Return {instrument_id → annualised dividend yield as ratio} for each id.
+
+    PLAN-0114 W6 / T-W6-04.
+
+    WHY pct/100: S3 fundamentals stores dividend yield as a percentage
+    (e.g. 2.4 = 2.4 %).  The frontend and holdings-columns expect a ratio
+    (0.024) so that formatPercentUnsigned(yld) renders correctly.
+
+    WHY Valkey 900 s: fundamental data changes at most daily; a 15-minute
+    cache avoids hammering S3 on every holdings page load while staying
+    fresh enough for intraday users.
+
+    WHY fail-open (None): if S3 is unavailable or returns no yield data for
+    an instrument the column shows "—" — the rest of the holdings table is
+    unaffected.
+    """
+    _cache_ttl = 900  # seconds — 15 minutes (N806 suppressed: local const)
+
+    async def _fetch_one(iid: str) -> tuple[str, float | None]:
+        cache_key = f"portfolio:div_yield:{iid}"
+        # 1. Check Valkey cache first.
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return iid, float(cached)
+        except Exception:  # noqa: S110
+            pass  # cache miss → fall through to live fetch
+
+        # 2. Fetch from S3 fundamentals.
+        try:
+            resp = await clients.market_data.get(
+                f"/api/v1/fundamentals/{iid}/metrics",
+                headers=s3_headers,
+            )
+            if resp.status_code != 200:
+                return iid, None
+            data = json.loads(resp.content)
+            raw_pct = data.get("annualized_dividend_yield")
+            if raw_pct is None:
+                return iid, None
+            ratio = float(raw_pct) / 100.0
+            # 3. Populate cache (best-effort — write failure is non-fatal).
+            with contextlib.suppress(Exception):
+                await valkey.set(cache_key, str(ratio), ex=_cache_ttl)
+            return iid, ratio
+        except Exception:
+            return iid, None
+
+    results = await asyncio.gather(*(_fetch_one(iid) for iid in instrument_ids))
+    return dict(results)
+
+
 async def _batch_fetch_sectors(
     instrument_ids: list[str],
     clients: Any,
@@ -1213,6 +1327,39 @@ async def list_transactions(request: Request) -> Any:
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# PLAN-0114 / T-W2-07: CSV export proxy.
+# IMPORTANT: this route MUST be declared BEFORE
+# ``/portfolios/{portfolio_id}/transactions`` to prevent FastAPI from
+# treating "export" as a literal portfolio_id path segment in the more
+# general route below.
+@router.get("/portfolios/{portfolio_id}/transactions/export")
+async def export_transactions(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /v1/portfolios/{id}/transactions/export → S1 Portfolio service.
+
+    PLAN-0114 / T-W2-07 (FR-3). Streams the CSV response back to the client
+    and forwards the ``Content-Disposition`` header so browsers prompt a save
+    dialog.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions/export",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    content_disposition = resp.headers.get(
+        "Content-Disposition", f'attachment; filename="transactions_{portfolio_id}.csv"'
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="text/csv",
+        headers={"Content-Disposition": content_disposition},
+    )
 
 
 # F-012 (QA 2026-04-28) — nested transactions form mirrors the analytics

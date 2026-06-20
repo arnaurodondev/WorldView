@@ -314,6 +314,12 @@ class ConsumerConfig:
     # to True, otherwise attempt counts reset to 0 every redelivery and the
     # message loops until ``dead_letter_cap`` trips.  See docs/libs/messaging.md.
     enable_persistent_retry: bool = False
+    # Kafka static group membership (KIP-345). When set, this value is passed
+    # to librdkafka as ``group.instance.id``. Static membership prevents
+    # unnecessary rebalances on consumer restarts — useful for consumers with
+    # long processing times. None (the default) uses the original dynamic
+    # membership behaviour.
+    group_instance_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -331,18 +337,21 @@ class ConsumerConfig:
         # PLAN-0093 Wave A-2 (F-LOG-003): prepend the rdkafka base config so
         # every consumer carries broker.address.ttl=30s + family=v4.  User
         # keys are spread on top → per-consumer overrides still win.
-        return apply_base_rdkafka_config(
-            {
-                "bootstrap.servers": self.bootstrap_servers,
-                "group.id": self.group_id,
-                "auto.offset.reset": self.auto_offset_reset,
-                "enable.auto.commit": self.enable_auto_commit,
-                "session.timeout.ms": self.session_timeout_ms,
-                "heartbeat.interval.ms": self.heartbeat_interval_ms,
-                "max.poll.interval.ms": self.max_poll_interval_ms,
-                "partition.assignment.strategy": self.partition_assignment_strategy,
-            }
-        )
+        cfg: dict[str, object] = {
+            "bootstrap.servers": self.bootstrap_servers,
+            "group.id": self.group_id,
+            "auto.offset.reset": self.auto_offset_reset,
+            "enable.auto.commit": self.enable_auto_commit,
+            "session.timeout.ms": self.session_timeout_ms,
+            "heartbeat.interval.ms": self.heartbeat_interval_ms,
+            "max.poll.interval.ms": self.max_poll_interval_ms,
+            "partition.assignment.strategy": self.partition_assignment_strategy,
+        }
+        # KIP-345 static group membership: only set if configured so consumers
+        # that omit it retain the original dynamic membership behaviour.
+        if self.group_instance_id is not None:
+            cfg["group.instance.id"] = self.group_instance_id
+        return apply_base_rdkafka_config(cfg)
 
 
 @dataclasses.dataclass

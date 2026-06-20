@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from portfolio.application.ports.repositories import PortfolioRepository
 from portfolio.domain.entities.portfolio import Portfolio
-from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+from portfolio.domain.enums import CostBasisMethod, PortfolioKind, PortfolioStatus
 from portfolio.domain.errors import PortfolioAlreadyExistsError
 from portfolio.infrastructure.db.models.portfolio import PortfolioModel
 
@@ -37,6 +37,10 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
             # REQ-002a: surface the idempotency key so the use case can
             # detect "same key, different payload" conflicts on replay.
             idempotency_key=row.idempotency_key,
+            # PLAN-0114 W1 (BP-655): hydrate cost_basis_method.
+            cost_basis_method=CostBasisMethod(row.cost_basis_method)
+            if getattr(row, "cost_basis_method", None)
+            else CostBasisMethod.FIFO,
         )
 
     async def find_by_idempotency_key(
@@ -161,6 +165,8 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
                 # REQ-002a: persist the idempotency key only on initial insert;
                 # rename/archive paths leave it untouched.
                 idempotency_key=portfolio.idempotency_key,
+                # PLAN-0114 W1 (BP-655): persist cost_basis_method on INSERT.
+                cost_basis_method=str(portfolio.cost_basis_method),
             )
             self._session.add(row)
             try:
@@ -172,3 +178,5 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
         else:
             row.name = portfolio.name
             row.status = str(portfolio.status)
+            # PLAN-0114 W1 (BP-655): persist cost_basis_method on UPDATE.
+            row.cost_basis_method = str(portfolio.cost_basis_method)

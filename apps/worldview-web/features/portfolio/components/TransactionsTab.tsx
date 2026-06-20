@@ -25,8 +25,12 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TransactionsTable } from "@/components/portfolio/TransactionsTable";
 import { ConnectedBrokeragesList } from "@/components/brokerage/ConnectedBrokeragesList";
+// PRD-0114 W5-T02/03: server-side filter bar + export button.
+import { TransactionsFilterBar } from "@/components/portfolio/TransactionsFilterBar";
+import { ExportTransactionsButton } from "@/components/portfolio/ExportTransactionsButton";
 import type { TransactionsResponse } from "@/types/api";
 import type { HoldingOverviewMap } from "@/features/portfolio/lib/kpi";
+import type { TransactionFilters, BackendTransactionParams } from "@/features/portfolio/hooks/useTransactionsFilterState";
 
 interface TransactionsTabProps {
   activePortfolioId: string | null;
@@ -50,6 +54,25 @@ interface TransactionsTabProps {
    * queryKey, so each page is its own cache entry).
    */
   onTxOffsetChange?: (offset: number) => void;
+
+  // ── PRD-0114 W5-T02/03: backend-driven filter state ──────────────────────
+  /**
+   * filterState — current URL-synced filter values from useTransactionsFilterState().
+   * When provided, the filter bar renders above the transaction table.
+   * When undefined, the old layout (no filter bar) is preserved for callers
+   * that haven't upgraded yet.
+   */
+  filterState?: TransactionFilters;
+  /** onChange for the filter bar — updates URL params via nuqs. */
+  onFilterChange?: (f: TransactionFilters) => void;
+  /** Reset all filter slots to defaults. */
+  onFilterReset?: () => void;
+  /** Typed S9 query params derived from filterState via toBackendParams(). */
+  backendFilterParams?: BackendTransactionParams;
+  /** Auth token for the server-side CSV export button. */
+  accessToken?: string | null;
+  /** Ticker strings for the filter bar's suggest-as-you-type ticker input. */
+  tickerSuggestions?: string[];
 }
 
 export function TransactionsTab({
@@ -60,6 +83,12 @@ export function TransactionsTab({
   onConnect,
   onAddPosition,
   onTxOffsetChange,
+  filterState,
+  onFilterChange,
+  onFilterReset,
+  backendFilterParams,
+  accessToken,
+  tickerSuggestions,
 }: TransactionsTabProps) {
   // WHY brokeragesSectionExpanded default false: the primary use of the
   // Transactions tab is reviewing transaction history — the brokerage
@@ -139,6 +168,49 @@ export function TransactionsTab({
           </div>
         )}
       </div>
+
+      {/* ── PRD-0114 W5-T02/03: Filter bar + export button ──────────────────
+          Only renders when the caller passes filterState + handlers.
+          Backwards compatible: if filterState is undefined, the old layout
+          with no filter bar is preserved unchanged for existing callers. */}
+      {filterState && onFilterChange && onFilterReset && activePortfolioId && (
+        <div className="shrink-0 flex items-center gap-2 border-b border-border/60 px-2 py-1 bg-card/50">
+          {/* TransactionsFilterBar renders the type pills + date/ticker inputs.
+              filteredItems=[] disables the legacy client-side CSV export button
+              inside the filter bar (it only exports the current page); the new
+              ExportTransactionsButton below handles server-side export instead. */}
+          <TransactionsFilterBar
+            value={filterState}
+            onChange={(f) => {
+              onFilterChange(f);
+              // Reset pagination to page 1 whenever filters change (PRD-0114 W5).
+              onTxOffsetChange?.(0);
+            }}
+            // WHY tickerOptions (not tickerSuggestions): TransactionsFilterBar was
+            // built before W5 and uses tickerOptions as the existing prop name.
+            // We pass tickerSuggestions (or empty array) through here.
+            tickerOptions={tickerSuggestions ?? []}
+            // WHY 0 for total/filteredCount: the filter bar shows "X / Y" counts
+            // but we don't have the unfiltered total from the server here (the
+            // total in transactionsResp is for the FILTERED set). Passing 0
+            // hides the count display or shows "0" — acceptable until W3 ships
+            // a dedicated endpoint for unfiltered counts.
+            totalCount={transactionsResp?.total ?? 0}
+            filteredCount={transactionsResp?.total ?? 0}
+            // WHY []: filteredItems drives the client-side CSV export button.
+            // Setting it to [] disables that button — the server-side
+            // ExportTransactionsButton to the right handles exports instead.
+            filteredItems={[]}
+          />
+          <div className="ml-auto shrink-0">
+            <ExportTransactionsButton
+              portfolioId={activePortfolioId}
+              filter={backendFilterParams ?? {}}
+              accessToken={accessToken}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── Transaction list (always visible below brokerage section) ──── */}
       <div className="flex-1 min-h-0">

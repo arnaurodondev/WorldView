@@ -58,6 +58,18 @@ import {
 
 // ── Validation schema ──────────────────────────────────────────────────────
 
+// ── Cost basis method exports (PLAN-0114 W6 / T-W6-03) ───────────────────
+// Exported so EditPortfolioDialog can import the same constants instead of
+// duplicating them (single source of truth for labels + enum members).
+export const COST_BASIS_METHODS = ["FIFO", "AVCO"] as const;
+export type CostBasisMethod = (typeof COST_BASIS_METHODS)[number];
+export const COST_BASIS_METHOD_LABELS: Record<CostBasisMethod, string> = {
+  // WHY verbose label: new users unfamiliar with cost-basis terminology get
+  // the full expansion inline without needing a tooltip hover.
+  FIFO: "First In, First Out (FIFO)",
+  AVCO: "Average Cost (AVCO)",
+};
+
 /**
  * WHY z.enum for currency (not z.string): an enum constrains the value to the
  * 12 known ISO 4217 + crypto codes at compile time AND runtime. This was the
@@ -71,7 +83,7 @@ const CURRENCIES = [
 ] as const;
 
 // Type so the Select items array is typed and exhaustive.
-type CurrencyCode = typeof CURRENCIES[number];
+type CurrencyCode = (typeof CURRENCIES)[number];
 
 const CURRENCY_LABELS: Record<CurrencyCode, string> = {
   USD: "USD — US Dollar ($)",
@@ -97,6 +109,10 @@ const portfolioSchema = z.object({
     // WHY custom errorMap: the default "Invalid enum value" message isn't
     // user-friendly. "Select a currency" matches the field label.
     errorMap: () => ({ message: "Select a currency" }),
+  }),
+  // PLAN-0114 W6: cost basis method defaults to FIFO (S1 server default).
+  cost_basis_method: z.enum(COST_BASIS_METHODS, {
+    errorMap: () => ({ message: "Select a cost basis method" }),
   }),
 });
 
@@ -124,6 +140,9 @@ export function CreatePortfolioDialog({
       // WHY USD default: the overwhelming majority of users are USD-denominated.
       // Defaulting saves a click for 90%+ of users.
       currency: "USD",
+      // WHY FIFO default: matches S1's server default. Users who need AVCO can
+      // change it here or later via EditPortfolioDialog.
+      cost_basis_method: "FIFO",
     },
   });
 
@@ -137,6 +156,8 @@ export function CreatePortfolioDialog({
       const newPortfolio = await createGateway(accessToken).createPortfolio(
         values.name.trim(),
         values.currency,
+        // PLAN-0114 W6: two-step create (POST+PATCH) if non-FIFO.
+        values.cost_basis_method,
       );
       form.reset();
       onSuccess(newPortfolio);
@@ -230,6 +251,42 @@ export function CreatePortfolioDialog({
                             className="text-[11px] font-mono"
                           >
                             {CURRENCY_LABELS[code]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Cost basis method — PLAN-0114 W6 / T-W6-03. */}
+            <FormField
+              control={form.control}
+              name="cost_basis_method"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Cost Basis Method
+                  </FormLabel>
+                  <FormControl>
+                    <Select
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      disabled={form.formState.isSubmitting}
+                    >
+                      <SelectTrigger className="h-8 text-[11px] font-mono bg-background border-border w-full">
+                        <SelectValue placeholder="Select method" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {COST_BASIS_METHODS.map((method) => (
+                          <SelectItem
+                            key={method}
+                            value={method}
+                            className="text-[11px] font-mono"
+                          >
+                            {COST_BASIS_METHOD_LABELS[method]}
                           </SelectItem>
                         ))}
                       </SelectContent>

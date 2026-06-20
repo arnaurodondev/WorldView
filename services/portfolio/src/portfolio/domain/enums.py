@@ -122,3 +122,22 @@ class AuthAuditEventType(StrEnum):
     ACCOUNT_LINKED = "account_linked"
     LOGIN_PROVISIONED = "login_provisioned"
     PROVISION_CONFLICT_409 = "provision_conflict_409"
+
+
+class CostBasisMethod(StrEnum):
+    """How cost basis is computed when shares from multiple lots are sold.
+
+    PLAN-0114 W1.
+
+    FIFO (First-In First-Out):
+        The oldest lot (earliest BUY) is consumed first on a SELL.
+        Preferred by most tax systems as the default.
+
+    AVCO (Average Cost):
+        A running weighted average across all open lots is maintained.
+        The cost per unit is recalculated on every BUY; SELLs don't change
+        the per-unit cost of remaining shares.
+    """
+
+    FIFO = "FIFO"
+    AVCO = "AVCO"

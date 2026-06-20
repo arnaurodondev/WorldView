@@ -190,6 +190,18 @@ class FakeTransactionRepo(TransactionRepository):
         items.sort(key=lambda t: (t.executed_at, t.created_at))
         return items
 
+    # PLAN-0114 / T-W2-02 — stubs for the new filtered repository methods.
+    # Real filtering is exercised in test_list_transactions_filtered.py via
+    # the FakeTransactionRepo in tests/unit/fakes.py.
+    async def list_by_portfolio_filtered(self, portfolio_id, tenant_id, tx_filter):
+        return [], 0
+
+    async def list_by_portfolio_ids_filtered(self, portfolio_ids, tenant_id, tx_filter):
+        return [], 0
+
+    async def list_all_for_portfolio_filtered(self, portfolio_id, tenant_id, tx_filter):
+        return []
+
 
 class FakeHoldingRepo(HoldingRepository):
     def __init__(self) -> None:

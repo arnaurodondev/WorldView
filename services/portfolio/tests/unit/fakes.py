@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
-    from portfolio.domain.value_objects import AuthAuditEvent
+    from portfolio.domain.value_objects import AuthAuditEvent, TransactionFilter
 
 
 class FakeTenantRepository(TenantRepository):
@@ -346,6 +346,62 @@ class FakeTransactionRepository(TransactionRepository):
 
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
+
+    def _apply_tx_filter(self, items: list[Transaction], tx_filter: TransactionFilter) -> list[Transaction]:
+        """Apply TransactionFilter predicates in-memory (mirrors SQL WHERE logic).
+
+        Ticker filtering is skipped: it requires an instrument lookup that
+        FakeTransactionRepository doesn't have. Tested at integration level.
+        """
+        result = items
+        if tx_filter.from_date is not None:
+            result = [t for t in result if t.executed_at.date() >= tx_filter.from_date]
+        if tx_filter.to_date is not None:
+            result = [t for t in result if t.executed_at.date() <= tx_filter.to_date]
+        if tx_filter.transaction_types:
+            type_set = set(tx_filter.transaction_types)
+            result = [t for t in result if t.transaction_type in type_set]
+        return result
+
+    async def list_by_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """PLAN-0114 T-W2-02: filtered + paginated list for a single portfolio."""
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        total = len(items)
+        return items[tx_filter.offset : tx_filter.offset + tx_filter.limit], total
+
+    async def list_by_portfolio_ids_filtered(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """PLAN-0114 T-W2-02: filtered + paginated list across multiple portfolios (ROOT)."""
+        if not portfolio_ids:
+            return [], 0
+        pid_set = set(portfolio_ids)
+        items = [t for t in self._store.values() if t.portfolio_id in pid_set and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        items.sort(key=lambda t: (t.executed_at, t.created_at), reverse=True)
+        total = len(items)
+        return items[tx_filter.offset : tx_filter.offset + tx_filter.limit], total
+
+    async def list_all_for_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> list[Transaction]:
+        """PLAN-0114 T-W2-05: all matching transactions ASC order for CSV export."""
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
 
 
 class FakeHoldingRepository(HoldingRepository):
