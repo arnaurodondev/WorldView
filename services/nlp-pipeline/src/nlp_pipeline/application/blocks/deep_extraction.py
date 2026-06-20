@@ -32,6 +32,7 @@ from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from nlp_pipeline.application.blocks.relation_validation import validate_relations
 from nlp_pipeline.application.blocks.suppression import should_run_deep_extraction
 from nlp_pipeline.domain.models import SignalEvent
 
@@ -484,6 +485,24 @@ async def run_deep_extraction_block(
 
     # Merge deduplicated results
     merged = _merge_results_safe(window_results)
+
+    # Deterministic precision gates (2026-06-14 v1.6 re-A/B follow-up): drop relations
+    # that are structurally invalid — self-loops, out-of-vocabulary predicates,
+    # index/ticker `listed_on` objects, and bare common-noun endpoints. The v1.6 prompt
+    # asks the model to self-police these, but the re-A/B showed it complies only ~2/3 of
+    # the time; this code filter makes the gates a guarantee independent of model drift.
+    # See application/blocks/relation_validation.py.
+    kept_relations, relation_drops = validate_relations(merged.get("relations", []))
+    if relation_drops:
+        logger.info(
+            "deep_extraction.relations_filtered",
+            doc_id=str(doc_id),
+            kept=len(kept_relations),
+            dropped_total=sum(relation_drops.values()),
+            **{f"dropped_{reason}": count for reason, count in relation_drops.items()},
+        )
+    merged["relations"] = kept_relations
+
     # Surface degradation on the merged result so the caller (and any persistence
     # path) can carry it forward. Kept as plain dict keys to avoid changing the
     # ExtractionResult shape consumed by _merge_results_safe / downstream readers,
