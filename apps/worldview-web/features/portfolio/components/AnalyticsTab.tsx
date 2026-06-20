@@ -181,12 +181,83 @@ interface RiskSidebarProps {
 }
 
 /**
- * RiskSidebar — 11-tile vertical strip of risk metrics.
+ * DEGRADED_DASH — the affordance shown in place of a bare "—" when a
+ * benchmark-relative metric (BETA·SPY / ALPHA·SPY) is null specifically
+ * BECAUSE the SPY benchmark series is unavailable (data_quality.status ===
+ * "benchmark_unavailable"), as opposed to a generic insufficient-data null.
+ *
+ * STRUCTURAL/ROBUSTNESS GOAL (this redesign): a bare "—" is ambiguous — the
+ * user can't tell "we couldn't fetch SPY" from "this number is genuinely
+ * zero / not yet computed". "n/a" + an explanatory hover names the cause so
+ * the empty cell reads as a known, explained degradation rather than a bug.
+ * The sibling AnalyticsRiskMetricsPanel already distinguishes these two cases
+ * via its betaTooltip; this brings the backend-driven sidebar to parity.
+ */
+const BENCHMARK_UNAVAILABLE_LABEL = "n/a";
+
+// ── Metric grouping ─────────────────────────────────────────────────────────
+//
+// STRUCTURAL REDESIGN: the previous sidebar rendered all 11 tiles as a flat,
+// undifferentiated vertical list — RETURN, RISK-ADJUSTED, DRAWDOWN, and
+// BENCHMARK-RELATIVE metrics were visually interleaved with no grouping, so a
+// reader scanning for "how risk-adjusted is this book" had to hunt SHARPE /
+// SORTINO / CALMAR out of an 11-row stack. We now bucket every tile into one
+// of four finance-standard families and render a thin section header before
+// each group. The families are a stable, closed set (a union type) so a new
+// tile must declare which family it belongs to — the grouping can never drift.
+type MetricGroup = "return" | "risk-adjusted" | "drawdown" | "benchmark";
+
+const GROUP_LABEL: Record<MetricGroup, string> = {
+  return: "Return",
+  "risk-adjusted": "Risk-adjusted",
+  drawdown: "Drawdown",
+  benchmark: "vs SPY",
+};
+
+// Render order of the groups (top → bottom of the sidebar).
+const GROUP_ORDER: readonly MetricGroup[] = [
+  "return",
+  "risk-adjusted",
+  "drawdown",
+  "benchmark",
+];
+
+/** One sidebar tile descriptor. */
+interface RiskTile {
+  label: string;
+  value: string;
+  /** Which metric family this tile belongs to (drives section grouping). */
+  group: MetricGroup;
+  hint?: string;
+  colorClass?: string;
+  ariaLabel?: string;
+  /**
+   * Hover explanation of WHAT the metric is (Bloomberg-style: the cryptic
+   * uppercase label is decoded on hover). Also carries the degraded-state
+   * reason when value is the "n/a" benchmark-unavailable affordance.
+   */
+  tooltip?: string;
+  /**
+   * True when this tile is showing the graceful benchmark-unavailable
+   * affordance ("n/a") rather than a real value or a generic "—". Drives a
+   * distinct muted style + the dotted-underline "explain me" cue.
+   */
+  degraded?: boolean;
+}
+
+/**
+ * RiskSidebar — grouped vertical strip of risk metrics (11 tiles in 4 families).
  *
  * WHY 11 tiles (not the existing 5-tile RiskMetricsStrip): Design Decision 4
  * (spec §9.4) adds TWR, Benchmark-TWR, Alpha, Calmar, and Win Rate to the
  * existing 5-tile strip (Sharpe/Sortino/Beta/MaxDD/Vol). 11 tiles in a narrow
  * column > 2-row strip that needs extra horizontal space.
+ *
+ * REDESIGN (robustness pass): tiles are now grouped into RETURN /
+ * RISK-ADJUSTED / DRAWDOWN / vs-SPY families with section headers, every tile
+ * carries a decode tooltip, and the benchmark-relative tiles degrade
+ * gracefully ("n/a" + "benchmark unavailable" hover) instead of a bare "—"
+ * when SPY data is missing.
  */
 function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
   const apiClient = useApiClient();
@@ -219,98 +290,55 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
   // SAME risk-metrics response (VERIFIED LIVE 2026-06-11) — no separate
   // performance query is needed, so the old perfLoading placeholder is gone.
 
-  const tiles: Array<{
-    label: string;
-    value: string;
-    hint?: string;
-    colorClass?: string;
-    ariaLabel?: string;
-  }> = [
-    {
-      label: "MAX DD",
-      value: fmtPct(risk?.drawdown_max),
-      colorClass:
-        risk?.drawdown_max == null
-          ? "text-muted-foreground"
-          : risk.drawdown_max < -0.1
-          ? "text-negative"
-          : "text-foreground",
-      ariaLabel: `Max drawdown: ${fmtPct(risk?.drawdown_max)}`,
-      hint: `${riskLookbackDays(period)}D`,
-    },
-    {
-      label: "CURR DD",
-      value: fmtPct(risk?.drawdown_current),
-      colorClass:
-        risk?.drawdown_current == null
-          ? "text-muted-foreground"
-          : risk.drawdown_current < -0.05
-          ? "text-negative"
-          : "text-foreground",
-      ariaLabel: `Current drawdown: ${fmtPct(risk?.drawdown_current)}`,
-    },
+  // ── Degraded-benchmark detection ────────────────────────────────────────
+  // The gateway tells us WHY a benchmark-relative metric is null via
+  // data_quality.status === "benchmark_unavailable" (SPY OHLCV missing). When
+  // that is the case we render the explicit "n/a" + "benchmark unavailable"
+  // affordance for BETA·SPY / ALPHA·SPY instead of a bare "—", so the empty
+  // cell reads as an explained degradation, not a glitch. We only treat the
+  // value as benchmark-degraded when the metric is ACTUALLY null — a populated
+  // beta should never be overwritten.
+  const benchmarkUnavailable =
+    risk?.data_quality?.status === "benchmark_unavailable";
+
+  /**
+   * benchmarkValue — render a benchmark-relative metric (beta/alpha) with the
+   * graceful "n/a" affordance when its null-ness is attributable to a missing
+   * SPY series. Falls back to the normal formatter otherwise (a generic
+   * insufficient-data null still shows "—" with its own tooltip).
+   */
+  function benchmarkValue(
+    raw: number | null | undefined,
+    fmt: (v: number | null | undefined) => string,
+  ): { value: string; degraded: boolean } {
+    if (raw == null && benchmarkUnavailable) {
+      return { value: BENCHMARK_UNAVAILABLE_LABEL, degraded: true };
+    }
+    return { value: fmt(raw), degraded: false };
+  }
+
+  const beta = benchmarkValue(risk?.beta_vs_spy, fmtNum);
+  const alpha = benchmarkValue(risk?.alpha, fmtPct);
+
+  // Shared tooltip for a benchmark tile that has degraded to "n/a".
+  const benchmarkDegradedTooltip =
+    "Benchmark unavailable — SPY price history could not be loaded, so this benchmark-relative metric cannot be computed. It will populate once SPY data is available.";
+
+  const tiles: RiskTile[] = [
+    // ── RETURN family ──────────────────────────────────────────────────────
     {
       label: "VOL ANN",
+      group: "return",
       value: fmtPct(risk?.volatility_annualized),
       colorClass: "text-foreground",
       ariaLabel: `Annualised volatility: ${fmtPct(risk?.volatility_annualized)}`,
       hint: "ann.",
-    },
-    {
-      label: "SHARPE",
-      value: fmtNum(risk?.sharpe),
-      colorClass:
-        risk?.sharpe == null
-          ? "text-muted-foreground"
-          : risk.sharpe > 1
-          ? "text-positive"
-          : risk.sharpe < 0
-          ? "text-negative"
-          : "text-foreground",
-      ariaLabel: `Sharpe ratio: ${fmtNum(risk?.sharpe)}`,
-      hint: `${riskLookbackDays(period)}D`,
-    },
-    {
-      label: "SORTINO",
-      value: fmtNum(risk?.sortino),
-      colorClass:
-        risk?.sortino == null
-          ? "text-muted-foreground"
-          : risk.sortino > 1
-          ? "text-positive"
-          : risk.sortino < 0
-          ? "text-negative"
-          : "text-foreground",
-      ariaLabel: `Sortino ratio: ${fmtNum(risk?.sortino)}`,
-    },
-    {
-      label: "BETA·SPY",
-      value: fmtNum(risk?.beta_vs_spy),
-      colorClass: "text-foreground",
-      ariaLabel: `Beta vs SPY: ${fmtNum(risk?.beta_vs_spy)}`,
-      hint: "vs SPY",
-    },
-    // 2026-06-10 sprint: CALMAR / WIN RATE / ALPHA / VaR are REAL now — the
-    // risk-metrics endpoint returns them on the same response (the previous
-    // hardcoded "—" placeholders are gone). All independently nullable;
-    // fmtNum/fmtPct render null as "—" so insufficient-data windows stay
-    // honest without special-casing.
-    {
-      label: "CALMAR",
-      value: fmtNum(risk?.calmar),
-      colorClass:
-        risk?.calmar == null
-          ? "text-muted-foreground"
-          : risk.calmar > 1
-          ? "text-positive"
-          : risk.calmar < 0
-          ? "text-negative"
-          : "text-foreground",
-      ariaLabel: `Calmar ratio: ${fmtNum(risk?.calmar)}`,
-      hint: `${riskLookbackDays(period)}D`,
+      tooltip:
+        "Annualised volatility — sample standard deviation of daily returns × √252. Higher = a bumpier ride.",
     },
     {
       label: "WIN RATE",
+      group: "return",
       // win_rate is a 0-1 fraction of positive daily returns. UNSIGNED
       // render — a rate is a magnitude, "+39.3%" would be a category error
       // (same convention as weights/allocations).
@@ -323,28 +351,140 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
           ? "text-positive"
           : "text-foreground",
       ariaLabel: `Win rate: ${risk?.win_rate == null ? "unavailable" : `${(risk.win_rate * 100).toFixed(1)}%`}`,
+      tooltip:
+        "Win rate — fraction of days in the window with a positive return.",
+    },
+    // ── RISK-ADJUSTED family ───────────────────────────────────────────────
+    {
+      label: "SHARPE",
+      group: "risk-adjusted",
+      value: fmtNum(risk?.sharpe),
+      colorClass:
+        risk?.sharpe == null
+          ? "text-muted-foreground"
+          : risk.sharpe > 1
+          ? "text-positive"
+          : risk.sharpe < 0
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Sharpe ratio: ${fmtNum(risk?.sharpe)}`,
+      hint: `${riskLookbackDays(period)}D`,
+      tooltip:
+        "Sharpe ratio — annualised excess return per unit of total volatility (rf = 0 assumed). > 1 is good.",
     },
     {
-      label: "ALPHA·SPY",
-      // null while the benchmark leg is unavailable (data_quality.degradation
-      // .benchmark="no_data" on the dev stack) — "—" is the honest render.
-      value: fmtPct(risk?.alpha),
+      label: "SORTINO",
+      group: "risk-adjusted",
+      value: fmtNum(risk?.sortino),
       colorClass:
-        risk?.alpha == null
+        risk?.sortino == null
           ? "text-muted-foreground"
-          : risk.alpha > 0
+          : risk.sortino > 1
           ? "text-positive"
-          : "text-negative",
-      ariaLabel: `Alpha vs SPY: ${fmtPct(risk?.alpha)}`,
-      hint: "vs SPY",
+          : risk.sortino < 0
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Sortino ratio: ${fmtNum(risk?.sortino)}`,
+      tooltip:
+        "Sortino ratio — like Sharpe but penalises only downside volatility. > 1 is good.",
+    },
+    // 2026-06-10 sprint: CALMAR / WIN RATE / ALPHA / VaR are REAL now — the
+    // risk-metrics endpoint returns them on the same response (the previous
+    // hardcoded "—" placeholders are gone). All independently nullable;
+    // fmtNum/fmtPct render null as "—" so insufficient-data windows stay
+    // honest without special-casing.
+    {
+      label: "CALMAR",
+      group: "risk-adjusted",
+      value: fmtNum(risk?.calmar),
+      colorClass:
+        risk?.calmar == null
+          ? "text-muted-foreground"
+          : risk.calmar > 1
+          ? "text-positive"
+          : risk.calmar < 0
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Calmar ratio: ${fmtNum(risk?.calmar)}`,
+      hint: `${riskLookbackDays(period)}D`,
+      tooltip:
+        "Calmar ratio — annualised return ÷ max drawdown. Higher = better return for the worst loss endured.",
+    },
+    // ── DRAWDOWN family ────────────────────────────────────────────────────
+    {
+      label: "MAX DD",
+      group: "drawdown",
+      value: fmtPct(risk?.drawdown_max),
+      colorClass:
+        risk?.drawdown_max == null
+          ? "text-muted-foreground"
+          : risk.drawdown_max < -0.1
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Max drawdown: ${fmtPct(risk?.drawdown_max)}`,
+      hint: `${riskLookbackDays(period)}D`,
+      tooltip:
+        "Maximum drawdown — deepest peak-to-trough decline over the window.",
+    },
+    {
+      label: "CURR DD",
+      group: "drawdown",
+      value: fmtPct(risk?.drawdown_current),
+      colorClass:
+        risk?.drawdown_current == null
+          ? "text-muted-foreground"
+          : risk.drawdown_current < -0.05
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Current drawdown: ${fmtPct(risk?.drawdown_current)}`,
+      tooltip:
+        "Current drawdown — how far below the all-time peak the portfolio sits right now.",
     },
     {
       label: "VaR 95",
+      group: "drawdown",
       value: fmtPct(risk?.var_95),
       colorClass:
         risk?.var_95 == null ? "text-muted-foreground" : "text-negative",
       ariaLabel: `1-day 95% value at risk: ${fmtPct(risk?.var_95)}`,
       hint: "1D hist.",
+      tooltip:
+        "Value-at-Risk (95%, 1-day, historical) — the daily loss you'd exceed only 5% of the time.",
+    },
+    // ── BENCHMARK-RELATIVE family (degrades gracefully) ────────────────────
+    {
+      label: "BETA·SPY",
+      group: "benchmark",
+      value: beta.value,
+      degraded: beta.degraded,
+      colorClass: beta.degraded ? "text-muted-foreground/70" : "text-foreground",
+      ariaLabel: beta.degraded
+        ? "Beta vs SPY: benchmark unavailable"
+        : `Beta vs SPY: ${beta.value}`,
+      hint: "vs SPY",
+      tooltip: beta.degraded
+        ? benchmarkDegradedTooltip
+        : "Beta vs SPY — sensitivity of the portfolio's returns to the S&P 500. 1.0 = moves with the market.",
+    },
+    {
+      label: "ALPHA·SPY",
+      group: "benchmark",
+      value: alpha.value,
+      degraded: alpha.degraded,
+      colorClass: alpha.degraded
+        ? "text-muted-foreground/70"
+        : risk?.alpha == null
+          ? "text-muted-foreground"
+          : risk.alpha > 0
+            ? "text-positive"
+            : "text-negative",
+      ariaLabel: alpha.degraded
+        ? "Alpha vs SPY: benchmark unavailable"
+        : `Alpha vs SPY: ${alpha.value}`,
+      hint: "vs SPY",
+      tooltip: alpha.degraded
+        ? benchmarkDegradedTooltip
+        : "Alpha vs SPY — return earned above what beta-exposure to the S&P 500 would predict (Jensen's alpha).",
     },
   ];
 
@@ -358,41 +498,94 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
     // period's metrics land. transition-opacity makes the swap subtle.
     <div
       data-stale={riskIsStale || undefined}
+      data-testid="risk-sidebar"
       className={cn(
         "border border-border rounded-[2px] h-full overflow-hidden transition-opacity",
         riskIsStale && "opacity-60",
       )}
     >
-      {tiles.map((tile) => (
-        <div
-          key={tile.label}
-          aria-label={tile.ariaLabel}
-          className="flex flex-col px-2 py-1.5 border-b border-border last:border-0"
-        >
-          <div className="flex items-baseline justify-between gap-1">
-            <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-              {tile.label}
-            </span>
-            {tile.hint && (
-              <span className="text-[9px] text-muted-foreground/60">
-                {tile.hint}
+      {/* Header — names the panel + the lookback window so it never reads as a
+          duplicate of the period-aligned PERIOD RISK panel below it. */}
+      <div className="flex items-baseline justify-between border-b border-border bg-muted/20 px-2 py-1">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          Risk
+        </span>
+        <span className="text-[9px] text-muted-foreground/60 font-mono">
+          {riskLookbackDays(period)}D lookback
+        </span>
+      </div>
+
+      {/* STRUCTURAL REDESIGN: render the tiles grouped by metric family. We
+          walk GROUP_ORDER (not the tiles array) so the section order is fixed
+          and self-documenting; within each family we filter the tiles that
+          declared that group. A family with no tiles renders nothing (defensive
+          — keeps the loop total even if a tile is removed later). */}
+      {GROUP_ORDER.map((group) => {
+        const groupTiles = tiles.filter((t) => t.group === group);
+        if (groupTiles.length === 0) return null;
+        return (
+          <div
+            key={group}
+            data-testid={`risk-group-${group}`}
+            // border-b separates families; last group has no trailing border so
+            // the panel closes cleanly on its own rounded edge.
+            className="border-b border-border last:border-0"
+          >
+            {/* Thin family header — decodes the family of cryptic labels below
+                it (RISK-ADJUSTED groups SHARPE/SORTINO/CALMAR, etc.). */}
+            <div className="px-2 pt-1 pb-0.5">
+              <span className="text-[9px] uppercase tracking-[0.1em] text-muted-foreground/50 font-mono">
+                {GROUP_LABEL[group]}
               </span>
-            )}
+            </div>
+
+            {groupTiles.map((tile) => (
+              <div
+                key={tile.label}
+                aria-label={tile.ariaLabel}
+                // Native title tooltip decodes the metric on hover (same
+                // zero-DOM approach as the PERIOD RISK panel). For a degraded
+                // benchmark tile the tooltip explains the "n/a".
+                title={tile.tooltip}
+                data-testid={`risk-tile-${tile.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+                data-degraded={tile.degraded || undefined}
+                // Tighter rows than before (py-1 vs py-1.5) to absorb the extra
+                // vertical space the four section headers add — the whole panel
+                // still fits the chart column's height.
+                className="flex flex-col px-2 py-1 last:pb-1.5"
+              >
+                <div className="flex items-baseline justify-between gap-1">
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                    {tile.label}
+                  </span>
+                  {tile.hint && (
+                    <span className="text-[9px] text-muted-foreground/60">
+                      {tile.hint}
+                    </span>
+                  )}
+                </div>
+                {isLoading ? (
+                  <Skeleton className="h-[20px] w-14 mt-0.5" />
+                ) : (
+                  <span
+                    className={cn(
+                      "font-mono tabular-nums text-[13px] leading-none mt-0.5",
+                      tile.colorClass ?? "text-foreground",
+                      // Degraded benchmark cells get a dotted underline as the
+                      // universal "hover me for an explanation" cue — the cell
+                      // is intentionally empty of data, not broken.
+                      tile.degraded &&
+                        "decoration-dotted underline underline-offset-2 decoration-muted-foreground/40 cursor-help text-[11px]",
+                    )}
+                  >
+                    {tile.value}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
-          {isLoading ? (
-            <Skeleton className="h-[20px] w-14 mt-0.5" />
-          ) : (
-            <span
-              className={cn(
-                "font-mono tabular-nums text-[13px] leading-none mt-0.5",
-                tile.colorClass ?? "text-foreground",
-              )}
-            >
-              {tile.value}
-            </span>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

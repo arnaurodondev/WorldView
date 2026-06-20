@@ -232,6 +232,112 @@ describe("AnalyticsTab (R2 wiring)", () => {
     expect(container.textContent ?? "").not.toMatch(/\d{5,}bps/);
   });
 
+  // ── Risk-sidebar metric grouping (2026-06-20 structural redesign) ──────────
+  // The 11 backend-driven risk tiles used to render as a flat, undifferentiated
+  // vertical list. The redesign buckets them into four finance-standard
+  // families (RETURN / RISK-ADJUSTED / DRAWDOWN / vs-SPY) each preceded by a
+  // section header, so a reader can scan a family at a glance. This locks the
+  // four groups + a representative tile in each in place.
+  it("groups the risk sidebar tiles into the four metric families", async () => {
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("risk-sidebar")).toBeInTheDocument();
+    });
+
+    // All four metric-family sections render…
+    for (const group of ["return", "risk-adjusted", "drawdown", "benchmark"]) {
+      expect(screen.getByTestId(`risk-group-${group}`)).toBeInTheDocument();
+    }
+
+    // …and a representative tile lands in each family (the grouping wiring is
+    // what makes the family render, so finding the tile proves the bucket).
+    expect(screen.getByTestId("risk-tile-sharpe")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-max-dd")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-beta-spy")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-vol-ann")).toBeInTheDocument();
+
+    // Every tile decodes its cryptic label via a native title tooltip — no
+    // bare uppercase metric is left unexplained.
+    expect(
+      screen.getByTestId("risk-tile-sharpe").getAttribute("title"),
+    ).toMatch(/sharpe/i);
+  });
+
+  // ── Graceful degraded benchmark (2026-06-20 robustness pass) ───────────────
+  // When the gateway reports data_quality.status === "benchmark_unavailable"
+  // (SPY OHLCV missing), BETA·SPY / ALPHA·SPY must show an explicit "n/a"
+  // affordance with a "benchmark unavailable" tooltip — NOT a bare "—" the user
+  // has to guess about. This is the core ask of the redesign.
+  it("degrades BETA/ALPHA gracefully to 'n/a' + tooltip when the benchmark is unavailable", async () => {
+    mockGetRiskMetrics.mockResolvedValue({
+      portfolio_id: "p-1",
+      lookback_days: 365,
+      drawdown_max: -0.12,
+      drawdown_current: -0.03,
+      volatility_annualized: 0.18,
+      sharpe: 1.2,
+      sortino: 1.5,
+      // Benchmark-relative metrics are null specifically because SPY is missing.
+      beta_vs_spy: null,
+      alpha: null,
+      calmar: 0.9,
+      win_rate: 0.55,
+      var_95: -0.02,
+      n_returns: 250,
+      data_quality: {
+        status: "benchmark_unavailable",
+        n_returns: 250,
+        lookback_days: 365,
+      },
+    });
+
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    const betaTile = await screen.findByTestId("risk-tile-beta-spy");
+    const alphaTile = await screen.findByTestId("risk-tile-alpha-spy");
+
+    // The graceful affordance: "n/a", flagged degraded, and an explanatory
+    // tooltip — never a bare "—".
+    expect(betaTile).toHaveTextContent("n/a");
+    expect(betaTile).not.toHaveTextContent("—");
+    expect(betaTile).toHaveAttribute("data-degraded", "true");
+    expect(betaTile.getAttribute("title")).toMatch(/benchmark unavailable/i);
+
+    expect(alphaTile).toHaveTextContent("n/a");
+    expect(alphaTile).toHaveAttribute("data-degraded", "true");
+    expect(alphaTile.getAttribute("title")).toMatch(/benchmark unavailable/i);
+  });
+
+  // A null beta WITHOUT a benchmark-unavailable signal (e.g. plain insufficient
+  // data) must NOT show the "n/a" affordance — it stays a generic "—". This
+  // guards against over-eagerly attributing every null to a missing benchmark.
+  it("keeps a generic '—' for a null benchmark metric when the cause is not benchmark-unavailable", async () => {
+    mockGetRiskMetrics.mockResolvedValue({
+      portfolio_id: "p-1",
+      lookback_days: 365,
+      drawdown_max: null,
+      drawdown_current: null,
+      volatility_annualized: null,
+      sharpe: null,
+      sortino: null,
+      beta_vs_spy: null,
+      alpha: null,
+      n_returns: 1,
+      data_quality: {
+        status: "insufficient_data",
+        n_returns: 1,
+        lookback_days: 365,
+      },
+    });
+
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    const betaTile = await screen.findByTestId("risk-tile-beta-spy");
+    expect(betaTile).toHaveTextContent("—");
+    expect(betaTile).not.toHaveAttribute("data-degraded");
+  });
+
   it("client risk panel shows em-dashes + insufficient-data tooltips below 20 observations", async () => {
     render(wrap(<AnalyticsTab portfolioId="p-1" />));
 
