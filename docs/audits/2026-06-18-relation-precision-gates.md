@@ -69,13 +69,62 @@ each gate, spelling-variant exchanges kept, country endpoints not mis-dropped, m
 batches, hygiene, and the prompt-sync drift-guard. Full `application/blocks` suite: 259
 passed. ruff + mypy clean.
 
-## Follow-ups
+## Deploy + cleanup (done 2026-06-19/20)
 
-1. **Deploy** — rebuild + restart the article-processing consumer so new extractions are
-   gated (then watch the `deep_extraction.relations_filtered` structured log).
-2. **Backfill cleanup** (pending decision) — delete the 442 invalid `listed_on` rows from
-   the materialised `relations` graph and the ~6.8k structurally-invalid rows from
-   `relation_evidence_raw`.
-3. **Quiet-hour re-A/B** — with the deterministic classes now guaranteed at 0, re-measure
-   the *residual* (probabilistic) defect rate — co-mention hallucination, wrong-direction
-   — which remains the prompt's job, to decide if the GO gate (≥85% clean) is met.
+1. **Deployed** — both `nlp-pipeline-article-consumer-0/-1` images rebuilt and restarted;
+   the gate is verified live in-container (`validate_relations` importable + wired into
+   `deep_extraction`; smoke test drops a self-loop + an index `listed_on`, keeps a valid
+   relation). New extractions log `deep_extraction.relations_filtered` when they drop.
+2. **Cleanup** — both backfills run inside transactions, dry-run-verified, fully backed up
+   to `cleanup_20260618_*` tables in `intelligence_db`:
+   - Materialised graph: 442 invalid `listed_on` deleted across `relations` (442) +
+     `relation_evidence` (492) + `relation_summaries` (7) + `relations_history` (462) +
+     AGE `LISTED_ON` edges (442). `listed_on` 1938→1496 in both `relations` and AGE
+     (stayed in sync); residual invalid = 0.
+   - Raw evidence: 5,719 self-loops + 612 invalid `listed_on` deleted from
+     `relation_evidence_raw` (100,217→93,886); residual self-loops = 0.
+
+## Re-A/B on the LIVE model (2026-06-20) — gate-aware residual measurement
+
+`scripts/eval/gate_residual_ab.py` — runs the **currently deployed** extraction model,
+applies the production gate to each output, and judges RAW vs GATED with an independent
+budget judge (DeepSeek V4 Flash).
+
+**Key context: the live extraction model changed.** Production now runs
+`openai/gpt-oss-120b` @ `reasoning_effort=medium` — NOT the `Qwen/Qwen3-235B` @ `low`
+that the 2026-06-14 v1.6 audit (verdict TUNE, ~32% NEW-triple defective) measured. So the
+old residual numbers do not transfer; this run re-measures against what is actually live.
+
+Sample: 24 deep-tier articles; 7 lost to DeepInfra `api_error` (≈29% — rate-limiting at
+`medium` effort, a throughput/reliability signal, not a quality one), **17 judged, 32
+relations**.
+
+| Metric | RAW (gate off) | GATED (gate on) |
+|---|---|---|
+| relations | 32 | 32 |
+| deterministic drops | — | **0** (drop_rate 0.0) |
+| mean precision (1–5) | 4.941 | 4.941 |
+| mean adherence (1–5) | 5.0 | 5.0 |
+
+**Interpretation.** On the live model, the deterministic gate finds **nothing to drop**
+(0/32; rule-of-three upper bound ≈9% — "rare", not provably zero) and relation precision
+is already ≈4.94/5 with perfect adherence. The defect classes that polluted the corpus
+(self-loops, index `listed_on`) were overwhelmingly produced by the **previous** model;
+`gpt-oss-120b` @ medium is dramatically cleaner and **clears the ≥85%-clean GO gate**.
+
+This reframes the gate's role: it currently catches ~nothing, so its value is now
+(a) the one-time cleanup of the old model's accumulated junk (done above) and
+(b) a permanent, zero-cost **regression guarantee** against future model drift /
+prompt changes — not an active filter on the current model.
+
+**Caveats** — small sample (17 articles / 32 relations, low power for rare defects);
+articles share a recent time-prefix (correlated window); budget judge (screening-grade);
+recent articles may be in-distribution-easy. Treat as a strong directional signal, not a
+final precision figure. A larger, time-diverse sample would tighten the bound.
+
+## Remaining open item (new, surfaced by the re-A/B)
+
+- **≈29% extraction `api_error` rate** under load at `gpt-oss-120b` @ `medium` effort
+  (DeepInfra 429s exhausting backoff). This is a separate *reliability/throughput*
+  concern from extraction *quality* — worth a dedicated look (effort tuning, concurrency
+  caps, or fallback-model wiring) since dropped windows degrade recall silently.
