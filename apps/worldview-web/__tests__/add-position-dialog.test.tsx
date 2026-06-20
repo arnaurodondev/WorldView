@@ -11,22 +11,39 @@
  * DESIGN REFERENCE: PLAN-0059 F-2 Form Layer.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { z } from "zod";
 import { AddPositionDialog } from "@/features/portfolio/components/AddPositionDialog";
 
-// ── Gateway mock ─────────────────────────────────────────────────────────────
+// ── Hoisted mock functions ────────────────────────────────────────────────────
+// WHY vi.hoisted: vi.mock() factory functions are hoisted to the top of the
+// file before any variable declarations. Variables declared with `const` below
+// the vi.mock() call cannot be referenced inside the factory — doing so causes
+// a ReferenceError at module initialisation time. vi.hoisted() runs its
+// callback *before* module resolution, so the returned references are
+// initialised in time to be captured by the vi.mock() factories.
+const { mockSearchInstruments, mockAddPosition, mockToastSuccess } = vi.hoisted(() => ({
+  mockSearchInstruments: vi.fn(),
+  mockAddPosition: vi.fn(),
+  mockToastSuccess: vi.fn(),
+}));
 
-const mockSearchInstruments = vi.fn();
-const mockAddPosition = vi.fn();
+// ── Gateway mock ─────────────────────────────────────────────────────────────
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     searchInstruments: mockSearchInstruments,
     addPosition: mockAddPosition,
   })),
+}));
+
+// ── Toast mock (FR-8) ─────────────────────────────────────────────────────────
+// WHY mock sonner: toast.success is a side-effect that does not render DOM
+// nodes in jsdom. Mocking lets us assert on the call arguments directly.
+vi.mock("sonner", () => ({
+  toast: { success: mockToastSuccess },
 }));
 
 const SAMPLE_INSTRUMENT = {
@@ -75,6 +92,7 @@ async function fillQuantity(user: ReturnType<typeof userEvent.setup>, value: str
 beforeEach(() => {
   mockSearchInstruments.mockReset();
   mockAddPosition.mockReset();
+  mockToastSuccess.mockReset();
 });
 
 // ── Ticker required ────────────────────────────────────────────────────────
@@ -246,5 +264,61 @@ describe("AddPositionDialog — cancel", () => {
     const { onOpenChange } = renderDialog();
     await user.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// ── FR-8: portfolio-kind-aware toast copy ─────────────────────────────────
+//
+// WHY these tests: PRD-0114 FR-8 acceptance criterion requires a unit test
+// verifying the toast message copy is gated on portfolioKind. The manual
+// copy ("Holdings will reflect this trade within seconds.") sets the correct
+// async expectation; the brokerage copy ("Position added successfully.")
+// is the generic fallback. These tests cover both branches of the condition
+// at AddPositionDialog.tsx:173.
+
+describe("AddPositionDialog — FR-8 toast copy (portfolioKind)", () => {
+  it("shows async-holdings toast for manual portfolio", async () => {
+    // WHY manual: manual portfolios trigger async W1 consumer recompute.
+    // The 'within seconds' copy sets the user's expectation correctly.
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-manual" });
+
+    renderDialog({ portfolioKind: "manual" });
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAPL");
+    await fillQuantity(user, "10");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        "Transaction recorded",
+        expect.objectContaining({
+          description: "Holdings will reflect this trade within seconds.",
+        }),
+      );
+    });
+  });
+
+  it("shows generic success toast for brokerage portfolio", async () => {
+    // WHY brokerage: brokerage portfolios sync from broker — no async consumer
+    // recompute — so the generic copy is correct (no 'within seconds' promise).
+    const user = userEvent.setup();
+    mockSearchInstruments.mockResolvedValueOnce({ results: [SAMPLE_INSTRUMENT] });
+    mockAddPosition.mockResolvedValueOnce({ transaction_id: "tx-brokerage" });
+
+    renderDialog({ portfolioKind: "brokerage" });
+    await user.type(screen.getByPlaceholderText(/aapl/i), "AAPL");
+    await fillQuantity(user, "10");
+    await user.click(screen.getByRole("button", { name: /add position/i }));
+
+    await waitFor(() => {
+      // Called with just the message string (no description object).
+      expect(mockToastSuccess).toHaveBeenCalledWith("Position added successfully.");
+    });
+    // Confirm the manual copy does NOT appear.
+    expect(mockToastSuccess).not.toHaveBeenCalledWith(
+      "Transaction recorded",
+      expect.anything(),
+    );
   });
 });

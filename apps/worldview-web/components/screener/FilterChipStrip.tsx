@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatCompactCurrency } from "@/lib/format";
 import {
   Popover,
   PopoverContent,
@@ -215,11 +216,9 @@ function formatChipValue(
   if (opts.pct) return `${(v * 100).toFixed(1)}%`;
   if (opts.usd) {
     // Compact USD so a $5,000,000 insider flow reads "$5.0M", not a wall of digits.
-    const abs = Math.abs(v);
-    if (abs >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(1)}B`;
-    if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-    if (abs >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-    return `$${v}`;
+    // WHY formatCompactCurrency: the architecture gate bans hand-built `$${value.toFixed(N)}`
+    // literals — all USD must go through the shared formatter for locale grouping.
+    return formatCompactCurrency(v, "USD", { compactThreshold: 1_000 });
   }
   return `${v}`;
 }

@@ -216,7 +216,10 @@ async def list_transactions(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
     transaction_type: list[str] | None = Query(default=None),
-    ticker: str | None = Query(default=None),
+    # max_length=20: tickers are rarely longer than 10 chars; caps ILIKE pattern size
+    # to prevent expensive wildcard amplification on the transactions table.
+    # pattern restricts to valid ticker characters — rejects injection attempts.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     x_owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
@@ -243,7 +246,9 @@ async def export_transactions(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
     transaction_type: list[str] | None = Query(default=None),
-    ticker: str | None = Query(default=None),
+    # max_length=20 + pattern: especially important on the export path (limit=999_999)
+    # where an expensive ILIKE pattern would scan the entire transactions table.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
 ) -> StreamingResponse:
     """Stream all matching transactions as a CSV file.
 
@@ -289,7 +294,14 @@ async def export_transactions(
     return StreamingResponse(
         csv_iter,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Defence-in-depth: prevent MIME-sniffing by Chromium-based browsers.
+            # Although _sanitize_csv_cell guards against CSV injection, older
+            # Chromium builds may treat a text/csv response as HTML if opened
+            # inline without this header (OWASP A05:2021 Security Misconfiguration).
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -312,7 +324,8 @@ async def list_transactions_nested(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
     transaction_type: list[str] | None = Query(default=None),
-    ticker: str | None = Query(default=None),
+    # Same ticker guard as GET /transactions — caps ILIKE amplification risk.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     """Nested alias for ``GET /transactions?portfolio_id=...``.
 

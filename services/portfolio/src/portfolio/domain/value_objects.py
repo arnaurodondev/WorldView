@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -145,6 +146,18 @@ class TransactionFilter:
     _MAX_RANGE_DAYS: int = field(default=1826, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # Ticker guard: max 20 chars, alphanumeric + dot/caret/hyphen only.
+        # WHY here: even if the API layer validates Query params, the domain VO
+        # is the canonical guard — callers that construct TransactionFilter
+        # directly (e.g. export use case) benefit from the same constraint.
+        if self.ticker is not None:
+            if len(self.ticker) > 20:
+                raise ValueError(f"ticker must be at most 20 characters, got {len(self.ticker)}")
+            if not re.fullmatch(r"[A-Z0-9.\^-]*", self.ticker):
+                raise ValueError(
+                    f"ticker '{self.ticker}' contains invalid characters. "
+                    "Only uppercase letters, digits, '.', '^', and '-' are allowed."
+                )
         if self.from_date is not None and self.to_date is not None:
             if self.to_date < self.from_date:
                 raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")

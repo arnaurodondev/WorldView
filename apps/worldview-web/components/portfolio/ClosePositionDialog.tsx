@@ -32,7 +32,7 @@
 "use client";
 // WHY "use client": useState for form state, fetch for API calls, event handlers.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -102,6 +102,14 @@ export function ClosePositionDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [priceError, setPriceError] = useState<string | null>(null);
 
+  // WHY useRef for idempotency key (not useState): we need a stable value for
+  // the entire lifecycle of this dialog instance. If the user double-clicks
+  // "Confirm" (or the network is slow and they click again), both requests will
+  // carry the same key and S1 will deduplicate them, preventing duplicate SELL
+  // transactions from corrupting FIFO cost-basis and holdings. useRef is correct
+  // because changing the key should NOT cause a re-render.
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
+
   // ── Validation ────────────────────────────────────────────────────────────
 
   function validatePrice(raw: string): number | null {
@@ -161,6 +169,11 @@ export function ClosePositionDialog({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // WHY Idempotency-Key: the backend (S1) deduplicates POST /transactions
+          // requests that carry the same key, preventing duplicate SELL entries
+          // from double-clicks or retries. The key is stable for the dialog
+          // instance (useRef above) so rapid re-clicks all carry the same key.
+          "Idempotency-Key": idempotencyKeyRef.current,
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify(body),

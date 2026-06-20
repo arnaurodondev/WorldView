@@ -153,30 +153,62 @@ class ExportTransactionsUseCase:
         if portfolio.owner_id != owner_id:
             raise AuthorizationError("Not authorized to export this portfolio's transactions")
 
-        # --- Fetch matching transactions (chronological, no pagination) ---
-        # For ROOT portfolios we fan out across all sub-portfolios, then sort
-        # chronologically in-process.  For single portfolios we use the direct
-        # filtered method which orders ASC at the DB level.
+        # --- Fetch transactions — two-pass strategy for correct FIFO cost basis ---
+        #
+        # WHY two separate fetches:
+        # The FIFO replay algorithm must see ALL historical BUY lots to compute
+        # accurate cost basis for any SELL in the exported window.  If we only
+        # fetch the filtered subset (e.g. "from 2026-01-01" or "type=BUY only"),
+        # earlier BUY lots are invisible to the replayer and every SELL in the
+        # window would show no cost_basis_per_unit / realized_pnl — silently
+        # incorrect FIFO accounting.
+        #
+        # Strategy:
+        #   1. full_transactions — all transactions for the portfolio, chronological
+        #      ASC, unfiltered. Used ONLY for the FIFO lot replay.
+        #   2. output_transactions — only the transactions that pass tx_filter.
+        #      These are the rows written to the CSV.
+        #
+        # The FIFO state is built from full_transactions; the rows emitted are
+        # those from output_transactions.  We match them by (id) so each output
+        # row gets the FIFO-computed cost_basis_per_unit / realized_pnl that
+        # accounts for every prior lot.
         if portfolio.kind == PortfolioKind.ROOT:
             sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
             if not sub_ids:
-                transactions = []
+                full_transactions: list[Transaction] = []
+                transactions: list[Transaction] = []
             else:
-                # Collect from each sub-portfolio and merge-sort.
-                # For export scale (5-year cap) this is acceptable in-process.
-                all_txs: list[Transaction] = []
+                # Full chronological history (for FIFO replay).
+                all_full: list[Transaction] = []
                 for pid in sub_ids:
-                    txs = await uow.transactions.list_all_for_portfolio_filtered(pid, tenant_id, tx_filter)
-                    all_txs.extend(txs)
-                transactions = sorted(all_txs, key=lambda t: (t.executed_at, t.created_at))
+                    all_full.extend(await uow.transactions.list_all_for_portfolio_asc(pid, tenant_id))
+                full_transactions = sorted(all_full, key=lambda t: (t.executed_at, t.created_at))
+                # Filtered subset (for CSV output rows).
+                all_filtered: list[Transaction] = []
+                for pid in sub_ids:
+                    all_filtered.extend(
+                        await uow.transactions.list_all_for_portfolio_filtered(pid, tenant_id, tx_filter)
+                    )
+                transactions = sorted(all_filtered, key=lambda t: (t.executed_at, t.created_at))
         else:
+            # Full chronological history (for FIFO replay).
+            full_transactions = await uow.transactions.list_all_for_portfolio_asc(portfolio_id, tenant_id)
+            # Filtered subset (for CSV output rows).
             transactions = await uow.transactions.list_all_for_portfolio_filtered(portfolio_id, tenant_id, tx_filter)
 
+        # Build a set of output transaction IDs so we can skip non-output rows
+        # efficiently during the FIFO replay loop below.
+        output_tx_ids = {tx.id for tx in transactions}
+
         # --- Instrument ticker lookup (same bounded pattern as ListTransactionsUseCase) ---
-        instrument_ids = {tx.instrument_id for tx in transactions}
+        # WHY use full_transactions for instrument_ids: the ticker map should cover
+        # all instruments that appear in the full history (needed for FIFO rows),
+        # not just the filtered output rows.
+        instrument_ids = {tx.instrument_id for tx in full_transactions}
         if instrument_ids:
             all_instruments, _ = await uow.instruments.list_all(limit=10_000, offset=0)
-            # instrument_id → (ticker, asset_class) — we only need ticker for CSV
+            # instrument_id → ticker — we only need ticker for CSV
             ticker_map: dict[UUID, str] = {
                 inst.id: inst.symbol
                 for inst in all_instruments
@@ -188,12 +220,17 @@ class ExportTransactionsUseCase:
         logger.info(
             "export_transactions_started",
             portfolio_id=str(portfolio_id),
-            transaction_count=len(transactions),
+            full_transaction_count=len(full_transactions),
+            output_transaction_count=len(transactions),
             from_date=str(tx_filter.from_date),
             to_date=str(tx_filter.to_date),
         )
 
-        # --- FIFO lot tracking ---
+        # --- FIFO lot tracking (two-pass) ---
+        # Replay FIFO over the FULL chronological history so that all BUY lots
+        # before the filter window are properly tracked.  Only rows whose id is in
+        # output_tx_ids are appended to the CSV output list.
+        #
         # Structure: instrument_id → deque of (quantity: Decimal, price: Decimal)
         # One deque per instrument; FIFO = front of deque = oldest lot.
         lots: dict[UUID, deque[tuple[Decimal, Decimal]]] = {}
@@ -201,7 +238,7 @@ class ExportTransactionsUseCase:
         # Build output rows in-process (list of dicts) then stream via csv module.
         rows: list[dict[str, str]] = []
 
-        for tx in transactions:
+        for tx in full_transactions:
             ticker = ticker_map.get(tx.instrument_id, "")
             total_value = tx.quantity * tx.price
 
@@ -243,6 +280,10 @@ class ExportTransactionsUseCase:
                     # realized_pnl = proceeds - cost.  Fees reduce proceeds for sells.
                     proceeds = tx.quantity * tx.price - tx.fees
                     realized_pnl = proceeds - total_cost_of_sold_units
+
+            # Only emit a CSV row when this transaction matches the user's filter.
+            if tx.id not in output_tx_ids:
+                continue
 
             row = {
                 "date": _sanitize_csv_cell(tx.executed_at.date().isoformat()),
