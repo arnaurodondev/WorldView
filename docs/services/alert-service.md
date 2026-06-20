@@ -52,14 +52,41 @@ The **alert-rule poller** (PLAN-0113) is the 5th process (R22). It runs an
 APScheduler interval loop (base tick `ALERT_RULE_POLL_TICK_SECONDS`, default 60s)
 that loads enabled poll-type rules (`PRICE_CROSS`, `FUNDAMENTAL_CROSS`,
 `NEWS_COUNT`, `NEWS_MOMENTUM`), throttles each by its per-type cadence
-(`AlertRule.is_due`), and resolves an evaluator from `EVALUATOR_REGISTRY`.
-Wave 1 ships the loop with the registry empty (no-op); Waves 2/3 wire the
-evaluators + firing. KG_CONNECTION is event-driven (intelligence consumer), not
-polled. Observability per BP-705: `s10_rule_poller_last_success_timestamp_seconds`
-(liveness gauge), `s10_rule_poller_runs_total{outcome}`, `s10_rule_poller_due_rules`,
+(`AlertRule.is_due`), resolves an evaluator from `EVALUATOR_REGISTRY`
+(`register_default_evaluators()` at boot), runs `evaluate → should_fire`, and on
+an edge fires via `FireRuleAlertUseCase`. KG_CONNECTION is event-driven
+(intelligence consumer), not polled. Observability per BP-705:
+`s10_rule_poller_last_success_timestamp_seconds` (liveness gauge),
+`s10_rule_poller_runs_total{outcome}`, `s10_rule_poller_due_rules`,
+`s10_rule_evaluations_total{rule_type,outcome}`, `s10_rule_fired_total{rule_type}`,
 and a per-cycle `asyncio.wait_for` watchdog (`ALERT_RULE_POLLER_WATCHDOG_SECONDS`).
 Set `ALERT_RULE_POLLER_ENABLED=false` to disable evaluation instantly (rules
 stay stored but dormant). Metrics on `:9101`.
+
+#### Rule evaluators (PLAN-0113 Wave 2)
+
+Each poll rule type maps to one `RuleEvaluator` in `application/rules/`. Evaluators
+depend only on the ABC client ports in `application/ports/signal_clients.py`
+(`IS3PriceClient`, `IS6NewsClient`) — never on the concrete HTTP clients (R25). All
+reads are best-effort (a flaky upstream returns None → skip, no state change).
+
+| Rule type | Evaluator | Cadence | Source (REST, R9) | Fires when |
+|---|---|---|---|---|
+| `PRICE_CROSS` | `PriceCrossEvaluator` | 60s | S3 `POST /internal/v1/price/batch` | last price crosses `value` (edge vs `last_state.was_above`) |
+| `FUNDAMENTAL_CROSS` | `FundamentalCrossEvaluator` | 21600s (6h) | S3 `GET /api/v1/fundamentals/timeseries` (latest `value_numeric`) | metric crosses `value` (edge); cooldown re-arm 24h |
+| `NEWS_COUNT` | `NewsCountEvaluator` | 3600s | S6 `GET /internal/v1/instruments/{id}/news-rollup-7d` (7d) or `GET /api/v1/news/trending-entities` (24/72/168h) | count first ≥ `threshold`; re-arms below |
+| `NEWS_MOMENTUM` | `NewsMomentumEvaluator` | 3600s | S6 `GET /api/v1/news/trending-entities` (`delta_pct`, `count`) | `delta_pct ≥ threshold AND count ≥ min_count` (edge) |
+| `KG_CONNECTION` | (Wave 3) | event | S7 `/paths/between` confirm | edge first appears (latch) |
+
+`FireRuleAlertUseCase` (`application/use_cases/fire_rule_alert.py`) is the shared
+firing path: one transaction writes `alerts` (`alert_type='user_rule'`,
+`severity=rule.severity`, `payload={rule_type, rule_id, observed,
+condition_snapshot}`, `dedup_key=sha256(rule_id:transition_signature)`) +
+a `pending_alerts` row **for `rule.user_id` only** (owner-targeted, never a
+watchlist fan-out) + an `outbox_events` row (R8). It advances
+`rule.last_state.last_fired_at` only on commit; a rolled-back/duplicate fire never
+advances the cooldown clock. Post-commit it pushes over the existing Valkey
+WebSocket channel.
 
 ### WebSocket Cross-Process Architecture (Valkey Pub/Sub)
 

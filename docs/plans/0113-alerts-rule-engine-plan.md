@@ -202,7 +202,7 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Tests (integration):** `test_poller_price_fires_once` (Postgres + S3 stub), per-type cadence throttling.
 
 #### Pre-read (W2): `application/use_cases/alert_fanout.py`, `infrastructure/clients/s3_client.py` (`S3MarketDataClient`), `infrastructure/rules/poller_main.py`, S3 routers `market-data/.../api/routers/{price_snapshot,fundamental_metrics}.py`, S6 routes `nlp-pipeline/.../api/routes/{internal_news_rollup,trending_entities}.py`.
-#### Validation Gate (W2): ruff+mypy clean; ≥ 20 new tests; poller fires edge-triggered once in integration; docs/services/alert.md evaluator table.
+#### Validation Gate (W2) — DONE 2026-06-20: ruff+mypy clean on changed files; 49 new tests (48 unit + 1 integration), 576 unit pass (integration requires Docker — collects clean); poller fires edge-triggered once (`test_poller_price_fires_once` + unit `test_poller_fires_once_on_edge`); docs/services/alert-service.md evaluator table added.
 #### Architecture Compliance (W2): R25 ABC client ports (`IS3PriceClient`,`IS6NewsClient`); R8 outbox in FireRuleAlertUseCase; R9 S3/S6 via REST only; R12 structlog.
 #### Break Impact (W2): none external (additive). Update alert conftest with S3/S6 client stubs.
 #### Regression Guardrails (W2): **BP-705** (poller obs); **BP-235** (httpx timeout: set `httpx.Timeout` on S3/S6 clients + `asyncio.wait_for`); edge-trigger correctness (no fire-every-tick); **R9** (no cross-service DB — REST only).
@@ -285,7 +285,17 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Tests:** manager renders server rules; pause/delete call API.
 
 #### Pre-read (W4): `components/alerts/{RuleManagerDialog,AlertRuleBuilder}.tsx`, `lib/alerts/{rules,format}.ts`, `lib/api/alerts.ts`, `components/intelligence/PathBetweenPanel.tsx` (inline `EntityPicker`), `components/workspace/TickerPicker.tsx`, `features/screener/lib/filter-state.ts` (metric names reference) + S3 `screen/fields` shape, `lib/api/search.ts` (`searchInstruments`/`searchFundamentals`), `app/(app)/alerts/page.tsx`, `docs/ui/DESIGN_SYSTEM.md`.
-#### Validation Gate (W4): pnpm typecheck + lint clean; vitest green (≥ 15 new tests); no localStorage rule path remains.
+#### Validation Gate (W4) — DONE 2026-06-20
+- [x] pnpm typecheck + lint clean (only pre-existing warnings; no new errors)
+- [x] vitest green — 535 scoped tests pass; +30 new (6 alertRules API + 7 ruleToNaturalLanguage + 8 condition-editors + 6 AlertWizard + 3 EntityPicker) + 5 rewritten (rule-manager-dialog)
+- [x] no localStorage rule path remains — `lib/alerts/rules.ts` reduced to a type/`defaultRuleName` shim; `AlertRuleBuilder` deleted; rule count + manager read from server (`useAlertRules`)
+- [x] shared `EntityPicker` extracted from `PathBetweenPanel` (repointed) + new `InstrumentPicker` + `MetricPicker` from S3 `screen/fields`
+- [x] type-first `AlertWizard`, 5 condition-editors emit §6.5.3 shapes (node_a≠node_b guard), `ruleToNaturalLanguage` per type
+- [x] `RuleManagerDialog` + `/alerts` page migrated to server rules; docs/apps/worldview-web.md updated
+
+> **Deviation (T-4-02):** the plan said "reuse TickerPicker for instrument_id types." `TickerPicker` is a workspace widget that broadcasts via `SymbolLinkingContext.setActiveSymbol` (no `onSelect` return, requires a `panelId`), so it cannot back a form field without mutating open panels. Built a form-shaped sibling `components/common/InstrumentPicker.tsx` (same look + `searchInstruments` source, returns the chosen instrument via `onSelect`).
+> **Deviation (T-4-01):** hooks live in a sibling `lib/api/useAlertRules.ts` (not inside `alertRules.ts`) so the gateway-spread factory stays React-free; `alertRules.ts` holds types + raw CRUD methods.
+> **Note (T-4-05):** the optional inline `PathBetweenPanel` current-state preview inside `KgConnectionEditor` was not added (kept the editor compact; the NL summary covers the preview need). `RuleManagerDialog.prefillEntity` is retained for call-site back-compat but is now a no-op (the type-first wizard uses structured pickers).
 #### Architecture Compliance (W4): Frontend→S9 only (R14, talks to `/v1/alert-rules`); pnpm only; heavy comments.
 #### Break Impact (W4): `lib/alerts/rules` localStorage tests → rewrite to server API; type-enum tests (4→5 + structured); alerts-page tests → wizard entry.
 #### Regression Guardrails (W4): CSS `hsl(var())` no-paint class (use tokens, not inline var()); reuse existing pickers (don't duplicate); entity free-text→picker eliminates unresolved-ticker silent failure.

@@ -81,3 +81,66 @@ async def test_get_price_batch_failure_is_best_effort() -> None:
     mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
     client = S3MarketDataClient(_settings(), client=mock_client)
     assert await client.get_price_batch([uuid4()]) == {}
+
+
+# ── get_fundamental_metric (PLAN-0113 T-2-03) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_fundamental_metric_returns_latest() -> None:
+    """``data`` is ASC by date → the last non-null value_numeric is the latest."""
+    iid = uuid4()
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "instrument_id": str(iid),
+        "metric": "pe_ratio",
+        "data": [
+            {"as_of_date": "2024-01-01", "value_numeric": 18.0},
+            {"as_of_date": "2024-04-01", "value_numeric": 22.5},
+        ],
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    client = S3MarketDataClient(_settings(), client=mock_client)
+    assert await client.get_fundamental_metric(iid, "pe_ratio") == 22.5
+
+
+@pytest.mark.asyncio
+async def test_get_fundamental_metric_skips_null_tail() -> None:
+    """A null value_numeric at the tail is skipped for the latest non-null."""
+    iid = uuid4()
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [
+            {"as_of_date": "2024-01-01", "value_numeric": 18.0},
+            {"as_of_date": "2024-04-01", "value_numeric": None},
+        ],
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    client = S3MarketDataClient(_settings(), client=mock_client)
+    assert await client.get_fundamental_metric(iid, "pe_ratio") == 18.0
+
+
+@pytest.mark.asyncio
+async def test_get_fundamental_metric_empty_returns_none() -> None:
+    iid = uuid4()
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"data": []}
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    client = S3MarketDataClient(_settings(), client=mock_client)
+    assert await client.get_fundamental_metric(iid, "pe_ratio") is None
+
+
+@pytest.mark.asyncio
+async def test_get_fundamental_metric_failure_returns_none() -> None:
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    client = S3MarketDataClient(_settings(), client=mock_client)
+    assert await client.get_fundamental_metric(uuid4(), "pe_ratio") is None

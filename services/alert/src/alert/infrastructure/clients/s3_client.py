@@ -14,6 +14,8 @@ from uuid import UUID
 import structlog
 from httpx import AsyncClient, HTTPStatusError, RequestError, Timeout
 
+from alert.application.ports.signal_clients import IS3PriceClient
+
 if TYPE_CHECKING:
     from alert.config import Settings
 
@@ -24,9 +26,11 @@ logger = structlog.get_logger(__name__)
 _PRICE_BATCH_TIMEOUT_S = 10.0
 # Endpoint caps the batch at 50 ids (DoS amplification guard) — we chunk to match.
 _PRICE_BATCH_MAX_IDS = 50
+# BP-235: same timeout policy for the fundamental-metric read.
+_FUNDAMENTAL_TIMEOUT_S = 10.0
 
 
-class S3MarketDataClient:
+class S3MarketDataClient(IS3PriceClient):
     """Async HTTP client for S3 Market Data service endpoints.
 
     All public methods are best-effort: on any transport or HTTP error they
@@ -35,7 +39,14 @@ class S3MarketDataClient:
 
     def __init__(self, settings: Settings, client: AsyncClient | None = None) -> None:
         self._base_url = settings.s3_market_data_base_url.rstrip("/")
+        # PRD-0025: S3 internal endpoints require X-Internal-JWT. Empty string
+        # means no header (dev / unauthenticated stub) — the stub server ignores it.
+        self._jwt = settings.s3_internal_jwt
         self._client = client or AsyncClient(timeout=30.0)
+
+    def _headers(self) -> dict[str, str]:
+        """Internal-JWT header (PRD-0025); empty when no token is configured."""
+        return {"X-Internal-JWT": self._jwt} if self._jwt else {}
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -108,7 +119,12 @@ class S3MarketDataClient:
             body = {"instrument_ids": [str(i) for i in chunk]}
             try:
                 resp = await asyncio.wait_for(
-                    self._client.post(url, json=body, timeout=Timeout(_PRICE_BATCH_TIMEOUT_S)),
+                    self._client.post(
+                        url,
+                        json=body,
+                        headers=self._headers(),
+                        timeout=Timeout(_PRICE_BATCH_TIMEOUT_S),
+                    ),
                     timeout=_PRICE_BATCH_TIMEOUT_S + 1.0,
                 )
                 resp.raise_for_status()
@@ -123,6 +139,51 @@ class S3MarketDataClient:
                 except (KeyError, ValueError, TypeError):
                     continue
         return result
+
+    async def get_fundamental_metric(self, instrument_id: UUID, metric: str) -> float | None:
+        """GET /api/v1/fundamentals/timeseries — latest numeric value of ``metric``.
+
+        The endpoint returns ``data`` sorted ASC by date regardless of fetch
+        order, so the *last* point with a non-null ``value_numeric`` is the most
+        recent observation. Returns ``None`` when the metric is unknown, has no
+        numeric data, or the call fails (best-effort — the evaluator treats None
+        as "no observation", leaving rule state untouched). BP-235: explicit
+        httpx timeout + asyncio.wait_for.
+        """
+        url = f"{self._base_url}/api/v1/fundamentals/timeseries"
+        # order=desc + limit=1 minimises payload: the most-recent point is first
+        # in fetch order even though ``data`` is re-sorted ASC for rendering.
+        params: dict[str, str | int] = {
+            "instrument_id": str(instrument_id),
+            "metric": metric,
+            "order": "desc",
+            "limit": 1,
+        }
+        try:
+            resp = await asyncio.wait_for(
+                self._client.get(
+                    url,
+                    params=params,
+                    headers=self._headers(),
+                    timeout=Timeout(_FUNDAMENTAL_TIMEOUT_S),
+                ),
+                timeout=_FUNDAMENTAL_TIMEOUT_S + 1.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (RequestError, HTTPStatusError, TimeoutError) as exc:
+            logger.warning("s3_fundamental_metric_failed", url=url, metric=metric, error=str(exc))
+            return None
+        points = data.get("data", []) if isinstance(data, dict) else []
+        # Walk from the end (latest) to the start; return the first non-null value.
+        for point in reversed(points):
+            value = point.get("value_numeric")
+            if value is not None:
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    continue
+        return None
 
     async def _get_list(self, url: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         try:

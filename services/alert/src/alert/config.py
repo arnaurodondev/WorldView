@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     # Set this to a pre-signed long-lived service JWT (valid ~1 year for dev).
     s1_internal_jwt: str = ""
     s3_market_data_base_url: str = "http://market-data:8003"
+    # PRD-0025: S3 internal endpoints (price batch, fundamentals) require X-Internal-JWT.
+    s3_internal_jwt: str = ""
 
     # ── S7 Knowledge Graph dependency (PLAN-0048 Wave B-1) ─────────────────
     # WHY: alert fan-out enriches payloads with (entity_name, ticker) for

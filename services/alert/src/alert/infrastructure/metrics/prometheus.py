@@ -71,3 +71,19 @@ s10_rule_poller_due_rules = Gauge(
     "s10_rule_poller_due_rules",
     "Number of enabled poll rules found due in the most recent poller cycle.",
 )
+
+# Per-evaluation outcome, labelled by rule type + outcome (PLAN-0113 T-2-06).
+# outcome in {fired, no_fire, skipped, error}. Cardinality is bounded (4 poll
+# types x 4 outcomes) so labels are safe.
+s10_rule_evaluations_total = Counter(
+    "s10_rule_evaluations_total",
+    "Total rule evaluations, labelled by rule type and outcome.",
+    ["rule_type", "outcome"],
+)
+
+# Per-fire counter, labelled by rule type (PLAN-0113 T-2-06).
+s10_rule_fired_total = Counter(
+    "s10_rule_fired_total",
+    "Total alerts fired by the rule engine, labelled by rule type.",
+    ["rule_type"],
+)
