@@ -288,6 +288,15 @@ class BriefingContext:
     # then falls back to an UNCONDITIONAL caveat whenever a narrative exists
     # (safer than an intermittent one).
     entity_narrative_generated_at: str | None = None
+    # AI-brief-flag fix (2026-06-19): the market-data ``instrument_id`` resolved
+    # for this instrument brief (via entity ticker → S3 lookup). This is the id
+    # the screener ``has_ai_brief`` flag keys on — it is NOT the same as the KG
+    # ``entity_id`` route param (see the route comment in public_briefings.py and
+    # the 2026-06-19 AI-brief investigation). The persistence path stores the
+    # entity brief under THIS id when present so the flag query matches; it falls
+    # back to ``entity_id`` only when the ticker could not be resolved. ``None``
+    # when no ticker/instrument could be resolved or for morning briefs.
+    resolved_instrument_id: str | None = None
 
     @classmethod
     def for_morning(cls, *, user_id: UUID, tenant_id: UUID, **kwargs: Any) -> BriefingContext:

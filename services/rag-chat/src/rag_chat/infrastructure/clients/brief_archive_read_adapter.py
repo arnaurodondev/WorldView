@@ -109,3 +109,29 @@ class BriefArchiveReadAdapter:
     async def get_by_id(self, brief_id: UUID) -> UserBriefRecord | None:
         # WHY not implemented: tool handlers only need get_latest.
         return None
+
+    async def get_latest_entity_brief(
+        self,
+        entity_id: UUID,
+        limit: int = 1,
+    ) -> list[UserBriefRecord]:
+        """Read the latest entity-scoped brief from the read replica.
+
+        WHY R27-compliant: creates a fresh read-only session, runs the query,
+        and closes the session in finally. Returns [] on any error.
+        """
+        from rag_chat.infrastructure.db.repositories.brief_archive_repository import BriefArchiveRepository
+
+        session = self._read_factory()
+        try:
+            repo = BriefArchiveRepository(session=session)
+            return await repo.get_latest_entity_brief(entity_id=entity_id, limit=limit)
+        except Exception as exc:
+            log.warning(
+                "brief_archive_read_adapter_error",
+                method="get_latest_entity_brief",
+                error=str(exc),
+            )
+            return []
+        finally:
+            await session.close()

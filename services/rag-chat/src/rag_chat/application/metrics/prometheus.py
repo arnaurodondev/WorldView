@@ -419,6 +419,32 @@ rag_brief_pregeneration_eligible_users = Gauge(
     "Active users found in the last run",
 )
 
+# ── Instrument-brief pre-generation (AI-brief-flag fix, 2026-06-19) ──────────
+# Mirrors the morning-brief pre-gen metrics but for the entity (instrument)
+# brief worker that populates the screener ``has_ai_brief`` flag.
+rag_instrument_brief_pregeneration_runs_total = Counter(
+    "rag_instrument_brief_pregeneration_runs_total",
+    "Instrument-brief pre-generation scheduler runs",
+    labelnames=["status"],  # started | completed | failed
+)
+
+rag_instrument_brief_pregeneration_instruments_total = Counter(
+    "rag_instrument_brief_pregeneration_instruments_total",
+    "Per-instrument pre-generation outcomes",
+    labelnames=["outcome"],  # generated | skipped_fresh | failed
+)
+
+rag_instrument_brief_pregeneration_run_duration_seconds = Histogram(
+    "rag_instrument_brief_pregeneration_run_duration_seconds",
+    "End-to-end instrument-brief pre-generation run latency",
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800),
+)
+
+rag_instrument_brief_pregeneration_eligible_total = Gauge(
+    "rag_instrument_brief_pregeneration_eligible_total",
+    "Active instruments found in the last run",
+)
+
 rag_brief_served_stale_total = Counter(
     "rag_brief_served_stale_total",
     "Times the handler served last-known-good brief instead of fresh",

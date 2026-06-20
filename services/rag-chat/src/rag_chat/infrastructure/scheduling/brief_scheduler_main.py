@@ -19,7 +19,12 @@ import asyncio
 import contextlib
 import os
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rag_chat.application.workers.instrument_brief_pregeneration_worker import (
+        InstrumentBriefPregenerationWorker,
+    )
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
@@ -204,14 +209,46 @@ async def _run_loop(settings: Settings) -> None:
     )
     llm_chain = _build_llm_chain(settings, valkey)
 
-    # WHY brief_archive=None: persistence is an API-layer concern; the worker
-    # only needs to write to Valkey.  The use case tolerates None archive via
-    # its NullBriefArchive default.
+    # WHY brief_archive=None: the MORNING worker only writes to Valkey, so the
+    # use case tolerates None archive via its NullBriefArchive default.
     briefing_uc = GenerateBriefingUseCase(
         llm_chain=llm_chain,
         valkey=valkey,
         context_gatherer=context_gatherer,
     )
+
+    # ── Instrument-brief pre-gen wiring (AI-brief-flag fix, 2026-06-19) ───────
+    # The instrument-brief worker MUST persist ``brief_type='entity'`` rows to
+    # ``user_briefs`` (that is the whole point — it populates the screener
+    # ``has_ai_brief`` flag), so it needs a DB-backed brief archive, which the
+    # Valkey-only morning path deliberately omits. Build a dedicated session
+    # factory + write adapter + use case for it. The engines are torn down in
+    # the finally block below. Only constructed when the feature is enabled so a
+    # disabled deployment opens no DB pool.
+    instrument_worker: InstrumentBriefPregenerationWorker | None = None
+    instr_write_engine = None
+    instr_read_engine = None
+    if settings.brief_instrument_pregen_enabled:
+        from rag_chat.application.workers.instrument_brief_pregeneration_worker import (
+            InstrumentBriefPregenerationWorker,
+        )
+        from rag_chat.infrastructure.clients.active_instruments_reader import ActiveInstrumentsReader
+        from rag_chat.infrastructure.clients.brief_archive_write_adapter import BriefArchiveWriteAdapter
+        from rag_chat.infrastructure.db.session import create_rag_session_factory
+
+        instr_write_engine, instr_read_engine, instr_write_factory, _instr_read_factory = create_rag_session_factory(
+            settings
+        )
+        instrument_briefing_uc = GenerateBriefingUseCase(
+            llm_chain=llm_chain,
+            valkey=valkey,
+            context_gatherer=context_gatherer,
+            brief_archive=BriefArchiveWriteAdapter(write_factory=instr_write_factory),
+        )
+        active_instruments = ActiveInstrumentsReader(
+            valkey_client=valkey,
+            window_days=settings.brief_pregen_active_window_days,
+        )
 
     # PLAN-0094 W2 follow-up (BP-303 variant): mint a short-lived service JWT
     # before each generation so S1/S5/S6/S7 internal endpoints accept us.
@@ -240,6 +277,17 @@ async def _run_loop(settings: Settings) -> None:
         jwt_minter=jwt_minter,
     )
 
+    # Build the instrument-brief worker (only when enabled — the UC + reader were
+    # constructed above under the same flag). Reuses the same service-JWT minter
+    # so S6/S7 internal calls are authenticated.
+    if settings.brief_instrument_pregen_enabled:
+        instrument_worker = InstrumentBriefPregenerationWorker(
+            active_instruments=active_instruments,
+            briefing_uc=instrument_briefing_uc,
+            settings=settings,
+            jwt_minter=jwt_minter,
+        )
+
     # ── Schedule the recurring job ────────────────────────────────────────────
     # WHY IntervalTrigger (not CronTrigger): the email scheduler uses cron
     # (top of hour) because email digests are time-of-day-aware. The brief
@@ -267,11 +315,31 @@ async def _run_loop(settings: Settings) -> None:
         # scheduler timezone (which is UTC by default in our containers).
         next_run_time=utc_now() + timedelta(seconds=30),
     )
+
+    # ── Instrument-brief pre-gen job (AI-brief-flag fix, 2026-06-19) ──────────
+    # Same interval/window as the morning job (reuses the same knobs). Offset the
+    # first run by +60s (vs +30s for morning) so the two cold-start passes do not
+    # both hammer the LLM provider at once.
+    if settings.brief_instrument_pregen_enabled:
+        # ``instrument_worker`` is always constructed when the flag is set (see the
+        # build block above); assert for the type-checker since the two guarded
+        # blocks are not narrowed together.
+        assert instrument_worker is not None
+        ap_scheduler.add_job(
+            instrument_worker.run,
+            IntervalTrigger(hours=settings.brief_pregen_interval_hours),
+            id="instrument_brief_pregeneration",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=utc_now() + timedelta(seconds=60),
+        )
+
     ap_scheduler.start()
     log.info(  # type: ignore[no-any-return]
         "brief_scheduler_started",
         interval_hours=settings.brief_pregen_interval_hours,
         window_days=settings.brief_pregen_active_window_days,
+        instrument_pregen_enabled=settings.brief_instrument_pregen_enabled,
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
@@ -300,6 +368,12 @@ async def _run_loop(settings: Settings) -> None:
             await jwt_minter_http_client.aclose()
         with contextlib.suppress(Exception):
             await valkey.close()
+        # AI-brief-flag fix (2026-06-19): dispose the instrument-brief DB engines
+        # (only created when the feature is enabled).
+        for _engine in (instr_write_engine, instr_read_engine):
+            if _engine is not None:
+                with contextlib.suppress(Exception):
+                    await _engine.dispose()
         # PLAN-0107 B-3: tear down the shared metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()

@@ -322,9 +322,7 @@ class BriefingContextGatherer:
                 # may already be in /news/top) so we don't double-count; keep
                 # the per-holding copy (it carries sentiment + attribution).
                 global_ids = {str(a.article_id) for a in per_holding_articles}
-                news_articles = per_holding_articles + [
-                    a for a in news_articles if str(a.article_id) not in global_ids
-                ]
+                news_articles = per_holding_articles + [a for a in news_articles if str(a.article_id) not in global_ids]
 
         news_articles = _score_news_by_overlap(news_articles, held_entity_ids, self._NEWS_OVERLAP_MULTIPLIER)
 
@@ -559,6 +557,12 @@ class BriefingContextGatherer:
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_instrument(
             entity_id=entity_id,
+            # AI-brief-flag fix (2026-06-19): surface the resolved market-data
+            # instrument_id so the persistence path can store the entity brief
+            # under the SAME id the screener ``has_ai_brief`` flag queries by.
+            # ``None`` when the ticker could not be resolved (the persistence
+            # path then falls back to ``entity_id``).
+            resolved_instrument_id=str(instrument_id) if instrument_id else None,
             entity_graph=entity_graph,
             fundamentals=fundamentals,
             news_articles=news_articles,

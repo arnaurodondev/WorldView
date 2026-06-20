@@ -253,9 +253,7 @@ class Settings(BaseSettings):
     # Bounded retry on a transient classifier transport failure BEFORE declaring
     # the classifier unavailable. 0 disables retries (legacy behaviour). Kept
     # small (1) so a real outage surfaces fast instead of multiplying latency.
-    classifier_retry_attempts: int = Field(
-        default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS"
-    )
+    classifier_retry_attempts: int = Field(default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS")
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
@@ -273,6 +271,17 @@ class Settings(BaseSettings):
     brief_pregen_concurrency: int = Field(default=4, ge=1, le=20)
     brief_fresh_ttl_hours: int = Field(default=30, ge=1, le=168)
     brief_last_good_ttl_days: int = Field(default=7, ge=1, le=30)
+
+    # ── Instrument-brief pre-generation (AI-brief-flag fix, 2026-06-19) ───────
+    # Separate scheduled worker that pre-generates + PERSISTS entity briefs
+    # (brief_type='entity') for the set of instruments viewed in the active
+    # window (Valkey ``active_instruments`` sorted-set populated by the on-demand
+    # route). This is what populates the screener ``has_ai_brief`` flag
+    # proactively instead of only on first view. Reuses the morning-brief
+    # pre-gen knobs (interval/active-window/batch/concurrency) above so there is
+    # one set of tuning dials. Defaults ON so coverage builds without operator
+    # action; set RAG_CHAT_BRIEF_INSTRUMENT_PREGEN_ENABLED=false to disable.
+    brief_instrument_pregen_enabled: bool = True  # RAG_CHAT_BRIEF_INSTRUMENT_PREGEN_ENABLED
 
     # ── Agentic brief generator (PLAN-0099 Wave C — experimental) ────────────
     # When True, the morning-brief route uses the AgenticBriefGenerator (an

@@ -152,6 +152,30 @@ class BriefArchiveRepository:
         models = result.scalars().all()
         return [self._to_record(m) for m in models], total
 
+    async def get_latest_entity_brief(
+        self,
+        entity_id: UUID,
+        limit: int = 1,
+    ) -> list[UserBriefRecord]:
+        """Return the most-recent entity-scoped briefs for ``entity_id``.
+
+        WHY (AI-brief-flag fix, 2026-06-19): mirrors the exact predicate the
+        ``GetAiBriefFlagUseCase`` uses (``brief_type='entity' AND
+        entity_id=:id``) so callers can do a cross-user freshness/idempotency
+        check against the SAME rows the screener ``has_ai_brief`` flag reads.
+        Ordered DESC by ``generated_at`` so callers can read element [0] as the
+        newest.
+        """
+        result = await self._session.execute(
+            select(UserBriefModel)
+            .where(UserBriefModel.brief_type == "entity")
+            .where(UserBriefModel.entity_id == entity_id)
+            .order_by(UserBriefModel.generated_at.desc())
+            .limit(limit)
+        )
+        models = result.scalars().all()
+        return [self._to_record(m) for m in models]
+
     async def get_by_id(self, brief_id: UUID) -> UserBriefRecord | None:
         """Look up a single brief by primary key.
 

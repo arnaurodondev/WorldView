@@ -28,6 +28,7 @@ PLAN-0066 Wave C (T-W10-C-01, T-W10-C-02):
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -45,6 +46,7 @@ from rag_chat.domain.errors import (
     ProviderUnavailableError,
     RateLimitExceededError,
 )
+from rag_chat.infrastructure.clients.active_instruments_reader import ACTIVE_INSTRUMENTS_KEY as _ACTIVE_INSTRUMENTS_KEY
 
 router = APIRouter(prefix="/api/v1", tags=["briefings"])
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -425,6 +427,18 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     # viewers, cutting cache misses by ~N users per entity per day. Stale-user-brief
     # isolation is preserved by the morning briefing (which retains the user_id key).
     cache_key = f"briefing:instrument:v2:{entity_id}"
+
+    # ── AI-brief-flag fix (2026-06-19): mark this instrument as "active" ──────
+    # Record the view in the Valkey ``active_instruments`` sorted-set (member =
+    # entity_id, score = now) so the InstrumentBriefPregenerationWorker can
+    # proactively keep this instrument's persisted entity brief fresh — mirroring
+    # how S9 populates ``active_users`` for the morning-brief worker. Best-effort:
+    # a failure here must never affect the brief response.
+    if valkey is not None:
+        try:
+            await valkey.zadd(_ACTIVE_INSTRUMENTS_KEY, {entity_id: int(time.time())})
+        except Exception as e:  # pragma: no cover — defensive
+            log.warning("active_instruments_mark_failed", error=str(e), entity_id=entity_id)  # type: ignore[no-any-return]
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
