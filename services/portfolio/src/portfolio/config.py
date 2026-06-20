@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_auto_register_schemas: bool = True
+    # PLAN-0113 FIX-2: static-membership instance ID for Kafka consumers.
+    # Empty string → Kafka assigns a dynamic instance ID (default, fine for dev).
+    # Set to a stable hostname (e.g. pod name) in prod to enable static membership
+    # which reduces rebalance latency on rolling deploys.
+    kafka_instrument_consumer_instance_id: str = ""
 
     # Kafka topics (produced)
     topic_portfolio_events: str = "portfolio.events.v1"

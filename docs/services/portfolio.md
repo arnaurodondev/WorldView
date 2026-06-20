@@ -43,6 +43,8 @@ from the verified JWT claims.
 | Instrument consumer | `portfolio.infrastructure.messaging.consumers.instrument_consumer_main` | Syncs instruments from S3/S2 |
 | Brokerage sync worker | `portfolio.workers.brokerage_sync_worker` | 4-hour SnapTrade sync cycle |
 | Portfolio snapshot worker | `portfolio.workers.portfolio_snapshot_worker` | Daily 21:30 UTC snapshot writer (value history) |
+| **Manual holdings consumer** | `portfolio.infrastructure.messaging.consumers.manual_holdings_consumer_main` | **PLAN-0114 W1** Consumes `portfolio.holding.recompute_requested.v1`; calls `ComputeManualHoldingsUseCase` |
+| **Manual holdings worker** | `portfolio.workers.manual_holdings_worker` | **PLAN-0114 W1** Nightly 22:00 UTC fallback sweep; recomputes all MANUAL portfolios with ≥1 transaction |
 
 ---
 

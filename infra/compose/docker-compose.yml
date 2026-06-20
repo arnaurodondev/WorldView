@@ -339,6 +339,52 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── Portfolio manual holdings recompute consumer ────────────────────────────
+  # PLAN-0114 W1 / T-W1-07.
+  # Consumes portfolio.holding.recompute_requested.v1 and calls
+  # ComputeManualHoldingsUseCase (FIFO/AVCO replay).
+  portfolio-manual-holdings-consumer:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.manual_holdings_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Portfolio manual holdings nightly worker ─────────────────────────────────
+  # PLAN-0114 W1 / T-W1-08.
+  # Fallback sweep: recomputes MANUAL portfolio holdings at 22:00 UTC daily.
+  portfolio-manual-holdings-worker:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.workers.manual_holdings_worker"]
+    restart: unless-stopped
+
   # ── Portfolio daily value snapshot worker ───────────────────────────────────
   # PLAN-0046 Wave 4 / T-46-4-02 + T-46-4-03.
   # Same Dockerfile as the API + other workers — only the ``command`` differs.

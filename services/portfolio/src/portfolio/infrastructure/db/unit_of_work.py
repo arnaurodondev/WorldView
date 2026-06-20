@@ -501,6 +501,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
         from sqlalchemy import text
 
+        assert self._session is not None, "UoW not entered"
         digest = hashlib.blake2b(str(portfolio_id).encode("utf-8"), digest_size=8).digest()
         lock_key = int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
         result = await self._session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key})
