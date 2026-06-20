@@ -194,3 +194,80 @@ describe("AiSignalsWidget — news momentum rows", () => {
     expect(screen.getByRole("button", { name: "1W" })).toBeInTheDocument();
   });
 });
+
+describe("AiSignalsWidget — momentum sort selector", () => {
+  // A 3-ticker fixture with distinct delta_pct so the ORDER is unambiguous:
+  //   GAIN  ↑300% (most positive)   FLAT  ↑20%   DROP  ↓50% (most negative)
+  // The server returns them in an arbitrary order so we can prove the client sort
+  // actually re-orders (rather than coincidentally matching the input order).
+  function trio() {
+    return {
+      signals: [
+        item({ entity_id: "flat", ticker: "FLAT", name: "Flat Co", delta: 1, delta_pct: 20 }),
+        item({ entity_id: "gain", ticker: "GAIN", name: "Gainer", delta: 9, delta_pct: 300 }),
+        item({ entity_id: "drop", ticker: "DROP", name: "Dropper", count: 2, prior_count: 4, delta: -2, delta_pct: -50 }),
+      ],
+      window_hours: 24,
+    };
+  }
+
+  /** Read the rendered ticker order off the row buttons (DOM order = visual order). */
+  function tickerOrder(): string[] {
+    return screen
+      .getAllByRole("button", { name: /GAIN|DROP|FLAT/i })
+      .map((b) => b.querySelector("span")?.textContent ?? "");
+  }
+
+  it("defaults to TOP (server order) — the rows are not re-ordered", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    // TOP is the active sort, and the order matches the server payload as-is.
+    expect(screen.getByRole("button", { name: "TOP" })).toHaveAttribute("aria-pressed", "true");
+    expect(tickerOrder()).toEqual(["FLAT", "GAIN", "DROP"]);
+  });
+
+  it("'Biggest Increase' (▲) orders by delta_pct DESCENDING", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    await userEvent.click(screen.getByRole("button", { name: "▲" }));
+
+    // delta_pct desc: GAIN(300) → FLAT(20) → DROP(-50).
+    expect(tickerOrder()).toEqual(["GAIN", "FLAT", "DROP"]);
+    expect(screen.getByRole("button", { name: "▲" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("'Biggest Decrease' (▼) orders by delta_pct ASCENDING", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    await userEvent.click(screen.getByRole("button", { name: "▼" }));
+
+    // delta_pct asc: DROP(-50) → FLAT(20) → GAIN(300).
+    expect(tickerOrder()).toEqual(["DROP", "FLAT", "GAIN"]);
+    expect(screen.getByRole("button", { name: "▼" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles the active sort button state and does NOT refetch when switching sort", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    // One fetch for the initial load.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "▲" }));
+    expect(screen.getByRole("button", { name: "▲" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "TOP" })).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(screen.getByRole("button", { name: "▼" }));
+    expect(screen.getByRole("button", { name: "▼" })).toHaveAttribute("aria-pressed", "true");
+
+    // Sorting is a pure client-side re-order — it must never hit the gateway.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(1);
+  });
+});

@@ -13,6 +13,76 @@
 import type { NewsMomentumItem } from "./types";
 
 /**
+ * SortMode — how the user wants the momentum feed RANKED.
+ *
+ *  - "top"      = the server's own surge ranking (the default; what S6 returns).
+ *                 We keep this as the landing view because the backend already
+ *                 ranks by an honest composite surge metric — the user only
+ *                 reaches for the explicit increase/decrease modes when they want
+ *                 to scan one direction.
+ *  - "increase" = BIGGEST INCREASE — most positive momentum first
+ *                 (delta_pct DESCENDING: ↑500%, ↑200%, ↑40%, … , ↓60%).
+ *  - "decrease" = BIGGEST DECREASE — most negative / declining momentum first
+ *                 (delta_pct ASCENDING: ↓60%, ↓10%, flat, … , ↑500%).
+ *
+ * WHY delta_pct (not delta): delta_pct is the RELATIVE surge (already floored by
+ * the server so it is finite), which is the apples-to-apples velocity reading the
+ * trend column shows. Ranking by it keeps the visible ↑/↓ % consistent with the
+ * order.
+ */
+export type SortMode = "top" | "increase" | "decrease";
+
+/**
+ * sortMomentumItems — return a NEW array of the items ranked by the chosen mode.
+ *
+ * WHY pure + non-mutating: the source array comes from TanStack Query's cache.
+ * Mutating it in place (Array.prototype.sort sorts in place) would corrupt the
+ * cached payload and make the order depend on render history. We copy first
+ * ([...items]) so each render derives a fresh, deterministic ordering.
+ *
+ * SORT SEMANTICS (the whole point of this control):
+ *  - "increase": delta_pct DESCENDING  → most positive momentum at the top.
+ *  - "decrease": delta_pct ASCENDING   → most negative momentum at the top.
+ *  - "top":      untouched server order (already ranked by surge) — returned as a
+ *                shallow copy for a consistent contract (callers can treat the
+ *                result as freshly owned).
+ *
+ * NULL/0 SAFETY: a missing delta_pct is coerced to 0 (`?? 0`) so a partial row
+ * (forward-compat: an older S9 might omit the field) sorts as "flat" rather than
+ * throwing or sorting as NaN (which would scatter rows unpredictably).
+ *
+ * TIE-BREAKS (so the order is STABLE and meaningful when delta_pct ties — common
+ * for new-coverage rows that all read ↑100%):
+ *   1. higher current article `count` first (more coverage = more notable);
+ *   2. then ticker A→Z (a deterministic, human-readable final tiebreak so the
+ *      list never reshuffles between renders for equal rows).
+ */
+export function sortMomentumItems(items: NewsMomentumItem[], mode: SortMode): NewsMomentumItem[] {
+  // "top" = trust the server's surge ranking; just hand back an owned copy.
+  if (mode === "top") return [...items];
+
+  // Direction multiplier: increase ranks high→low (desc), decrease low→high (asc).
+  const direction = mode === "increase" ? -1 : 1;
+
+  return [...items].sort((a, b) => {
+    const aPct = a.delta_pct ?? 0; // null/undefined delta_pct → treat as flat (0)
+    const bPct = b.delta_pct ?? 0;
+    if (aPct !== bPct) {
+      // direction === -1 → descending (increase); direction === 1 → ascending.
+      return (aPct - bPct) * direction;
+    }
+
+    // Tie-break 1: more current articles first (higher coverage = more notable).
+    const aCount = a.count ?? 0;
+    const bCount = b.count ?? 0;
+    if (aCount !== bCount) return bCount - aCount;
+
+    // Tie-break 2: ticker A→Z — a deterministic, render-stable final ordering.
+    return (a.ticker ?? "").localeCompare(b.ticker ?? "");
+  });
+}
+
+/**
  * trendMeta — the MOMENTUM signal: arrow glyph + semantic color + a compact
  * label for a row's count change vs the prior window.
  *
