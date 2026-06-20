@@ -12,154 +12,26 @@
  * DATA SOURCE: GET /v1/paths/between via usePathBetween (enabled only when both
  * endpoints are chosen).
  *
- * ENTITY PICKER — DESIGN CHOICE (documented per the task brief):
- * The codebase has NO standalone entity autocomplete primitive. It DOES have
- * `searchInstruments` (S9 /v1/search/instruments) which returns candidates, but
- * that endpoint returns instrument ids and sets `entity_id = instrument_id`
- * (S3 has no real entity link). The reliable entity_id comes from `searchFundamentals`
- * (search → company-overview enrichment) which IS on the gateway. To keep this
- * panel self-contained and avoid `this`-binding issues, we use the gateway's
- * `searchFundamentals(q)` via the existing useApiClient() — it returns
- * SearchResult.entity_id (the real KG entity id) which is exactly what the
- * pairwise endpoint needs. A minimal debounced text input + results dropdown is
- * built here (no new shadcn dependency); if a shared EntityPicker primitive is
- * added later, this should be swapped to it.
+ * ENTITY PICKER (PLAN-0113 W4 T-4-02): the picker was extracted to the shared
+ * `components/common/EntityPicker.tsx` so the alert condition editors can reuse
+ * it. It still uses `searchFundamentals` to attach the REAL KG `entity_id` (the
+ * pairwise endpoint needs that, not a raw instrument_id). This panel now imports
+ * the shared component instead of defining its own.
  *
  * DESIGN: Midnight Pro dark palette, shadcn/ui (Input) only. Painting-safe tokens.
  */
 
 "use client";
-// WHY "use client": uses useState (picker state), the debounce hook, and the
-// TanStack Query hooks — all browser-only.
+// WHY "use client": uses useState (picker state) and the TanStack Query hooks —
+// all browser-only.
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useApiClient } from "@/lib/api-client";
 import { usePathBetween } from "@/lib/api/intelligence";
-import { useDebounce } from "@/hooks/useDebounce";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PathChain } from "@/components/intelligence/PathChain";
 import { WeirdnessBreakdown } from "@/components/intelligence/WeirdnessBreakdown";
+import { EntityPicker, type ChosenEntity } from "@/components/common/EntityPicker";
 import type { PathBetweenPublic } from "@/types/intelligence";
-import type { SearchResult } from "@/types/api";
-
-// ── Chosen-entity shape ───────────────────────────────────────────────────────
-// We only need the id + a display name once an entity is selected.
-interface ChosenEntity {
-  entityId: string;
-  name: string;
-}
-
-// ── EntityPicker ──────────────────────────────────────────────────────────────
-
-/**
- * EntityPicker — minimal debounced search box → results dropdown → onSelect.
- *
- * WHY built inline (not a shared primitive): see the file header. It is intentionally
- * small and local; extracting it is a future refactor once a second caller exists.
- */
-function EntityPicker({
-  label,
-  value,
-  onSelect,
-  onClear,
-}: {
-  label: string;
-  value: ChosenEntity | null;
-  onSelect: (e: ChosenEntity) => void;
-  onClear: () => void;
-}) {
-  const gw = useApiClient();
-  const [query, setQuery] = useState("");
-  // Debounce so we only hit S9 when the user pauses typing (same 300ms as
-  // GlobalSearch). Empty / very short queries never fire.
-  const debounced = useDebounce(query, 300);
-
-  // WHY enabled gate on length>=2 AND no current selection: don't search while a
-  // value is already chosen (the input is hidden then), and skip 1-char noise.
-  const { data, isFetching } = useQuery({
-    queryKey: ["pathbetween-entity-search", debounced],
-    // searchFundamentals enriches each candidate with the REAL KG entity_id
-    // (see lib/api/search.ts) — exactly what the pairwise endpoint needs.
-    queryFn: () => gw.searchFundamentals(debounced, 8),
-    enabled: debounced.trim().length >= 2 && value === null,
-    staleTime: 60_000,
-  });
-
-  // Selected state: show the chosen entity as a chip with a clear (×) button.
-  if (value) {
-    return (
-      <div className="flex flex-col gap-1">
-        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-          {label}
-        </span>
-        <div className="flex items-center gap-2 rounded-[2px] border border-primary/40 bg-primary/10 px-2 py-1">
-          <span className="flex-1 truncate text-[11px] font-mono text-primary">
-            {value.name}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              onClear();
-              setQuery("");
-            }}
-            className="text-[12px] leading-none text-muted-foreground hover:text-foreground"
-            aria-label={`Clear ${label}`}
-          >
-            ×
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Unselected state: search input + results dropdown.
-  return (
-    <div className="relative flex flex-col gap-1">
-      <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <Input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search entity…"
-        className="h-7 text-[11px]"
-        aria-label={`${label} entity search`}
-      />
-
-      {/* Results dropdown — only when the user has typed enough to search. */}
-      {debounced.trim().length >= 2 && (
-        <div className="absolute top-full z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-[2px] border border-border/60 bg-popover shadow-lg">
-          {isFetching && (
-            <div className="space-y-1 p-2">
-              <Skeleton className="h-5 w-full" />
-              <Skeleton className="h-5 w-full" />
-            </div>
-          )}
-          {!isFetching && (data?.results.length ?? 0) === 0 && (
-            <p className="p-2 font-mono text-[10px] text-muted-foreground">
-              No matching entities
-            </p>
-          )}
-          {!isFetching &&
-            (data?.results ?? []).map((r: SearchResult) => (
-              <button
-                key={r.entity_id}
-                type="button"
-                onClick={() => onSelect({ entityId: r.entity_id, name: r.name })}
-                className="block w-full px-2 py-1 text-left text-[11px] font-mono text-foreground/90 hover:bg-muted/60"
-              >
-                <span className="text-primary">{r.ticker}</span>
-                {"  "}
-                <span className="text-foreground/70">{r.name}</span>
-              </button>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── PathBetweenPanel ──────────────────────────────────────────────────────────
 

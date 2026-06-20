@@ -299,7 +299,16 @@ export const qk = {
       params
         ? (["alerts", "history", params] as const)
         : (["alerts", "history"] as const),
+    // PLAN-0113 W4: standing alert RULES (distinct from fired alerts above).
+    // `rules()` lists; `rulesList(params)` carries filters as cache identity;
+    // `rule(id)` is the per-rule detail key. All nest under ["alerts","rules"]
+    // so invalidating that prefix cascades to every rules query after a write.
     rules: () => ["alerts", "rules"] as const,
+    rulesList: (params?: Readonly<Record<string, unknown>>) =>
+      params
+        ? (["alerts", "rules", "list", params] as const)
+        : (["alerts", "rules", "list"] as const),
+    rule: (ruleId: string) => ["alerts", "rules", "detail", ruleId] as const,
     // WHY pendingCount: layout.tsx polls a lightweight pending-count query every
     // 60s independently of the AlarmsPanel's full alert list. A dedicated key
     // avoids cache collisions with qk.alerts.list() which carries filters.

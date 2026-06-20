@@ -389,9 +389,22 @@ apps/worldview-web/
 | `AlertsList` | Severity-grouped pending alerts |
 | `AlertHistoryTab` | Paginated history with severity + date + entity filters + Load More |
 | `AlertDetailSheet` | Right-anchored sheet + Suggested Actions strip |
-| `RuleManagerDialog` | Full CRUD alert rule manager (List + Edit tabs) |
+| `RuleManagerDialog` | Server-backed standing-rule manager (list/pause/edit/delete); opens `AlertWizard` (PLAN-0113) |
+| `AlertWizard` | Type-first 2-step rule creator/editor: 5 type cards → per-type editor + severity + notify + live NL summary; real `/v1/alert-rules` CRUD |
+| `condition-editors/*` | Per-type structured editors: `PriceCrossEditor`, `FundamentalCrossEditor`, `NewsVolumeEditor`, `NewsMomentumEditor`, `KgConnectionEditor` |
+| `MetricPicker` | Fundamental metric dropdown sourced from S3 `/v1/fundamentals/screen/fields` (emits a backend-valid `metric_key`) |
 | `NotificationPreferencesDialog` | Quiet hours + severity floor settings |
 | `SeverityBadge` | LOW / MEDIUM / HIGH / CRITICAL colored badge |
+
+> **Standing alert rules (PLAN-0113 W4):** rule CRUD goes through `lib/api/alertRules.ts`
+> (gateway factory) + `lib/api/useAlertRules.ts` (TanStack hooks) → S9 `/v1/alert-rules`.
+> The 5 rule types (`PRICE_CROSS`, `NEWS_COUNT`, `NEWS_MOMENTUM`, `KG_CONNECTION`,
+> `FUNDAMENTAL_CROSS`) carry a discriminated-union `condition`. The legacy
+> localStorage rule layer (`lib/alerts/rules.ts`, `AlertRuleBuilder`) is retired —
+> `rules.ts` is now a thin type/`defaultRuleName` shim with no browser persistence.
+> Shared pickers: `components/common/EntityPicker` (real KG `entity_id` via
+> `searchFundamentals`) and `components/common/InstrumentPicker` (S3 `instrument_id`
+> via `searchInstruments`).
 
 ### Chat Components (`components/chat/`)
 

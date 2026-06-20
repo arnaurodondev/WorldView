@@ -60,10 +60,12 @@ const AlertsList = dynamic(
   },
 );
 import { AlertHistoryTab } from "@/components/alerts/AlertHistoryTab";
-import { AlertRuleBuilder } from "@/components/alerts/AlertRuleBuilder";
 import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";
 import { NotificationPreferencesDialog } from "@/components/alerts/NotificationPreferencesDialog";
-import { countAlertRules } from "@/lib/alerts/rules";
+// PLAN-0113 W4: the rule count comes from the SERVER list (useAlertRules), not
+// localStorage. AlertRuleBuilder is retired — creation goes through the
+// type-first AlertWizard opened from RuleManagerDialog.
+import { useAlertRules } from "@/lib/api/useAlertRules";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -312,15 +314,12 @@ export default function AlertsPage() {
   // WHY null as default: null = "show ALL", consistent with the AlertsList prop contract.
   const [filterSeverity, setFilterSeverity] = useState<AlertSeverity | null>(null);
 
-  // ── Rule count — read from localStorage for Manage Rules badge ────────────
-  // WHY not state: rule count updates after AlertRuleBuilder saves; we re-read
-  // localStorage synchronously via countAlertRules() on each render.
-  // This is safe — countAlertRules() is cheap (one localStorage.getItem).
-  const [ruleCount, setRuleCount] = useState(() =>
-    // WHY guard: localStorage is not available in SSR (server component context).
-    // "use client" ensures this runs in the browser, but typeof check is belt-and-suspenders.
-    typeof window !== "undefined" ? countAlertRules() : 0,
-  );
+  // ── Rule count — from the SERVER rules list (PLAN-0113 W4) ─────────────────
+  // WHY useAlertRules: rules are real backend rows now. `total` is the canonical
+  // count; mutations (create/delete via the wizard/manager) invalidate this query
+  // so the badge updates automatically — no manual refresh callback needed.
+  const { data: rulesData } = useAlertRules();
+  const ruleCount = rulesData?.total ?? 0;
 
   return (
     // WHY flex h-full flex-col overflow-hidden (not space-y-1 p-3):
@@ -349,9 +348,10 @@ export default function AlertsPage() {
           {/* Notification preferences — quiet hours + severity floor */}
           <NotificationPreferencesDialog />
 
-          {/* Manage Rules — opens RuleManagerDialog (List + Edit tabs) */}
+          {/* Manage Rules — opens RuleManagerDialog (server rules + AlertWizard).
+              The wizard's "New rule" button inside the dialog covers creation, so
+              the legacy separate "+ Create Rule" (AlertRuleBuilder) is removed. */}
           <RuleManagerDialog
-            onRulesChanged={() => setRuleCount(countAlertRules())}
             trigger={
               <button
                 type="button"
@@ -362,9 +362,6 @@ export default function AlertsPage() {
               </button>
             }
           />
-
-          {/* Create Rule — opens AlertRuleBuilder dialog (legacy quick-add) */}
-          <AlertRuleBuilder onRuleSaved={() => setRuleCount(countAlertRules())} />
 
         </div>
       </div>

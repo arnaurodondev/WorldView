@@ -1,121 +1,142 @@
 /**
- * __tests__/rule-manager-dialog.test.tsx — PLAN-0051 T-D-4-06 RuleManager.
+ * __tests__/rule-manager-dialog.test.tsx — server-backed RuleManagerDialog
+ * (PLAN-0113 W4 T-4-06; rewritten from the legacy localStorage version).
  *
- * Covers the full CRUD flow through the dialog UI:
- *   - List tab shows seeded rules + a "(local only)" badge.
- *   - Create flow: switching to Edit, filling the form, Save returns to List.
- *   - Edit flow: clicking the pencil icon pre-fills the form.
- *   - Delete flow: clicking the trash icon removes the row.
- *   - Toggle enabled inline.
+ * The old dialog stored rules in localStorage and showed a "(local only)" badge.
+ * PLAN-0113 retired that — the manager now lists rules from the server
+ * (`useAlertRules`) and pauses/deletes via the mutation hooks. These tests mock
+ * the hooks module so we can assert the dialog renders server rows and wires
+ * pause/delete to the right calls, without a real gateway.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";
-import { createAlertRule, listAlertRules } from "@/lib/alerts/rules";
+import type { AlertRule } from "@/lib/api/alertRules";
 
-beforeEach(() => {
-  try { localStorage.clear(); } catch { /* ignore */ }
-});
+// ── Mock the alert-rules hooks ────────────────────────────────────────────────
+// WHY mock the hooks (not the gateway): the dialog talks only to these hooks. A
+// hook-level mock keeps the test focused on the dialog's behaviour + the calls
+// it issues, and avoids standing up ApiClientProvider / QueryClient plumbing.
 
-async function seedRule() {
-  // Helper: pre-populate localStorage with one rule so the List tab has content.
-  await createAlertRule({
-    name: "AAPL price alert",
-    type: "price_threshold",
-    entitySearch: "AAPL",
-    condition: "price > 200",
-    enabled: true,
-    notifyInApp: true,
-    notifyEmail: false,
+const deleteMutate = vi.fn().mockResolvedValue(undefined);
+const updateMutate = vi.fn().mockResolvedValue({});
+const listResult: {
+  data: { items: AlertRule[]; total: number };
+  isLoading: boolean;
+  isError: boolean;
+} = {
+  data: { items: [], total: 0 },
+  isLoading: false,
+  isError: false,
+};
+
+vi.mock("@/lib/api/useAlertRules", () => ({
+  useAlertRules: () => listResult,
+  useDeleteAlertRule: () => ({ mutateAsync: deleteMutate, isPending: false }),
+  useUpdateAlertRule: () => ({ mutateAsync: updateMutate, isPending: false }),
+  useCreateAlertRule: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+// AlertWizard is exercised in its own test; stub it here so opening the wizard
+// doesn't pull the full picker/editor tree into this dialog-focused test.
+vi.mock("@/components/alerts/AlertWizard", () => ({
+  AlertWizard: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="alert-wizard-stub">wizard</div> : null,
+}));
+
+// ── Fixture ───────────────────────────────────────────────────────────────────
+
+const PRICE_RULE: AlertRule = {
+  rule_id: "rule-1",
+  tenant_id: "t1",
+  user_id: "u1",
+  rule_type: "PRICE_CROSS",
+  name: "AAPL price alert",
+  entity_id: "i-aapl",
+  node_a_entity_id: null,
+  node_b_entity_id: null,
+  condition: { instrument_id: "i-aapl", operator: "above", value: 250 },
+  severity: "medium",
+  enabled: true,
+  cooldown_seconds: 3600,
+  notify_in_app: true,
+  notify_email: false,
+  last_state: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+describe("RuleManagerDialog (server-backed)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listResult.data = { items: [], total: 0 };
+    listResult.isLoading = false;
+    listResult.isError = false;
   });
-}
 
-describe("RuleManagerDialog", () => {
-  it("opens and shows existing rules with a 'local only' badge", async () => {
+  it("shows the empty state when the server returns no rules", async () => {
     const user = userEvent.setup();
-    await seedRule();
+    render(<RuleManagerDialog />);
+    await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
+    expect(await screen.findByText(/No alert rules defined yet/i)).toBeInTheDocument();
+    // The legacy "(local only)" badge must be gone.
+    expect(screen.queryByText(/local only/i)).not.toBeInTheDocument();
+  });
 
+  it("lists server rules with an NL summary (no local-only badge)", async () => {
+    listResult.data = { items: [PRICE_RULE], total: 1 };
+    const user = userEvent.setup();
     render(<RuleManagerDialog />);
     await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
 
     expect(await screen.findByText(/AAPL price alert/i)).toBeInTheDocument();
-    expect(screen.getByText(/local only/i)).toBeInTheDocument();
-    expect(screen.getByText(/price > 200/)).toBeInTheDocument();
+    // NL summary derived from the structured condition.
+    expect(screen.getByText(/price crosses above 250/i)).toBeInTheDocument();
+    expect(screen.queryByText(/local only/i)).not.toBeInTheDocument();
   });
 
-  it("creates a new rule via the Edit tab and returns to List", async () => {
+  it("toggling enabled calls updateAlertRule with the new flag", async () => {
+    listResult.data = { items: [PRICE_RULE], total: 1 };
     const user = userEvent.setup();
-    const onChanged = vi.fn();
-    render(<RuleManagerDialog onRulesChanged={onChanged} />);
-    await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
-
-    await user.click(await screen.findByRole("button", { name: /Create new alert rule/i }));
-
-    // Fill condition (required) — the others have defaults.
-    const conditionInput = await screen.findByLabelText(/Rule condition/i);
-    await user.type(conditionInput, "vol > 1m");
-    await user.click(screen.getByRole("button", { name: /Create rule/i }));
-
-    // After save we land back on the List tab and the rule is persisted.
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    const rules = await listAlertRules();
-    expect(rules).toHaveLength(1);
-    expect(rules[0].condition).toBe("vol > 1m");
-  });
-
-  it("loads a rule into the Edit tab when clicking the pencil icon", async () => {
-    const user = userEvent.setup();
-    await seedRule();
     render(<RuleManagerDialog />);
     await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
 
-    await user.click(await screen.findByRole("button", { name: /Edit rule AAPL price alert/i }));
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Toggle rule AAPL price alert/i,
+    });
+    await user.click(toggle); // currently enabled → un-checking pauses it
 
-    const conditionInput = await screen.findByLabelText(/Rule condition/i);
-    expect(conditionInput).toHaveValue("price > 200");
-  });
-
-  it("deletes a rule via the trash icon", async () => {
-    const user = userEvent.setup();
-    await seedRule();
-    const onChanged = vi.fn();
-    render(<RuleManagerDialog onRulesChanged={onChanged} />);
-    await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
-
-    await user.click(await screen.findByRole("button", { name: /Delete rule AAPL price alert/i }));
-
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    const remaining = await listAlertRules();
-    expect(remaining).toHaveLength(0);
-  });
-
-  it("toggles enabled flag inline without leaving the List tab", async () => {
-    const user = userEvent.setup();
-    await seedRule();
-    render(<RuleManagerDialog />);
-    await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
-
-    const li = (await screen.findByText(/AAPL price alert/)).closest("li");
-    expect(li).not.toBeNull();
-    const toggle = within(li!).getByRole("checkbox", { name: /Toggle rule AAPL price alert/i });
-    await user.click(toggle);
-
-    await waitFor(async () => {
-      const rules = await listAlertRules();
-      expect(rules[0].enabled).toBe(false);
+    await waitFor(() => {
+      expect(updateMutate).toHaveBeenCalledWith({
+        ruleId: "rule-1",
+        patch: { enabled: false },
+      });
     });
   });
 
-  it("supports an entity prefill for the Edit tab", async () => {
+  it("delete calls deleteAlertRule with the rule id", async () => {
+    listResult.data = { items: [PRICE_RULE], total: 1 };
     const user = userEvent.setup();
-    render(<RuleManagerDialog prefillEntity="TSLA" />);
+    render(<RuleManagerDialog />);
     await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
 
-    // Switch to Edit tab — the prefill should populate the entity input.
-    await user.click(await screen.findByRole("button", { name: /Create new alert rule/i }));
-    const entityInput = await screen.findByPlaceholderText(/AAPL/i);
-    expect(entityInput).toHaveValue("TSLA");
+    await user.click(
+      await screen.findByRole("button", { name: /Delete rule AAPL price alert/i }),
+    );
+    await waitFor(() => {
+      expect(deleteMutate).toHaveBeenCalledWith("rule-1");
+    });
+  });
+
+  it("opens the wizard when 'New rule' is clicked", async () => {
+    const user = userEvent.setup();
+    render(<RuleManagerDialog />);
+    await user.click(screen.getByRole("button", { name: /Manage alert rules/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /Create new alert rule/i }),
+    );
+    expect(await screen.findByTestId("alert-wizard-stub")).toBeInTheDocument();
   });
 });
