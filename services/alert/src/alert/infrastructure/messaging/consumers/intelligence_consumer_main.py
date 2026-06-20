@@ -96,13 +96,18 @@ async def _liveness_watchdog(
 
 
 async def main() -> None:
+    from alert.application.rules.registry import EvalContext, get_evaluator, register_default_evaluators
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+    from alert.application.use_cases.fire_rule_alert import FireRuleAlertUseCase
+    from alert.application.use_cases.kg_connection_handler import KG_RULE_TYPE, KgConnectionEventHandler
     from alert.config import Settings
     from alert.domain.entities import SeverityThresholds
     from alert.infrastructure.cache.watchlist_cache import WatchlistCache
     from alert.infrastructure.clients.s1_client import S1Client
+    from alert.infrastructure.clients.s7_client import S7GraphClient
     from alert.infrastructure.clients.s7_entity_resolver import S7EntityResolver
     from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.alert_rule import AlertRuleRepository
     from alert.infrastructure.db.repositories.dedup import DedupRepository
     from alert.infrastructure.db.repositories.outbox import OutboxRepository
     from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
@@ -141,8 +146,9 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    # Database — write factory for fan-out (creates alerts, outbox events)
-    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
+    # Database — write factory for fan-out (creates alerts, outbox events);
+    # read factory drives the KG rule lookup (R27 read/write split).
+    _engine, _read_engine, write_factory, read_factory = _build_factories(settings)
 
     # Valkey — dedup + watchlist cache
     valkey = create_valkey_client_from_url(settings.valkey_url)
@@ -186,6 +192,46 @@ async def main() -> None:
         entity_resolver=entity_resolver,
     )
 
+    # ── PLAN-0113 W3: KG_CONNECTION event branch wiring ───────────────────────
+    # The intelligence consumer gets an OPTIONAL kg_handler that evaluates
+    # standing KG_CONNECTION rules on each graph.state.changed.v1 event (additive
+    # to the existing GRAPH_CHANGE fan-out). S7 path confirms are fail-closed.
+    register_default_evaluators()
+    kg_evaluator = get_evaluator(KG_RULE_TYPE)
+    s7_graph_client = S7GraphClient(settings)
+    kg_eval_ctx = EvalContext(clients={"s7": s7_graph_client})
+
+    def _fire_repo_factory(session):  # type: ignore[no-untyped-def]
+        return (
+            AlertRepository(session),
+            PendingAlertRepository(session),
+            OutboxRepository(session),
+            AlertRuleRepository(session),
+        )
+
+    kg_fire_use_case = FireRuleAlertUseCase(
+        session_factory=write_factory,
+        notification_publisher=notification_publisher,
+        repo_factory=_fire_repo_factory,  # type: ignore[arg-type]
+        alert_delivered_topic=settings.kafka_topic_alert_delivered,
+    )
+
+    async def _load_enabled_kg_rules():  # type: ignore[no-untyped-def]
+        # Read path (R27): list enabled KG_CONNECTION rules from the read replica.
+        async with read_factory() as session:
+            return await AlertRuleRepository(session).list_enabled_by_type(KG_RULE_TYPE)
+
+    kg_handler: KgConnectionEventHandler | None = None
+    if kg_evaluator is not None and settings.alert_rule_poller_enabled:
+        kg_handler = KgConnectionEventHandler(
+            evaluator=kg_evaluator,
+            eval_ctx=kg_eval_ctx,
+            fire_use_case=kg_fire_use_case,
+            load_enabled_rules=_load_enabled_kg_rules,
+            write_session_factory=write_factory,
+            rule_repo_factory=AlertRuleRepository,  # type: ignore[arg-type]
+        )
+
     # Consumer config
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
@@ -200,6 +246,7 @@ async def main() -> None:
         config=config,
         fanout_use_case=fanout,
         dedup_client=valkey,
+        kg_handler=kg_handler,
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
@@ -264,6 +311,8 @@ async def main() -> None:
             with contextlib.suppress(Exception):
                 await entity_resolver.close()
             with contextlib.suppress(Exception):
+                await s7_graph_client.close()
+            with contextlib.suppress(Exception):
                 await valkey.close()
             with contextlib.suppress(Exception):
                 await _engine.dispose()
@@ -289,6 +338,8 @@ async def main() -> None:
         await s1_client.close()
         # Close the resolver's httpx client to release sockets.
         await entity_resolver.close()
+        with contextlib.suppress(Exception):
+            await s7_graph_client.close()
         await valkey.close()
         await _engine.dispose()
         # Stop the Prometheus metrics HTTP server cleanly.

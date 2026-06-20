@@ -67,10 +67,15 @@ def register_default_evaluators() -> dict[RuleType, RuleEvaluator]:
 
     Idempotent — re-registers the same singletons on each call. Imports are
     local to keep this module import-cycle-free (the evaluators import
-    ``EvalContext`` from here). The KG_CONNECTION evaluator is event-driven and
-    registered by the intelligence consumer in Wave 3, not here.
+    ``EvalContext`` from here).
+
+    Includes the event-driven ``KG_CONNECTION`` evaluator (Wave 3). The poller
+    skips KG_CONNECTION (it is ``trigger="event"``, ``cadence_seconds=None``); the
+    intelligence consumer drives it on ``graph.state.changed.v1`` events. It lives
+    in the single registry so both processes resolve the same evaluator instance.
     """
     from alert.application.rules.fundamental_cross import FundamentalCrossEvaluator
+    from alert.application.rules.kg_connection import KgConnectionEvaluator
     from alert.application.rules.news_count import NewsCountEvaluator
     from alert.application.rules.news_momentum import NewsMomentumEvaluator
     from alert.application.rules.price_cross import PriceCrossEvaluator
@@ -80,4 +85,5 @@ def register_default_evaluators() -> dict[RuleType, RuleEvaluator]:
     EVALUATOR_REGISTRY[_RuleType.FUNDAMENTAL_CROSS] = FundamentalCrossEvaluator()
     EVALUATOR_REGISTRY[_RuleType.NEWS_COUNT] = NewsCountEvaluator()
     EVALUATOR_REGISTRY[_RuleType.NEWS_MOMENTUM] = NewsMomentumEvaluator()
+    EVALUATOR_REGISTRY[_RuleType.KG_CONNECTION] = KgConnectionEvaluator()
     return EVALUATOR_REGISTRY

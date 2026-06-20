@@ -76,7 +76,7 @@ reads are best-effort (a flaky upstream returns None → skip, no state change).
 | `FUNDAMENTAL_CROSS` | `FundamentalCrossEvaluator` | 21600s (6h) | S3 `GET /api/v1/fundamentals/timeseries` (latest `value_numeric`) | metric crosses `value` (edge); cooldown re-arm 24h |
 | `NEWS_COUNT` | `NewsCountEvaluator` | 3600s | S6 `GET /internal/v1/instruments/{id}/news-rollup-7d` (7d) or `GET /api/v1/news/trending-entities` (24/72/168h) | count first ≥ `threshold`; re-arms below |
 | `NEWS_MOMENTUM` | `NewsMomentumEvaluator` | 3600s | S6 `GET /api/v1/news/trending-entities` (`delta_pct`, `count`) | `delta_pct ≥ threshold AND count ≥ min_count` (edge) |
-| `KG_CONNECTION` | (Wave 3) | event | S7 `/paths/between` confirm | edge first appears (latch) |
+| `KG_CONNECTION` | `KgConnectionEvaluator` | event (`graph.state.changed.v1`) | S7 `GET /api/v1/paths/between` confirm | A↔B first connected within `max_hops` (latch, fires once) |
 
 `FireRuleAlertUseCase` (`application/use_cases/fire_rule_alert.py`) is the shared
 firing path: one transaction writes `alerts` (`alert_type='user_rule'`,
@@ -87,6 +87,46 @@ watchlist fan-out) + an `outbox_events` row (R8). It advances
 `rule.last_state.last_fired_at` only on commit; a rolled-back/duplicate fire never
 advances the cooldown clock. Post-commit it pushes over the existing Valkey
 WebSocket channel.
+
+#### KG_CONNECTION (event-driven, PLAN-0113 Wave 3)
+
+`KG_CONNECTION` is the one rule type that is **not** polled. It is driven off the
+intelligence consumer's existing `graph.state.changed.v1` stream by an **additive**
+branch (`KgConnectionEventHandler`, `application/use_cases/kg_connection_handler.py`)
+that runs *after* — and is fully isolated from — the existing `GRAPH_CHANGE`
+watchlist fan-out. The branch is opt-in: the consumer takes an optional
+`kg_handler` (None in every fan-out-only context, so the legacy path is unchanged),
+wired in `intelligence_consumer_main.py` only when `ALERT_RULE_POLLER_ENABLED` is
+on.
+
+Per graph event the handler:
+
+1. **Suppresses backfill** (`is_backfill=true` → skip; AD-10) so a history replay
+   never retro-fires.
+2. **Pre-filters cheaply**: collects the event's `affected_entity_ids` +
+   `primary_entity_id` and keeps only rules whose `node_a` **or** `node_b` appears
+   in that set (a single new edge on one endpoint can complete a multi-hop path).
+3. **Confirms via S7** (`KgConnectionEvaluator` → `IS7GraphClient.confirm_connection`)
+   and, on `should_fire` (latch on first `connected=true`, KG cooldown default 0),
+   fires once via `FireRuleAlertUseCase`. A no-fire still persists `next_state` so
+   the `connected` edge memory advances.
+
+The handler is **fail-soft per rule** and wrapped in an outer try/except in the
+consumer, so a KG-rule failure can never perturb the fan-out path. Idempotency is
+triple-guarded: the consumer's Valkey `event_id` dedup, the `FireRuleAlertUseCase`
+`dedup_key` (includes `rule_id`), and the durable `connected` latch in `last_state`.
+
+**`S7GraphClient`** (`infrastructure/clients/s7_client.py`, NEW — distinct from
+`s7_entity_resolver.py`) implements `IS7GraphClient` (ABC port in
+`application/ports/graph_clients.py`, R25). It calls
+`GET /api/v1/paths/between?source=&target=&max_hops=<1..3>` (reusing the existing
+`s7_knowledge_graph_base_url` + `X-Internal-JWT` config — no new base URL) and
+returns the `connected` boolean; when the rule pins a `relation_type` it
+additionally requires a matching `path_edges[].relation_type` (case-insensitive).
+It is **fail-closed** (BP-235): an explicit `httpx.Timeout` plus an outer
+`asyncio.wait_for`, and any `503` (AGE statement timeout), transport error,
+timeout, or malformed body returns `False` — an unproven connection never fires.
+A missed edge is re-evaluated on the next `graph.state.changed.v1` for that pair.
 
 ### WebSocket Cross-Process Architecture (Valkey Pub/Sub)
 

@@ -28,6 +28,7 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+    from alert.application.use_cases.kg_connection_handler import KgConnectionEventHandler
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -99,6 +100,7 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         *,
         dedup_client: Any | None = None,
         metrics_namespace: str | None = "alert",
+        kg_handler: KgConnectionEventHandler | None = None,
     ) -> None:
         # Force the metrics namespace to the service name (default "alert") so
         # the emitted Prometheus series match alert-service.json which queries
@@ -108,6 +110,11 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         super().__init__(config, metrics_namespace=metrics_namespace)
         self._fanout = fanout_use_case
         self._dedup_client = dedup_client
+        # PLAN-0113 W3: optional ADDITIVE branch that evaluates standing
+        # KG_CONNECTION rules on each graph-state event. None (the default, and
+        # what every existing test uses) makes the branch a pure no-op so the
+        # existing GRAPH_CHANGE fan-out path is byte-for-byte unchanged.
+        self._kg_handler = kg_handler
         self._dedup_prefix = f"s10:dedup:{config.group_id}"
         # ── Liveness / progress instrumentation (issue 4, Fix A gaps A+D) ──────
         # The 43h silent wedge (audit 2026-06-16) was invisible because nothing
@@ -205,6 +212,21 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             correlation_id=correlation_id,
             market_impact_score=market_impact_score,
         )
+
+        # ── PLAN-0113 W3: KG_CONNECTION rule branch (ADDITIVE) ────────────────
+        # Runs ONLY for graph-state events, ONLY when a kg_handler is wired, and
+        # is fully isolated in try/except so it can NEVER perturb the existing
+        # GRAPH_CHANGE fan-out above (the spec's hard constraint). The handler is
+        # itself fail-soft per rule; this guard is the outer belt-and-braces.
+        if self._kg_handler is not None and topic == "graph.state.changed.v1":
+            try:
+                await self._kg_handler.handle(value)
+            except Exception:
+                logger.warning(  # type: ignore[no-any-return]
+                    "intelligence_consumer.kg_branch_error",
+                    event_id=value.get("event_id"),
+                    exc_info=True,
+                )
 
         # Fix A (gaps A+D): record forward progress so the watchdog +
         # healthcheck can tell a draining consumer from a wedged one. Done
