@@ -165,6 +165,73 @@ describe("AnalyticsTab (R2 wiring)", () => {
     expect(qqqBtn).toHaveAttribute("aria-pressed", "true");
   });
 
+  // ── Layout-overlap regression (2026-06-19) ─────────────────────────────────
+  // The PERIOD RISK sidebar panel used to overlap the ATTRIBUTION column: the
+  // charts column is a CSS-grid item with the default `min-width: auto`, so a
+  // recharts ResponsiveContainer inside it could grow the 9/12 track past its
+  // share and shove the col-span-3 sidebar sideways until they collided. The
+  // fix pins every grid row with `items-start` and gives each column `min-w-0`
+  // so the tracks size to their fractional share. These assertions lock the
+  // structural guard in place — if a refactor drops min-w-0, the overlap
+  // returns and this test fails loudly.
+  it("lays the analytics grids out with overlap guards (items-start + min-w-0)", async () => {
+    const { container } = render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("client-risk-panel")).toBeInTheDocument();
+    });
+
+    // Every 12-column grid in the tab must pin its items to the top so a tall
+    // sidebar column never stretches a neighbour into overlap.
+    const grids = Array.from(
+      container.querySelectorAll<HTMLElement>(".grid.grid-cols-12"),
+    );
+    expect(grids.length).toBeGreaterThanOrEqual(2);
+    for (const grid of grids) {
+      expect(grid.className).toContain("items-start");
+      // Each direct grid child (a column) carries min-w-0 so the grid track
+      // can shrink to its fractional width instead of its content's intrinsic
+      // minimum (the recharts overflow vector).
+      for (const col of Array.from(grid.children) as HTMLElement[]) {
+        expect(col.className).toContain("min-w-0");
+      }
+    }
+  });
+
+  // ── Pathological-contribution clamping (2026-06-19) ────────────────────────
+  // A cash-flow artifact can inflate the portfolio period return to +2327%,
+  // making a single holding's contribution ~+218,000 bps. Printed raw this is
+  // a ~10-char string that helped bleed the attribution panel into its
+  // neighbour. fmtContribBps collapses 5+ digit bps to a "kbps" suffix and the
+  // cell is whitespace-nowrap, so a hostile-wide value stays clamped.
+  it("clamps a pathologically wide attribution contribution to a kbps suffix", async () => {
+    // A huge period return (last/first − 1 ≈ +21.8x) over a single full-weight
+    // holding → ~+218,000 bps contribution.
+    mockGetValueHistory.mockResolvedValue({
+      points: [
+        { date: "2026-06-01", value: 10_000, cost_basis: 10_000, cash: 0 },
+        { date: "2026-06-02", value: 228_000, cost_basis: 10_000, cash: 0 },
+      ],
+    } satisfies ValueHistoryResponse);
+    mockGetHoldings.mockResolvedValue({
+      portfolio_id: "p-1",
+      holdings: [
+        { ticker: "ZZZZ", quantity: 1, average_cost: 100 } as never,
+      ],
+    });
+
+    const { container } = render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    // The contrib cell renders the bounded "kbps" form, never a raw 6-figure
+    // bps string. We scan the attribution table's value cells for the suffix.
+    await waitFor(() => {
+      const text = container.textContent ?? "";
+      expect(text).toMatch(/[+-]?\d+(\.\d)?kbps/);
+    });
+    // And the un-clamped raw form (e.g. "+218000bps") must NOT appear.
+    expect(container.textContent ?? "").not.toMatch(/\d{5,}bps/);
+  });
+
   it("client risk panel shows em-dashes + insufficient-data tooltips below 20 observations", async () => {
     render(wrap(<AnalyticsTab portfolioId="p-1" />));
 

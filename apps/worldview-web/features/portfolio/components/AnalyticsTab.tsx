@@ -141,6 +141,33 @@ function fmtNum(val: number | null | undefined, fractions = 2): string {
   return val.toFixed(fractions);
 }
 
+/**
+ * fmtContribBps — bounded basis-point formatter for the attribution CONTRIB
+ * column.
+ *
+ * WHY THIS EXISTS (2026-06-19 overlap fix): contribution = weight ×
+ * portfolio_period_return × 10000. On the live demo portfolio the period
+ * return can be pathological (a cash-flow artifact inflates it to +2327%),
+ * which makes a single holding's contribution ~+218,000 bps. Printed raw
+ * ("+218340bps") this is a ~10-char monospace string that, combined with the
+ * grid min-width:auto default, was a contributor to the panel bleed.
+ *
+ * This formatter keeps the cell width bounded the same way `formatChangePct`
+ * (lib/format.ts) bounds the mover rows:
+ *   |bps| < 10,000  → integer bps        "+250bps"   / "-1240bps"
+ *   |bps| ≥ 10,000  → thousands-of-bps   "+21.8kbps" (collapses 5+ digits)
+ * Sign convention matches the rest of the surface: strictly-positive gets a
+ * "+", zero and negatives carry their own sign.
+ */
+function fmtContribBps(bps: number): string {
+  const sign = bps > 0 ? "+" : "";
+  if (Math.abs(bps) >= 10_000) {
+    // Collapse 5+ integer digits to "k bps" so the slot can never overflow.
+    return `${sign}${(bps / 1000).toFixed(1)}kbps`;
+  }
+  return `${sign}${bps.toFixed(0)}bps`;
+}
+
 // R2 sprint: the drawdown computation moved to the pure risk-metrics lib
 // (drawdownSeries) so the same unit-tested formula backs the chart AND the
 // MAX DD tile in the client risk panel. Behavior is identical:
@@ -692,13 +719,16 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
               </td>
               <td
                 className={cn(
-                  "px-2 py-0.5 tabular-nums text-right",
+                  // whitespace-nowrap: the value is a single token — never let
+                  // it wrap mid-number. The bounded fmtContribBps keeps it
+                  // short enough that nowrap can't overflow the clamped cell.
+                  "px-2 py-0.5 tabular-nums text-right whitespace-nowrap",
                   row.contribBps >= 0 ? "text-positive" : "text-negative",
                 )}
               >
-                {/* R3 polish: zero stays unsigned (signedPrice convention). */}
-                {row.contribBps > 0 ? "+" : ""}
-                {row.contribBps.toFixed(0)}bps
+                {/* fmtContribBps clamps huge contributions (zero stays
+                    unsigned per the signedPrice convention). */}
+                {fmtContribBps(row.contribBps)}
               </td>
             </tr>
           ))}
@@ -723,8 +753,8 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
                   <td className="px-2 py-0.5 tabular-nums text-right text-muted-foreground">
                     {(row.weight * 100).toFixed(1)}%
                   </td>
-                  <td className="px-2 py-0.5 tabular-nums text-right text-negative">
-                    {row.contribBps.toFixed(0)}bps
+                  <td className="px-2 py-0.5 tabular-nums text-right whitespace-nowrap text-negative">
+                    {fmtContribBps(row.contribBps)}
                   </td>
                 </tr>
               ))}
@@ -867,10 +897,25 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
       </div>
 
       {/* ── Main grid: charts (9 cols) + risk sidebar (3 cols) ──────────── */}
-      <div className="grid grid-cols-12 gap-2">
+      {/* OVERLAP FIX (2026-06-19): items-start pins every grid item to the top
+          of its row. Without it, a CSS grid stretches items to the row's full
+          height (align-items:stretch is the default) — and a recharts
+          ResponsiveContainer inside a STRETCHED cell can mis-measure, letting
+          the charts column bleed over the sidebar. Pinning to the top removes
+          the stretch so each column owns exactly its own height. */}
+      <div className="grid grid-cols-12 items-start gap-2">
 
-        {/* Charts column — col-span-9 */}
-        <div className="col-span-12 lg:col-span-9 space-y-2">
+        {/* Charts column — col-span-9.
+            min-w-0: THE root-cause fix. A CSS-grid item defaults to
+            `min-width: auto`, which refuses to shrink below the intrinsic
+            width of its content. The recharts ResponsiveContainer below
+            reports the width it last measured, so without `min-w-0` this
+            9/12 track can grow past its fraction and shove the col-span-3
+            sidebar (RiskSidebar + PERIOD RISK) sideways until the two
+            visually overlap. `min-w-0` lets the track size to its 9/12 share,
+            and the chart then measures the constrained width. overflow-hidden
+            is belt-and-braces so a stray wide child is clipped, never bled. */}
+        <div className="col-span-12 lg:col-span-9 min-w-0 overflow-hidden space-y-2">
           {/* R2 sprint: cumulative-return (TWR-style) chart with benchmark
               overlays — every series rebased to 0% at period start so the
               vertical gap IS the excess return. */}
@@ -885,8 +930,12 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
           <DrawdownChart portfolioId={portfolioId} period={period} />
         </div>
 
-        {/* Risk sidebar — col-span-3 */}
-        <div className="col-span-12 lg:col-span-3 space-y-2">
+        {/* Risk sidebar — col-span-3.
+            min-w-0 here too: symmetric protection so neither track can force
+            the other to overflow. The sidebar's tiles already clamp their own
+            values (the panels carry overflow-hidden), so the only remaining
+            overflow vector was the grid min-width:auto default — closed now. */}
+        <div className="col-span-12 lg:col-span-3 min-w-0 space-y-2">
           <RiskSidebar portfolioId={portfolioId} period={period} />
           {/* R2 sprint: client-computed, PERIOD-ALIGNED risk metrics
               (Sharpe rf=0 / MaxDD / Vol / Beta·SPY) from the same daily
@@ -902,10 +951,16 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
       </div>
 
       {/* ── Period returns + attribution row ─────────────────────────────── */}
-      <div className="grid grid-cols-12 gap-2">
+      {/* items-start + min-w-0 on each cell: same overlap guard as the main
+          grid above. The period-returns and attribution tables both contain
+          tabular numbers that can grow very wide (e.g. a +2327% portfolio
+          return → six-figure contribution bps); min-w-0 keeps each half at
+          its 6/12 share and lets the inner table scroll/clamp instead of
+          pushing into its neighbour. */}
+      <div className="grid grid-cols-12 items-start gap-2">
 
         {/* Period returns table (col-span-6) */}
-        <div className="col-span-12 md:col-span-6">
+        <div className="col-span-12 md:col-span-6 min-w-0">
           <div className="flex items-center mb-1">
             <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
               Period Returns
@@ -915,7 +970,7 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
         </div>
 
         {/* Attribution table (col-span-6) */}
-        <div className="col-span-12 md:col-span-6">
+        <div className="col-span-12 md:col-span-6 min-w-0">
           <div className="flex items-center mb-1">
             <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
               Attribution (top contributors)
