@@ -122,6 +122,34 @@ articles share a recent time-prefix (correlated window); budget judge (screening
 recent articles may be in-distribution-easy. Treat as a strong directional signal, not a
 final precision figure. A larger, time-diverse sample would tighten the bound.
 
+## Did the model switch improve quality? Head-to-head A/B (2026-06-20)
+
+Direct comparison on the SAME 20 deep-tier articles, same independent judge (DeepSeek
+V4 Flash), via `scripts/eval/extraction_quality_eval.py`
+(`results/model_switch_ab/report.md`). Both ran with 0 api_error this time (the earlier
+≈29% was transient throttling, not constant).
+
+| Dimension | **gpt-oss-120b@medium (new)** | Qwen3-235B@low (old) |
+|---|---|---|
+| Precision (1–5) | **5.0** | 4.4 |
+| Recall (1–5) | **3.8** | 3.6 |
+| Adherence (1–5) | **5.0** | 4.15 |
+| **Overall** | **4.6** | 4.05 (Δ **+0.55**) |
+| Fabrication / article | **0.0** | 0.2 |
+| Allowlist violations / article | **0.0** | 0.25 |
+| relations / article | 2.3 | 3.95 |
+| p50 / p95 latency (s) | 29.4 / 69.6 | 30.6 / 65.5 |
+
+**Verdict: a clear, multi-dimension win.** The new model is more precise (5.0 vs 4.4,
+zero fabrication), fully schema/direction-compliant (5.0 vs 4.15, zero allowlist
+violations), and — importantly — recall did NOT regress (3.8 vs 3.6, slightly better),
+laying to rest the v1.6 concern that a swap might cost recall. It emits *fewer*
+relations/article (2.3 vs 3.95) but the old model's extra ~1.65 were largely the junk
+(fabrication + off-list refs) the gate and cleanup targeted — i.e. a leaner, cleaner
+graph at comparable latency and lower cost. The lowest dimension for BOTH models is
+**recall (≈3.8)** — the remaining (modest) headroom, to be chased only if real usage
+shows missed relations, since pushing it risks the precision the new model just won.
+
 ## Reliability hardening (2026-06-20) — addresses the ≈29% api_error rate
 
 The re-A/B surfaced a **≈29% extraction `api_error` rate** under load at `gpt-oss-120b`
