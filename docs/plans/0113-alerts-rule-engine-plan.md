@@ -308,24 +308,32 @@ W2 and W3 both depend on W1 and can run in parallel. W4 depends on W1 (the CRUD 
 **Depends on:** W2, W3, W4
 **Estimated effort:** 2–3 h · **Layer:** frontend wiring + integration
 
-#### T-5-01: New creation entry points
+#### T-5-01: New creation entry points — DONE 2026-06-20
 **Type:** impl · **depends_on:** T-4-04,T-4-05 · **blocks:** none
 **Target files:** instrument detail header (`apps/worldview-web/components/instrument/...`), KG graph / `PathBetweenPanel` (`components/intelligence/...`)
 **What to build:** ＋ Alert on the instrument header → wizard pre-scoped to that instrument (price/fundamental/news defaults); ＋ Alert on the Path/graph panel → wizard pre-scoped to `KG_CONNECTION` with both entities prefilled (mirror existing `prefillEntity`).
 **Tests:** entry opens wizard with prefill.
+**Done:** Added a minimal `prefillCondition` (partial) + `prefillNames` prop to `AlertWizard` (threaded into the editors via `ConditionEditorProps.value: Partial<C>` + `names`) instead of rebuilding it. New `components/instrument/header/InstrumentAlertButton.tsx` (＋ Alert on `InstrumentHeader`, pre-scoped `PRICE_CROSS` + instrument seeded; disabled until id resolves). `PathBetweenPanel` gains an "Alert on connection" button (shown once both entities chosen) opening the wizard pre-scoped `KG_CONNECTION` with both entities seeded. 5 condition editors made partial-prefill-safe (defensive field reads + `names` for chip labels). Tests: `InstrumentAlertButton.test.tsx` (3), `AlertWizard` prefill suite (2), `PathBetweenPanel` KG entry test (1); existing InstrumentHeader test mocks the new button. **Deviation:** the legacy `RuleManagerDialog.prefillEntity` (free-text, no-op since W4) was NOT used — the structured pickers + the new `prefillCondition`/`prefillNames` mechanism supersede it.
 
-#### T-5-02: Observability dashboards/alerts wiring
+#### T-5-02: Observability dashboards/alerts wiring — DONE 2026-06-20
 **Type:** config · **depends_on:** T-2-06,T-3-02 · **blocks:** none
 **Target files:** poller metrics already emitted (W1/W2); add staleness alert rule (`alert_rule_poller_last_success > 2× cadence`) + a small Grafana panel set.
 **PRD ref:** §13, NFR-6.
 **Tests:** metrics exposed on `/metrics`.
+**Done:** (1) **Found a real gap** — the `alert-rule-poller` compose service (`:9101`) had no Prometheus scrape job; added `job_name: alert-rule-poller` → `alert-rule-poller:9101` in `infra/prometheus/prometheus.yml`. (2) New `infra/prometheus/rules/alert_rule_poller.yml` (this dir IS the one mounted into Prometheus via `rule_files`; `infra/grafana/alerts/` is NOT mounted — orphaned): `AlertRulePollerStalled` (`time() - s10_rule_poller_last_success_timestamp_seconds > 120` = 2× the 60s tick, `for 1m`), `AlertRulePollerDown` (`absent(...)` `for 5m`), `AlertRuleEvaluationErrors` (error-rate `> 0.2/s` over 10m `for 15m`). (3) New Grafana dashboard `infra/grafana/dashboards/alert-rule-engine.json` (uid `worldview-alert-rule-engine`): poller liveness + cycle outcomes + due-rules + evaluations/fired/errors by type. Metric names verified against `services/alert/.../infrastructure/metrics/prometheus.py` (`s10_rule_*`). YAML + JSON validated. **Note:** metric names are `s10_rule_*` (not the PRD's `alert_rule_*` placeholder names) — used the actual emitted names.
 
 #### T-5-03: End-to-end integration QA + docs
 **Type:** test/docs · **depends_on:** T-5-01,T-5-02 · **blocks:** none
 **What to build:** deploy S10 (api+poller+consumer) + S9 + web; create one rule of each type via the UI; force-evaluate (seed a price cross / news count / graph edge) and confirm a single edge-triggered alert lands for the owner; verify cooldown. Update `docs/services/alert.md`, `services/alert/.claude-context.md`, `services/api-gateway/.claude-context.md`, `docs/apps/worldview-web.md`, TRACKING.md (5/5).
 **Acceptance:** [ ] all 5 types fire once end-to-end; [ ] no spam (cooldown/edge); [ ] tenant isolation verified live.
 
-#### Validation Gate (W5): full deploy healthy; all 5 types verified live; docs updated; TRACKING 5/5.
+#### Validation Gate (W5) — T-5-01 + T-5-02 DONE 2026-06-20; T-5-03 live QA PENDING (orchestrator QA phase)
+- [x] T-5-01 entry points: instrument-header ＋ Alert + KG-path "Alert on connection"; wizard `prefillCondition`/`prefillNames` prop added (no rebuild)
+- [x] T-5-02 observability: `alert-rule-poller` scrape job + 3 Prometheus alert rules (`alert_rule_poller.yml`) + Grafana dashboard (`alert-rule-engine.json`)
+- [x] frontend `pnpm typecheck` + `lint` clean (only pre-existing warnings); `vitest` 502 scoped pass (+6 new: 3 InstrumentAlertButton, 2 AlertWizard prefill, 1 PathBetweenPanel KG entry)
+- [x] docs updated: `docs/apps/worldview-web.md` (entry points), `docs/services/alert-service.md` (monitoring wiring)
+- [ ] **T-5-03 (live, orchestrator QA phase):** full deploy healthy; all 5 types fire once end-to-end; cooldown/edge verified; tenant isolation live; then mark TRACKING 5/5
+> **Original gate (deferred to T-5-03 live QA):** full deploy healthy; all 5 types verified live.
 #### Architecture Compliance (W5): R22 poller in topology; obs per BP-705.
 #### Break Impact (W5): none new (wiring).
 #### Regression Guardrails (W5): verify edge-trigger live (the canonical "fires every tick" risk); confirm owner-only delivery (no watchlist fan-out leak).

@@ -299,6 +299,29 @@ needed for each new connection (30 s TTL).
 | GET | `/readyz` | None | Readiness (checks alert_db, Kafka, Valkey, S1) |
 | GET | `/metrics` | None | Prometheus metrics (`s10_` prefix) |
 
+#### Rule-engine monitoring wiring (PLAN-0113 Wave 5, T-5-02)
+
+The poller exposes its `s10_rule_*` metrics on `:9101` (separate from the shared
+`:9100` used by the alert consumers/dispatcher). The full wiring:
+
+- **Scrape job** `alert-rule-poller` (`infra/prometheus/prometheus.yml`) →
+  `alert-rule-poller:9101` (15s interval).
+- **Alert rules** `infra/prometheus/rules/alert_rule_poller.yml` (loaded via
+  `rule_files: /etc/prometheus/rules/*.yml`):
+  - `AlertRulePollerStalled` — `time() - s10_rule_poller_last_success_timestamp_seconds > 120`
+    (2× the 60s base tick, PRD-0113 §13 "2× cadence") `for: 1m`. The canonical
+    "silent stall" page — no rules evaluated, alerts stop firing invisibly.
+  - `AlertRulePollerDown` — `absent(s10_rule_poller_last_success_timestamp_seconds)`
+    `for: 5m` (process never came up / unscraped; the staleness expr produces no
+    series in that case).
+  - `AlertRuleEvaluationErrors` — `sum(rate(s10_rule_evaluations_total{outcome="error"}[10m])) > 0.2`
+    `for: 15m` (fail-soft loop alive but a rule type's upstream S3/S6/S7 read is
+    failing → that type silently not firing).
+- **Dashboard** `infra/grafana/dashboards/alert-rule-engine.json`
+  (uid `worldview-alert-rule-engine`): poller liveness (seconds-since-last-success
+  stat with 60/120s thresholds, cycle-outcome rate, due-rules), plus
+  evaluations-by-type/outcome, fired-by-type, and evaluation-errors-by-type.
+
 ### DLQ Admin Endpoints
 
 | Method | Path | Auth | Description |

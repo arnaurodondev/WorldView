@@ -24,13 +24,26 @@ import type { ConditionEditorProps } from "./types";
 
 export function KgConnectionEditor({
   value,
+  names,
   onChange,
 }: ConditionEditorProps<KgConnectionCondition>) {
+  // value may be a PARTIAL prefill (Wave 5) — the KG path-panel entry point seeds
+  // BOTH source + target ids; read each defensively and use `names` for the chip.
   const [source, setSource] = useState<ChosenEntity | null>(
-    value ? { entityId: value.source_entity_id, name: value.source_entity_id } : null,
+    value?.source_entity_id
+      ? {
+          entityId: value.source_entity_id,
+          name: names?.[value.source_entity_id] ?? value.source_entity_id,
+        }
+      : null,
   );
   const [target, setTarget] = useState<ChosenEntity | null>(
-    value ? { entityId: value.target_entity_id, name: value.target_entity_id } : null,
+    value?.target_entity_id
+      ? {
+          entityId: value.target_entity_id,
+          name: names?.[value.target_entity_id] ?? value.target_entity_id,
+        }
+      : null,
   );
   const [maxHops, setMaxHops] = useState<number>(value?.max_hops ?? 3);
   const [relationType, setRelationType] = useState<string>(value?.relation_type ?? "");

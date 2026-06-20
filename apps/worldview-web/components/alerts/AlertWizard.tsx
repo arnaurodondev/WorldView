@@ -85,6 +85,32 @@ export interface AlertWizardProps {
    * button defaults to PRICE_CROSS). When set, the wizard skips Step 1.
    */
   initialRuleType?: RuleType;
+  /**
+   * Optional CREATE-mode condition seed (PLAN-0113 Wave 5, T-5-01).
+   *
+   * WHY a Partial: the entry-point buttons know the SUBJECT of the rule (the
+   * instrument on the instrument page, the two entities on the Path panel) but
+   * not the threshold/operator the user still has to choose. We therefore seed
+   * only the known fields — e.g. `{ instrument_id }` from the instrument header,
+   * or `{ source_entity_id, target_entity_id }` from the KG path panel — and let
+   * the mounted editor hydrate those fields while leaving the rest blank. Because
+   * the seed is partial, the editor keeps emitting `null` (Save disabled) until
+   * the user completes the remaining required fields, so we never POST a
+   * half-built condition.
+   *
+   * Ignored in EDIT mode (an existing rule's `condition` always wins).
+   */
+  prefillCondition?: Partial<RuleCondition>;
+  /**
+   * Optional id→display-name map for the seeded subjects (PLAN-0113 Wave 5).
+   *
+   * The pickers normally learn an entity/instrument's display name when the user
+   * selects it from the dropdown. A prefilled subject skips that step, so the
+   * chip would otherwise show a raw UUID. The entry points pass the names they
+   * already know (e.g. the ticker on the instrument page) so the seeded chip and
+   * the live NL summary read "AAPL", not a UUID.
+   */
+  prefillNames?: Record<string, string>;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
@@ -97,6 +123,8 @@ export function AlertWizard({
   onOpenChange,
   editRule,
   initialRuleType,
+  prefillCondition,
+  prefillNames,
 }: AlertWizardProps) {
   const isEdit = editRule !== undefined;
 
@@ -110,6 +138,9 @@ export function AlertWizard({
 
   // ── Step-2 form state ─────────────────────────────────────────────────────
   // `condition` is null until the mounted editor reports a complete payload.
+  // (A partial prefill seeds the EDITOR fields but is intentionally NOT used as
+  // the initial `condition` value — a partial seed is incomplete, so Save must
+  // stay disabled until the editor reports a complete payload.)
   const [condition, setCondition] = useState<RuleCondition | null>(
     editRule?.condition ?? null,
   );
@@ -123,9 +154,14 @@ export function AlertWizard({
   const saving = createMut.isPending || updateMut.isPending;
 
   // Live NL summary — recomputed as the editor reports condition changes.
+  // `prefillNames` lets the summary read "AAPL" instead of a raw UUID for any
+  // subject that was seeded by an entry point (PLAN-0113 Wave 5).
   const summary = useMemo(
-    () => (ruleType ? ruleToNaturalLanguage({ rule_type: ruleType, condition }) : ""),
-    [ruleType, condition],
+    () =>
+      ruleType
+        ? ruleToNaturalLanguage({ rule_type: ruleType, condition, names: prefillNames })
+        : "",
+    [ruleType, condition, prefillNames],
   );
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -231,10 +267,15 @@ export function AlertWizard({
         {/* ── Step 2 — editor + meta ────────────────────────────────────────── */}
         {step === 2 && ruleType && (
           <div className="flex flex-col gap-3 pt-1">
-            {/* Type editor — mounted per the chosen rule_type. */}
+            {/* Type editor — mounted per the chosen rule_type.
+                value precedence: an EDIT rule's stored condition wins; otherwise
+                a CREATE-mode partial prefill (from an entry point) seeds the
+                known fields. The editors treat a partial seed as incomplete and
+                keep Save disabled until the user fills the rest. */}
             <ConditionEditorSwitch
               ruleType={ruleType}
-              value={editRule?.condition ?? null}
+              value={editRule?.condition ?? prefillCondition ?? null}
+              names={prefillNames}
               onChange={setCondition}
             />
 
@@ -360,10 +401,14 @@ export function AlertWizard({
 function ConditionEditorSwitch({
   ruleType,
   value,
+  names,
   onChange,
 }: {
   ruleType: RuleType;
-  value: RuleCondition | null;
+  /** Stored condition (edit) or partial prefill (create); may be incomplete. */
+  value: Partial<RuleCondition> | null;
+  /** Optional id→display-name map so seeded chips show names, not UUIDs. */
+  names?: Record<string, string>;
   onChange: (c: RuleCondition | null) => void;
 }) {
   switch (ruleType) {
@@ -371,6 +416,7 @@ function ConditionEditorSwitch({
       return (
         <PriceCrossEditor
           value={value as never}
+          names={names}
           onChange={onChange as never}
         />
       );
@@ -378,20 +424,21 @@ function ConditionEditorSwitch({
       return (
         <FundamentalCrossEditor
           value={value as never}
+          names={names}
           onChange={onChange as never}
         />
       );
     case "NEWS_COUNT":
       return (
-        <NewsVolumeEditor value={value as never} onChange={onChange as never} />
+        <NewsVolumeEditor value={value as never} names={names} onChange={onChange as never} />
       );
     case "NEWS_MOMENTUM":
       return (
-        <NewsMomentumEditor value={value as never} onChange={onChange as never} />
+        <NewsMomentumEditor value={value as never} names={names} onChange={onChange as never} />
       );
     case "KG_CONNECTION":
       return (
-        <KgConnectionEditor value={value as never} onChange={onChange as never} />
+        <KgConnectionEditor value={value as never} names={names} onChange={onChange as never} />
       );
     default: {
       // Exhaustiveness guard — adding a RuleType without a branch is a compile error.

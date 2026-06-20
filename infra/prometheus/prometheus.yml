@@ -314,6 +314,18 @@ scrape_configs:
       - targets: ["alert-email-scheduler:9100"]
     metrics_path: /metrics
 
+  # ── PLAN-0113 — alert-rule-poller (standing-rule evaluation loop) ──────────
+  # The rule-engine poller (R22, services/alert/.../rules/poller_main.py) runs
+  # the APScheduler evaluation loop and exposes its s10_rule_* metrics on :9101
+  # (METRICS_PORT=9101 in docker-compose — NOT the shared 9100, which the
+  # alert-* consumers/dispatcher already use). Scraping this job powers the
+  # AlertRulePollerStalled staleness alert + the alert-rule-engine dashboard.
+  - job_name: "alert-rule-poller"
+    static_configs:
+      - targets: ["alert-rule-poller:9101"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
   # ── PLAN-0107 B-3 — OVERSIGHT entrypoints wired with start_metrics_server ──
   - job_name: "alert-dispatcher"
     static_configs:

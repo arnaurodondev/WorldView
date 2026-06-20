@@ -390,8 +390,9 @@ apps/worldview-web/
 | `AlertHistoryTab` | Paginated history with severity + date + entity filters + Load More |
 | `AlertDetailSheet` | Right-anchored sheet + Suggested Actions strip |
 | `RuleManagerDialog` | Server-backed standing-rule manager (list/pause/edit/delete); opens `AlertWizard` (PLAN-0113) |
-| `AlertWizard` | Type-first 2-step rule creator/editor: 5 type cards → per-type editor + severity + notify + live NL summary; real `/v1/alert-rules` CRUD |
-| `condition-editors/*` | Per-type structured editors: `PriceCrossEditor`, `FundamentalCrossEditor`, `NewsVolumeEditor`, `NewsMomentumEditor`, `KgConnectionEditor` |
+| `AlertWizard` | Type-first 2-step rule creator/editor: 5 type cards → per-type editor + severity + notify + live NL summary; real `/v1/alert-rules` CRUD. Accepts `initialRuleType` + a partial `prefillCondition`/`prefillNames` so entry points can pre-scope a rule (PLAN-0113 W5) |
+| `condition-editors/*` | Per-type structured editors: `PriceCrossEditor`, `FundamentalCrossEditor`, `NewsVolumeEditor`, `NewsMomentumEditor`, `KgConnectionEditor`. Each accepts an optional partial `value` (prefill) + `names` (id→display-name for seeded chips) |
+| `InstrumentAlertButton` | "＋ Alert" affordance on the instrument detail header — opens `AlertWizard` pre-scoped to `PRICE_CROSS` with the instrument seeded (PLAN-0113 W5) |
 | `MetricPicker` | Fundamental metric dropdown sourced from S3 `/v1/fundamentals/screen/fields` (emits a backend-valid `metric_key`) |
 | `NotificationPreferencesDialog` | Quiet hours + severity floor settings |
 | `SeverityBadge` | LOW / MEDIUM / HIGH / CRITICAL colored badge |
@@ -405,6 +406,19 @@ apps/worldview-web/
 > Shared pickers: `components/common/EntityPicker` (real KG `entity_id` via
 > `searchFundamentals`) and `components/common/InstrumentPicker` (S3 `instrument_id`
 > via `searchInstruments`).
+>
+> **Creation entry points (PLAN-0113 W5, FR-11):** besides the `/alerts` page
+> (`RuleManagerDialog`), users can launch the wizard pre-scoped where they already
+> are: (1) the **instrument detail header** "＋ Alert" button
+> (`components/instrument/header/InstrumentAlertButton`) opens it on `PRICE_CROSS`
+> with the current `instrument_id` seeded (the user can switch to fundamental/news
+> types via Back — they key on the same subject); (2) the **KG path panel**
+> (`components/intelligence/PathBetweenPanel`) shows an "Alert on connection"
+> button once both entities are chosen, opening the wizard on `KG_CONNECTION` with
+> both `source_entity_id`/`target_entity_id` seeded. Both pass a partial
+> `prefillCondition` + a `prefillNames` map so the seeded chips and live NL summary
+> show tickers/names instead of UUIDs; the wizard still requires the user to
+> complete the remaining fields before Save enables.
 
 ### Chat Components (`components/chat/`)
 

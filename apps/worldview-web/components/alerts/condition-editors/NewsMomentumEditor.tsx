@@ -25,17 +25,23 @@ import type { ConditionEditorProps } from "./types";
 
 export function NewsMomentumEditor({
   value,
+  names,
   onChange,
 }: ConditionEditorProps<NewsMomentumCondition>) {
+  // value may be a PARTIAL prefill (Wave 5) — read each field defensively.
   const [entity, setEntity] = useState<ChosenEntity | null>(
-    value ? { entityId: value.entity_id, name: value.entity_id } : null,
+    value?.entity_id
+      ? { entityId: value.entity_id, name: names?.[value.entity_id] ?? value.entity_id }
+      : null,
   );
   const [windowHours, setWindowHours] = useState<NewsMomentumWindowHours>(
     value?.window_hours ?? 24,
   );
-  const [deltaStr, setDeltaStr] = useState<string>(value ? String(value.delta_pct) : "50");
+  const [deltaStr, setDeltaStr] = useState<string>(
+    value?.delta_pct != null ? String(value.delta_pct) : "50",
+  );
   const [minCountStr, setMinCountStr] = useState<string>(
-    value ? String(value.min_count) : "2",
+    value?.min_count != null ? String(value.min_count) : "2",
   );
 
   useEffect(() => {

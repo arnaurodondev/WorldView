@@ -26,11 +26,14 @@
 // all browser-only.
 
 import { useState } from "react";
+import { BellPlus } from "lucide-react";
 import { usePathBetween } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PathChain } from "@/components/intelligence/PathChain";
 import { WeirdnessBreakdown } from "@/components/intelligence/WeirdnessBreakdown";
 import { EntityPicker, type ChosenEntity } from "@/components/common/EntityPicker";
+// PLAN-0113 Wave 5 (T-5-01): "＋ Alert" entry point for KG_CONNECTION rules.
+import { AlertWizard } from "@/components/alerts/AlertWizard";
 import type { PathBetweenPublic } from "@/types/intelligence";
 
 // ── PathBetweenPanel ──────────────────────────────────────────────────────────
@@ -38,6 +41,10 @@ import type { PathBetweenPublic } from "@/types/intelligence";
 export function PathBetweenPanel() {
   const [source, setSource] = useState<ChosenEntity | null>(null);
   const [target, setTarget] = useState<ChosenEntity | null>(null);
+  // PLAN-0113 Wave 5: KG_CONNECTION alert wizard open-state. The "＋ Alert" button
+  // (shown once both endpoints are chosen) opens it pre-scoped to KG_CONNECTION
+  // with BOTH entities seeded — Journey D ("alert me when A connects to B").
+  const [alertOpen, setAlertOpen] = useState(false);
 
   // The hook is mounted unconditionally (hooks rule) but its `enabled` gate keeps
   // it idle until BOTH endpoints are chosen — passing "" until then.
@@ -52,19 +59,39 @@ export function PathBetweenPanel() {
   return (
     <div className="flex h-full flex-col">
       {/* ── Picker row ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 border-b border-border/50 px-3 py-3">
-        <EntityPicker
-          label="Source"
-          value={source}
-          onSelect={setSource}
-          onClear={() => setSource(null)}
-        />
-        <EntityPicker
-          label="Target"
-          value={target}
-          onSelect={setTarget}
-          onClear={() => setTarget(null)}
-        />
+      <div className="border-b border-border/50 px-3 py-3">
+        <div className="grid grid-cols-2 gap-3">
+          <EntityPicker
+            label="Source"
+            value={source}
+            onSelect={setSource}
+            onClear={() => setSource(null)}
+          />
+          <EntityPicker
+            label="Target"
+            value={target}
+            onSelect={setTarget}
+            onClear={() => setTarget(null)}
+          />
+        </div>
+
+        {/* ＋ Alert — only meaningful once BOTH endpoints are chosen. Opens the
+            wizard pre-scoped to KG_CONNECTION with both entities seeded so the
+            user only picks max_hops (+ optional relation_type). */}
+        {bothChosen && (
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setAlertOpen(true)}
+              data-testid="kg-connection-alert-button"
+              aria-label="Alert me when these entities connect"
+              className="flex items-center gap-1 rounded-[2px] border border-border/50 bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary/50 hover:bg-muted/40 hover:text-foreground"
+            >
+              <BellPlus className="size-3" aria-hidden="true" />
+              Alert on connection
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Result body ──────────────────────────────────────────────────── */}
@@ -174,6 +201,27 @@ export function PathBetweenPanel() {
           </>
         )}
       </div>
+
+      {/* KG_CONNECTION alert wizard — pre-scoped + both entities seeded. Mounted
+          only while both endpoints exist so the prefill is always valid. The
+          editor enforces the node_a≠node_b guard; the wizard's Save flows through
+          the gateway hooks (R14). */}
+      {source && target && (
+        <AlertWizard
+          open={alertOpen}
+          onOpenChange={setAlertOpen}
+          initialRuleType="KG_CONNECTION"
+          prefillCondition={{
+            source_entity_id: source.entityId,
+            target_entity_id: target.entityId,
+            max_hops: 3,
+          }}
+          prefillNames={{
+            [source.entityId]: source.name,
+            [target.entityId]: target.name,
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -23,6 +23,14 @@ vi.mock("@/components/instrument/LiveQuoteBadge", () => ({
   LiveQuoteBadge: () => <span data-testid="live-quote-badge" />,
 }));
 
+// WHY mock InstrumentAlertButton (PLAN-0113 W5): it mounts the AlertWizard, which
+// pulls in the TanStack mutation hooks + gateway client. Those need a
+// QueryClientProvider/auth context this static-metric-row test doesn't provide.
+// The button has its own dedicated test (InstrumentAlertButton.test.tsx).
+vi.mock("@/components/instrument/header/InstrumentAlertButton", () => ({
+  InstrumentAlertButton: () => <button data-testid="instrument-alert-button" />,
+}));
+
 import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
 import type { Instrument, Quote, Fundamentals } from "@/types/api";
 

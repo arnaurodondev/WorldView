@@ -17,6 +17,8 @@
 import { ChevronLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
+// PLAN-0113 Wave 5 (T-5-01): "＋ Alert" entry point pre-scoped to this instrument.
+import { InstrumentAlertButton } from "./InstrumentAlertButton";
 import {
   formatPrice,
   formatPercentDirect,
@@ -180,6 +182,14 @@ export function InstrumentHeader({
         {instrument?.instrument_id && (
           <LiveQuoteBadge instrumentId={instrument.instrument_id} initialPrice={price} compact />
         )}
+
+        {/* ＋ Alert — opens the AlertWizard pre-scoped to this instrument
+            (PLAN-0113 Wave 5). Disabled until the instrument id resolves. */}
+        <InstrumentAlertButton
+          instrumentId={instrument?.instrument_id ?? null}
+          ticker={instrument?.ticker ?? null}
+          name={instrument?.name ?? null}
+        />
       </div>
     </header>
   );

@@ -24,14 +24,18 @@ import type { ConditionEditorProps } from "./types";
 
 export function NewsVolumeEditor({
   value,
+  names,
   onChange,
 }: ConditionEditorProps<NewsCountCondition>) {
+  // value may be a PARTIAL prefill (Wave 5) — read each field defensively.
   const [entity, setEntity] = useState<ChosenEntity | null>(
-    value ? { entityId: value.entity_id, name: value.entity_id } : null,
+    value?.entity_id
+      ? { entityId: value.entity_id, name: names?.[value.entity_id] ?? value.entity_id }
+      : null,
   );
   const [window, setWindow] = useState<NewsCountWindow>(value?.window ?? "24h");
   const [thresholdStr, setThresholdStr] = useState<string>(
-    value ? String(value.threshold) : "5",
+    value?.threshold != null ? String(value.threshold) : "5",
   );
   const [keyword, setKeyword] = useState<string>(value?.keyword ?? "");
 

@@ -21,8 +21,22 @@ export interface ConditionEditorProps<C extends RuleCondition = RuleCondition> {
   /**
    * The current condition (when editing an existing rule), or `null` for a fresh
    * create. Editors hydrate their internal field state from this on mount.
+   *
+   * PLAN-0113 Wave 5 (T-5-01): this may be a PARTIAL condition when an entry
+   * point seeds only the known subject fields (e.g. just `instrument_id` from
+   * the instrument header, or `{source_entity_id, target_entity_id}` from the KG
+   * path panel). Editors read fields defensively (optional access) and treat any
+   * missing required field as "incomplete" → they emit `null` so Save stays
+   * disabled until the user fills the rest.
    */
-  value: C | null;
+  value: Partial<C> | null;
+  /**
+   * Optional id→display-name map (PLAN-0113 Wave 5). When a subject is prefilled,
+   * the picker chip would otherwise show a raw UUID (the user never picked it
+   * from the dropdown, so the editor never learned its name). Entry points pass
+   * the names they already know (e.g. the ticker) so the chip reads "AAPL".
+   */
+  names?: Record<string, string>;
   /**
    * Emits the structured condition when complete, or `null` when the form is not
    * yet valid (so the wizard can disable Save).

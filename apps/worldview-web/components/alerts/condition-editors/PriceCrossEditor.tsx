@@ -22,13 +22,21 @@ import type { ConditionEditorProps } from "./types";
 
 export function PriceCrossEditor({
   value,
+  names,
   onChange,
 }: ConditionEditorProps<PriceCrossCondition>) {
   // WHY local chip state for the instrument: the picker needs a display name, but
   // the condition only carries the id. We keep both — the chip name is presentation
-  // only and never leaves the component.
+  // only and never leaves the component. `names` (Wave 5) lets a prefilled id show
+  // its ticker/name instead of a raw UUID.
   const [instrument, setInstrument] = useState<ChosenInstrument | null>(
-    value ? { instrumentId: value.instrument_id, ticker: "", name: value.instrument_id } : null,
+    value?.instrument_id
+      ? {
+          instrumentId: value.instrument_id,
+          ticker: names?.[value.instrument_id] ?? "",
+          name: names?.[value.instrument_id] ?? value.instrument_id,
+        }
+      : null,
   );
   const [operator, setOperator] = useState<CrossOperator>(value?.operator ?? "above");
   // WHY string state for the number input: an empty input is "" (not 0), so the

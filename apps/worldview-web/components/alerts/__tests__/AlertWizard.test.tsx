@@ -31,11 +31,15 @@ vi.mock("@/lib/api/useAlertRules", () => ({
 // Each stub immediately renders a button that, when clicked, emits a complete
 // condition. A data-testid identifies WHICH editor mounted (type-selection test).
 function makeEditorStub(testid: string, condition: RuleCondition) {
-  return function Stub({ onChange }: ConditionEditorProps) {
+  return function Stub({ value, names, onChange }: ConditionEditorProps) {
     return (
       <button
         type="button"
         data-testid={testid}
+        // Surface the seeded value/names so the prefill test can assert them
+        // (PLAN-0113 W5 — the wizard passes the entry-point prefill down here).
+        data-seeded-value={value ? JSON.stringify(value) : ""}
+        data-seeded-names={names ? JSON.stringify(names) : ""}
         onClick={() => onChange(condition as never)}
       >
         complete {testid}
@@ -107,6 +111,49 @@ describe("AlertWizard — type selection", () => {
     render(<AlertWizard open onOpenChange={vi.fn()} />);
     fireEvent.click(screen.getByTestId("rule-type-card-KG_CONNECTION"));
     expect(screen.getByTestId("editor-kg")).toBeInTheDocument();
+  });
+});
+
+describe("AlertWizard — entry-point prefill (PLAN-0113 W5)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("seeds the editor with a partial prefillCondition + names (create mode)", () => {
+    render(
+      <AlertWizard
+        open
+        onOpenChange={vi.fn()}
+        initialRuleType="PRICE_CROSS"
+        prefillCondition={{ instrument_id: "ins-001" }}
+        prefillNames={{ "ins-001": "AAPL" }}
+      />,
+    );
+    // Skips Step 1 (no type cards) and mounts the price editor straight away.
+    expect(screen.queryByTestId("rule-type-card-PRICE_CROSS")).not.toBeInTheDocument();
+    const editor = screen.getByTestId("editor-price");
+    expect(JSON.parse(editor.getAttribute("data-seeded-value") || "{}")).toEqual({
+      instrument_id: "ins-001",
+    });
+    expect(JSON.parse(editor.getAttribute("data-seeded-names") || "{}")).toEqual({
+      "ins-001": "AAPL",
+    });
+  });
+
+  it("keeps Save disabled until the partially-seeded editor reports complete", () => {
+    render(
+      <AlertWizard
+        open
+        onOpenChange={vi.fn()}
+        initialRuleType="KG_CONNECTION"
+        prefillCondition={{ source_entity_id: "a", target_entity_id: "b", max_hops: 3 }}
+        prefillNames={{ a: "Apple", b: "Anthropic" }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Create rule/i })).toBeDisabled();
+    const editor = screen.getByTestId("editor-kg");
+    expect(JSON.parse(editor.getAttribute("data-seeded-value") || "{}")).toMatchObject({
+      source_entity_id: "a",
+      target_entity_id: "b",
+    });
   });
 });
 

@@ -23,17 +23,27 @@ import type { ConditionEditorProps } from "./types";
 
 export function FundamentalCrossEditor({
   value,
+  names,
   onChange,
 }: ConditionEditorProps<FundamentalCrossCondition>) {
+  // value may be a PARTIAL prefill (Wave 5) — read each field defensively.
   const [instrument, setInstrument] = useState<ChosenInstrument | null>(
-    value ? { instrumentId: value.instrument_id, ticker: "", name: value.instrument_id } : null,
+    value?.instrument_id
+      ? {
+          instrumentId: value.instrument_id,
+          ticker: names?.[value.instrument_id] ?? "",
+          name: names?.[value.instrument_id] ?? value.instrument_id,
+        }
+      : null,
   );
   const [metricKey, setMetricKey] = useState<string>(value?.metric_key ?? "");
   const [operator, setOperator] = useState<CrossOperator>(value?.operator ?? "below");
   // WHY string state: see PriceCrossEditor — keeps an empty input distinct from 0.
   // Note: fundamental values can legitimately be negative (e.g. negative EPS), so
   // we do NOT require value > 0 here, only that it is a finite number.
-  const [valueStr, setValueStr] = useState<string>(value ? String(value.value) : "");
+  const [valueStr, setValueStr] = useState<string>(
+    value?.value != null ? String(value.value) : "",
+  );
 
   useEffect(() => {
     const numeric = Number(valueStr);

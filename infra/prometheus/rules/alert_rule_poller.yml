@@ -1,0 +1,90 @@
+# PLAN-0113 Wave 5 (T-5-02, PRD-0113 §13 / NFR-6): alert-rule-poller observability
+# alert rules.
+#
+# Loaded by Prometheus via `rule_files: /etc/prometheus/rules/*.yml` (this dir is
+# mounted read-only into the prometheus container in docker-compose). The poller
+# is scraped by the `alert-rule-poller` job (:9101) added in prometheus.yml.
+#
+# The alert-rule-poller (services/alert/.../infrastructure/rules/poller_main.py,
+# an R22 process) wakes every `alert_rule_poll_tick_seconds` (default 60s), loads
+# the `enabled` poll-type rules that are due per their per-type cadence, runs the
+# evaluators, and fires edge-triggered alerts. On every SUCCESSFUL cycle it sets
+# the liveness gauge:
+#
+#   s10_rule_poller_last_success_timestamp_seconds  (Gauge, unix seconds)
+#
+# and increments s10_rule_poller_runs_total{outcome="success|timeout|error"}.
+# The per-cycle work is wrapped in `asyncio.wait_for(..., watchdog_seconds=180)`
+# (BP-705) so a hung S3/S6/DB call cannot stall the loop silently.
+#
+# Failure mode these alerts catch (the "silent stall"):
+#   - the poller container is OOM-killed / crash-looping and the gauge freezes,
+#   - every cycle times out (DB pool exhausted, S3/S6 unreachable) so the
+#     last-success timestamp never advances,
+#   - APScheduler coalesces the job indefinitely (max_instances=1 stuck).
+# In all three cases NO standing rule is evaluated — price/news/fundamental
+# alerts stop firing entirely, which is invisible without these alerts.
+groups:
+  - name: alert_rule_poller
+    rules:
+      # ── Staleness: last successful cycle older than 2x the base cadence ─────
+      # base tick = 60s, so a HEALTHY poller advances the gauge at least every
+      # 60s; `> 120` = two missed ticks (2x the 60s cadence), matching
+      # PRD-0113 §13's "2x cadence" rule of thumb. `for: 1m` adds a one-tick
+      # grace so a single slow cycle (e.g. a large /price/batch fan-out) does
+      # not page; a genuine stall persists well past it.
+      - alert: AlertRulePollerStalled
+        expr: time() - s10_rule_poller_last_success_timestamp_seconds > 120
+        for: 1m
+        labels:
+          severity: warning
+          subsystem: alert
+        annotations:
+          summary: "alert-rule-poller has not completed a cycle in > 2x cadence"
+          description: >
+            s10_rule_poller_last_success_timestamp_seconds is older than 120s
+            (2x the 60s base tick). The standing-rule poller is not evaluating
+            rules — price/news/fundamental alerts have stopped firing. Check the
+            alert-rule-poller container (crash-loop / OOM), the
+            s10_rule_poller_runs_total{outcome="timeout|error"} counters, and
+            S3/S6/DB reachability.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/AlertRulePollerStalled.md"
+
+      # ── Absent: the poller never came up / scrape target unreachable ───────
+      # Distinct from a frozen-but-present gauge above: `time() - gauge` produces
+      # no series when the gauge itself is absent, so a never-started poller would
+      # otherwise be invisible.
+      - alert: AlertRulePollerDown
+        expr: absent(s10_rule_poller_last_success_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: alert
+        annotations:
+          summary: "alert-rule-poller metrics absent (process down or unscraped)"
+          description: >
+            No s10_rule_poller_last_success_timestamp_seconds series for 5 min.
+            The alert-rule-poller process is down or the Prometheus scrape job
+            `alert-rule-poller` (:9101) cannot reach it. No standing rules are
+            being evaluated.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/AlertRulePollerStalled.md"
+
+      # ── Sustained evaluator errors (loop alive, a rule type mis-reading) ───
+      # Fail-soft per evaluator means the loop survives an upstream failure, so a
+      # rising error rate is the only signal that a specific rule type is silently
+      # not firing.
+      - alert: AlertRuleEvaluationErrors
+        expr: sum(rate(s10_rule_evaluations_total{outcome="error"}[10m])) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+          subsystem: alert
+        annotations:
+          summary: "Sustained alert-rule evaluation errors"
+          description: >
+            s10_rule_evaluations_total{outcome="error"} is rising
+            (> 0.2/s over 10m for 15m). One or more evaluators is failing to
+            read its upstream (S3 /price/batch, S6 rollup/trending, or S7
+            paths/between). Rules of that type are silently not firing — check
+            the per-rule_type breakdown on the alert-rule-engine dashboard.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/AlertRulePollerStalled.md"
