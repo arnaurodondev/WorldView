@@ -7,9 +7,10 @@
  *   2. Values format through the shared formatters (compact currency,
  *      signed percent, ratio) — spot-checked per category.
  *   3. Nulls render the em-dash placeholder, never "0" or blank.
- *   4. Colour intent matches the DenseMetricsGrid thresholds (P/E < 20 →
- *      positive; negative margin → negative) so strip and grid never
- *      disagree about the same metric on one screen.
+ *   4. Colour semantics (UI roadmap 2026-06-19 item #1): teal/red are reserved
+ *      for DIRECTIONAL values only (REV YOY growth, FCF sign). Non-directional
+ *      LEVELS — P/E, ROE, NET MGN, D/E — render NEUTRAL (no bull/bear colour),
+ *      matching the neutralised DenseMetricsGrid so the two never disagree.
  */
 
 import { describe, it, expect } from "vitest";
@@ -78,11 +79,21 @@ describe("KeyRatioStrip", () => {
     expect(screen.getAllByText("—")).toHaveLength(12);
   });
 
-  it("colour intent agrees with the grid thresholds", () => {
+  it("reserves teal/red for DIRECTIONAL values; levels are neutral (item #1)", () => {
     render(<KeyRatioStrip fundamentals={FUNDAMENTALS} snapshot={SNAPSHOT} />);
-    // Cheap P/E (18.4 < 20) → positive token.
-    expect(screen.getByText("18.40x").className).toContain("text-positive");
-    // Negative net margin → negative token.
-    expect(screen.getByText("-5.00%").className).toContain("text-negative");
+    // P/E is a non-directional valuation LEVEL → neutral (NOT teal/red).
+    // A "cheap" P/E being green miscommunicates: green must mean "moved up".
+    const pe = screen.getByText("18.40x").className;
+    expect(pe).not.toContain("text-positive");
+    expect(pe).not.toContain("text-negative");
+    // Net margin is a quality LEVEL → neutral. The unsigned formatter drops the
+    // gratuitous "+" prefix but a genuinely negative margin keeps its "-"
+    // (the minus is part of the number, not a directional delta marker), and it
+    // is NOT painted red — colour is reserved for directional moves.
+    const netMgn = screen.getByText("-5.00%").className;
+    expect(netMgn).not.toContain("text-negative");
+    expect(netMgn).not.toContain("text-positive");
+    // REV YOY is DIRECTIONAL (rate-of-change) → keeps the positive token.
+    expect(screen.getByText("+6.20%").className).toContain("text-positive");
   });
 });

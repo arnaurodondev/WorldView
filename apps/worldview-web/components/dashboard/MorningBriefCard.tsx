@@ -56,6 +56,13 @@ import remarkGfm from "remark-gfm";
 // needs to decide WHEN to show the structured view (sections non-empty) vs the
 // markdown fallback (sections empty or absent).
 import { StructuredBrief } from "@/components/brief/StructuredBrief";
+// Roadmap 2026-06-19 Top-8 #8 / C3 ("Cited, structured Morning Briefing"):
+// promote the COLLAPSED view from a prose blob to a scannable, cited catalyst
+// preview when the backend parsed the brief into `sections`. The preview shows
+// the top sections' catalyst bullets each with inline source chips + a
+// best-effort affected-ticker pill. When `sections` is empty (the live v4.x
+// reality) the card keeps the prose summary fallback below.
+import { BriefCatalystPreview } from "@/components/dashboard/BriefCatalystPreview";
 // PLAN-0066 Wave F: diff badge (amber pill), "Discuss in Chat" button (hook),
 // and brief-level rating widget all added to the card.
 import { BriefDiffBadge } from "@/features/dashboard/components/BriefDiffBadge";
@@ -122,6 +129,18 @@ import type { BriefingResponse, BriefCitation, BriefingCitation } from "@/types/
 
 /** Brief older than 12h shows a stale badge in the header */
 const STALE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Freshness thresholds for the header status dot (roadmap #8: "a subtle
+ * freshness indicator"). The dot encodes how recently the brief was generated:
+ *   - FRESH (< 4h)   → positive/green: today's brief, current.
+ *   - AGING (4h-12h) → warning/amber: still today's but several hours old.
+ *   - STALE (> 12h)  → negative/red: matches the existing STALE_MS "stale"
+ *     badge so the dot and the badge agree.
+ * WHY a static dot (no animation): DESIGN_SYSTEM.md §15.11 — status dots never
+ * pulse (Bloomberg convention); color alone encodes freshness.
+ */
+const FRESH_MS = 4 * 60 * 60 * 1000;
 
 /**
  * Maximum number of "Top Stories" chips rendered below the summary.
@@ -447,7 +466,22 @@ export function MorningBriefCard() {
 
   // ── Content rendering ──────────────────────────────────────────────────────
   const generatedAt = new Date(brief.generated_at);
-  const isStale = Date.now() - generatedAt.getTime() > STALE_MS;
+  const ageMs = Date.now() - generatedAt.getTime();
+  const isStale = ageMs > STALE_MS;
+
+  // Roadmap #8 freshness indicator: a single static dot whose color encodes
+  // how old the brief is. The three tiers agree with the existing "stale"
+  // badge (>12h) so the dot and badge never contradict each other.
+  // WHY Tailwind token classes (text-positive / text-warning / text-negative)
+  // and NOT inline `hsl(var(--positive))`: globals.css defines the semantic
+  // colors only as Tailwind utilities; an inline `var()` compiles but paints
+  // nothing (DESIGN_SYSTEM.md §F-VISUAL-001 / the "no-paint" bug class).
+  const freshness: { dotClass: string; label: string } =
+    ageMs <= FRESH_MS
+      ? { dotClass: "text-positive", label: "Fresh — generated within 4h" }
+      : ageMs <= STALE_MS
+        ? { dotClass: "text-warning", label: "Aging — generated 4-12h ago" }
+        : { dotClass: "text-negative", label: "Stale — generated over 12h ago" };
   // WHY date-only format: the header is one compact line; "2026-04-28 07:14 UTC"
   // gives the trader both the date and generation time at a glance.
   const ts = generatedAt.toISOString().slice(0, 16).replace("T", " ");
@@ -509,6 +543,23 @@ export function MorningBriefCard() {
     .filter((c) => c.source_type === "article" && c.url)
     .slice(0, TOP_STORIES_LIMIT);
 
+  // ── Structured collapsed preview gating (roadmap #8 / C3) ──────────────────
+  // WHY: the collapsed view defaulted to a prose blob (summary_paragraph). When
+  // the backend parsed the brief into `sections` we instead render a scannable,
+  // CITED catalyst preview (BriefCatalystPreview) so the structure + sources
+  // are visible WITHOUT clicking "Read more". When `sections` is empty (the
+  // live v4.x reality, where the whole body arrives as `narrative`) we keep the
+  // prose fallback. Filter REMOVED placeholder sections the LLM occasionally
+  // emits — same guard the expanded StructuredBrief path uses.
+  const previewSections =
+    brief.sections?.filter((s) => !s.title?.toUpperCase().includes("REMOVED")) ?? [];
+  // Render the structured preview only when at least one section carries a
+  // bullet — otherwise BriefCatalystPreview would return null and we'd show an
+  // empty card body. The lead/summary line still renders above the preview.
+  const useStructuredCollapsed = previewSections.some(
+    (s) => (s.bullets?.length ?? 0) > 0,
+  );
+
   return (
     // WHY flex flex-col h-full: fills Row 1 grid cell; header is fixed h-5,
     // text area fills the rest with overflow-auto for long briefs.
@@ -535,7 +586,17 @@ export function MorningBriefCard() {
             (R19 forbids deleting/weakening tests). The label also
             disambiguates the timestamp from "current UTC time" so users
             don't confuse the brief's mtime with wall-clock time. */}
-        <span className="min-w-[120px] max-w-[140px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground-dim">
+        <span className="flex min-w-[120px] max-w-[148px] shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground-dim">
+          {/* Roadmap #8 freshness dot — static (never pulses); color encodes
+              how recently the brief was generated. title= gives the human
+              tier label on hover; aria-label exposes it to assistive tech. */}
+          <span
+            className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current ${freshness.dotClass}`}
+            title={freshness.label}
+            aria-label={freshness.label}
+            role="img"
+            data-testid="brief-freshness-dot"
+          />
           Generated {ts} UTC
         </span>
 
@@ -630,37 +691,79 @@ export function MorningBriefCard() {
             line-height, and tight paragraph margins matching Bloomberg briefing panels. */}
         <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mb-0.5 [&_h3]:text-[10px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-[0.06em] [&_h3]:text-muted-foreground [&_li]:leading-[1.4] [&_li]:text-[11px] [&_p]:mb-1 [&_p]:leading-[1.4] [&_strong]:font-semibold [&_ul]:mb-1 [&_ul]:pl-3">
           {!expanded ? (
-            // ── Collapsed view: brief.summary rendered at full readability ──
-            // WHY no line-clamp when summary is present: the v2.2 prompt
-            // already constrains the summary to 1-2 sentences, so clamping is
-            // redundant and risks hiding the second sentence. We only apply
-            // line-clamp-3 in the legacy fallback branch (no summary field).
-            <div
-              className={
-                usingSummaryFallback
-                  ? "line-clamp-3 [&>*:first-child]:mt-0"
-                  : "[&>*:first-child]:mt-0"
-              }
-            >
-              <ReactMarkdown
-                remarkPlugins={REMARK_PLUGINS}
-                components={{
-                  a: ({ href, children }) => (
-                    <Link href={href ?? "#"} className="text-primary">
-                      {children}
-                    </Link>
-                  ),
-                  // WHY render headers inline in the collapsed view: any
-                  // residual ## / ### headings the LLM emits would otherwise
-                  // create awkward block breaks in a 1-2 sentence summary.
-                  h1: ({ children }) => <span className="font-semibold">{children} </span>,
-                  h2: ({ children }) => <span className="font-semibold">{children} </span>,
-                  h3: ({ children }) => <span className="font-medium">{children} </span>,
-                }}
+            // ── Collapsed view ─────────────────────────────────────────────
+            // Roadmap #8 / C3: when the backend parsed the brief into
+            // `sections`, render a STRUCTURED, CITED catalyst preview — the top
+            // sections' bullets each with inline source chips + a best-effort
+            // affected-ticker pill — instead of the prose blob. The 1-2
+            // sentence lead/summary still renders above it for the 10-second
+            // synthesis. When sections are empty (the live v4.x reality, whole
+            // body in `narrative`) we keep the original prose-markdown path.
+            useStructuredCollapsed ? (
+              <div className="flex flex-col gap-1.5 [&>*:first-child]:mt-0">
+                {/* Lead / summary synthesis line above the catalysts. WHY
+                    ReactMarkdown: collapsedSource carries entity deep-links
+                    produced by linkifyEntities() (markdown anchors). */}
+                {collapsedSource && (
+                  <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                    <ReactMarkdown
+                      remarkPlugins={REMARK_PLUGINS}
+                      components={{
+                        a: ({ href, children }) => (
+                          <Link href={href ?? "#"} className="text-primary">
+                            {children}
+                          </Link>
+                        ),
+                        // Collapse residual headings to inline emphasis so a
+                        // stray ## doesn't break the 1-2 sentence synthesis.
+                        h1: ({ children }) => <span className="font-semibold">{children} </span>,
+                        h2: ({ children }) => <span className="font-semibold">{children} </span>,
+                        h3: ({ children }) => <span className="font-medium">{children} </span>,
+                      }}
+                    >
+                      {collapsedSource}
+                    </ReactMarkdown>
+                  </div>
+                )}
+                {/* The structured, cited catalyst preview. */}
+                <BriefCatalystPreview
+                  sections={previewSections}
+                  mentions={brief.entity_mentions ?? []}
+                />
+              </div>
+            ) : (
+              // ── Collapsed prose fallback (sections empty) ────────────────
+              // WHY no line-clamp when summary is present: the v2.2 prompt
+              // already constrains the summary to 1-2 sentences, so clamping is
+              // redundant and risks hiding the second sentence. We only apply
+              // line-clamp-3 in the legacy fallback branch (no summary field).
+              <div
+                className={
+                  usingSummaryFallback
+                    ? "line-clamp-3 [&>*:first-child]:mt-0"
+                    : "[&>*:first-child]:mt-0"
+                }
               >
-                {collapsedSource}
-              </ReactMarkdown>
-            </div>
+                <ReactMarkdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  components={{
+                    a: ({ href, children }) => (
+                      <Link href={href ?? "#"} className="text-primary">
+                        {children}
+                      </Link>
+                    ),
+                    // WHY render headers inline in the collapsed view: any
+                    // residual ## / ### headings the LLM emits would otherwise
+                    // create awkward block breaks in a 1-2 sentence summary.
+                    h1: ({ children }) => <span className="font-semibold">{children} </span>,
+                    h2: ({ children }) => <span className="font-semibold">{children} </span>,
+                    h3: ({ children }) => <span className="font-medium">{children} </span>,
+                  }}
+                >
+                  {collapsedSource}
+                </ReactMarkdown>
+              </div>
+            )
           ) : brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
             // WHY render the summary above the structured view: the v4.2+

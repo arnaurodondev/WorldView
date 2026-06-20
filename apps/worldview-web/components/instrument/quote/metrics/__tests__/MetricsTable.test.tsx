@@ -142,6 +142,30 @@ describe("MetricsTable", () => {
     expect(screen.queryByText("No analyst coverage")).not.toBeInTheDocument();
   });
 
+  // NEW (UI roadmap 2026-06-19 item #1): teal/red are reserved for DIRECTIONAL
+  // values. Non-directional LEVELS (P/E, ROE, net margin) render neutral; the
+  // directional growth row keeps its sign colour.
+  it("colours only DIRECTIONAL values; levels are neutral (item #1)", () => {
+    hookState.value = { ...hookState.value, fundamentals: FULL_FUNDAMENTALS };
+    render(<MetricsTable instrumentId="i-1" fundamentals={null} quote={QUOTE} />);
+
+    // P/E 35.47 was previously amber ("expensive") — now neutral. A coloured
+    // P/E miscommunicates: amber/red must mean a move, not a valuation opinion.
+    const pe = screen.getByText("35.47").className;
+    expect(pe).not.toContain("text-positive");
+    expect(pe).not.toContain("text-negative");
+    expect(pe).not.toContain("text-warning");
+
+    // ROE 141.47% (a quality level) is unsigned + neutral — no "+" and no teal.
+    const roe = screen.getByText("141.47%").className;
+    expect(roe).not.toContain("text-positive");
+    expect(roe).not.toContain("text-negative");
+
+    // REV GROWTH YOY +16.60% is DIRECTIONAL → keeps the positive token + "+".
+    const rev = screen.getByText("+16.60%").className;
+    expect(rev).toContain("text-positive");
+  });
+
   // NEW: hook data must WIN over the slim bundle prop (the rich shape carries
   // margins/consensus the 5-field prop lacks).
   it("prefers hook fundamentals over the slim prop seed", () => {

@@ -20,9 +20,11 @@
  *
  * ERROR / EMPTY HANDLING:
  *   - Pending: input + button disabled, button shows a spinner glyph.
- *   - Backend error: inline red message with the error text (DS §6.1).
- *   - Zero filters understood: a soft "couldn't interpret" hint (the query ran
- *     but produced no constraints) — we do NOT apply an empty screen silently.
+ *   - Backend error: a designed <ScreenerAlert variant="error"> callout with the
+ *     error text (roadmap #6b — was a bare red <p>, which read as a crash).
+ *   - Zero filters understood: a soft <ScreenerAlert variant="warning"> hint
+ *     (the query ran but produced no constraints) — we do NOT apply an empty
+ *     screen silently.
  */
 
 "use client";
@@ -33,6 +35,10 @@ import { useNlScreenerTranslate } from "@/hooks/useNlScreenerTranslate";
 import { nlFiltersToFilterState } from "@/features/screener/lib/build-filters";
 import type { FilterState } from "@/features/screener/lib/filter-state";
 import { cn } from "@/lib/utils";
+// #6b (roadmap A3): surface NL failures as a designed Alert callout instead of a
+// bare line of red text. ScreenerAlert is a screener-local bordered/icon-led
+// component (no shared components/ui Alert exists).
+import { ScreenerAlert } from "@/components/screener/ScreenerAlert";
 
 export interface NlScreenerSearchProps {
   /**
@@ -115,19 +121,21 @@ export function NlScreenerSearch({ onApply }: NlScreenerSearchProps) {
         </button>
       </div>
 
-      {/* Error: backend failed (network / 5xx / LLM error). */}
+      {/* Error: backend failed (network / 5xx / LLM error). Wrapped in a
+          designed Alert (bordered + icon) so it reads as a handled state, not a
+          raw stack-trace tell (roadmap #6b). */}
       {translate.isError && (
-        <p role="alert" className="px-1 text-[10px] font-mono text-negative">
+        <ScreenerAlert variant="error">
           Couldn&apos;t translate that screen — {translate.error.message}
-        </p>
+        </ScreenerAlert>
       )}
 
       {/* Soft hint: the query ran but no filters were extracted. */}
       {noConstraints && !translate.isError && (
-        <p role="status" className="px-1 text-[10px] font-mono text-warning">
+        <ScreenerAlert variant="warning">
           Couldn&apos;t interpret that into filters — try naming a metric (P/E,
           market cap, dividend yield, sector…).
-        </p>
+        </ScreenerAlert>
       )}
 
       {/* Explanation echo (if the backend returned one) — builds trust by showing

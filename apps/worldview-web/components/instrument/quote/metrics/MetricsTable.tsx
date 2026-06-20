@@ -35,7 +35,7 @@ import { useMetricsTableData } from "@/components/instrument/hooks/useMetricsTab
 import { MetricRow, type MetricValueColor } from "./MetricRow";
 import { WeekRangeBar } from "./WeekRangeBar";
 import { AnalystMiniBar } from "./AnalystMiniBar";
-import { formatMarketCap, formatPercent, formatPrice, formatRatio, formatVolume } from "@/lib/utils";
+import { formatMarketCap, formatPercent, formatPercentUnsigned, formatPrice, formatRatio, formatVolume } from "@/lib/utils";
 import type { Fundamentals, Quote, ShareStatisticsData, TechnicalsData } from "@/types/api";
 
 interface MetricsTableProps {
@@ -49,42 +49,35 @@ interface MetricsTableProps {
   quote: Quote | null;
 }
 
-// ── Threshold colour helpers (PRD-0088 FR-10) ──────────────────────────────
-// WHY tiny pure helpers: each row's threshold logic lives in ONE place so the
-// spec maps 1:1 to source. Null inputs return "default" — we never colour
-// missing data (that would mis-signal).
-// NOTE on percentages: gross_margin/roe/dividend_yield/short_percent are
-// stored as decimals (0.15 = 15%), so thresholds use decimal form too.
+// ── Colour helpers ─────────────────────────────────────────────────────────
+//
+// COLOUR SEMANTICS (UI roadmap 2026-06-19 item #1 / A1): teal (positive) and
+// red (negative) are reserved STRICTLY for *directional* values — things that
+// genuinely move up or down: price change, returns, P&L, and rate-of-change
+// (growth YoY). They are NOT applied to non-directional *levels* (valuation
+// multiples like P/E, profitability levels like margins / ROE / ROA, leverage
+// ratios like D/E, risk levels like Beta / Short %, ownership %). Painting a
+// P/E red ("expensive") or a margin green ("good") miscommunicates: those are
+// editorial judgements, not directions, and they dilute the red/green that
+// matters for actual moves. Non-directional metrics now render in neutral
+// `text-foreground` (the MetricRow/MetricValue "default" colour). Peer-percentile
+// conditional formatting (roadmap B3) is the correct future home for "cheap vs
+// rich" context — not bull/bear colour.
+//
+// WHY pure helpers remain: the directional ones still benefit from one place
+// each. Null inputs return "default" — we never colour missing data.
 
-/** FR-10 P/E: amber >30, red >50. */
-const peColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v > 50 ? "negative" : v > 30 ? "amber" : "default";
-
-/** FR-10 ROE: green >15%, red <0. */
-const roeColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v < 0 ? "negative" : v > 0.15 ? "positive" : "default";
-
-/** FR-10 Beta: amber >1.5, red >2. */
-const betaColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v > 2 ? "negative" : v > 1.5 ? "amber" : "default";
-
-/** FR-10 Debt/Equity: amber >1x, red >2x. */
-const debtColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v > 2 ? "negative" : v > 1 ? "amber" : "default";
-
-/** FR-10 Short %: amber >10%, red >20% (decimal). */
-const shortColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v > 0.2 ? "negative" : v > 0.1 ? "amber" : "default";
-
-/** FR-10 Net margin: green >20%, red <0 (decimal). */
-const netMarginColor = (v: number | null | undefined): MetricValueColor =>
-  v == null ? "default" : v < 0 ? "negative" : v > 0.2 ? "positive" : "default";
-
-/** Sign colour — EPS/ROA/growth positive/negative split. */
+/**
+ * Sign colour — ONLY for directional values (a positive value means "up/grew",
+ * a negative value means "down/shrank"). Used for growth-YoY rates here.
+ */
 const signColor = (v: number | null | undefined): MetricValueColor =>
   v == null ? "default" : v >= 0 ? "positive" : "negative";
 
-/** Price-vs-MA trend: green when current >= MA (uptrend), red when below. */
+/**
+ * Price-vs-MA trend: green when current >= MA (uptrend), red when below.
+ * Directional: it encodes whether price is above or below its moving average.
+ */
 const trendColor = (p: number | null, m: number | null): MetricValueColor =>
   p == null || m == null ? "default" : p >= m ? "positive" : "negative";
 
@@ -157,9 +150,13 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
       {/* ── VALUATION ──────────────────────────────────────────────────────── */}
       <SectionHeader label="Valuation" />
       <MetricRow label="MARKET CAP" value={formatMarketCap(fundamentals?.market_cap ?? null)} />
-      <MetricRow label="P/E" value={formatRatio(fundamentals?.pe_ratio ?? null, "")} color={peColor(fundamentals?.pe_ratio)} />
-      <MetricRow label="FWD P/E" value={formatRatio(fundamentals?.forward_pe ?? null, "")} color={peColor(fundamentals?.forward_pe)} />
-      <MetricRow label="EPS TTM" value={formatPrice(snapshot?.eps_ttm ?? null)} color={signColor(snapshot?.eps_ttm)} />
+      {/* P/E + FWD P/E are non-directional VALUATION levels → neutral (item #1).
+          A red P/E read as "this looks broken"; "cheap vs rich" context belongs
+          in peer-percentile heat (roadmap B3), not bull/bear colour. */}
+      <MetricRow label="P/E" value={formatRatio(fundamentals?.pe_ratio ?? null, "")} />
+      <MetricRow label="FWD P/E" value={formatRatio(fundamentals?.forward_pe ?? null, "")} />
+      {/* EPS TTM is an absolute level (a $ amount), not a delta → neutral. */}
+      <MetricRow label="EPS TTM" value={formatPrice(snapshot?.eps_ttm ?? null)} />
       <MetricRow label="P/S" value={formatRatio(fundamentals?.price_to_sales ?? null, "")} />
       <MetricRow label="P/B" value={formatRatio(fundamentals?.price_to_book ?? null, "")} />
       <MetricRow label="EV/EBITDA" value={formatRatio(fundamentals?.ev_to_ebitda ?? null, "")} />
@@ -167,24 +164,29 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
       {/* ── PROFITABILITY (incl. growth — same analytical question: "is the
              business getting better?") ──────────────────────────────────────── */}
       <SectionHeader label="Profitability" />
-      <MetricRow label="GROSS MARGIN" value={formatPercent(fundamentals?.gross_margin ?? null)} />
-      <MetricRow label="OPER MARGIN" value={formatPercent(fundamentals?.operating_margin ?? null)} />
-      <MetricRow label="NET MARGIN" value={formatPercent(fundamentals?.net_margin ?? null)} color={netMarginColor(fundamentals?.net_margin)} />
-      <MetricRow label="ROE" value={formatPercent(fundamentals?.roe ?? null)} color={roeColor(fundamentals?.roe)} />
-      <MetricRow label="ROA" value={formatPercent(fundamentals?.roa ?? null)} color={signColor(fundamentals?.roa)} />
-      {/* Wave-2: growth rows — the Fundamentals shape always carried these
-          (QuarterlyRevenueGrowthYOY / QuarterlyEarningsGrowthYOY) but the old
-          table never rendered them. Decimal form → formatPercent. */}
+      {/* Margins / ROE / ROA are non-directional QUALITY levels → neutral, and
+          formatted UNSIGNED (a "+" prefix is for deltas, not absolute levels —
+          item #1 + the F-3 sign-on-levels fix). */}
+      <MetricRow label="GROSS MARGIN" value={formatPercentUnsigned(fundamentals?.gross_margin ?? null)} />
+      <MetricRow label="OPER MARGIN" value={formatPercentUnsigned(fundamentals?.operating_margin ?? null)} />
+      <MetricRow label="NET MARGIN" value={formatPercentUnsigned(fundamentals?.net_margin ?? null)} />
+      <MetricRow label="ROE" value={formatPercentUnsigned(fundamentals?.roe ?? null)} />
+      <MetricRow label="ROA" value={formatPercentUnsigned(fundamentals?.roa ?? null)} />
+      {/* Wave-2: growth rows — these ARE directional (a rate-of-change over a
+          year: positive = grew, negative = shrank). They keep teal/red + the
+          signed formatter so the +/- and the colour reinforce the direction. */}
       <MetricRow label="REV GROWTH YOY" value={formatPercent(fundamentals?.revenue_growth_yoy ?? null)} color={signColor(fundamentals?.revenue_growth_yoy)} />
       <MetricRow label="EPS GROWTH YOY" value={formatPercent(fundamentals?.earnings_growth_yoy ?? null)} color={signColor(fundamentals?.earnings_growth_yoy)} />
 
       {/* ── LEVERAGE & YIELD ──────────────────────────────────────────────── */}
       <SectionHeader label="Leverage & Yield" />
-      <MetricRow label="DEBT/EQUITY" value={formatRatio(fundamentals?.debt_to_equity ?? null)} color={debtColor(fundamentals?.debt_to_equity)} />
+      {/* Leverage / yield are non-directional levels → neutral, unsigned %. */}
+      <MetricRow label="DEBT/EQUITY" value={formatRatio(fundamentals?.debt_to_equity ?? null)} />
       <MetricRow label="CURRENT RATIO" value={formatRatio(fundamentals?.current_ratio ?? null)} />
-      <MetricRow label="DIV YIELD" value={formatPercent(fundamentals?.dividend_yield ?? null)} />
-      <MetricRow label="PAYOUT RATIO" value={formatPercent(fundamentals?.payout_ratio ?? null)} />
-      <MetricRow label="BETA" value={snapshot?.beta != null ? snapshot.beta.toFixed(2) : null} color={betaColor(snapshot?.beta)} />
+      <MetricRow label="DIV YIELD" value={formatPercentUnsigned(fundamentals?.dividend_yield ?? null)} />
+      <MetricRow label="PAYOUT RATIO" value={formatPercentUnsigned(fundamentals?.payout_ratio ?? null)} />
+      {/* Beta is a risk LEVEL, not a direction → neutral. */}
+      <MetricRow label="BETA" value={snapshot?.beta != null ? snapshot.beta.toFixed(2) : null} />
 
       {/* ── 52W RANGE — two rows + the position bar ───────────────────────── */}
       <SectionHeader label="52-Week Range" />
@@ -195,11 +197,13 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
       {/* ── OWNERSHIP ─────────────────────────────────────────────────────── */}
       <SectionHeader label="Ownership" />
       <MetricRow label="AVG VOL 30D" value={formatVolume(snapshot?.avg_volume_30d ?? null)} />
-      {/* SHORT %: ShortPercent is decimal-form per EODHD — feed directly. */}
-      <MetricRow label="SHORT %" value={formatPercent(shortPct)} color={shortColor(shortPct)} />
-      {/* INST/INSIDER OWN: normalized above (raw% ÷ 100) before formatPercent. */}
-      <MetricRow label="INST OWN" value={formatPercent(pctInstitutions)} />
-      <MetricRow label="INSIDER OWN" value={formatPercent(pctInsiders)} />
+      {/* SHORT % / ownership %s are non-directional LEVELS → neutral, unsigned
+          (an ownership % is an absolute level — a "+" would mis-read as a move,
+          F-3). SHORT %: ShortPercent is decimal-form per EODHD — feed directly. */}
+      <MetricRow label="SHORT %" value={formatPercentUnsigned(shortPct)} />
+      {/* INST/INSIDER OWN: normalized above (raw% ÷ 100) before formatting. */}
+      <MetricRow label="INST OWN" value={formatPercentUnsigned(pctInstitutions)} />
+      <MetricRow label="INSIDER OWN" value={formatPercentUnsigned(pctInsiders)} />
 
       {/* ── TECHNICALS — MA values with ↑/↓ vs current price ──────────────── */}
       <SectionHeader label="Technicals" />

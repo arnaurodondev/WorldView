@@ -30,6 +30,12 @@ import type { ScreenerResult, OHLCVBar } from "@/types/api";
 import type { ScreenerRowEnriched } from "@/lib/api/screener";
 import { HeatCell } from "./HeatCell";
 import { MiniChart } from "./MiniChart";
+// #5 (roadmap B3): peer-percentile conditional formatting. collectColumnValues
+// ranks a cell against the other loaded rows (post-filter); peerHeatStyle turns
+// that rank into a subtle single-hue background wash (only when the user has
+// toggled peer-heat ON — see ScreenerHeader). Reused by the valuation/quality
+// level renderers below.
+import { collectColumnValues, peerHeatStyle } from "./percentile-heat";
 import { cn } from "@/lib/utils";
 // HF-10: formatPrice for locale-grouped USD output ("$4,892.11" not "$4892.11").
 import { formatCompact, formatPrice } from "@/lib/format";
@@ -77,6 +83,48 @@ function formatCap(val: number | null | undefined): string {
   return formatCompact(val, { adaptive: true, maxDecimals: 1 });
 }
 
+/**
+ * signedZeroPct — number-hygiene helper (roadmap #6 / A2) for DIRECTIONAL
+ * percent columns (CHG%, revenue YoY): formats a decimal as a signed percent
+ * but NEUTRALISES zero.
+ *
+ * THE BUG IT FIXES: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` prints "+0.00%"
+ * for an exactly-flat value, and — worse — a tiny negative like -0.0001 rounds
+ * to "0.00" while `isNeg` stays true, so it renders "-0.00%" (a meaningless
+ * negative zero) tinted red. A sign belongs on a DIRECTION; a value that
+ * rounds to zero has none.
+ *
+ * CONTRACT:
+ *   - rounds to 0 at the given precision  → "0.00%"  (no sign), neutral
+ *   - strictly positive after rounding    → "+1.23%"
+ *   - strictly negative after rounding     → "-1.23%" (hyphen-minus, matching
+ *                                            the existing formatReturnPct
+ *                                            convention the tests pin)
+ *
+ * Returns BOTH the text and a `direction` so the caller can colour the cell
+ * consistently (zero ⇒ neutral, never red/green).
+ *
+ * NOTE: this is deliberately SEPARATE from `formatReturnPct` above — that
+ * function's "+0.0%" output is locked by returns-columns.test.tsx (it is the
+ * documented contract for the 8 RTN columns) and must not change. This helper
+ * is for the inline CHG%/REV-YoY renderers that had no such test lock.
+ */
+export function signedZeroPct(
+  v: number,
+  decimals = 2,
+): { text: string; direction: "up" | "down" | "flat" } {
+  const pct = v * 100;
+  const rounded = Number(pct.toFixed(decimals));
+  // Compare the ROUNDED value to zero so "-0.0001 → 0.00" is treated as flat,
+  // not negative (this is the negative-zero fix).
+  if (rounded === 0) return { text: `${(0).toFixed(decimals)}%`, direction: "flat" };
+  const sign = rounded > 0 ? "+" : "-";
+  return {
+    text: `${sign}${Math.abs(pct).toFixed(decimals)}%`,
+    direction: rounded > 0 ? "up" : "down",
+  };
+}
+
 // ── Column pixel widths ───────────────────────────────────────────────────────
 
 export const SCREENER_AG_COL_WIDTHS: Record<string, number> = {
@@ -120,6 +168,30 @@ export const SCREENER_AG_COL_WIDTHS: Record<string, number> = {
   briefScore: 68,
 };
 
+// ── Peer-heat helper (roadmap #5) ─────────────────────────────────────────────
+
+/**
+ * heatStyleFor — compute the peer-percentile background style for one cell.
+ *
+ * Pulls the column's peer values out of the grid (post-filter, via params.api),
+ * ranks `value` against them, and returns the inline style (or {} when peer-heat
+ * is off / no peers / below the visible band). Co-located here so the renderers
+ * below stay one-liners.
+ *
+ * @param params    the AG Grid ICellRendererParams (gives us `api`)
+ * @param value     the THIS-ROW value to rank (already unit-normalised by caller)
+ * @param selector  derives the comparable value from any row (must mirror the
+ *                  caller's own derivation so ranked === displayed)
+ */
+function heatStyleFor(
+  params: ICellRendererParams<ScreenerResult>,
+  value: number | null | undefined,
+  selector: (row: ScreenerResult) => number | null | undefined,
+): React.CSSProperties {
+  const peers = collectColumnValues<ScreenerResult>(params.api, selector);
+  return peerHeatStyle(value, peers);
+}
+
 // ── Cell renderer components ──────────────────────────────────────────────────
 // Each is a plain React function. AG Grid calls them with ICellRendererParams.
 
@@ -161,9 +233,12 @@ function ChangeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>
     );
   }
-  const pct = v * 100;
-  const isPos = pct > 0;
-  const isNeg = pct < 0;
+  // #6 number hygiene: signedZeroPct neutralises "+0.00%"/"-0.00%" — a value
+  // that rounds to flat gets no sign and a neutral (muted) tint, so the
+  // directional teal/red pill only fires on a genuine up/down move.
+  const { text, direction } = signedZeroPct(v, 2);
+  const isPos = direction === "up";
+  const isNeg = direction === "down";
   return (
     <span
       className={cn(
@@ -173,8 +248,7 @@ function ChangeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
         !isPos && !isNeg && "text-muted-foreground",
       )}
     >
-      {pct >= 0 ? "+" : ""}
-      {pct.toFixed(2)}%
+      {text}
     </span>
   );
 }
@@ -187,10 +261,15 @@ function MarketCapCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   );
 }
 
-function PeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+function PeCellRenderer(params: ICellRendererParams<ScreenerResult>) {
+  const v = params.data?.pe_ratio;
+  // #5 peer-heat: P/E is the headline valuation column — peer-relative ranking
+  // ("cheaper than 80% of this cohort") is exactly the premium signal incumbents
+  // show. The wash is the right answer to the "low P/E shouldn't be red" problem.
+  const style = heatStyleFor(params, v, (r) => r.pe_ratio);
   return (
-    <span className="font-mono text-[11px] tabular-nums text-foreground">
-      {data?.pe_ratio != null ? data.pe_ratio.toFixed(1) : "—"}
+    <span className="font-mono text-[11px] tabular-nums text-foreground" style={style}>
+      {v != null ? v.toFixed(1) : "—"}
     </span>
   );
 }
@@ -426,34 +505,38 @@ function VolumeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
 // All follow the "10px mono right-aligned, toFixed(1) + % suffix" design spec
 // (docs/designs/0089/08-screener.md §3.4). Show "—" when value is null/undefined.
 
-function DivYieldCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+function DivYieldCellRenderer(params: ICellRendererParams<ScreenerResult>) {
   // dividend_yield stored as decimal (0.015 = 1.5%); display as "1.5%"
-  const v = data?.dividend_yield;
+  const v = params.data?.dividend_yield;
   if (v == null) {
     return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
   }
+  // #5 peer-heat: higher yield ranks brighter within the cohort.
+  const style = heatStyleFor(params, v, (r) => r.dividend_yield);
   return (
-    <span className="font-mono text-[10px] tabular-nums text-foreground">
+    <span className="font-mono text-[10px] tabular-nums text-foreground" style={style}>
       {(v * 100).toFixed(2)}%
     </span>
   );
 }
 
-function ForwardPeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
-  const v = data?.forward_pe;
+function ForwardPeCellRenderer(params: ICellRendererParams<ScreenerResult>) {
+  const v = params.data?.forward_pe;
   if (v == null) {
     return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
   }
+  // #5 peer-heat: same valuation-ranking rationale as trailing P/E.
+  const style = heatStyleFor(params, v, (r) => r.forward_pe);
   return (
-    <span className="font-mono text-[10px] tabular-nums text-foreground">
+    <span className="font-mono text-[10px] tabular-nums text-foreground" style={style}>
       {v.toFixed(1)}
     </span>
   );
 }
 
-function RoeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+function RoeCellRenderer(params: ICellRendererParams<ScreenerResult>) {
   // roe stored as decimal (0.15 = 15%); colour: green > 15%, red < 0%
-  const v = data?.roe;
+  const v = params.data?.roe;
   if (v == null) {
     return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
   }
@@ -462,12 +545,16 @@ function RoeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   // ROE < 0 = company is destroying value (losses).
   const isHigh = pct > 15;
   const isNeg = pct < 0;
+  // #5 peer-heat: ROE is a quality metric — higher ranks brighter. The wash is
+  // monochrome so it composes with (does not fight) the green/red threshold tint.
+  const style = heatStyleFor(params, v, (r) => r.roe);
   return (
     <span
       className={cn(
         "font-mono text-[10px] tabular-nums",
         isHigh ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
       )}
+      style={style}
     >
       {pct.toFixed(1)}%
     </span>
@@ -480,9 +567,11 @@ function RevenueGrowthCellRenderer({ data }: ICellRendererParams<ScreenerResult>
   if (v == null) {
     return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
   }
-  const pct = v * 100;
-  const isPos = pct > 0;
-  const isNeg = pct < 0;
+  // #6 number hygiene: REV YoY is directional, but a 0.0% growth must not show a
+  // "+" or a red "-0.0%". signedZeroPct neutralises the flat case.
+  const { text, direction } = signedZeroPct(v, 1);
+  const isPos = direction === "up";
+  const isNeg = direction === "down";
   return (
     <span
       className={cn(
@@ -490,15 +579,14 @@ function RevenueGrowthCellRenderer({ data }: ICellRendererParams<ScreenerResult>
         isPos ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
       )}
     >
-      {pct >= 0 ? "+" : ""}
-      {pct.toFixed(1)}%
+      {text}
     </span>
   );
 }
 
-function OpMarginCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+function OpMarginCellRenderer(params: ICellRendererParams<ScreenerResult>) {
   // operating_margin stored as decimal; green > 20% (design §3.4)
-  const v = data?.operating_margin;
+  const v = params.data?.operating_margin;
   if (v == null) {
     return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
   }
@@ -507,12 +595,15 @@ function OpMarginCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   // (Apple ~30%, Google ~26%). Below 20% is typical/competitive; below 0 = loss-making.
   const isHigh = pct > 20;
   const isNeg = pct < 0;
+  // #5 peer-heat: margin is a quality metric — higher ranks brighter.
+  const style = heatStyleFor(params, v, (r) => r.operating_margin);
   return (
     <span
       className={cn(
         "font-mono text-[10px] tabular-nums",
         isHigh ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
       )}
+      style={style}
     >
       {pct.toFixed(1)}%
     </span>
@@ -598,9 +689,9 @@ function AnalystTargetCellRenderer({ data }: ICellRendererParams<ScreenerResult>
  * The formula is (analyst_target_price / current_price) - 1. We need both
  * fields to be non-null; if either is missing we show "—".
  */
-function AnalystUpsideCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
-  const target = data?.analyst_target_price;
-  const price = data?.current_price;
+function AnalystUpsideCellRenderer(params: ICellRendererParams<ScreenerResult>) {
+  const target = params.data?.analyst_target_price;
+  const price = params.data?.current_price;
   if (target == null || price == null || price === 0) {
     return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
   }
@@ -608,12 +699,22 @@ function AnalystUpsideCellRenderer({ data }: ICellRendererParams<ScreenerResult>
   const pct = upside * 100;
   const isPos = pct > 0;
   const isNeg = pct < 0;
+  // #5 peer-heat: rank derived upside against the cohort. The selector mirrors
+  // the per-row derivation EXACTLY so the ranked value equals the displayed one
+  // (returns null when underivable → excluded from the peer set).
+  const style = heatStyleFor(params, upside, (r) => {
+    const t = r.analyst_target_price;
+    const p = r.current_price;
+    if (t == null || p == null || p === 0) return null;
+    return t / p - 1;
+  });
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums",
         isPos ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
       )}
+      style={style}
     >
       {formatReturnPct(upside)}
     </span>

@@ -128,6 +128,62 @@ describe("ContradictionsBlock expand/collapse (Round-1)", () => {
   });
 });
 
+describe("ContradictionsBlock live S7 detail shape (item #4)", () => {
+  // The live api-gateway PASSES THROUGH the S7 ContradictionDetailResponse
+  // verbatim: { claim_type, strength, detected_at, sides: [{ polarity,
+  // confidence, claim_text, evidence_date }, …] }. This is NOT the legacy flat
+  // claim_a/claim_b shape. The block must normalise it and surface claim-vs-
+  // counterclaim WITH per-side confidence + recency.
+  it("renders claims, confidence, claim_type pill and derived severity from the sides[] shape", async () => {
+    mockGetContradictions.mockResolvedValue({
+      entity_id: "ent-001",
+      contradictions: [
+        {
+          contradiction_id: "live-1",
+          claim_type: "guidance",
+          strength: 0.8, // >= 0.66 → HIGH severity (derived)
+          detected_at: "2026-06-15T08:00:00Z",
+          sides: [
+            {
+              polarity: "POSITIVE",
+              confidence: 0.92,
+              doc_id: "doc-a",
+              claim_text: "Q3 revenue will beat guidance",
+              evidence_date: "2026-06-14T08:00:00Z",
+            },
+            {
+              polarity: "NEGATIVE",
+              confidence: 0.71,
+              doc_id: "doc-b",
+              claim_text: "Supply-chain disruption will miss guidance",
+              evidence_date: "2026-06-13T08:00:00Z",
+            },
+          ],
+        },
+      ],
+    });
+    render(
+      <Wrapper>
+        <ContradictionsBlock entityId="ent-001" limit={5} showHeader />
+      </Wrapper>,
+    );
+    // Both opposing claims surface (claim_text from each side).
+    expect(await screen.findByText("Q3 revenue will beat guidance")).toBeInTheDocument();
+    expect(screen.getByText("Supply-chain disruption will miss guidance")).toBeInTheDocument();
+    // claim_type pill (uppercased).
+    expect(screen.getByText("GUIDANCE")).toBeInTheDocument();
+    // Severity derived from strength=0.8 → HIGH.
+    expect(screen.getByText("HIGH")).toBeInTheDocument();
+    // Per-side confidence surfaced as "· 92%" / "· 71%" (item #4 differentiator).
+    expect(screen.getByText(/92%/)).toBeInTheDocument();
+    expect(screen.getByText(/71%/)).toBeInTheDocument();
+    // Recency: detected date rendered (formatDate UTC → "Jun 15, 2026").
+    expect(screen.getByText("Jun 15, 2026")).toBeInTheDocument();
+    // Count badge reflects the single contradiction.
+    expect(screen.getByTestId("contradictions-count")).toHaveTextContent("1");
+  });
+});
+
 describe("ContradictionsBlock named empty state (Round-1)", () => {
   it("renders the icon+headline empty state with a 0 badge", async () => {
     mockGetContradictions.mockResolvedValue({

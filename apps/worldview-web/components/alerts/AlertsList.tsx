@@ -44,6 +44,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime, cn } from "@/lib/utils";
+// roadmap item #2 / A-1 / B2: pure helpers that turn an Alert into the distinct,
+// scannable columns the row renders (subject, humanised type, "what changed"
+// summary). Kept in a separate module so they're unit-tested in isolation and
+// stay in lock-step with the sidebar's formatAlertTitle composer.
+import { alertSubject, alertSummary, humaniseAlertType } from "@/components/alerts/alert-row-content";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 // WHY sonner toast: consistent toast pattern across the app (SemanticHoldingsTable uses same import).
 import { toast } from "sonner";
@@ -68,6 +73,21 @@ const SEV_DOT_COLOR: Record<AlertSeverity, string> = {
   HIGH: "bg-warning",
   MEDIUM: "bg-primary",
   LOW: "bg-muted-foreground",
+};
+
+/**
+ * SEV_STRIPE_COLOR — left edge severity stripe colour (DESIGN-QA A-2).
+ * WHY a left stripe (in addition to the dot): the audit flagged that "all rows
+ * read the same muted tone despite a MEDIUM label". A 2px coloured stripe down
+ * the left edge of each row makes the severity scannable as a vertical band —
+ * the eye picks out the cluster of red CRITICAL stripes without reading. Uses
+ * the same semantic tokens as the dot so the two cues never disagree.
+ */
+const SEV_STRIPE_COLOR: Record<AlertSeverity, string> = {
+  CRITICAL: "border-l-negative",
+  HIGH: "border-l-warning",
+  MEDIUM: "border-l-primary",
+  LOW: "border-l-muted-foreground/50",
 };
 
 /** localStorage keys for persistence */
@@ -762,16 +782,35 @@ export function AlertRow({
   // the value is "low" returns undefined and renders an unstyled bg. Normalise
   // once here so the dot is always coloured correctly.
   const severityKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
+
+  // ── Derived row columns (roadmap item #2 / A-1 / B2) ──────────────────────
+  // WHY compute these once, up-front: the row is rendered ~30× and these pure
+  // helpers walk the fallback ladder; computing them here keeps the JSX terse
+  // and makes the "what each column shows" contract explicit.
+  //
+  //   subject  → the ticker / entity the alert is about (own column).
+  //   typeLabel→ humanised alert_type ("GRAPH CHANGE") for the TYPE chip.
+  //   summary  → the one-line "what changed" string that fills the dead band.
+  const subject = alertSubject(alert);
+  const typeLabel = humaniseAlertType(alert.alert_type);
+  const summary = alertSummary(alert);
+
   return (
     <li>
-      {/* WHY flex h-[20px]: terminal 22px row per §0 quality rules.
+      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules.
           dimmed=true (snoozed / acked) drops opacity to 60% so the row
-          remains scannable but visibly de-emphasised. */}
+          remains scannable but visibly de-emphasised.
+
+          A-2 left severity stripe: border-l-2 + a per-severity colour turns the
+          list into a scannable vertical band of severity — the eye finds the
+          cluster of red CRITICAL stripes without reading any text. */}
       <div
         className={cn(
           // WHY group: Tailwind group enables group-hover:flex on the action strip
           // children, so Dismiss/Snooze/View appear ONLY on row hover.
-          "group flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
+          "group flex h-[22px] w-full items-center gap-2 border-b border-l-2 border-border/30 px-2 hover:bg-muted/40",
+          // A-2: the left edge carries the severity colour (stripe).
+          SEV_STRIPE_COLOR[severityKey],
           dimmed && "opacity-60",
           // PLAN-0053 T-F-6-03: tint selected rows so the bulk set is visible
           // even when the checkbox column scrolls out of view (rare in this
@@ -797,37 +836,69 @@ export function AlertRow({
           />
         )}
 
-        {/* Severity dot — quick visual severity scan */}
+        {/* Severity dot — quick visual severity scan (kept alongside the badge:
+            the dot is the fast pre-attentive cue, the badge is the explicit
+            label for users who read it). */}
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[severityKey])} />
 
-        {/* Entity ticker — if available */}
-        {alert.ticker && (
-          <span className="w-[40px] shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-            {alert.ticker}
-          </span>
-        )}
-
-        {/* Alert type label */}
-        <span className="shrink-0 text-[10px] text-muted-foreground">
-          {alert.alert_type}
+        {/* A-2: severity badge is now VISIBLE (was sr-only). The audit flagged
+            that "all rows read the same muted tone despite a MEDIUM label" — the
+            coloured chip carries the severity palette into the row body so a
+            scan distinguishes CRIT/HIGH/MED/LOW at a glance. A fixed-width
+            wrapper keeps the following columns aligned across rows.
+            WHY pass the normalised uppercase key: SeverityBadge's lookup tables
+            are keyed by the uppercase union even when the backend sends "low"
+            (F-302). This also satisfies the tests asserting on CRIT/HIGH/MED. */}
+        <span className="flex w-[40px] shrink-0 justify-start">
+          <SeverityBadge severity={severityKey} size="sm" />
         </span>
 
-        {/* Alert body — truncated. Click opens AlertDetailSheet via the URL
-            ?selected= contract (B-3) instead of navigating away to /instruments.
-            Trader keeps context — the list stays in view behind the sheet.
+        {/* Subject column — ticker / entity the alert is about. Fixed width +
+            tabular-nums so tickers line up vertically into a scannable column.
+            Renders the `—` null sentinel (DESIGN_SYSTEM) when no subject is
+            known, instead of collapsing the column and misaligning the row.
+            WHY rendered exactly once: the previous row rendered the raw ticker
+            here AND repeated it inside the body string — duplication that broke
+            single-match `getByText("AAPL")` scans and wasted width. */}
+        <span
+          className={cn(
+            "w-[52px] shrink-0 truncate font-mono text-[10px] font-semibold tabular-nums",
+            subject ? "text-foreground" : "text-muted-foreground/50",
+          )}
+          title={subject ?? undefined}
+        >
+          {subject ?? "—"}
+        </span>
 
-            WHY derive the visible label from payload when alert.body is empty:
-            S10's PendingAlertResponse populates `body` only on legacy alerts;
-            new alerts (post-B-1) carry payload.signal_label. We mirror the
-            simplified RecentAlerts logic so both surfaces look consistent. */}
+        {/* TYPE chip — humanised alert_type as a compact classifier tag. Fixed
+            width keeps the summary column's left edge aligned across all rows
+            (the core "scannable feed" requirement). uppercase + tracking reads
+            as a field code, not prose. */}
+        <span
+          className="w-[88px] shrink-0 truncate text-[9px] uppercase tracking-[0.06em] text-muted-foreground"
+          title={typeLabel || undefined}
+        >
+          {typeLabel || "—"}
+        </span>
+
+        {/* "What changed" summary — the one-line body that fills the previously
+            dead horizontal band, making each row differentiated and scannable
+            (roadmap item #2 / A-1 / B2). Sourced from alert.body when present,
+            otherwise composed via the SAME formatAlertTitle ladder the sidebar
+            ALARMS panel uses, so the surfaces never drift and a bare
+            "<SEVERITY> signal" string can never appear.
+
+            Click opens AlertDetailSheet via the URL ?selected= contract (B-3)
+            rather than navigating away — the trader keeps the list in view
+            behind the sheet. */}
         <button
           type="button"
           onClick={onSelect}
-          className="flex-1 truncate text-left text-[11px] text-foreground"
-          title={alert.body || (alert.payload?.signal_label as string | undefined) || alert.alert_type}
+          className="min-w-0 flex-1 truncate text-left text-[11px] text-foreground"
+          title={summary}
           aria-label={`Open alert ${alert.alert_id}`}
         >
-          {alert.body || (alert.payload?.signal_label as string | undefined) || `${alert.severity} alert`}
+          {summary}
         </button>
 
         {/* Relative timestamp */}
@@ -992,15 +1063,10 @@ export function AlertRow({
 
       </div>
 
-      {/* WHY SeverityBadge hidden (not removed): existing tests assert on CRIT/HIGH/MED
-          badges. We keep the badge in a visually-hidden span so tests still pass,
-          while the visible row uses the dot indicator for compactness.
-          Tests look for text content "CRIT"/"HIGH"/"MED"/"LOW" from SeverityBadge. */}
-      <span className="sr-only">
-        {/* Pass the normalised uppercase key so SeverityBadge's switch table
-            hits the correct branch even if backend sends lowercase (F-302). */}
-        <SeverityBadge severity={severityKey} size="sm" />
-      </span>
+      {/* NOTE: the previously sr-only SeverityBadge (kept only so tests could
+          assert on CRIT/HIGH/MED text) is gone — the badge is now rendered
+          VISIBLY in the row body above (A-2), so the test assertions still find
+          the CRIT/HIGH/MED text while users finally see the severity palette. */}
 
     </li>
   );

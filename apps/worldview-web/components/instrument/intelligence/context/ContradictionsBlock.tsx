@@ -61,21 +61,150 @@ function severityClass(s: "HIGH" | "MEDIUM" | "LOW"): string {
   return "text-muted-foreground bg-muted";
 }
 
+// ── Real-backend shape normalisation (UI roadmap 2026-06-19 item #4) ──────────
+//
+// WHY THIS EXISTS: the S7 contradiction-detection job (claim_repository
+// .fetch_contradictions_for_entity, recently fixed so recent_contradiction_count
+// now populates) returns a DETAIL shape that the api-gateway PASSES THROUGH
+// verbatim (intelligence.py is a pass-through proxy). That live shape is NOT the
+// flat `claim_a/claim_b/source_a/source_b/severity` the frontend `Contradiction`
+// type historically modelled — it is:
+//
+//   { claim_type, strength, detected_at,
+//     sides: [{ polarity, confidence, doc_id, claim_text, evidence_date }, …] }
+//
+// (see services/knowledge-graph .../api/schemas: ContradictionDetailResponse +
+// ContradictionSideResponse). Rendering the old flat fields against the new
+// payload would print blank claims. We normalise BOTH shapes here, at the
+// rendering boundary, so:
+//   • the now-flowing detail data renders claim-vs-counterclaim WITH per-side
+//     confidence + recency (the item #4 differentiator), and
+//   • the legacy flat shape (and the existing unit tests / 404→null contract)
+//     keep working unchanged.
+// The frontend `Contradiction` type lives in types/api.ts (out of this change's
+// scope); normalising defensively here is the minimal, forward-compatible fix.
+
+/** One side of a contradiction in the live S7 detail shape. */
+interface ContradictionSide {
+  polarity?: string | null;
+  confidence?: number | null;
+  doc_id?: string | null;
+  claim_text?: string | null;
+  evidence_date?: string | null;
+}
+
+/** The flat display model the card actually renders from. */
+interface DisplayContradiction {
+  key: string;
+  claimType: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  detectedAt: string | null | undefined;
+  claimA: string;
+  claimB: string;
+  sourceA: string;
+  sourceB: string;
+  confidenceA: number | null;
+  confidenceB: number | null;
+}
+
+/**
+ * strengthToSeverity — the detail shape carries a numeric `strength` [0,1]
+ * instead of a HIGH/MEDIUM/LOW band. Map it so the severity badge keeps
+ * working. Thresholds mirror the platform's confidence banding (>=0.66 high,
+ * >=0.33 medium). Used only when no explicit `severity` string is present.
+ */
+function strengthToSeverity(strength: number | null | undefined): "HIGH" | "MEDIUM" | "LOW" {
+  if (strength == null) return "LOW";
+  if (strength >= 0.66) return "HIGH";
+  if (strength >= 0.33) return "MEDIUM";
+  return "LOW";
+}
+
+/** A polarity string (e.g. "POSITIVE"/"NEGATIVE") makes a readable source label. */
+function sideSource(side: ContradictionSide | undefined, fallback: string): string {
+  const polarity = side?.polarity?.trim();
+  if (polarity) return polarity.toUpperCase();
+  // doc_id is a UUID — too noisy as a label; only use polarity, else fallback.
+  return fallback;
+}
+
+/**
+ * normalizeContradiction — accept either the live detail shape OR the legacy
+ * flat shape and produce a single DisplayContradiction.
+ *
+ * WHY a permissive cast: the typed `Contradiction` models the legacy flat shape
+ * only; the live payload arrives untyped through the pass-through proxy. We read
+ * both field sets off a loose record and prefer whichever is present.
+ */
+function normalizeContradiction(raw: Contradiction, index: number): DisplayContradiction {
+  const r = raw as unknown as Record<string, unknown>;
+  const sides = Array.isArray(r.sides) ? (r.sides as ContradictionSide[]) : null;
+
+  // claim_type pill: explicit on the detail shape; "CLAIM" otherwise (Δ16).
+  const claimType = typeof r.claim_type === "string" && r.claim_type.trim()
+    ? r.claim_type.toUpperCase()
+    : "CLAIM";
+
+  // Severity: explicit band wins; else derive from numeric `strength`.
+  const severity = r.severity != null
+    ? normalizeSeverity(r.severity as string)
+    : strengthToSeverity(typeof r.strength === "number" ? r.strength : null);
+
+  // detected_at is present on both shapes.
+  const detectedAt = (r.detected_at as string | null | undefined) ?? null;
+
+  if (sides && sides.length >= 2) {
+    // ── Live detail shape: two opposing sides. ──
+    const a = sides[0];
+    const b = sides[1];
+    return {
+      key: (r.contradiction_id as string) ?? `con-${index}`,
+      claimType,
+      severity,
+      detectedAt: detectedAt ?? a?.evidence_date ?? b?.evidence_date ?? null,
+      claimA: a?.claim_text?.trim() || "—",
+      claimB: b?.claim_text?.trim() || "—",
+      sourceA: sideSource(a, "Side A"),
+      sourceB: sideSource(b, "Side B"),
+      confidenceA: typeof a?.confidence === "number" ? a.confidence : null,
+      confidenceB: typeof b?.confidence === "number" ? b.confidence : null,
+    };
+  }
+
+  // ── Legacy flat shape (and the unit-test fixtures). ──
+  return {
+    key: raw.contradiction_id ?? `con-${index}`,
+    claimType,
+    severity,
+    detectedAt,
+    claimA: raw.claim_a ?? "—",
+    claimB: raw.claim_b ?? "—",
+    sourceA: raw.source_a || "Source A",
+    sourceB: raw.source_b || "Source B",
+    confidenceA: null,
+    confidenceB: null,
+  };
+}
+
+/** Render a [0,1] confidence as a compact "· 80%" suffix; null → nothing. */
+function ConfidenceTag({ value }: { value: number | null }) {
+  if (value == null) return null;
+  // tabular-nums so the suffix doesn't jitter the source prefix width.
+  return (
+    <span className="font-mono text-[9px] tabular-nums text-muted-foreground/70">
+      {" · "}
+      {Math.round(value * 100)}%
+    </span>
+  );
+}
+
 // ── Sub-component: individual contradiction card ──────────────────────────────
 
 interface ContradictionCardProps {
-  contradiction: Contradiction;
+  contradiction: DisplayContradiction;
 }
 
 function ContradictionCard({ contradiction }: ContradictionCardProps) {
-  const severity = normalizeSeverity(contradiction.severity);
-  // Δ16: claim_type pill. The Contradiction type currently has severity but not
-  // claim_type — we derive a display label from the available severity field
-  // until S9 exposes claim_type in a follow-up (backend additive change, zero risk).
-  const claimTypeLabel = (contradiction as { claim_type?: string }).claim_type
-    ? ((contradiction as { claim_type?: string }).claim_type ?? "CLAIM").toUpperCase()
-    : "CLAIM";
-
   return (
     // WHY border-border/40: consistent with other right-rail cards (RelationsList rows).
     <div className="border border-border/40 p-2 space-y-1">
@@ -83,37 +212,43 @@ function ContradictionCard({ contradiction }: ContradictionCardProps) {
       <div className="flex items-center gap-1.5">
         {/* claim_type pill — uppercase, 9px mono (Δ16) */}
         <span className="text-[9px] font-mono uppercase tracking-wider bg-muted text-muted-foreground px-1.5 py-0.5 rounded-[2px]">
-          {claimTypeLabel}
+          {contradiction.claimType}
         </span>
         {/* severity badge (Δ8: always uppercase, fallback LOW) */}
         <span
           className={cn(
             "text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-[2px]",
-            severityClass(severity),
+            severityClass(contradiction.severity),
           )}
         >
-          {severity}
+          {contradiction.severity}
         </span>
         {/* Detected date — right-aligned in the header row (Round-1 req 4).
             WHY ml-auto: keeps the pills left-clustered and the date scannable
             at the row's end, matching the platform's "timestamps trail" rule. */}
         <span className="ml-auto text-[9px] font-mono tabular-nums text-muted-foreground/70">
-          {formatDate(contradiction.detected_at)}
+          {formatDate(contradiction.detectedAt)}
         </span>
       </div>
 
       {/* ── Claims: source A's claim vs source B's claim ─────────────────────
           Round-1 requirement 4: each side is attributed to its SOURCE so the
-          analyst can judge credibility (Reuters vs a blog) without opening
-          the underlying articles. Source renders as a 9px mono prefix. */}
+          analyst can judge credibility without opening the underlying articles.
+          Item #4: when the live detail shape supplies a per-side CONFIDENCE we
+          render it next to the source — the analyst sees not just "these two
+          conflict" but "how sure the pipeline is of each side". */}
       <p className="text-[10px] text-foreground/90 leading-snug">
-        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.source_a || "Source A"}: </span>
-        {contradiction.claim_a}
+        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.sourceA}</span>
+        <ConfidenceTag value={contradiction.confidenceA} />
+        <span className="font-mono text-[9px] text-muted-foreground">: </span>
+        {contradiction.claimA}
       </p>
       <p className="text-[9px] text-muted-foreground font-mono uppercase">vs</p>
       <p className="text-[10px] text-foreground/90 leading-snug">
-        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.source_b || "Source B"}: </span>
-        {contradiction.claim_b}
+        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.sourceB}</span>
+        <ConfidenceTag value={contradiction.confidenceB} />
+        <span className="font-mono text-[9px] text-muted-foreground">: </span>
+        {contradiction.claimB}
       </p>
     </div>
   );
@@ -231,9 +366,12 @@ export function ContradictionsBlock({
     <div>
       {header}
       <section className="space-y-1.5" aria-label="Contradictions">
-        {visible.map((c) => (
-          <ContradictionCard key={c.contradiction_id} contradiction={c} />
-        ))}
+        {visible.map((c, i) => {
+          // Normalise each raw row (live detail OR legacy flat shape) into the
+          // single display model the card renders from (item #4).
+          const display = normalizeContradiction(c, i);
+          return <ContradictionCard key={display.key} contradiction={display} />;
+        })}
         {/* Expand/collapse toggle — only when there is something to reveal.
             WHY a text button (not an accordion): one extra row at 9px mono
             keeps the rail dense; an accordion header would cost 24px. */}

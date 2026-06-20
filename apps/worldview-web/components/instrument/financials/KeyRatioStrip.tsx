@@ -29,7 +29,7 @@
 // WHY no "use client": pure presentational — receives all data as props.
 
 import { MetricCell } from "@/components/primitives/MetricCell";
-import { formatMarketCap, formatPercent, formatRatio } from "@/lib/utils";
+import { formatMarketCap, formatPercent, formatPercentUnsigned, formatRatio } from "@/lib/utils";
 import type { Fundamentals, FundamentalsSnapshot } from "@/types/api";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -40,32 +40,24 @@ export interface KeyRatioStripProps {
 }
 
 // ── Colour helpers ───────────────────────────────────────────────────────────
-// Mirrors DenseMetricsGrid's intent thresholds so the SAME metric never shows
-// two different colours on one screen (strip vs grid must agree).
+// COLOUR SEMANTICS (UI roadmap 2026-06-19 item #1 / A1): teal/red are reserved
+// for DIRECTIONAL values only — here just REV YOY (a rate-of-change) and FCF
+// (sign matters: cash burn vs generation). Non-directional LEVELS — P/E, FWD
+// P/E, ROE, NET MGN, D/E, DIV YLD, BETA — render neutral. A red P/E or a green
+// margin is an editorial judgement masquerading as a direction; "cheap vs rich"
+// belongs in peer-percentile heat (roadmap B3). The peColor/deColor threshold
+// helpers were removed; this strip now AGREES with the neutralised grid.
 
 type CellColor = "positive" | "negative" | "warning" | "muted" | "default";
 
-/** Sign-based intent: gains teal, losses red, null muted. */
+/**
+ * Sign-based intent — ONLY for directional values (REV YOY growth, FCF sign):
+ * gains teal, losses red, null muted.
+ */
 function signColor(v: number | null | undefined): CellColor {
   if (v == null) return "muted";
   if (v > 0) return "positive";
   if (v < 0) return "negative";
-  return "default";
-}
-
-/** P/E heuristic: <20 cheap (teal), >35 rich (red), else caution amber. */
-function peColor(pe: number | null | undefined): CellColor {
-  if (pe == null) return "muted";
-  if (pe > 35) return "negative";
-  if (pe < 20) return "positive";
-  return "warning";
-}
-
-/** D/E heuristic: ≤0.5 conservative (teal), >2 levered (red). */
-function deColor(de: number | null | undefined): CellColor {
-  if (de == null) return "muted";
-  if (de > 2) return "negative";
-  if (de <= 0.5) return "positive";
   return "default";
 }
 
@@ -86,17 +78,23 @@ export function KeyRatioStrip({ fundamentals, snapshot }: KeyRatioStripProps) {
   // invite drift between the three.
   const cells: Array<{ label: string; value: string; color: CellColor }> = [
     { label: "MKT CAP", value: fmt(fundamentals?.market_cap, formatMarketCap), color: "default" },
-    { label: "P/E", value: fmt(fundamentals?.pe_ratio, formatRatio), color: peColor(fundamentals?.pe_ratio) },
-    { label: "FWD P/E", value: fmt(fundamentals?.forward_pe, formatRatio), color: peColor(fundamentals?.forward_pe) },
+    // P/E + FWD P/E: non-directional valuation levels → neutral (item #1).
+    { label: "P/E", value: fmt(fundamentals?.pe_ratio, formatRatio), color: "default" },
+    { label: "FWD P/E", value: fmt(fundamentals?.forward_pe, formatRatio), color: "default" },
     { label: "EV/EBITDA", value: fmt(fundamentals?.ev_to_ebitda, formatRatio), color: "default" },
     { label: "P/S", value: fmt(fundamentals?.price_to_sales, formatRatio), color: "default" },
-    { label: "ROE", value: fmt(fundamentals?.roe, formatPercent), color: signColor(fundamentals?.roe) },
-    { label: "NET MGN", value: fmt(fundamentals?.net_margin, formatPercent), color: signColor(fundamentals?.net_margin) },
+    // ROE + NET MGN: quality levels → neutral + unsigned (no "+" on a level).
+    { label: "ROE", value: fmt(fundamentals?.roe, formatPercentUnsigned), color: "default" },
+    { label: "NET MGN", value: fmt(fundamentals?.net_margin, formatPercentUnsigned), color: "default" },
+    // REV YOY: DIRECTIONAL rate-of-change → keep teal/red + signed %.
     { label: "REV YOY", value: fmt(fundamentals?.revenue_growth_yoy, formatPercent), color: signColor(fundamentals?.revenue_growth_yoy) },
+    // FCF: sign is directional (burn vs generation) → keep colour.
     { label: "FCF", value: fmt(snapshot?.free_cash_flow, formatMarketCap), color: signColor(snapshot?.free_cash_flow) },
-    { label: "DIV YLD", value: fmt(fundamentals?.dividend_yield, formatPercent), color: "default" },
+    // DIV YLD: allocation-style level → neutral + unsigned.
+    { label: "DIV YLD", value: fmt(fundamentals?.dividend_yield, formatPercentUnsigned), color: "default" },
     { label: "BETA", value: snapshot?.beta != null ? snapshot.beta.toFixed(2) : DASH, color: "default" },
-    { label: "D/E", value: fmt(fundamentals?.debt_to_equity, formatRatio), color: deColor(fundamentals?.debt_to_equity) },
+    // D/E: leverage level → neutral (item #1).
+    { label: "D/E", value: fmt(fundamentals?.debt_to_equity, formatRatio), color: "default" },
     // Exactly 12 cells — one grid column each. EPS TTM was considered and
     // dropped: it lives in the PROFITABILITY grid section + the earnings
     // panel, and a 13th cell would break the 12-col rhythm.
