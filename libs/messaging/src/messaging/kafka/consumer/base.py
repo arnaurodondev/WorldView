@@ -337,6 +337,19 @@ class ConsumerConfig:
     # next use instead of hanging until a poll fails. 9 minutes < the common
     # 10-minute cloud LB idle cutoff, so we drop the socket before the LB does.
     connections_max_idle_ms: int = 540_000
+    # CPU-bottleneck fix (2026-06-21 cpu-profile): when a consumer is wedged off
+    # the broker (network-path break / CPU-starved handshake), librdkafka's
+    # background thread retries the connection. Without an explicit, generous
+    # backoff CAP it reconnects aggressively and can busy-spin at ~90% CPU at ZERO
+    # throughput (observed live: 4 market-data consumers + the temporal-event
+    # consumer pegged a core EACH while processing 0 messages — see
+    # docs/audits/2026-06-21-*-cpu-profile.md). Pinning a 1s floor and a 20s cap
+    # makes a disconnected client back off (one attempt per ≤20s) instead of
+    # hot-spinning, bounding the wasted CPU AND easing the reconnect load on an
+    # already-stressed broker. Healthy connections are unaffected (these only
+    # apply while disconnected). Settings-driven so an operator can retune.
+    reconnect_backoff_ms: int = 1_000
+    reconnect_backoff_max_ms: int = 20_000
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -371,6 +384,11 @@ class ConsumerConfig:
             # retries promptly instead of burning ~31s per attempt.
             "socket.connection.setup.timeout.ms": self.socket_connection_setup_timeout_ms,
             "connections.max.idle.ms": self.connections_max_idle_ms,
+            # Reconnect backoff (see field docs): bound the disconnected-client
+            # reconnect spin so a wedged consumer backs off instead of pegging a
+            # core at zero throughput.
+            "reconnect.backoff.ms": self.reconnect_backoff_ms,
+            "reconnect.backoff.max.ms": self.reconnect_backoff_max_ms,
         }
         # KIP-345 static group membership: only set if configured so consumers
         # that omit it retain the original dynamic membership behaviour.
