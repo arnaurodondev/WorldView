@@ -49,10 +49,34 @@ except Exception:  # — prometheus_client missing in some test contexts
 # Transient Valkey errors worth retrying once (50ms backoff). Anything outside
 # this allowlist (auth, ResponseError, programmer bugs) fails fast — retrying
 # won't heal it within 50ms.
-_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    ConnectionError,
-    TimeoutError,
-)
+#
+# F-007 (2026-06-21): the redis-py client raises ``redis.exceptions.ConnectionError``
+# and ``redis.exceptions.TimeoutError`` on a dropped socket / socket_timeout —
+# and CRITICALLY these do NOT inherit from the Python builtin ``ConnectionError`` /
+# ``TimeoutError`` (their MRO is ``RedisError -> Exception``). The previous
+# allowlist listed only the builtins, so a real Valkey timeout under the
+# heavily-hit /v1/quotes path (live ping latency ~756ms vs a 5s socket_timeout
+# that the burst exceeds) was NEVER classified as transient: the retry path was
+# dead code and every blip fell straight into ``503_no_retry``, hard-failing
+# real traffic. We now include the redis exception classes. They are imported
+# defensively so the module still loads in test contexts where redis may be
+# absent (the builtins remain as a always-present fallback).
+_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...]
+try:
+    from redis.exceptions import ConnectionError as _RedisConnectionError  # type: ignore[import-untyped]
+    from redis.exceptions import TimeoutError as _RedisTimeoutError
+
+    _VALKEY_TRANSIENT_EXCEPTIONS = (
+        ConnectionError,
+        TimeoutError,
+        _RedisConnectionError,
+        _RedisTimeoutError,
+    )
+except Exception:  # — redis not importable in some minimal test contexts
+    _VALKEY_TRANSIENT_EXCEPTIONS = (
+        ConnectionError,
+        TimeoutError,
+    )
 
 
 async def _record_active_user(valkey: Any, user_id: str) -> None:
@@ -425,7 +449,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     separately so payment-adjacent writes are strictly controlled while
     read-heavy dashboard loads stay within the default bucket.
     Unauthenticated requests are keyed by sha256(IP)[:16] (20/min).
-    Fail-closed (D-001): returns 503 if Valkey is unavailable.
+
+    Valkey-failure policy (F-007, 2026-06-21):
+      * Valkey unconfigured / ``None`` at request time → 503 (fail-closed): a
+        deploy-time misconfiguration we refuse to silently run wide-open under.
+      * Transient Valkey op error (connection drop / socket timeout) → after a
+        single 50ms-backoff retry, FAIL-OPEN (allow the request). A momentary
+        blip must not 503 real traffic; rate limiting degrades to "allow".
+      * Non-transient op error (auth / ResponseError / programmer bug) → 503
+        (fail-closed): will not self-heal, must not run wide-open.
     """
 
     def __init__(
@@ -604,12 +636,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     },
                 )
         except Exception as exc:
-            # D-001: Fail-closed — Valkey operation failure returns 503.
-            # FIX-LIVE-D: distinguish "transient after retry" vs "non-transient"
-            # by inspecting whether the exception class is in the transient
-            # allowlist. The counter label drives Grafana paging decisions.
+            # F-007 (2026-06-21): policy split by error class.
+            #
+            # TRANSIENT errors (Valkey connection drop / socket timeout, now
+            # correctly matched against the redis exception classes — see
+            # ``_VALKEY_TRANSIENT_EXCEPTIONS``) FAIL-OPEN: the retry has already
+            # been exhausted above, so a momentary Valkey blip must NOT 503 real
+            # user traffic. Rate limiting is a protective control, not a
+            # correctness invariant — degrading it open for the duration of a
+            # hiccup is strictly better than handing every /v1/quotes caller a
+            # 503. The request is allowed through and the degradation is
+            # counted + warned so operators can page on a *sustained* outage.
+            #
+            # NON-TRANSIENT errors (auth failure, ResponseError, a programmer
+            # bug in the key/command) FAIL-CLOSED (503): these will not heal on
+            # their own and usually indicate a misconfiguration we do not want
+            # to silently run wide-open under.
             is_transient = isinstance(exc, _VALKEY_TRANSIENT_EXCEPTIONS)
-            label = "503_after_retry" if is_transient else "503_no_retry"
+            label = "fail_open_after_retry" if is_transient else "503_no_retry"
             if _RATE_LIMIT_UNAVAILABLE_COUNTER is not None:
                 _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action=label).inc()  # type: ignore[attr-defined]
             logger.warning(  # type: ignore[no-any-return]
@@ -618,6 +662,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 fallback_action=label,
                 path=str(request.url.path),
             )
+            if is_transient:
+                # Fail-open: a transient Valkey blip degrades rate limiting to
+                # "allow" rather than 503ing the caller.
+                return cast("Response", await call_next(request))
             return Response(
                 content='{"detail":"Service temporarily unavailable"}',
                 status_code=503,
