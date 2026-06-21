@@ -138,3 +138,38 @@ is the recommended follow-up.
 
 **Related:** `docs/bug-patterns/config-docker.md` (BP entry on per-variant
 images), `scripts/rebuild_service.sh`, `Makefile` (`rebuild` target).
+
+## `failed to solve: frontend grpc server closed unexpectedly` — missing dockerfile frontend image (NOT memory)
+
+After a **Docker Desktop restart**, EVERY build (`make rebuild`, `docker compose
+build`, even a single-image build, even a fresh `docker buildx` container-driver
+builder) can fail instantly with:
+
+```
+failed to solve: frontend grpc server closed unexpectedly
+```
+
+It looks like a BuildKit/memory crash and tempts a build-cache prune (which can
+wedge the daemon further). The real cause: the Dockerfiles start with
+`# syntax=docker/dockerfile:1`, so BuildKit must pull the **`docker/dockerfile:1`
+frontend image** to parse them — and Docker Desktop's restart cleared the image
+cache. When BuildKit can't fetch the frontend image, the frontend grpc server
+"closes unexpectedly".
+
+**Fix (instant):**
+```
+docker pull docker/dockerfile:1
+```
+then re-run the normal build — all builds succeed. No prune, no memory tuning,
+no builder recreation needed.
+
+**Diagnosis tells it apart from real memory pressure:** the failure is immediate
+(before any build step runs) and identical for a single tiny image; a genuine
+OOM fails mid-step on a large image. The classic builder (`DOCKER_BUILDKIT=0`)
+is NOT a workaround here — the whitelist `.dockerignore` excludes the Dockerfile
+from the context tarball (BuildKit reads it out-of-band; the classic builder
+can't → "Cannot locate specified Dockerfile").
+
+Verified 2026-06-20: 3 BuildKit attempts + a fresh container-driver builder all
+crashed with this error until `docker pull docker/dockerfile:1`, after which the
+identical build completed in 67s.
