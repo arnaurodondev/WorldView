@@ -313,7 +313,9 @@ async def test_intelligence_consumer_watchdog_exits_on_stall() -> None:
         raise _ForcedExitError(code)
 
     consumer = MagicMock()
-    # Progress timestamp is far in the past → immediately stalled.
+    # F-006: the watchdog now gates on the poll-cycle marker. A genuinely
+    # WEDGED loop stops cycling → its poll marker is far in the past → stalled.
+    consumer.last_poll_monotonic = 0.0
     consumer.last_progress_monotonic = 0.0
     stop_event = _REAL_ASYNCIO_EVENT()  # never set
     log = MagicMock()
@@ -334,6 +336,55 @@ async def test_intelligence_consumer_watchdog_exits_on_stall() -> None:
 
 
 @pytest.mark.asyncio
+async def test_intelligence_consumer_watchdog_idle_topic_does_not_exit() -> None:
+    """F-006 regression: an IDLE-but-alive consumer must NOT trip the watchdog.
+
+    Reproduces the crash-loop: the topic is idle so no MESSAGE has been
+    processed in a long time (``last_progress_monotonic`` is ancient), but the
+    poll loop keeps cycling (``last_poll_monotonic`` stays fresh). The watchdog
+    must gate on the poll marker and NOT force-exit.
+    """
+    import importlib
+    import time
+
+    from alert.infrastructure.messaging.consumers import intelligence_consumer_main
+
+    importlib.reload(intelligence_consumer_main)
+
+    consumer = MagicMock()
+    # No message processed for ~1h (idle topic) — the OLD watchdog would exit.
+    consumer.last_progress_monotonic = time.monotonic() - 3600.0
+    # But the poll loop is cycling: poll marker refreshed "now".
+    consumer.last_poll_monotonic = time.monotonic()
+    stop_event = _REAL_ASYNCIO_EVENT()  # never set — consumer "running"
+    log = MagicMock()
+
+    def _boom(code: int) -> None:  # pragma: no cover — must not be called
+        raise AssertionError(f"watchdog exited with {code} on an idle-but-alive consumer")
+
+    async def _drive() -> None:
+        with patch.object(intelligence_consumer_main.os, "_exit", _boom):
+            # Stall threshold 300s; poll fast. The poll marker is fresh, so the
+            # watchdog should keep looping (never exit) until we stop it.
+            await intelligence_consumer_main._liveness_watchdog(
+                consumer,
+                stop_event,
+                log,
+                stall_seconds=300.0,
+                poll_seconds=0.01,
+            )
+
+    task = asyncio.create_task(_drive())
+    # Let the watchdog run several check cycles, then request graceful stop.
+    await asyncio.sleep(0.05)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    # Idle ≠ wedged: no critical log, no exit.
+    log.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
     """The watchdog returns (no exit) when the stop signal fires."""
     import importlib
@@ -343,6 +394,7 @@ async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
     importlib.reload(intelligence_consumer_main)
 
     consumer = MagicMock()
+    consumer.last_poll_monotonic = 0.0
     consumer.last_progress_monotonic = 0.0
     stop_event = _REAL_ASYNCIO_EVENT()
     stop_event.set()  # graceful shutdown requested

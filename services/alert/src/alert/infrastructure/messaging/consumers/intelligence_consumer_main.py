@@ -36,18 +36,23 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # reporting `healthy` for 43h. The connectivity probe in BaseKafkaConsumer could
 # not catch it (it only escalates on 3 *consecutive* failures, and the broker
 # only flapped) and the lag-stall warning merely LOGGED. This watchdog ACTS: if
-# no message has been processed for `_WATCHDOG_STALL_SECONDS` it force-exits the
+# the poll loop stops *cycling* for `_WATCHDOG_STALL_SECONDS` it force-exits the
 # process so the orchestrator (Docker `restart: unless-stopped`) restarts a
 # fresh, re-joining consumer that drains the backlog.
 #
-# Why a plain wall-clock timeout (not lag-gated): reading lag requires the
-# broker, which is exactly what is flapping during the failure mode; gating on
-# it would re-introduce the blind spot. The trade-off is that a genuinely idle
-# topic (no traffic at all) would also trip the watchdog — acceptable here
-# because these three intelligence topics carry steady traffic and a needless
-# restart is cheap and self-correcting (a fresh consumer that finds no work just
-# idles and re-touches its heartbeat). The threshold is set well above the
-# slowest realistic per-message time so normal slow batches never trip it.
+# F-006 (2026-06-21): the watchdog originally gated on time-since-last-MESSAGE
+# (`last_progress_monotonic`). That is WRONG for a low-traffic consumer: an idle
+# topic processes no messages, so the timer ran out and the container
+# crash-looped (RestartCount=10, restarting every ~5 min) even though it was
+# connected, assigned, and polling — just IDLE. We now gate on
+# `last_poll_monotonic`, which advances on every healthy poll-loop CYCLE (idle
+# OR message; the base class's BP-700 progress tick). This distinguishes:
+#   • IDLE  → poll keeps returning empty → marker stays fresh → NO restart.
+#   • WEDGED → poll stops returning / loop dies → marker goes stale → restart.
+# Why poll-cycle (not lag-gated): reading lag requires the broker, which is
+# exactly what flaps during the failure mode; gating on it would re-introduce
+# the blind spot. The threshold is set well above the slowest realistic poll
+# interval so a normal poll timeout never trips it.
 # Overridable via env for ops tuning / tests.
 _WATCHDOG_STALL_SECONDS: float = float(os.environ.get("ALERT_CONSUMER_WATCHDOG_STALL_SECONDS", "300"))
 # How often the watchdog samples the progress timestamp.
@@ -62,13 +67,19 @@ async def _liveness_watchdog(
     stall_seconds: float = _WATCHDOG_STALL_SECONDS,
     poll_seconds: float = _WATCHDOG_POLL_SECONDS,
 ) -> None:
-    """Force a process restart if the consumer stops making forward progress.
+    """Force a process restart if the consumer's poll loop stops cycling.
 
-    Polls ``consumer.last_progress_monotonic`` (updated on every processed
-    message) every ``poll_seconds``. If it has not advanced for
+    Polls ``consumer.last_poll_monotonic`` (advanced on every healthy poll-loop
+    cycle — idle OR message) every ``poll_seconds``. If it has not advanced for
     ``stall_seconds`` while we are NOT shutting down, the poll loop is presumed
     wedged (the 43h failure mode) and we exit hard so the orchestrator restarts
     a clean consumer.
+
+    F-006: gating on poll-cycle liveness (not last-message) means an IDLE topic
+    — where the loop keeps returning empty polls — does NOT trip the watchdog,
+    while a genuinely wedged loop (poll stops returning / loop dies) still does.
+    Falls back to ``last_progress_monotonic`` for consumers that don't expose
+    the poll marker, so the watchdog is safe to reuse on other consumers.
 
     ``time.monotonic()`` is used throughout so the wall-clock skew the audit saw
     on this host cannot mask a real stall.
@@ -80,8 +91,14 @@ async def _liveness_watchdog(
         except TimeoutError:
             pass  # interval elapsed — run a check
 
-        last_progress = getattr(consumer, "last_progress_monotonic", time.monotonic())
-        age = time.monotonic() - last_progress
+        # Prefer the poll-cycle marker (alive even when idle); fall back to the
+        # message marker, then to "now" so a missing attribute never false-trips.
+        last_alive = getattr(
+            consumer,
+            "last_poll_monotonic",
+            getattr(consumer, "last_progress_monotonic", time.monotonic()),
+        )
+        age = time.monotonic() - last_alive
         if age >= stall_seconds:
             log.critical(  # type: ignore[attr-defined]
                 "intelligence_consumer_watchdog_stall",
