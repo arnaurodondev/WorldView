@@ -237,6 +237,94 @@ class TestDispatcherFailedDelivery:
 
 
 @pytest.mark.unit
+class TestDispatcherBrokenProducerRecovery:
+    """GAP-A: a wedged producer (produce/flush TimeoutError) must be discarded."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_resets_producer(self) -> None:
+        """A flush TimeoutError clears the cached producer so the next dispatch rebuilds."""
+        dispatcher, outbox_repo, dlq_repo = _make_dispatcher()
+        record = _make_record(retry_count=0)
+        outbox_repo.claim_batch = AsyncMock(return_value=[record])
+        outbox_repo.mark_dispatched = AsyncMock()
+        outbox_repo.mark_failed = AsyncMock()
+        dlq_repo.move_to_dlq = AsyncMock()
+
+        # produce succeeds but flush() raises TimeoutError → wedged producer.
+        mock_producer = MagicMock()
+        mock_producer.produce = MagicMock()
+        mock_producer.flush = MagicMock(side_effect=TimeoutError())
+        dispatcher._producer = mock_producer
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+                return_value=outbox_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
+                return_value=dlq_repo,
+            ),
+            patch.object(dispatcher, "_get_producer", return_value=mock_producer),
+        ):
+            loop = asyncio.get_event_loop()
+            original = loop.run_in_executor
+
+            async def immediate_executor(executor: Any, fn: Any, *args: Any) -> Any:
+                return fn()
+
+            loop.run_in_executor = immediate_executor  # type: ignore[method-assign]
+            try:
+                count = await dispatcher._dispatch_batch()
+            finally:
+                loop.run_in_executor = original  # type: ignore[method-assign]
+
+        assert count == 0
+        # Wedged producer discarded; ``_get_producer`` will lazily rebuild next cycle.
+        assert dispatcher._producer is None
+        outbox_repo.mark_failed.assert_called_once_with(record.event_id)
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_error_keeps_producer(self) -> None:
+        """A non-timeout produce exception must NOT discard the cached producer."""
+        dispatcher, outbox_repo, dlq_repo = _make_dispatcher()
+        record = _make_record(retry_count=0)
+        outbox_repo.claim_batch = AsyncMock(return_value=[record])
+        outbox_repo.mark_failed = AsyncMock()
+        dlq_repo.move_to_dlq = AsyncMock()
+
+        mock_producer = MagicMock()
+        mock_producer.produce = MagicMock(side_effect=ValueError("bad payload"))
+        mock_producer.flush = MagicMock(return_value=0)
+        dispatcher._producer = mock_producer
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+                return_value=outbox_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
+                return_value=dlq_repo,
+            ),
+            patch.object(dispatcher, "_get_producer", return_value=mock_producer),
+        ):
+            loop = asyncio.get_event_loop()
+            original = loop.run_in_executor
+
+            async def immediate_executor(executor: Any, fn: Any, *args: Any) -> Any:
+                return fn()
+
+            loop.run_in_executor = immediate_executor  # type: ignore[method-assign]
+            try:
+                await dispatcher._dispatch_batch()
+            finally:
+                loop.run_in_executor = original  # type: ignore[method-assign]
+
+        assert dispatcher._producer is mock_producer
+
+
+@pytest.mark.unit
 class TestDispatcherLifecycle:
     def test_stop_sets_event(self) -> None:
         """stop() must signal the run loop to exit."""
