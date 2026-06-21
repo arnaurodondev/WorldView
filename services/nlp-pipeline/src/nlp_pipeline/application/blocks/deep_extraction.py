@@ -480,7 +480,7 @@ async def run_deep_extraction_block(
             total_windows=total_windows,
         )
         raise RetryableError(
-            f"deep extraction timed out on all {timed_out_windows}/{total_windows} " f"windows for doc {doc_id}",
+            f"deep extraction timed out on all {timed_out_windows}/{total_windows} windows for doc {doc_id}",
         )
 
     # Merge deduplicated results
@@ -492,14 +492,30 @@ async def run_deep_extraction_block(
     # asks the model to self-police these, but the re-A/B showed it complies only ~2/3 of
     # the time; this code filter makes the gates a guarantee independent of model drift.
     # See application/blocks/relation_validation.py.
-    kept_relations, relation_drops = validate_relations(merged.get("relations", []))
+    # Enhancements #3/#4/#5 (2026-06-21): thread the per-mention NER class into the gate
+    # so it can run the entity-type guard (#3) and direction auto-swap (#4). Build a
+    # {mention_text: mention_class} map from this doc's resolved mentions. The map is
+    # best-effort: refs the model echoes verbatim from the entity list match exactly, and
+    # any ref NOT in the map is treated as unknown-class (never dropped/swapped), so the
+    # new gates cannot produce false positives. Last write wins on duplicate mention_text.
+    entity_classes = {m.mention_text: m.mention_class for m in mentions}
+    kept_relations, relation_drops = validate_relations(
+        merged.get("relations", []),
+        entity_classes=entity_classes,
+    )
     if relation_drops:
+        # ``direction_swapped`` is a normalisation event (the relation was KEPT with its
+        # subject/object corrected), not a drop — surface it separately so the dropped
+        # total stays an accurate count of discarded relations.
+        swapped = relation_drops.get("direction_swapped", 0)
+        dropped_total = sum(count for reason, count in relation_drops.items() if reason != "direction_swapped")
         logger.info(
             "deep_extraction.relations_filtered",
             doc_id=str(doc_id),
             kept=len(kept_relations),
-            dropped_total=sum(relation_drops.values()),
-            **{f"dropped_{reason}": count for reason, count in relation_drops.items()},
+            dropped_total=dropped_total,
+            swapped=swapped,
+            **{f"dropped_{reason}": count for reason, count in relation_drops.items() if reason != "direction_swapped"},
         )
     merged["relations"] = kept_relations
 
