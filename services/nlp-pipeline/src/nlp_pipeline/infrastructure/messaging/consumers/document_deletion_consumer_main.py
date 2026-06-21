@@ -23,6 +23,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -31,6 +32,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer import (
@@ -50,9 +55,14 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # BP-704 FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when
+    # the poll loop wedges or the run() task dies — without it a wedged consumer
+    # keeps a GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-document-deletion-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -83,6 +93,8 @@ async def main() -> None:
         nlp_session_factory=nlp_sf,
         valkey_client=valkey,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -95,34 +107,17 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-
-        def _on_consumer_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
-            if task.cancelled():
-                return
-            exc = task.exception()
-            if exc is not None:
-                log.error("document_deletion_consumer_task_crashed", error=str(exc), exc_info=exc)
-                stop_event.set()
-
-        consumer_task.add_done_callback(_on_consumer_done)
-
-        await stop_event.wait()
-        consumer.stop()  # type: ignore[attr-defined]
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            try:
-                await asyncio.wait_for(consumer_task, timeout=5.0)
-            except (asyncio.CancelledError, TimeoutError):
-                log.warning("consumer_task_stuck_forcing_exit")
-                sys.exit(1)
+        # BP-704 supervision: race run() against the stop event so a crashed
+        # run() can no longer leave an un-awaited dead task while main() hangs
+        # on stop_event.wait(). A terminal run() exit raises ConsumerExited →
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("document_deletion_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("document_deletion_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("document_deletion_consumer_stopped")
     finally:
         await valkey.close()
         await nlp_engine.dispose()
@@ -130,6 +125,7 @@ async def main() -> None:
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("document_deletion_consumer_stopped")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from observability import (  # type: ignore[import-untyped]
     create_ml_metrics,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -30,6 +31,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
@@ -54,9 +59,14 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # BP-704 FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when
+    # the poll loop wedges or the run() task dies — without it a wedged consumer
+    # keeps a GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-article-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     # ML metrics for the extraction adapter (Prometheus namespace ``nlp_pipeline``,
@@ -433,6 +443,8 @@ async def main() -> None:
         entailment_client=entailment_client,
         entailment_config=entailment_config,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.
     # redis.asyncio uses lazy connection; the first call triggers DNS resolution
@@ -457,41 +469,17 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-
-        # If the consumer task crashes before stop_event is set, the process would
-        # stay alive (stuck on stop_event.wait()) but do no useful work.  The done
-        # callback propagates the crash into the normal shutdown path so Docker sees
-        # a clean non-zero exit and triggers restart with full error logging.
-        def _on_consumer_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
-            if task.cancelled():
-                return
-            exc = task.exception()
-            if exc is not None:
-                log.error("article_consumer_task_crashed", error=str(exc), exc_info=exc)
-                stop_event.set()
-
-        consumer_task.add_done_callback(_on_consumer_done)
-
-        await stop_event.wait()
-        consumer.stop()  # type: ignore[attr-defined]
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            try:
-                # Give the task 5 s to honour the cancellation.  If it is stuck
-                # in a thread-pool executor (e.g. socket.getaddrinfo) it cannot
-                # be cancelled; sys.exit lets Docker reclaim the process cleanly.
-                await asyncio.wait_for(consumer_task, timeout=5.0)
-            except (asyncio.CancelledError, TimeoutError):
-                log.warning("consumer_task_stuck_forcing_exit")
-                sys.exit(1)
+        # BP-704 supervision: race run() against the stop event so a crashed
+        # run() can no longer leave an un-awaited dead task while main() hangs
+        # on stop_event.wait(). A terminal run() exit raises ConsumerExited →
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("article_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("article_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("article_consumer_stopped")
     finally:
         await valkey.close()
         await nlp_engine.dispose()
@@ -500,6 +488,7 @@ async def main() -> None:
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("article_consumer_stopped")
 
 
 if __name__ == "__main__":

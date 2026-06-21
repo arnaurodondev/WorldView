@@ -26,6 +26,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -143,9 +144,18 @@ async def main() -> None:
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a dedicated
     # port so non-HTTP worker processes are scrape-able alongside the FastAPI
     # services.  Defaults to 9100; container compose entry exposes the same port.
+    #
+    # BP-704: bind a stall-aware liveness probe so the Docker healthcheck's
+    # ``GET /healthz`` flips to 503 the moment the poll loop wedges or ``run()``
+    # dies — without it a dead consumer kept a GREEN healthcheck and was never
+    # restarted (the 43h wedge). This complements the in-process
+    # ``_liveness_watchdog`` below: the watchdog force-restarts the process,
+    # while this probe makes the *external* healthcheck observe the stall too.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="alert-intelligence-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -218,6 +228,9 @@ async def main() -> None:
         fanout_use_case=fanout,
         dedup_client=valkey,
     )
+    # BP-704: bind the probe so /healthz reflects this consumer's poll-loop
+    # progress (``seconds_since_progress`` from the BP-700 heartbeat).
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -247,6 +260,9 @@ async def main() -> None:
         # wall-clock watchdog (gap A) concurrently. Whichever finishes first
         # wins; we then decide between graceful shutdown and fatal restart.
         consumer_task = asyncio.create_task(consumer.run(), name="intelligence_consume")
+        # BP-704: attach the run() task so /healthz turns 503 the instant run()
+        # finishes — even if it crashes before its first poll-loop progress tick.
+        liveness_probe.attach_task(consumer_task)
         stop_task = asyncio.create_task(stop_event.wait(), name="intelligence_stop")
         watchdog_task = asyncio.create_task(
             _liveness_watchdog(consumer, stop_event, log),

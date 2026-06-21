@@ -420,14 +420,33 @@ async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _make_supervised_consumer() -> MagicMock:
+    """Build a mock consumer whose run() blocks until stop() — the real contract.
+
+    BP-704: ``watchlist_consumer_main`` now drives run() via
+    ``run_consumer_supervised``, which treats a run() that returns on its own
+    (without a stop signal) as an unexpected wedge/crash and raises
+    ``ConsumerExited``. A bare ``AsyncMock`` returns instantly and would trip
+    that path, so we model a healthy consumer: run() awaits a gate that stop()
+    sets, so the supervisor takes the graceful-stop path.
+    """
+    mock_consumer = MagicMock()
+    _run_gate = _REAL_ASYNCIO_EVENT()
+
+    async def _run_until_stopped() -> None:
+        await _run_gate.wait()
+
+    mock_consumer.run = _run_until_stopped
+    mock_consumer.stop = MagicMock(side_effect=lambda: _run_gate.set())
+    return mock_consumer
+
+
 @pytest.mark.asyncio
 async def test_watchlist_consumer_graceful_stop() -> None:
-    """wait_for(30s) + s1_client.close + valkey.close called on stop."""
+    """Supervised graceful stop + s1_client.close + valkey.close called on stop."""
     mock_valkey = AsyncMock()
     mock_s1 = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
     settings = _mock_settings()
 
     with (
@@ -457,9 +476,7 @@ async def test_watchlist_consumer_stop_pre_set() -> None:
     """Consumer task is started then stopped immediately when stop_event is pre-set."""
     mock_valkey = AsyncMock()
     mock_s1 = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
     settings = _mock_settings()
 
     with (
@@ -484,6 +501,69 @@ async def test_watchlist_consumer_stop_pre_set() -> None:
 
     mock_consumer.stop.assert_called_once()
     mock_valkey.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# BP-704 — stall-aware /healthz liveness probe wired into start_metrics_server
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intelligence_consumer_wires_liveness_probe() -> None:
+    """BP-704: the intelligence consumer main must pass a non-None liveness_probe
+    to start_metrics_server so the Docker /healthz reflects poll-loop liveness."""
+    mock_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = MagicMock()
+    mock_consumer.run = AsyncMock()
+    mock_consumer.stop = MagicMock()
+    mock_s1 = AsyncMock()
+    settings = _mock_settings()
+
+    with _intelligence_patches(mock_engine, mock_valkey, mock_consumer, mock_s1, settings):
+        import importlib
+
+        from alert.infrastructure.messaging.consumers import intelligence_consumer_main
+
+        importlib.reload(intelligence_consumer_main)
+        # Patch the name as bound in the main module's namespace.
+        with patch.object(intelligence_consumer_main, "start_metrics_server", return_value=MagicMock()) as mock_start:
+            await intelligence_consumer_main.main()
+
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
+
+
+@pytest.mark.asyncio
+async def test_watchlist_consumer_wires_liveness_probe() -> None:
+    """BP-704: the watchlist consumer main must pass a non-None liveness_probe
+    to start_metrics_server so the Docker /healthz reflects poll-loop liveness."""
+    mock_valkey = AsyncMock()
+    mock_s1 = AsyncMock()
+    mock_consumer = _make_supervised_consumer()
+    settings = _mock_settings()
+
+    with (
+        patch("alert.config.Settings", return_value=settings),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
+        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.messaging.consumers.watchlist_consumer.WatchlistConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        import importlib
+
+        from alert.infrastructure.messaging.consumers import watchlist_consumer_main
+
+        importlib.reload(watchlist_consumer_main)
+        with patch.object(watchlist_consumer_main, "start_metrics_server", return_value=MagicMock()) as mock_start:
+            await watchlist_consumer_main.main()
+
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
 
 
 # ---------------------------------------------------------------------------

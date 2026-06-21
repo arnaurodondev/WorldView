@@ -66,6 +66,27 @@ def _mock_settings(**overrides: object) -> MagicMock:
     return s
 
 
+def _make_supervised_consumer() -> MagicMock:
+    """Return a mock consumer whose ``run()`` blocks until ``stop()`` fires.
+
+    F-005 / BP-704: the consumer mains now drive the run loop through
+    ``run_consumer_supervised``, which races ``run()`` against the stop event.
+    A bare ``AsyncMock`` ``run()`` returns instantly and would be (correctly)
+    flagged as an unexpected consumer exit — exactly the wedge-detection
+    behaviour. Model the real contract instead: ``run()`` blocks until
+    ``stop()`` releases a gate, so the supervisor takes the graceful path.
+    """
+    mock_consumer = MagicMock()
+    _run_gate = _REAL_ASYNCIO_EVENT()
+
+    async def _run_until_stopped() -> None:
+        await _run_gate.wait()
+
+    mock_consumer.run = _run_until_stopped
+    mock_consumer.stop = MagicMock(side_effect=lambda: _run_gate.set())
+    return mock_consumer
+
+
 # ---------------------------------------------------------------------------
 # ohlcv_consumer_main
 # ---------------------------------------------------------------------------
@@ -193,9 +214,7 @@ async def test_quotes_consumer_main_stop_before_run() -> None:
     """Pre-set stop_event causes quotes main() to exit immediately."""
     mock_engine = AsyncMock()
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),
@@ -216,7 +235,7 @@ async def test_quotes_consumer_main_stop_before_run() -> None:
 
         await main()
 
-    mock_consumer.run.assert_called_once()
+    # Supervised shutdown drains the run loop via stop().
     mock_consumer.stop.assert_called_once()
 
 
@@ -225,9 +244,7 @@ async def test_quotes_consumer_main_graceful_stop() -> None:
     """valkey.close() and engine.dispose() called on graceful stop."""
     mock_engine = AsyncMock()
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),
@@ -261,9 +278,7 @@ async def test_quotes_consumer_main_graceful_stop() -> None:
 async def test_fundamentals_consumer_main_stop_before_run() -> None:
     """Pre-set stop_event causes fundamentals main() to exit immediately."""
     mock_engine = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),
@@ -283,7 +298,7 @@ async def test_fundamentals_consumer_main_stop_before_run() -> None:
 
         await main()
 
-    mock_consumer.run.assert_called_once()
+    # Supervised shutdown drains the run loop via stop().
     mock_consumer.stop.assert_called_once()
 
 
@@ -291,9 +306,7 @@ async def test_fundamentals_consumer_main_stop_before_run() -> None:
 async def test_fundamentals_consumer_main_engine_disposed() -> None:
     """write_engine.dispose() called on exit from fundamentals consumer."""
     mock_engine = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),
@@ -314,6 +327,77 @@ async def test_fundamentals_consumer_main_engine_disposed() -> None:
         await main()
 
     mock_engine.dispose.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# F-005 / BP-704 — every consumer main wires a stall-aware /healthz
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("main_module", "consumer_path"),
+    [
+        (
+            "market_data.infrastructure.messaging.consumers.insider_transactions_consumer_main",
+            "market_data.infrastructure.messaging.consumers.insider_transactions_consumer.InsiderTransactionsConsumer",
+        ),
+        (
+            "market_data.infrastructure.messaging.consumers.quotes_consumer_main",
+            "market_data.infrastructure.messaging.consumers.quotes_consumer.QuotesConsumer",
+        ),
+        (
+            "market_data.infrastructure.messaging.consumers.fundamentals_consumer_main",
+            "market_data.infrastructure.messaging.consumers.fundamentals_consumer.FundamentalsConsumer",
+        ),
+        (
+            "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer_main",
+            "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer.IntradayResamplingConsumer",
+        ),
+        (
+            "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main",
+            "market_data.infrastructure.messaging.consumers.prediction_market_consumer.PredictionMarketConsumer",
+        ),
+    ],
+)
+async def test_consumer_main_wires_stall_aware_healthz(main_module: str, consumer_path: str) -> None:
+    """Each consumer main calls start_metrics_server with a non-None liveness_probe.
+
+    This is the load-bearing F-005 / BP-704 assertion: /healthz must EXIST on
+    9100 (so the Docker healthcheck passes) AND be stall-aware (a bound probe so
+    it flips to 503 when the poll loop wedges). Patching start_metrics_server in
+    the consumer-main module namespace lets us inspect the call args without
+    binding a real socket.
+    """
+    import importlib
+
+    mod = importlib.import_module(main_module)
+    mock_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = _make_supervised_consumer()
+    captured: dict[str, object] = {}
+
+    def _fake_start(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock(aclose=AsyncMock())
+
+    with (
+        patch("market_data.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(f"{main_module}.start_metrics_server", side_effect=_fake_start),
+        patch("market_data.infrastructure.db.session.build_write_engine", return_value=mock_engine),
+        patch("market_data.infrastructure.db.session.build_read_engine", return_value=mock_engine),
+        patch("market_data.infrastructure.db.session.build_session_factory", return_value=MagicMock()),
+        patch("messaging.valkey.client.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("storage.factory.build_object_storage", return_value=MagicMock()),
+        patch(consumer_path, return_value=mock_consumer),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        await mod.main()
+
+    assert captured.get("liveness_probe") is not None
 
 
 # ---------------------------------------------------------------------------
