@@ -165,7 +165,7 @@ export function ClosePositionDialog({
         external_ref: null,
       };
 
-      const response = await fetch("/v1/transactions", {
+      const response = await fetch("/api/v1/transactions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

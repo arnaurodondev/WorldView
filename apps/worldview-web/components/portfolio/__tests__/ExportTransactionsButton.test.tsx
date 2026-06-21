@@ -110,10 +110,13 @@ describe("ExportTransactionsButton", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
     });
 
-    // Verify the endpoint URL includes portfolio_id.
+    // Verify the endpoint URL uses the path-param form (SEC-101 / FE-002 fix):
+    // portfolio_id must be a PATH segment, not a query param.
+    // URL: /api/v1/portfolios/{portfolio_id}/transactions/export
+    // The /api prefix is required for the Next.js → S9 rewrite rule.
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("portfolio_id=port-123");
-    expect(url).toContain("/v1/transactions/export");
+    expect(url).toContain("/api/v1/portfolios/port-123/transactions/export");
+    expect(url).not.toContain("portfolio_id=");
 
     // Verify the Authorization header was set.
     const headers = init.headers as Record<string, string>;

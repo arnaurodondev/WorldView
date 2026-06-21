@@ -618,6 +618,14 @@ export default function PortfolioPage() {
             onOpenAddPosition={
               activeIsRoot ? undefined : () => setAddPositionOpen(true)
             }
+            // PRD-0114 W5 (FE-003): Close Position wiring.
+            // accessToken is forwarded through HoldingsTab → SemanticHoldingsTable
+            // → ClosePositionDialog for the auth-gated POST /api/v1/transactions.
+            accessToken={accessToken}
+            // onHoldingsRefetch delegates to handlePositionAdded (same TanStack
+            // Query invalidation path as Add Position) so the table refreshes
+            // immediately after a close without a full page reload.
+            onHoldingsRefetch={handlePositionAdded}
           />
         </TabsContent>
 

@@ -155,7 +155,9 @@ describe("ClosePositionDialog", () => {
 
     // Verify the request body.
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/v1/transactions");
+    // FE-001 fix: the /api prefix is required for the Next.js → S9 rewrite rule.
+    // A bare /v1/... URL is not rewritten and hits the 404 handler.
+    expect(url).toBe("/api/v1/transactions");
     expect(init.method).toBe("POST");
 
     const body = JSON.parse(init.body as string) as Record<string, unknown>;

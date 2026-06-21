@@ -50,12 +50,22 @@ class ResolvedSnapshotPosition:
     use case lives in the application layer and must not know how the worker
     resolves symbols (DB-first, S3 fallback). The worker performs resolution
     and hands us a ``(instrument_id, quantity, average_cost, currency)`` tuple.
+
+    ``cost_basis_per_unit`` and ``total_cost_basis`` are populated by the MANUAL
+    replay paths (_replay_fifo / _replay_avco in ComputeManualHoldingsUseCase)
+    so the dedicated holding columns added in migration 0025 are written on every
+    recompute. For BROKERAGE snapshots these fields remain None (broker does not
+    provide lot-level cost basis in a format we can break out separately).
     """
 
     instrument_id: UUID
     quantity: Decimal
     average_cost: Decimal | None
     currency: str
+    # PLAN-0114 ARCH-002/DP-001: per-unit and total cost basis computed during
+    # FIFO/AVCO replay.  None for BROKERAGE positions (broker snapshot path).
+    cost_basis_per_unit: Decimal | None = None
+    total_cost_basis: Decimal | None = None
 
 
 @dataclass
@@ -98,13 +108,25 @@ class UpsertHoldingsFromSnapshotUseCase:
         # ticker will yield two ResolvedSnapshotPosition rows with the same
         # instrument_id. We sum quantity and compute a quantity-weighted avg
         # cost across the rows so the holdings table reflects total exposure.
-        aggregated: dict[UUID, tuple[Decimal, Decimal | None, str]] = {}
+        #
+        # cost_basis_per_unit / total_cost_basis: set by ComputeManualHoldingsUseCase
+        # (FIFO/AVCO replay). For BROKERAGE positions these remain None. When
+        # aggregating across sub-accounts we keep the first non-None value — the
+        # columns are populated correctly for MANUAL portfolios where there is
+        # always exactly one position per instrument (no sub-account fan-out).
+        aggregated: dict[UUID, tuple[Decimal, Decimal | None, str, Decimal | None, Decimal | None]] = {}
         for pos in cmd.positions:
             existing = aggregated.get(pos.instrument_id)
             if existing is None:
-                aggregated[pos.instrument_id] = (pos.quantity, pos.average_cost, pos.currency)
+                aggregated[pos.instrument_id] = (
+                    pos.quantity,
+                    pos.average_cost,
+                    pos.currency,
+                    pos.cost_basis_per_unit,
+                    pos.total_cost_basis,
+                )
                 continue
-            prev_qty, prev_avg, prev_ccy = existing
+            prev_qty, prev_avg, prev_ccy, prev_cbpu, prev_tcb = existing
             new_qty = prev_qty + pos.quantity
             # Weighted average cost; if either side has None we keep the side that
             # carries a value (broker may omit cost basis on transferred-in lots).
@@ -120,7 +142,11 @@ class UpsertHoldingsFromSnapshotUseCase:
                 new_avg = pos.average_cost
             else:
                 new_avg = (prev_qty * prev_avg + pos.quantity * pos.average_cost) / new_qty
-            aggregated[pos.instrument_id] = (new_qty, new_avg, prev_ccy)
+            # Keep the first non-None cost_basis_per_unit/total_cost_basis when
+            # aggregating across sub-accounts (BROKERAGE only; MANUAL has 1:1).
+            new_cbpu = prev_cbpu if prev_cbpu is not None else pos.cost_basis_per_unit
+            new_tcb = prev_tcb if prev_tcb is not None else pos.total_cost_basis
+            aggregated[pos.instrument_id] = (new_qty, new_avg, prev_ccy, new_cbpu, new_tcb)
 
         # ── 2. Diff against existing holdings ──
         existing_holdings = await uow.holdings.list_by_portfolio(cmd.portfolio_id)
@@ -132,7 +158,7 @@ class UpsertHoldingsFromSnapshotUseCase:
         outbox_events: list[tuple[UUID, UUID, str, str, str]] = []
 
         # ── 3. Upserts ──
-        for instrument_id, (qty, avg, ccy) in aggregated.items():
+        for instrument_id, (qty, avg, ccy, cbpu, tcb) in aggregated.items():
             current = existing_by_instrument.get(instrument_id)
             avg_decimal = avg if avg is not None else Decimal(0)
             if current is None:
@@ -146,6 +172,10 @@ class UpsertHoldingsFromSnapshotUseCase:
                     quantity=qty,
                     average_cost=avg_decimal,
                     updated_at=utc_now(),
+                    # ARCH-002/DP-001: propagate cost basis columns computed by
+                    # the FIFO/AVCO replay so migration 0025 columns are written.
+                    cost_basis_per_unit=cbpu,
+                    total_cost_basis=tcb,
                 )
                 await uow.holdings.save(holding)
                 upserted += 1
@@ -156,6 +186,9 @@ class UpsertHoldingsFromSnapshotUseCase:
                 # Quantity or cost basis changed — overwrite.
                 current.quantity = qty
                 current.average_cost = avg_decimal
+                # Update cost basis columns so they stay in sync with the replay.
+                current.cost_basis_per_unit = cbpu
+                current.total_cost_basis = tcb
                 current.updated_at = utc_now()
                 await uow.holdings.save(current)
                 upserted += 1

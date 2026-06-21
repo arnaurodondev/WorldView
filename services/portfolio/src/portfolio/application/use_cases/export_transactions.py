@@ -226,97 +226,92 @@ class ExportTransactionsUseCase:
             to_date=str(tx_filter.to_date),
         )
 
-        # --- FIFO lot tracking (two-pass) ---
-        # Replay FIFO over the FULL chronological history so that all BUY lots
-        # before the filter window are properly tracked.  Only rows whose id is in
-        # output_tx_ids are appended to the CSV output list.
+        # --- FIFO lot tracking + true streaming CSV ---
+        # WHY true streaming (ARCH-003): the previous implementation accumulated
+        # all output rows in a ``rows: list[dict]`` before yielding any bytes.
+        # With 10 k+ transactions two full lists lived in memory simultaneously.
+        # We now build a generator that replays FIFO and yields each CSV row
+        # immediately, so peak memory is O(open_lots) not O(all_transactions).
         #
         # Structure: instrument_id → deque of (quantity: Decimal, price: Decimal)
         # One deque per instrument; FIFO = front of deque = oldest lot.
         lots: dict[UUID, deque[tuple[Decimal, Decimal]]] = {}
 
-        # Build output rows in-process (list of dicts) then stream via csv module.
-        rows: list[dict[str, str]] = []
-
-        for tx in full_transactions:
-            ticker = ticker_map.get(tx.instrument_id, "")
-            total_value = tx.quantity * tx.price
-
-            cost_basis_per_unit: Decimal | None = None
-            realized_pnl: Decimal | None = None
-
-            # --- FIFO: handle BUY-side (open lot) ---
-            if _is_buy(tx):
-                if tx.instrument_id not in lots:
-                    lots[tx.instrument_id] = deque()
-                lots[tx.instrument_id].append((tx.quantity, tx.price))
-
-            # --- FIFO: handle SELL-side (close lots) ---
-            elif _is_sell(tx):
-                instrument_lots = lots.get(tx.instrument_id, deque())
-                remaining_sell_qty = tx.quantity
-                total_cost_of_sold_units = Decimal(0)
-                units_matched = Decimal(0)
-
-                while remaining_sell_qty > 0 and instrument_lots:
-                    lot_qty, lot_price = instrument_lots[0]
-
-                    if lot_qty <= remaining_sell_qty:
-                        # Consume entire lot.
-                        total_cost_of_sold_units += lot_qty * lot_price
-                        units_matched += lot_qty
-                        remaining_sell_qty -= lot_qty
-                        instrument_lots.popleft()
-                    else:
-                        # Partial consumption of this lot.
-                        total_cost_of_sold_units += remaining_sell_qty * lot_price
-                        units_matched += remaining_sell_qty
-                        # Update the remaining lot quantity in-place.
-                        instrument_lots[0] = (lot_qty - remaining_sell_qty, lot_price)
-                        remaining_sell_qty = Decimal(0)
-
-                if units_matched > 0:
-                    cost_basis_per_unit = total_cost_of_sold_units / units_matched
-                    # realized_pnl = proceeds - cost.  Fees reduce proceeds for sells.
-                    proceeds = tx.quantity * tx.price - tx.fees
-                    realized_pnl = proceeds - total_cost_of_sold_units
-
-            # Only emit a CSV row when this transaction matches the user's filter.
-            if tx.id not in output_tx_ids:
-                continue
-
-            row = {
-                "date": _sanitize_csv_cell(tx.executed_at.date().isoformat()),
-                "ticker": _sanitize_csv_cell(ticker),
-                "type": _sanitize_csv_cell(str(tx.transaction_type)),
-                "trade_side": _sanitize_csv_cell(str(tx.trade_side) if tx.trade_side else ""),
-                "quantity": _fmt_decimal(tx.quantity),
-                "price": _fmt_decimal(tx.price),
-                "fees": _fmt_decimal(tx.fees),
-                "currency": _sanitize_csv_cell(tx.currency),
-                "total_value": _fmt_decimal(total_value),
-                "cost_basis_per_unit": _fmt_decimal(cost_basis_per_unit),
-                "realized_pnl": _fmt_decimal(realized_pnl),
-                "description": _sanitize_csv_cell(tx.description or ""),
-            }
-            rows.append(row)
-
-        # --- Stream CSV output via csv.writer ---
-        # WHY StringIO + csv.writer: the csv module handles quoting of commas
-        # and embedded newlines correctly; we don't want to reproduce that logic.
-        # We write one row at a time to the StringIO buffer, yield the resulting
-        # string, then reset the buffer to avoid accumulating the entire file.
-
         def _iter_csv() -> Iterator[str]:
-            buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=_CSV_HEADERS, lineterminator="\r\n")
-            writer.writeheader()
-            yield buf.getvalue()
+            # Emit the header row first.
+            header_buf = io.StringIO()
+            csv.DictWriter(header_buf, fieldnames=_CSV_HEADERS, lineterminator="\r\n").writeheader()
+            yield header_buf.getvalue()
 
-            for row in rows:
-                buf = io.StringIO()
-                writer = csv.DictWriter(buf, fieldnames=_CSV_HEADERS, lineterminator="\r\n")
-                writer.writerow(row)
-                yield buf.getvalue()
+            for tx in full_transactions:
+                ticker = ticker_map.get(tx.instrument_id, "")
+                total_value = tx.quantity * tx.price
+
+                cost_basis_per_unit: Decimal | None = None
+                realized_pnl: Decimal | None = None
+
+                # --- FIFO: handle BUY-side (open lot) ---
+                if _is_buy(tx):
+                    if tx.instrument_id not in lots:
+                        lots[tx.instrument_id] = deque()
+                    lots[tx.instrument_id].append((tx.quantity, tx.price))
+
+                # --- FIFO: handle SELL-side (close lots) ---
+                elif _is_sell(tx):
+                    instrument_lots = lots.get(tx.instrument_id, deque())
+                    remaining_sell_qty = tx.quantity
+                    total_cost_of_sold_units = Decimal(0)
+                    units_matched = Decimal(0)
+
+                    while remaining_sell_qty > 0 and instrument_lots:
+                        lot_qty, lot_price = instrument_lots[0]
+
+                        if lot_qty <= remaining_sell_qty:
+                            # Consume entire lot.
+                            total_cost_of_sold_units += lot_qty * lot_price
+                            units_matched += lot_qty
+                            remaining_sell_qty -= lot_qty
+                            instrument_lots.popleft()
+                        else:
+                            # Partial consumption of this lot.
+                            total_cost_of_sold_units += remaining_sell_qty * lot_price
+                            units_matched += remaining_sell_qty
+                            # Update the remaining lot quantity in-place.
+                            instrument_lots[0] = (lot_qty - remaining_sell_qty, lot_price)
+                            remaining_sell_qty = Decimal(0)
+
+                    if units_matched > 0:
+                        cost_basis_per_unit = total_cost_of_sold_units / units_matched
+                        # realized_pnl = proceeds - cost.  Fees reduce proceeds for sells.
+                        proceeds = tx.quantity * tx.price - tx.fees
+                        realized_pnl = proceeds - total_cost_of_sold_units
+
+                # Only emit a CSV row when this transaction matches the user's filter.
+                if tx.id not in output_tx_ids:
+                    continue
+
+                # WHY one-row StringIO per yield: writing to a fresh buffer and
+                # yielding immediately avoids accumulating the entire file in
+                # memory.  The csv module still handles quoting of commas and
+                # embedded newlines correctly.
+                row_buf = io.StringIO()
+                writer = csv.DictWriter(row_buf, fieldnames=_CSV_HEADERS, lineterminator="\r\n")
+                writer.writerow(
+                    {
+                        "date": _sanitize_csv_cell(tx.executed_at.date().isoformat()),
+                        "ticker": _sanitize_csv_cell(ticker),
+                        "type": _sanitize_csv_cell(str(tx.transaction_type)),
+                        "trade_side": _sanitize_csv_cell(str(tx.trade_side) if tx.trade_side else ""),
+                        "quantity": _fmt_decimal(tx.quantity),
+                        "price": _fmt_decimal(tx.price),
+                        "fees": _fmt_decimal(tx.fees),
+                        "currency": _sanitize_csv_cell(tx.currency),
+                        "total_value": _fmt_decimal(total_value),
+                        "cost_basis_per_unit": _fmt_decimal(cost_basis_per_unit),
+                        "realized_pnl": _fmt_decimal(realized_pnl),
+                        "description": _sanitize_csv_cell(tx.description or ""),
+                    }
+                )
+                yield row_buf.getvalue()
 
         return _iter_csv()

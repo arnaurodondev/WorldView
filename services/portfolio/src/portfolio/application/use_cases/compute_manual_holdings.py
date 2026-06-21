@@ -313,6 +313,12 @@ def _replay_fifo(transactions: list) -> list[ResolvedSnapshotPosition]:
                 # uses average_cost for cost basis).
                 average_cost=cost_per_unit,
                 currency="USD",  # TODO W3: surface per-instrument currency
+                # ARCH-002/DP-001: populate dedicated cost-basis columns
+                # (added in migration 0025) so they are never NULL for MANUAL
+                # portfolios. cost_basis_per_unit = FIFO weighted-avg cost;
+                # total_cost_basis = per-unit * remaining quantity.
+                cost_basis_per_unit=cost_per_unit,
+                total_cost_basis=cost_per_unit * Decimal(total_qty),
             )
         )
     return positions
@@ -373,6 +379,12 @@ def _replay_avco(transactions: list) -> list[ResolvedSnapshotPosition]:
                 quantity=total_qty,
                 average_cost=cost_per_unit,
                 currency="USD",  # TODO W3: surface per-instrument currency
+                # ARCH-002/DP-001: populate dedicated cost-basis columns
+                # (added in migration 0025) so they are never NULL for MANUAL
+                # portfolios. AVCO cost_basis_per_unit = running weighted avg;
+                # total_cost_basis = per-unit * remaining quantity.
+                cost_basis_per_unit=cost_per_unit,
+                total_cost_basis=cost_per_unit * total_qty,
             )
         )
     return positions

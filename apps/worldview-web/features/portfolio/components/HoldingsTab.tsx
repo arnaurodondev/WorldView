@@ -163,6 +163,21 @@ interface HoldingsTabProps {
    * Optional — undefined when portfolioKind === "root" (read-only root portfolio).
    */
   onOpenAddPosition?: () => void;
+  /**
+   * PRD-0114 W5 (FE-003): auth token forwarded to SemanticHoldingsTable →
+   * ClosePositionDialog for the authenticated POST /api/v1/transactions call.
+   * Optional — undefined when the feature is not yet wired at the call site
+   * (older tests degrade gracefully; the context menu item is gated on
+   * portfolioId being defined anyway).
+   */
+  accessToken?: string | null;
+  /**
+   * PRD-0114 W5 (FE-003): called by ClosePositionDialog.onSuccess so the
+   * holdings table refetches after a position is closed. Delegates to
+   * handlePositionAdded() in usePortfolioData (same invalidation as Add).
+   * Optional — undefined falls back to a no-op in SemanticHoldingsTable.
+   */
+  onHoldingsRefetch?: () => void;
 }
 
 export function HoldingsTab({
@@ -191,6 +206,8 @@ export function HoldingsTab({
   sectorIdMap,
   portfolioKind = null,
   onOpenAddPosition,
+  accessToken,
+  onHoldingsRefetch,
 }: HoldingsTabProps) {
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
@@ -629,6 +646,19 @@ export function HoldingsTab({
           // R1 sprint: ASSET column data (was a hardcoded empty map inside
           // SemanticHoldingsTable, so every row showed "—").
           assetClasses={assetClasses}
+          // PRD-0114 W5 (FE-003): Close Position context-menu wiring.
+          // portfolioId gates the "Close Position" menu item — undefined for
+          // the root (read-only) portfolio so the item is correctly absent.
+          // portfolioKind is forwarded so the table can additionally gate on
+          // kind !== "root" (belt-and-suspenders guard matching the table's
+          // own internal check).
+          // accessToken is forwarded to ClosePositionDialog for the auth header.
+          // onHoldingsRefetch triggers query invalidation after a successful close
+          // so the holdings table updates without a full page reload.
+          portfolioId={activePortfolioId ?? undefined}
+          portfolioKind={portfolioKind ?? undefined}
+          accessToken={accessToken}
+          onHoldingsRefetch={onHoldingsRefetch}
         />
         )}
       </div>

@@ -79,9 +79,13 @@ export function ExportTransactionsButton({
 
     try {
       // ── Build the export URL with filter params ───────────────────────────
-      // WHY URLSearchParams: handles encoding automatically. We always include
-      // portfolio_id so the backend knows which transactions to export.
-      const qs = new URLSearchParams({ portfolio_id: portfolioId });
+      // WHY URLSearchParams: handles encoding automatically. Filter params
+      // (dates, tickers, types) are forwarded as query params.
+      // portfolio_id is embedded in the PATH (not a query param) to match the
+      // existing S9 route: GET /v1/portfolios/{portfolio_id}/transactions/export
+      // A flat /v1/transactions/export?portfolio_id=... route does NOT exist in
+      // S9 — using the path-param form ensures correct portfolio ownership checks.
+      const qs = new URLSearchParams();
 
       // Forward the active date-range filters if set.
       // The backend maps these to CAST(executed_at AS DATE) comparisons.
@@ -101,10 +105,14 @@ export function ExportTransactionsButton({
         }
       }
 
-      // WHY this URL pattern: the S9 proxy maps
-      // GET /v1/transactions/export → S1 GET /api/v1/portfolios/{id}/transactions/export
-      // All filter params are forwarded as query params.
-      const url = `/v1/transactions/export?${qs.toString()}`;
+      // WHY /api/v1/portfolios/{id}/transactions/export:
+      // - The /api prefix is required for the Next.js → S9 rewrite rule
+      //   (source: "/api/:path*"). A bare /v1/... path has no matching rewrite
+      //   and hits the Next.js 404 handler before reaching S9.
+      // - portfolio_id is a PATH segment, not a query param. S9 route:
+      //   GET /v1/portfolios/{portfolio_id}/transactions/export
+      //   The path-param form invokes the correct S1 ownership check.
+      const url = `/api/v1/portfolios/${portfolioId}/transactions/export${qs.toString() ? `?${qs.toString()}` : ""}`;
 
       // ── Fetch with auth ───────────────────────────────────────────────────
       // WHY fetch (not apiFetch): apiFetch returns parsed JSON. The export

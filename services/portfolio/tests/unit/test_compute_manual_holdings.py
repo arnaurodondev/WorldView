@@ -173,6 +173,57 @@ class TestFifoFullSell:
         assert len(uow.holdings._store) == 0
 
 
+class TestFifoOversell:
+    """FIFO: SELL quantity exceeds all open lots (short-sell / inconsistent history).
+
+    The position should be silently suppressed (net qty → 0) and a warning
+    logged — it must NOT crash or leave a corrupted holding row.
+    """
+
+    def test_oversell_suppresses_position_and_does_not_raise(self) -> None:
+        """BUY 5 then SELL 10: 5 excess shares → no holding row, no exception.
+
+        The warning is emitted via structlog (not stdlib logging), so we verify
+        the observable effect (suppressed position) rather than capturing log output.
+        """
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.FIFO)
+        txs = [
+            # BUY 5, then SELL 10 → 5 excess shares (short-sell)
+            _make_tx(INSTRUMENT_A, TransactionType.BUY, "5", "100.00", _utc(2025, 4, 1)),
+            _make_tx(INSTRUMENT_A, TransactionType.SELL, "10", "120.00", _utc(2025, 4, 2)),
+        ]
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        uow.transactions._store.update({t.id: t for t in txs})
+
+        use_case = ComputeManualHoldingsUseCase()
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        # The position must be suppressed — no holding row written
+        assert not result.skipped
+        assert len(uow.holdings._store) == 0
+
+    def test_oversell_does_not_raise(self) -> None:
+        """Oversell must never raise — callers cannot handle exceptions mid-replay."""
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.FIFO)
+        txs = [
+            _make_tx(INSTRUMENT_A, TransactionType.BUY, "1", "50.00", _utc(2025, 5, 1)),
+            _make_tx(INSTRUMENT_A, TransactionType.SELL, "999", "55.00", _utc(2025, 5, 2)),
+        ]
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        uow.transactions._store.update({t.id: t for t in txs})
+
+        use_case = ComputeManualHoldingsUseCase()
+        # Should complete without raising
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        assert not result.skipped
+        assert len(uow.holdings._store) == 0
+
+
 class TestAvcoInterleaved:
     """AVCO: interleaved buys and sells → running weighted average correct."""
 
