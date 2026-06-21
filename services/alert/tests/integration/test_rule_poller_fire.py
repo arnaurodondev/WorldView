@@ -37,6 +37,9 @@ class _StubS3(IS3PriceClient):
     async def get_fundamental_metric(self, instrument_id, metric):  # type: ignore[no-untyped-def]
         return None
 
+    async def get_fundamental_metric_keys(self):  # type: ignore[no-untyped-def]
+        return None
+
 
 class _CapturingPublisher:
     def __init__(self) -> None:
@@ -86,9 +89,15 @@ async def test_poller_price_fires_once(db_session_factory) -> None:  # type: ign
     ctx = EvalContext(clients={"s3": _StubS3(price=150.0)})
 
     due = await poller_main.run_poll_cycle(factory, settings, ctx=ctx, fire_use_case=fire_uc)
-    assert due == 1
-    assert len(publisher.sent) == 1
-    assert publisher.sent[0][0] == user_id
+    # ``due`` counts ALL enabled price rules in the shared (session-scoped)
+    # testcontainer DB, so other integration tests' committed rules may inflate
+    # it — assert on THIS rule's effect instead of a brittle global count.
+    assert due >= 1
+    # Exactly one push for THIS rule's owner (the stub price crosses 100 for
+    # this rule's instrument only; other rules key on different instruments and
+    # the stub returns no price for them → they skip without firing).
+    our_pushes = [p for p in publisher.sent if p[0] == user_id]
+    assert len(our_pushes) == 1
 
     # The rule state advanced (latched above + recorded a fire).
     async with factory() as s:

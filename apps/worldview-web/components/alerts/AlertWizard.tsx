@@ -149,6 +149,11 @@ export function AlertWizard({
   const [notifyInApp, setNotifyInApp] = useState<boolean>(editRule?.notify_in_app ?? true);
   const [notifyEmail, setNotifyEmail] = useState<boolean>(editRule?.notify_email ?? false);
 
+  // Display names learned from LIVE picks inside the mounted editor (id → ticker/
+  // name). Merged with `prefillNames` so the NL summary reads "AAPL" whether the
+  // subject was seeded by an entry point OR picked by the user (PLAN-0113 QA fix).
+  const [liveNames, setLiveNames] = useState<Record<string, string>>({});
+
   const createMut = useCreateAlertRule();
   const updateMut = useUpdateAlertRule();
   const saving = createMut.isPending || updateMut.isPending;
@@ -156,12 +161,19 @@ export function AlertWizard({
   // Live NL summary — recomputed as the editor reports condition changes.
   // `prefillNames` lets the summary read "AAPL" instead of a raw UUID for any
   // subject that was seeded by an entry point (PLAN-0113 Wave 5).
+  // Merge seeded (entry-point) names with names learned from live picks; live
+  // picks win on collision (they reflect the user's current choice).
+  const mergedNames = useMemo(
+    () => ({ ...prefillNames, ...liveNames }),
+    [prefillNames, liveNames],
+  );
+
   const summary = useMemo(
     () =>
       ruleType
-        ? ruleToNaturalLanguage({ rule_type: ruleType, condition, names: prefillNames })
+        ? ruleToNaturalLanguage({ rule_type: ruleType, condition, names: mergedNames })
         : "",
-    [ruleType, condition, prefillNames],
+    [ruleType, condition, mergedNames],
   );
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -174,6 +186,7 @@ export function AlertWizard({
     setName(editRule?.name ?? "");
     setNotifyInApp(editRule?.notify_in_app ?? true);
     setNotifyEmail(editRule?.notify_email ?? false);
+    setLiveNames({});
   }
 
   /** Close the dialog and reset for next time. */
@@ -277,6 +290,7 @@ export function AlertWizard({
               value={editRule?.condition ?? prefillCondition ?? null}
               names={prefillNames}
               onChange={setCondition}
+              onNamesChange={(n) => setLiveNames((prev) => ({ ...prev, ...n }))}
             />
 
             {/* Name (optional). */}
@@ -403,6 +417,7 @@ function ConditionEditorSwitch({
   value,
   names,
   onChange,
+  onNamesChange,
 }: {
   ruleType: RuleType;
   /** Stored condition (edit) or partial prefill (create); may be incomplete. */
@@ -410,6 +425,8 @@ function ConditionEditorSwitch({
   /** Optional id→display-name map so seeded chips show names, not UUIDs. */
   names?: Record<string, string>;
   onChange: (c: RuleCondition | null) => void;
+  /** Reports live-picked subject names up to the wizard for the NL summary. */
+  onNamesChange: (names: Record<string, string>) => void;
 }) {
   switch (ruleType) {
     case "PRICE_CROSS":
@@ -418,6 +435,7 @@ function ConditionEditorSwitch({
           value={value as never}
           names={names}
           onChange={onChange as never}
+          onNamesChange={onNamesChange}
         />
       );
     case "FUNDAMENTAL_CROSS":
@@ -426,19 +444,35 @@ function ConditionEditorSwitch({
           value={value as never}
           names={names}
           onChange={onChange as never}
+          onNamesChange={onNamesChange}
         />
       );
     case "NEWS_COUNT":
       return (
-        <NewsVolumeEditor value={value as never} names={names} onChange={onChange as never} />
+        <NewsVolumeEditor
+          value={value as never}
+          names={names}
+          onChange={onChange as never}
+          onNamesChange={onNamesChange}
+        />
       );
     case "NEWS_MOMENTUM":
       return (
-        <NewsMomentumEditor value={value as never} names={names} onChange={onChange as never} />
+        <NewsMomentumEditor
+          value={value as never}
+          names={names}
+          onChange={onChange as never}
+          onNamesChange={onNamesChange}
+        />
       );
     case "KG_CONNECTION":
       return (
-        <KgConnectionEditor value={value as never} names={names} onChange={onChange as never} />
+        <KgConnectionEditor
+          value={value as never}
+          names={names}
+          onChange={onChange as never}
+          onNamesChange={onNamesChange}
+        />
       );
     default: {
       // Exhaustiveness guard — adding a RuleType without a branch is a compile error.

@@ -508,11 +508,51 @@ def _validate_condition_and_keys(rule_type_raw: str, condition_raw: dict) -> tup
     return rule_type, cond_dict, keys
 
 
+async def _validate_metric_key(request: Request, rule_type: RuleType, cond_dict: dict) -> None:  # type: ignore[type-arg]
+    """Allow-list ``FUNDAMENTAL_CROSS.metric_key`` against the S3 vocabulary.
+
+    PRD-0113 §6.5.3/§9: the only semantic check that cannot live in the domain
+    condition model (it needs the live S3 ``screen/fields`` catalogue). Without
+    it, a typo'd ``metric_key`` is accepted and the rule then silently never
+    fires (the evaluator's ``get_fundamental_metric`` returns None for an unknown
+    metric) — exactly the silent-drop class this PRD set out to kill.
+
+    Fail policy: reject (400) only when the catalogue is reachable AND the metric
+    is definitively absent. If S3 is unreachable (vocab is ``None``), we
+    fail-open (allow + log) so a transient S3 outage cannot block rule creation.
+    """
+    from alert.domain.enums import RuleType
+    from alert.infrastructure.clients.s3_client import S3MarketDataClient
+
+    if rule_type is not RuleType.FUNDAMENTAL_CROSS:
+        return
+    metric_key = cond_dict.get("metric_key")
+    if not isinstance(metric_key, str):
+        return  # shape already validated by the Pydantic condition model.
+
+    s3_client = S3MarketDataClient(request.app.state.settings)
+    try:
+        vocab = await s3_client.get_fundamental_metric_keys()
+    finally:
+        await s3_client.close()
+
+    if vocab is None:
+        # Catalogue unreachable — allow but record the unverified creation.
+        logger.warning("metric_key_unverified_s3_unreachable", metric_key=metric_key)  # type: ignore[no-any-return]
+        return
+    if metric_key not in vocab:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown metric_key '{metric_key}'. Must be one of the S3 fundamentals fields.",
+        )
+
+
 @router.post("/alert-rules", response_model=AlertRuleResponse, status_code=201)
 async def create_alert_rule(
     body: AlertRuleCreateRequest,
     uc: CreateRuleUseCaseDep,
     tenant_user: TenantUserDep,
+    request: Request,
 ) -> AlertRuleResponse:
     """Create a standing alert rule (PLAN-0113).
 
@@ -526,6 +566,8 @@ async def create_alert_rule(
 
     tenant_id, user_id = tenant_user
     rule_type, cond_dict, keys = _validate_condition_and_keys(body.rule_type, body.condition)
+    # Semantic allow-list for FUNDAMENTAL_CROSS metric_key (S3 vocabulary).
+    await _validate_metric_key(request, rule_type, cond_dict)
 
     try:
         severity = AlertSeverity(body.severity)
@@ -568,9 +610,7 @@ async def list_alert_rules(
     """List the caller's alert rules (read replica, R27)."""
     tenant_id, user_id = tenant_user
     rt = _parse_rule_type(rule_type) if rule_type is not None else None
-    rules, total = await uc.execute(
-        tenant_id, user_id, enabled=enabled, rule_type=rt, limit=limit, offset=offset
-    )
+    rules, total = await uc.execute(tenant_id, user_id, enabled=enabled, rule_type=rt, limit=limit, offset=offset)
     return AlertRuleListResponse(items=[_rule_to_response(r) for r in rules], total=total)
 
 
@@ -598,6 +638,7 @@ async def update_alert_rule(
     get_uc: GetRuleUseCaseDep,
     uc: UpdateRuleUseCaseDep,
     tenant_user: TenantUserDep,
+    request: Request,
 ) -> AlertRuleResponse:
     """Partial-update an owned rule. Changing ``condition`` re-arms (last_state=null).
 
@@ -632,7 +673,9 @@ async def update_alert_rule(
             existing = await get_uc.execute(rule_id, tenant_id, user_id)
         except RuleNotFoundError:
             raise HTTPException(status_code=404, detail="Rule not found") from None
-        _, cond_dict, keys = _validate_condition_and_keys(str(existing.rule_type), body.condition)
+        rt, cond_dict, keys = _validate_condition_and_keys(str(existing.rule_type), body.condition)
+        # Re-validate metric_key when the condition changes (same allow-list as create).
+        await _validate_metric_key(request, rt, cond_dict)
         patch.condition = cond_dict
         patch.entity_id = keys.get("entity_id")
         patch.node_a_entity_id = keys.get("node_a_entity_id")

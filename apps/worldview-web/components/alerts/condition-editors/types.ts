@@ -42,4 +42,17 @@ export interface ConditionEditorProps<C extends RuleCondition = RuleCondition> {
    * yet valid (so the wizard can disable Save).
    */
   onChange: (condition: C | null) => void;
+  /**
+   * Reports the display names for the subjects the user picked LIVE in this editor
+   * (id → ticker/name), so the wizard's natural-language summary can read "AAPL"
+   * instead of a raw UUID (PLAN-0113 QA fix, 2026-06-20).
+   *
+   * WHY this exists: the condition only carries ids; the picker learns the display
+   * name when the user selects from the dropdown but that name never reached the
+   * summary. `prefillNames` only covered the entry-point case (seeded subjects);
+   * for live picks the summary fell back to the UUID. Each editor calls this with
+   * the names it knows whenever a subject is (de)selected. Optional so existing
+   * tests that don't pass it keep compiling.
+   */
+  onNamesChange?: (names: Record<string, string>) => void;
 }

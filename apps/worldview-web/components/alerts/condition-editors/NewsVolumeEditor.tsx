@@ -26,6 +26,7 @@ export function NewsVolumeEditor({
   value,
   names,
   onChange,
+  onNamesChange,
 }: ConditionEditorProps<NewsCountCondition>) {
   // value may be a PARTIAL prefill (Wave 5) — read each field defensively.
   const [entity, setEntity] = useState<ChosenEntity | null>(
@@ -56,6 +57,12 @@ export function NewsVolumeEditor({
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onChange stable parent cb.
   }, [entity, window, thresholdStr, keyword]);
+
+  // Report the live-picked entity's display name for the wizard NL summary.
+  useEffect(() => {
+    if (entity) onNamesChange?.({ [entity.entityId]: entity.name });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onNamesChange stable parent cb.
+  }, [entity]);
 
   return (
     <div className="flex flex-col gap-3">

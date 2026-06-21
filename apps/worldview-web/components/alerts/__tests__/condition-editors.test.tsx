@@ -100,6 +100,18 @@ describe("PriceCrossEditor", () => {
     fireEvent.change(screen.getByLabelText(/Price level/i), { target: { value: "0" } });
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
+
+  // PLAN-0113 QA fix (2026-06-20): a LIVE pick must report its display name up so
+  // the wizard NL summary reads the ticker, not the raw UUID.
+  it("reports the picked instrument's display name via onNamesChange", () => {
+    const onNamesChange = vi.fn();
+    render(
+      <PriceCrossEditor value={null} onChange={vi.fn()} onNamesChange={onNamesChange} />,
+    );
+    fireEvent.click(screen.getByTestId("pick-instrument-Instrument"));
+    // The stub picker selects {instrumentId:"i-aapl", ticker:"AAPL"}.
+    expect(onNamesChange).toHaveBeenLastCalledWith({ "i-aapl": "AAPL" });
+  });
 });
 
 describe("FundamentalCrossEditor", () => {

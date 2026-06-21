@@ -28,6 +28,16 @@ class IS3PriceClient(ABC):
     async def get_fundamental_metric(self, instrument_id: UUID, metric: str) -> float | None:
         """Return the latest numeric value of ``metric`` for an instrument, or None."""
 
+    @abstractmethod
+    async def get_fundamental_metric_keys(self) -> frozenset[str] | None:
+        """Return the S3 fundamentals metric vocabulary (``screen/fields`` names).
+
+        Used at the API boundary to allow-list ``FUNDAMENTAL_CROSS.metric_key``
+        (PRD-0113 §6.5.3/§9). Returns ``None`` on transport/HTTP error so the
+        caller can decide its fail-open/closed policy (a transient S3 outage must
+        not permanently block rule creation).
+        """
+
 
 class IS6NewsClient(ABC):
     """Port for S6 news-signal reads (rollup counts + trending momentum)."""

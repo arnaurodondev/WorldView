@@ -175,7 +175,7 @@ at `/v1/alert-rules` (auth-gated, `Cache-Control: no-store`).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/alert-rules` | X-Internal-JWT | Create a standing rule (201; 400 bad condition / unknown rule_type / bad severity; 422 node_a==node_b; 429 per-user cap) |
+| POST | `/api/v1/alert-rules` | X-Internal-JWT | Create a standing rule (201; 400 bad condition / unknown rule_type / bad severity / **unknown `metric_key`** for FUNDAMENTAL_CROSS; 422 node_a==node_b; 429 per-user cap). FUNDAMENTAL_CROSS `metric_key` is allow-listed against the S3 `GET /api/v1/fundamentals/screen/fields` vocabulary (fail-open if S3 is unreachable). |
 | GET | `/api/v1/alert-rules` | X-Internal-JWT | List the caller's rules (`?enabled=`, `?rule_type=`, `?limit=&offset=`) → `{items, total}` |
 | GET | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Get one owned rule (404 if missing/cross-owner) |
 | PATCH | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Partial update; changing `condition` re-arms (`last_state=null`); `rule_type` immutable |
@@ -607,6 +607,7 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_S7_KNOWLEDGE_GRAPH_BASE_URL` | `http://knowledge-graph:8007` | S7 URL for entity name/ticker enrichment |
 | `ALERT_S8_BASE_URL` | `http://rag-chat:8008` | S8 URL for email digest briefing generation |
 | `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data + rule price/fundamental reads |
+| `ALERT_S3_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S3 calls (PLAN-0113). **Required for PRICE_CROSS / FUNDAMENTAL_CROSS evaluation + `metric_key` validation.** Without it the poller's S3 reads 401 and **no price/fundamental rule ever fires** (QA 2026-06-21). |
 | `ALERT_S6_NLP_BASE_URL` | `http://nlp-pipeline:8006` | S6 URL for news-count/momentum rule reads (PLAN-0113, new) |
 | `ALERT_S6_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S6 calls (PLAN-0113) |
 | `ALERT_ALERT_RULE_POLLER_ENABLED` | `true` | Master switch for rule evaluation (false = rules dormant) |

@@ -24,6 +24,7 @@ export function PriceCrossEditor({
   value,
   names,
   onChange,
+  onNamesChange,
 }: ConditionEditorProps<PriceCrossCondition>) {
   // WHY local chip state for the instrument: the picker needs a display name, but
   // the condition only carries the id. We keep both — the chip name is presentation
@@ -56,6 +57,15 @@ export function PriceCrossEditor({
     // parent render, so it is intentionally omitted from the dependency array.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrument, operator, valueStr]);
+
+  // Report the live-picked instrument's display name so the wizard summary reads
+  // its ticker (e.g. "AAPL"), not the raw UUID (PLAN-0113 QA fix).
+  useEffect(() => {
+    if (instrument) {
+      onNamesChange?.({ [instrument.instrumentId]: instrument.ticker || instrument.name });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onNamesChange stable parent cb.
+  }, [instrument]);
 
   return (
     <div className="flex flex-col gap-3">

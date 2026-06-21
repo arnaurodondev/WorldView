@@ -26,6 +26,7 @@ export function KgConnectionEditor({
   value,
   names,
   onChange,
+  onNamesChange,
 }: ConditionEditorProps<KgConnectionCondition>) {
   // value may be a PARTIAL prefill (Wave 5) — the KG path-panel entry point seeds
   // BOTH source + target ids; read each defensively and use `names` for the chip.
@@ -66,6 +67,15 @@ export function KgConnectionEditor({
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onChange stable parent cb.
   }, [source, target, maxHops, relationType, sameNode]);
+
+  // Report both live-picked entities' display names for the wizard NL summary.
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    if (source) next[source.entityId] = source.name;
+    if (target) next[target.entityId] = target.name;
+    if (Object.keys(next).length) onNamesChange?.(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onNamesChange stable parent cb.
+  }, [source, target]);
 
   return (
     <div className="flex flex-col gap-3">

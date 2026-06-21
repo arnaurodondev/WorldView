@@ -45,9 +45,49 @@ export function createScreenerApi(t: string | undefined) {
     /**
      * getScreenerFields — available filter fields for the screener UI
      * Cached by S9/S3 for 6h — infrequently changes
+     *
+     * WHY a transform (PLAN-0113 QA, 2026-06-20): the live S3 endpoint returns
+     * a WRAPPED envelope `{ "fields": [...] }`, and each field carries
+     * `"type": "numeric"` (not `"number"`) plus no `operators` array. The
+     * frontend `ScreenerField` contract (and the sole consumer, the alert
+     * wizard's `MetricPicker`) expects a FLAT `ScreenerField[]` whose numeric
+     * fields are `type === "number"`. Returning the raw object made
+     * `(data ?? []).filter(...)` operate on a dict — the MetricPicker dropdown
+     * silently rendered ZERO metrics, so FUNDAMENTAL_CROSS alert rules could
+     * never be created. We unwrap + normalise here so every caller sees the
+     * documented array shape regardless of the backend envelope.
      */
-    getScreenerFields(): Promise<ScreenerField[]> {
-      return apiFetch<ScreenerField[]>("/v1/fundamentals/screen/fields");
+    async getScreenerFields(): Promise<ScreenerField[]> {
+      // Tolerate BOTH the wrapped `{fields:[...]}` envelope (live S3) and a
+      // bare array (older/mocked shape) so this never regresses if the backend
+      // is changed to return a flat list.
+      const raw = await apiFetch<
+        { fields?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+      >("/v1/fundamentals/screen/fields");
+      const rows: Array<Record<string, unknown>> = Array.isArray(raw)
+        ? raw
+        : (raw.fields ?? []);
+      return rows.map((f) => {
+        // Map the backend's "numeric" type onto the frontend's "number"; pass
+        // "string" / "select" through unchanged.
+        const rawType = String(f["type"] ?? "");
+        const type: ScreenerField["type"] =
+          rawType === "numeric" || rawType === "number"
+            ? "number"
+            : rawType === "select"
+              ? "select"
+              : "string";
+        return {
+          name: String(f["name"] ?? ""),
+          label: String(f["label"] ?? f["name"] ?? ""),
+          type,
+          // The live endpoint omits `operators`; default to an empty list so
+          // the typed contract holds. (MetricPicker does not read operators.)
+          operators: Array.isArray(f["operators"]) ? (f["operators"] as string[]) : [],
+          options: (f["options"] as ScreenerField["options"]) ?? undefined,
+          description: (f["description"] as string | null | undefined) ?? null,
+        } satisfies ScreenerField;
+      });
     },
 
     /**

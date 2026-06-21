@@ -136,3 +136,91 @@ async def test_unknown_rule_type_returns_400(client) -> None:  # type: ignore[no
     body["rule_type"] = "NONSENSE"
     resp = await client.post("/api/v1/alert-rules", json=body)
     assert resp.status_code == 400
+
+
+def _fundamental_body(metric_key: str = "pe_ratio") -> dict:  # type: ignore[type-arg]
+    return {
+        "rule_type": "FUNDAMENTAL_CROSS",
+        "name": "AAPL P/E < 25",
+        "condition": {
+            "instrument_id": str(uuid4()),
+            "metric_key": metric_key,
+            "operator": "below",
+            "value": 25.0,
+        },
+        "severity": "medium",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_fundamental_unknown_metric_key_returns_400(  # type: ignore[no-untyped-def]
+    client, monkeypatch
+) -> None:
+    """An unknown metric_key is rejected once the S3 vocabulary is reachable.
+
+    Regression: previously the metric_key allow-list (PRD §6.5.3/§9) was never
+    enforced in the API layer, so a typo'd key created a rule that then silently
+    never fired (evaluator returns None for an unknown metric).
+    """
+    from alert.infrastructure.clients import s3_client as s3_mod
+
+    async def _fake_keys(self):  # type: ignore[no-untyped-def]
+        return frozenset({"pe_ratio", "market_cap"})
+
+    monkeypatch.setattr(s3_mod.S3MarketDataClient, "get_fundamental_metric_keys", _fake_keys)
+
+    resp = await client.post("/api/v1/alert-rules", json=_fundamental_body("not_a_real_metric"))
+    assert resp.status_code == 400, resp.text
+    assert "metric_key" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_create_fundamental_valid_metric_key_succeeds(  # type: ignore[no-untyped-def]
+    client, monkeypatch
+) -> None:
+    """A metric_key present in the S3 vocabulary is accepted."""
+    from alert.infrastructure.clients import s3_client as s3_mod
+
+    async def _fake_keys(self):  # type: ignore[no-untyped-def]
+        return frozenset({"pe_ratio", "market_cap"})
+
+    monkeypatch.setattr(s3_mod.S3MarketDataClient, "get_fundamental_metric_keys", _fake_keys)
+
+    resp = await client.post("/api/v1/alert-rules", json=_fundamental_body("pe_ratio"))
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_create_fundamental_metric_key_failopen_when_s3_unreachable(  # type: ignore[no-untyped-def]
+    client, monkeypatch
+) -> None:
+    """If the S3 catalogue is unreachable (None), creation is allowed (fail-open)."""
+    from alert.infrastructure.clients import s3_client as s3_mod
+
+    async def _fake_keys(self):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(s3_mod.S3MarketDataClient, "get_fundamental_metric_keys", _fake_keys)
+
+    resp = await client.post("/api/v1/alert-rules", json=_fundamental_body("anything_goes"))
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_patch_advances_updated_at(client) -> None:  # type: ignore[no-untyped-def]
+    """PATCH echoes a fresh updated_at (> created_at) in the response body.
+
+    Regression: the UpdateRule use case returned the in-memory aggregate whose
+    ``updated_at`` still held the creation timestamp, so the API response showed
+    a stale value even though the DB row was correctly re-stamped.
+    """
+    resp = await client.post("/api/v1/alert-rules", json=_price_body())
+    created = resp.json()
+    rule_id = created["rule_id"]
+
+    resp = await client.patch(f"/api/v1/alert-rules/{rule_id}", json={"name": "renamed"})
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["name"] == "renamed"
+    assert updated["updated_at"] >= created["updated_at"]
+    assert updated["updated_at"] != created["created_at"]

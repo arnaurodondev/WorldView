@@ -22,6 +22,7 @@ from uuid import UUID
 
 from alert.domain.entities import AlertRule
 from alert.domain.errors import RuleLimitExceededError, RuleNotFoundError
+from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -198,6 +199,10 @@ class UpdateRule:
             # Re-arm: a new threshold must not inherit stale edge memory.
             rule.last_state = None
 
+        # Keep the returned aggregate's updated_at in sync with the value the
+        # repository stamps on the row, so the API response echoes the real
+        # mutation time (previously the response showed the stale created_at).
+        rule.updated_at = utc_now()
         await self._repo.update(rule)
         await self._session.commit()
         return rule

@@ -141,6 +141,9 @@ async def test_poller_fires_once_on_edge(monkeypatch: pytest.MonkeyPatch) -> Non
         async def get_fundamental_metric(self, *_a, **_k):  # type: ignore[no-untyped-def]
             return None
 
+        async def get_fundamental_metric_keys(self):  # type: ignore[no-untyped-def]
+            return None
+
     ctx = EvalContext(clients={"s3": _StubS3()})
     fire = _noop_fire()
     due = await poller_main.run_poll_cycle(_fake_session_factory(), _settings(), ctx=ctx, fire_use_case=fire)
@@ -175,6 +178,9 @@ async def test_poller_persists_no_fire_state(monkeypatch: pytest.MonkeyPatch) ->
             return {ids[0]: 50.0}  # below threshold
 
         async def get_fundamental_metric(self, *_a, **_k):  # type: ignore[no-untyped-def]
+            return None
+
+        async def get_fundamental_metric_keys(self):  # type: ignore[no-untyped-def]
             return None
 
     ctx = EvalContext(clients={"s3": _StubS3()})

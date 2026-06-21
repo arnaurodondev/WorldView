@@ -185,6 +185,37 @@ class S3MarketDataClient(IS3PriceClient):
                     continue
         return None
 
+    async def get_fundamental_metric_keys(self) -> frozenset[str] | None:
+        """GET /api/v1/fundamentals/screen/fields — the metric vocabulary.
+
+        Returns the set of valid ``metric_key`` names (the ``name`` field of each
+        screener field descriptor) used to allow-list ``FUNDAMENTAL_CROSS``
+        conditions at create/patch (PRD-0113 §6.5.3/§9). Returns ``None`` on a
+        transport/HTTP error so the API layer can fail-open (allow creation, log
+        a warning) rather than block on a transient S3 outage. BP-235: explicit
+        httpx timeout + asyncio.wait_for.
+        """
+        url = f"{self._base_url}/api/v1/fundamentals/screen/fields"
+        try:
+            resp = await asyncio.wait_for(
+                self._client.get(
+                    url,
+                    headers=self._headers(),
+                    timeout=Timeout(_FUNDAMENTAL_TIMEOUT_S),
+                ),
+                timeout=_FUNDAMENTAL_TIMEOUT_S + 1.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (RequestError, HTTPStatusError, TimeoutError) as exc:
+            logger.warning("s3_screen_fields_failed", url=url, error=str(exc))
+            return None
+        # The endpoint returns either a bare list of field descriptors or an
+        # envelope ``{"fields": [...]}`` / ``{"items": [...]}`` — handle all.
+        rows = data if isinstance(data, list) else data.get("fields") or data.get("items") or []
+        keys = {str(row["name"]) for row in rows if isinstance(row, dict) and row.get("name")}
+        return frozenset(keys)
+
     async def _get_list(self, url: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         try:
             resp = await self._client.get(url, params=params)

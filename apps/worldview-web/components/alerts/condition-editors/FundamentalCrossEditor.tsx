@@ -25,6 +25,7 @@ export function FundamentalCrossEditor({
   value,
   names,
   onChange,
+  onNamesChange,
 }: ConditionEditorProps<FundamentalCrossCondition>) {
   // value may be a PARTIAL prefill (Wave 5) — read each field defensively.
   const [instrument, setInstrument] = useState<ChosenInstrument | null>(
@@ -64,6 +65,14 @@ export function FundamentalCrossEditor({
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onChange stable parent cb.
   }, [instrument, metricKey, operator, valueStr]);
+
+  // Report the live-picked instrument's display name for the wizard NL summary.
+  useEffect(() => {
+    if (instrument) {
+      onNamesChange?.({ [instrument.instrumentId]: instrument.ticker || instrument.name });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onNamesChange stable parent cb.
+  }, [instrument]);
 
   return (
     <div className="flex flex-col gap-3">

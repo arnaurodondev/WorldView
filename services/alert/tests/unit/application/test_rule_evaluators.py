@@ -47,6 +47,9 @@ class _StubS3(IS3PriceClient):
         self.calls.append(("metric", instrument_id, metric))
         return self._metric
 
+    async def get_fundamental_metric_keys(self):  # type: ignore[no-untyped-def]
+        return None
+
 
 class _StubS6(IS6NewsClient):
     def __init__(
