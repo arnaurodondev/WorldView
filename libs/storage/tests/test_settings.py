@@ -51,6 +51,10 @@ class TestStorageSettingsDefaults:
         s = StorageSettings(**_CREDS)
         assert s.default_bucket == "worldview"
 
+    def test_default_max_pool_connections(self) -> None:
+        s = StorageSettings(**_CREDS)
+        assert s.max_pool_connections == 50
+
 
 class TestStorageSettingsComputedFields:
     def test_endpoint_url_returns_endpoint_when_set(self) -> None:
@@ -94,3 +98,10 @@ class TestStorageSettingsFromEnv:
         monkeypatch.setenv("STORAGE_SECRET_KEY", "envsecret")
         s = StorageSettings()
         assert s.use_ssl is True
+
+    def test_max_pool_connections_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("STORAGE_MAX_POOL_CONNECTIONS", "128")
+        monkeypatch.setenv("STORAGE_ACCESS_KEY", "envkey")
+        monkeypatch.setenv("STORAGE_SECRET_KEY", "envsecret")
+        s = StorageSettings()
+        assert s.max_pool_connections == 128
