@@ -65,7 +65,7 @@ class SqlAlchemyBrokerageTransactionSyncErrorRepository(BrokerageTransactionSync
         """Return total sync error count for a brokerage connection (W3 - FR-7).
 
         Uses a scalar COUNT(*) against the brokerage_sync_errors table filtered by
-        brokerage_connection_id. The new index added in Alembic migration 0026
+        connection_id. The new index added in Alembic migration 0026
         (``ix_brokerage_sync_errors_connection_id``) makes this O(1) on a bounded
         error set rather than a full table scan.
 

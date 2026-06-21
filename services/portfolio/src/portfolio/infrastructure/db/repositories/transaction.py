@@ -178,17 +178,26 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
 
         PLAN-0114 / T-W2-02. Each non-None / non-empty field produces one
         WHERE predicate. ``from_date`` / ``to_date`` compare against
-        ``CAST(executed_at AS DATE)`` (BP-180 guard — asyncpg rejects bare
-        datetime comparisons with date parameters). ``ticker`` uses an EXISTS
-        subquery on ``instruments`` with ILIKE so partial prefix match works
-        case-insensitively without a JOIN that would change the row count.
+        ``(executed_at AT TIME ZONE 'UTC')::date`` (BP-180 guard — asyncpg rejects
+        bare datetime comparisons with date parameters). The UTC-pinned cast is
+        used (rather than a bare ``CAST(executed_at AS DATE)``) so it matches —
+        and is served by — the IMMUTABLE functional index added in migration 0027
+        (a plain timestamptz→date cast is NOT IMMUTABLE and cannot be indexed).
+        All stored timestamps are UTC, so the date boundary is identical.
+        ``ticker`` uses an EXISTS subquery on ``instruments`` with ILIKE so partial
+        prefix match works case-insensitively without a JOIN that would change the
+        row count.
         """
         clauses: list = []  # type: ignore[type-arg]
 
+        # ``func.timezone('UTC', executed_at)`` renders as ``executed_at AT TIME ZONE
+        # 'UTC'`` — an IMMUTABLE timestamptz→timestamp conversion; the outer
+        # ``cast(..., Date)`` then yields the calendar date, matching the 0027 index.
+        executed_date = cast(func.timezone("UTC", TransactionModel.executed_at), Date)
         if tx_filter.from_date is not None:
-            clauses.append(cast(TransactionModel.executed_at, Date) >= tx_filter.from_date)
+            clauses.append(executed_date >= tx_filter.from_date)
         if tx_filter.to_date is not None:
-            clauses.append(cast(TransactionModel.executed_at, Date) <= tx_filter.to_date)
+            clauses.append(executed_date <= tx_filter.to_date)
         if tx_filter.transaction_types:
             type_strings = [str(t) for t in tx_filter.transaction_types]
             clauses.append(TransactionModel.transaction_type.in_(type_strings))

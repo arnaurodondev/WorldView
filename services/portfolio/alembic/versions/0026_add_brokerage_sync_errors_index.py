@@ -1,4 +1,4 @@
-"""Add index on brokerage_sync_errors.brokerage_connection_id (W3 - FR-7).
+"""Add index on brokerage_sync_errors.connection_id (W3 - FR-7).
 
 Revision ID: 0026
 Revises: 0023
@@ -7,7 +7,7 @@ Create Date: 2026-06-20
 WHY THIS INDEX:
 GetHoldingsUseCase.execute() now calls count_for_connection() on the
 BrokerageTransactionSyncErrorRepository for every GET /holdings/{portfolio_id}
-request for a BROKERAGE portfolio. Without an index on brokerage_connection_id
+request for a BROKERAGE portfolio. Without an index on connection_id
 this is a full table scan -- O(total_error_rows) per holdings request.
 
 The table is append-only (errors are immutable) so the index is never
@@ -27,6 +27,7 @@ Rollback:
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 import sqlalchemy.exc
 from alembic import op
 
@@ -64,10 +65,12 @@ def upgrade() -> None:
         # execution_options() returns a new connection proxy; the original
         # connection is not modified so Alembic's commit/rollback still works.
         conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_brokerage_sync_errors_connection_id
-                ON brokerage_sync_errors (brokerage_connection_id)
-            """,  # -- not user input, safe literal
+            sa.text(
+                """
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_brokerage_sync_errors_connection_id
+                    ON brokerage_sync_errors (connection_id)
+                """  # -- not user input, safe literal
+            ),
         )
     except sqlalchemy.exc.InvalidRequestError:
         # DP-007: only catch the specific error raised when AUTOCOMMIT isolation
@@ -78,10 +81,12 @@ def upgrade() -> None:
         # context.  InvalidRequestError is the precise SQLAlchemy error for
         # "cannot change isolation level within a transaction".
         conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS ix_brokerage_sync_errors_connection_id
-                ON brokerage_sync_errors (brokerage_connection_id)
-            """,  # -- not user input, safe literal
+            sa.text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_brokerage_sync_errors_connection_id
+                    ON brokerage_sync_errors (connection_id)
+                """  # -- not user input, safe literal
+            ),
         )
 
 
@@ -90,11 +95,11 @@ def downgrade() -> None:
     conn = op.get_bind()
     try:
         conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-            "DROP INDEX CONCURRENTLY IF EXISTS ix_brokerage_sync_errors_connection_id",
+            sa.text("DROP INDEX CONCURRENTLY IF EXISTS ix_brokerage_sync_errors_connection_id"),
         )
     except sqlalchemy.exc.InvalidRequestError:
         # Same narrow catch as upgrade() — only swallow the transaction-context
         # isolation error, not real failures.
         conn.execute(
-            "DROP INDEX IF EXISTS ix_brokerage_sync_errors_connection_id",
+            sa.text("DROP INDEX IF EXISTS ix_brokerage_sync_errors_connection_id"),
         )

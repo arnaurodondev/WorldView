@@ -45,14 +45,25 @@ depends_on = None
 
 def upgrade() -> None:
     # ── 1. Add nullable cost-basis columns to holdings ────────────────────────
-    op.add_column(
-        "holdings",
-        sa.Column("cost_basis_per_unit", sa.Numeric(precision=20, scale=8), nullable=True),
-    )
-    op.add_column(
-        "holdings",
-        sa.Column("total_cost_basis", sa.Numeric(precision=20, scale=8), nullable=True),
-    )
+    # IDEMPOTENT GUARD (BP — alembic migrate-divergence): a sibling branch
+    # applied this column DDL to the shared dev DB without recording the 0025
+    # stamp (the DB stayed at 0024), so a re-run of ``upgrade head`` hit
+    # ``DuplicateColumnError: column "cost_basis_per_unit" already exists`` and
+    # exited 1. ``op.add_column`` is not idempotent, so we check the live schema
+    # via the inspector and only add columns that are genuinely missing. This is
+    # additive-only (R11) and safe to run on a DB at any point in 0024..0025.
+    bind = op.get_bind()
+    existing_cols = {col["name"] for col in sa.inspect(bind).get_columns("holdings")}
+    if "cost_basis_per_unit" not in existing_cols:
+        op.add_column(
+            "holdings",
+            sa.Column("cost_basis_per_unit", sa.Numeric(precision=20, scale=8), nullable=True),
+        )
+    if "total_cost_basis" not in existing_cols:
+        op.add_column(
+            "holdings",
+            sa.Column("total_cost_basis", sa.Numeric(precision=20, scale=8), nullable=True),
+        )
 
     # ── 2. CREATE INDEX CONCURRENTLY on transactions ──────────────────────────
     # WHY CONCURRENTLY: the transactions table is write-heavy during active
