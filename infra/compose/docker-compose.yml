@@ -42,6 +42,19 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - minio_data:/data
+    # ── Memory governance (D1 prevention — 2026-06-21 OOM RCA) ────────────────
+    # MinIO was the ONLY stateful infra service with no reservation/limit, so
+    # under a VM-wide memory squeeze (rebuild waves) it was the deterministic
+    # OOM victim (Exit 137, F-001). It backs the whole pipeline (OHLCV + silver
+    # buckets), so guarantee it a baseline and cap its page-cache/buffer growth.
+    #   reservation 1G  — observed idle RSS ~0.6G; floor that survives squeezes.
+    #   limit 4G        — generous headroom for IO buffers during rebuild waves.
+    deploy:
+      resources:
+        reservations:
+          memory: 1G
+        limits:
+          memory: 4G
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -90,6 +103,15 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ../postgres/init:/docker-entrypoint-initdb.d:ro
     command: ["postgres", "-c", "max_connections=500", "-c", "shared_buffers=256MB"]
+    # ── Memory/CPU governance (D1 prevention) ─────────────────────────────────
+    # Primary datastore for every service — guarantee it baseline capacity so a
+    # memory-heavy rebuild wave (or uncapped ML inference) cannot starve it.
+    #   reservation 1G / 1 cpu — observed idle RSS ~0.6G; floors the datastore.
+    deploy:
+      resources:
+        reservations:
+          cpus: "1.0"
+          memory: 1G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -365,7 +387,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -391,7 +413,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -421,7 +443,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -464,7 +486,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -491,7 +513,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -559,7 +581,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -582,7 +604,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -609,7 +631,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -840,7 +862,7 @@ services:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -869,7 +891,7 @@ services:
       - "9100"
     # Scale: docker compose up --scale content-ingestion-worker=3
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -896,7 +918,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -966,7 +988,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -990,7 +1012,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1014,7 +1036,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1038,7 +1060,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1069,7 +1091,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1093,7 +1115,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1117,7 +1139,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1185,7 +1207,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1213,7 +1235,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1242,7 +1264,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1277,9 +1299,20 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps, finally applied) ────
+    # Ollama can balloon: idle RSS is tiny but loaded models (qwen3:0.6b +
+    # bge-large ≈ 1.7G resident, qwen2.5:7b adds 4G for the DEEP tier) plus the
+    # KV cache grow fast. Cap it so CPU inference cannot pin the host or push the
+    # VM into the reclaim/OOM that killed MinIO (F-001).
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 6G
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
     # Requires: nvidia-docker2, NVIDIA drivers ≥ 525, and
     #   DOCKER_DEFAULT_RUNTIME=nvidia in /etc/docker/daemon.json
+    # Merge the device reservation INTO the deploy.resources block above.
     # deploy:
     #   resources:
     #     reservations:
@@ -1355,7 +1388,17 @@ services:
       timeout: 10s
       retries: 5
       start_period: 600s  # allow 10 min for first-boot model download on slow connections
+    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps, finally applied) ────
+    # GLiNER (DeBERTa-large) holds the model + micro-batch forward-pass tensors.
+    # Observed RSS ≈ 2.6G under the 48-concurrent /ner fleet; cap at 4G with
+    # headroom so a batch spike cannot starve Kafka/MinIO during a rebuild wave.
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
+    # Merge the device reservation INTO the deploy.resources block above.
     # deploy:
     #   resources:
     #     reservations:
@@ -1429,7 +1472,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1471,7 +1514,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1493,7 +1536,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1517,7 +1560,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1545,7 +1588,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1567,7 +1610,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1589,7 +1632,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1642,7 +1685,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1698,7 +1741,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1719,7 +1762,7 @@ services:
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1745,7 +1788,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1776,7 +1819,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1802,7 +1845,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1828,7 +1871,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1854,7 +1897,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1890,7 +1933,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1916,7 +1959,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1942,7 +1985,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1968,7 +2011,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1994,7 +2037,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2021,7 +2064,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2047,7 +2090,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2116,7 +2159,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2174,7 +2217,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2196,7 +2239,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2270,7 +2313,7 @@ services:
     command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
