@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
     db_max_overflow_read: int = 30
+    # Universal per-connection statement_timeout (milliseconds) applied to EVERY
+    # SQL session on nlp_db AND intelligence_db.  Backstop introduced after FTS
+    # ``ts_rank_cd`` / ``ts_headline`` queries (document_search.py) ran ~5 min
+    # each against the full 52k-chunk corpus and starved the UI-facing OLTP
+    # databases on the shared Postgres instance.  Set as an asyncpg
+    # ``server_settings`` connection parameter so it applies immediately.
+    #
+    # 60_000 ms (60 s) default: broad full-text queries can legitimately take a
+    # few seconds, but no interactive search should ever run a full minute; any
+    # session that does is the runaway plan this backstop exists to kill.  Set
+    # to 0 to disable (unbounded; not recommended).  Background batch workers
+    # operate on bounded batches and complete well under 60 s.
+    statement_timeout_ms: int = 60_000
 
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
     # no default: fails fast if env var missing (DEF-027)
