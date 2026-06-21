@@ -1,0 +1,42 @@
+# worldview-gitops env/dev diff — Postgres OLTP/OLAP workload split (2026-06-08)
+#
+# Apply in the worldview-gitops repo (env/dev is the source of truth for runtime
+# config). The ONLY change is the DB host for the three OLAP services:
+# postgres -> postgres-intelligence. Do NOT push from this repo; hand to the
+# human to apply + sync. See docs/audits/2026-06-08-postgres-workload-split.md.
+#
+# Exact file paths in worldview-gitops may differ (per-service secret/configmap
+# layout); the values to change are listed below and as a unified-diff sketch.
+
+## Values to change (env/dev)
+
+  knowledge-graph:
+-   KNOWLEDGE_GRAPH_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres:5432/intelligence_db
++   KNOWLEDGE_GRAPH_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres-intelligence:5432/intelligence_db
+    # if a read replica is configured, repoint KNOWLEDGE_GRAPH_DATABASE_URL_READ too.
+
+  nlp-pipeline:
+-   NLP_PIPELINE_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres:5432/nlp_db
++   NLP_PIPELINE_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres-intelligence:5432/nlp_db
+-   NLP_PIPELINE_INTELLIGENCE_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres:5432/intelligence_db
++   NLP_PIPELINE_INTELLIGENCE_DATABASE_URL=postgresql+asyncpg://postgres:<PW>@postgres-intelligence:5432/intelligence_db
+
+  intelligence-migrations:
+-   INTELLIGENCE_DB_URL=postgresql://postgres:<PW>@postgres:5432/intelligence_db
++   INTELLIGENCE_DB_URL=postgresql://postgres:<PW>@postgres-intelligence:5432/intelligence_db
+
+## New instance resource settings (add to env/dev infra section)
+
+  postgres-intelligence:
+    image: <same image as postgres — timescaledb-pg16 + pgvector + AGE>
+    port: 5433  (host) -> 5432 (container)
+    shared_buffers: 2GB
+    work_mem: 128MB
+    max_connections: 120
+    # size mem_limit/cpus so OLAP autovacuum + AGE/FTS scans cannot burst into the
+    # OLTP instance's cores.
+
+## Unchanged (stay on `postgres`)
+
+  portfolio_db, market_data_db (timescaledb alias), gateway_db, alert_db,
+  content_ingestion_db, content_store_db, ingestion_db, rag_db.
