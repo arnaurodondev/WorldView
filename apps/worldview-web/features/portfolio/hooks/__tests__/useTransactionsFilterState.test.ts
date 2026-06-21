@@ -356,4 +356,82 @@ describe("useTransactionsFilterState", () => {
 
     expect(result.current.hasActiveFilters).toBe(true);
   });
+
+  // ── FE-005: date range validation tests ─────────────────────────────────────
+
+  it("FE-005: dateRangeError is null when range is valid (from <= to)", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-12-31",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    expect(result.current.dateRangeError).toBeNull();
+    // Both dates should be forwarded since range is valid.
+    const params = result.current.toBackendParams();
+    expect(params.from_date).toBe("2026-01-01");
+    expect(params.to_date).toBe("2026-12-31");
+  });
+
+  it("FE-005: dateRangeError is non-null when from_date > to_date", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // Inverted range: to_date is before from_date.
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-12-31",
+        dateTo: "2026-01-01",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    // dateRangeError must be a non-null string for the UI to show the error.
+    expect(result.current.dateRangeError).toBeTruthy();
+    expect(typeof result.current.dateRangeError).toBe("string");
+
+    // toBackendParams MUST omit to_date for inverted ranges (not send it to backend).
+    const params = result.current.toBackendParams();
+    expect(params.from_date).toBe("2026-12-31"); // from_date always forwarded
+    expect(params.to_date).toBeUndefined();       // to_date silently dropped
+  });
+
+  it("FE-005: dateRangeError is null when only one bound is set", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // Only from_date set — no comparison possible, no error.
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-06-01",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    expect(result.current.dateRangeError).toBeNull();
+  });
 });

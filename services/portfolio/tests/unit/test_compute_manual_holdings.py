@@ -322,6 +322,74 @@ class TestMultipleInstruments:
         assert INSTRUMENT_B in instruments_with_holdings
 
 
+class TestNoTransactions:
+    """FQ-004: empty portfolio (zero transactions) — no holdings produced, no crash.
+
+    WHY these tests matter:
+    An empty portfolio is a valid initial state. More critically, if a MANUAL
+    portfolio previously had holdings and ALL transactions were deleted (e.g. a
+    full rollback / data correction), recomputing with zero transactions must wipe
+    the stale holdings rows — not silently skip the delete step.
+    """
+
+    def test_empty_portfolio_produces_no_holdings(self) -> None:
+        """Portfolio with zero transactions → upserted=0, deleted=0, no holdings."""
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.FIFO)
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        # No transactions seeded — _store is empty for this portfolio.
+
+        use_case = ComputeManualHoldingsUseCase()
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        assert not result.skipped
+        assert result.upserted == 0
+        assert result.deleted == 0
+        assert len(uow.holdings._store) == 0
+
+    def test_zero_transactions_after_full_sell_clears_stale_holdings(self) -> None:
+        """Recompute with no transactions MUST delete any pre-existing holdings.
+
+        This guards against a scenario where:
+        1. A BUY was recorded → holding row created.
+        2. All transactions were purged (e.g. data correction).
+        3. Recompute is triggered with zero transactions.
+
+        Expected: the stale holding row is deleted (UpsertHoldingsFromSnapshotUseCase
+        receives an empty positions list and deletes all existing holdings for the
+        portfolio). This is intentional — the transaction history IS the source of
+        truth for MANUAL portfolios.
+        """
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.FIFO)
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        # No transactions — but seed a stale holding so the delete path triggers.
+        # FakeHoldingRepository keys by (portfolio_id, instrument_id) — same as
+        # the SQL repo's unique constraint.
+        from portfolio.domain.entities.holding import Holding
+
+        stale_holding = Holding(
+            portfolio_id=PORTFOLIO_ID,
+            instrument_id=INSTRUMENT_A,
+            tenant_id=TENANT_ID,
+            quantity=Decimal("10"),
+            average_cost=Decimal("100"),
+            currency="USD",
+        )
+        uow.holdings._store[(PORTFOLIO_ID, INSTRUMENT_A)] = stale_holding
+
+        use_case = ComputeManualHoldingsUseCase()
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        # The stale holding must be deleted — result.deleted == 1
+        assert not result.skipped
+        assert result.upserted == 0
+        assert result.deleted == 1
+        assert len(uow.holdings._store) == 0
+
+
 class TestBrokeragePortfolioRejected:
     """BROKERAGE portfolios must not be processed — the guard exits early."""
 

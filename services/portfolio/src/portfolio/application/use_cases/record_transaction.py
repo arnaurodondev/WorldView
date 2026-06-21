@@ -248,16 +248,15 @@ class RecordTransactionUseCase:
                 ),
             )
 
-        # Catch IntegrityError from concurrent same-key commits (TOCTOU race post-BP-035).
-        # Both requests passed create_if_not_exists (neither had committed yet), then one
-        # wins the commit race and the other hits a unique constraint violation.
-        # Import is at call-site to keep the infrastructure detail contained (sqlalchemy
-        # is a dependency of the infrastructure layer; use case tolerates this boundary cross).
-        from sqlalchemy.exc import IntegrityError
-
+        # Catch IdempotencyConflictError from concurrent same-key commits (TOCTOU race
+        # post-BP-035). Both requests passed create_if_not_exists (neither had committed yet),
+        # then one wins the commit race and the other hits a unique constraint violation.
+        # ARCH-001 fix: SqlAlchemyUnitOfWork.commit() now translates SQLAlchemy IntegrityError
+        # → IdempotencyConflictError (a pure domain type), keeping the application layer free
+        # of infrastructure imports (R25 / IG-LAYER-002).
         try:
             await uow.commit()
-        except IntegrityError as exc:
+        except IdempotencyConflictError as exc:
             await uow.rollback()
             if cmd.idempotency_key is not None:
                 existing = await uow.transactions.find_by_external_ref(

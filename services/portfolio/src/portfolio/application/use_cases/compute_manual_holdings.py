@@ -165,6 +165,22 @@ class ComputeManualHoldingsUseCase:
         # independently, and both call UpsertHoldingsFromSnapshotUseCase — the second
         # write wins but both read the same snapshot so the result is still idempotent.
         # The lock is a belt-and-suspenders measure, not a correctness requirement.
+        #
+        # FQ-003 ADVISORY LOCK SCOPE NOTE (verified 2026-06-21):
+        # SqlAlchemyUnitOfWork.try_advisory_lock() calls pg_try_advisory_xact_lock
+        # (transaction-scoped). This lock is released when the PostgreSQL transaction
+        # commits. UpsertHoldingsFromSnapshotUseCase (called below at step 5) calls
+        # uow.commit() internally — so the advisory lock is released at that commit,
+        # NOT at the end of this outer method's scope.
+        #
+        # This means two concurrent recompute requests for the same portfolio that
+        # arrive closely together could theoretically both pass the lock check — the
+        # first's lock is released when UpsertHoldings commits (inside step 5), and
+        # the second's lock check fires after that commit. In practice this race window
+        # is narrow (<1ms) and the upsert is idempotent, so correctness is preserved.
+        # A session-level lock (pg_advisory_lock) would hold longer but risks
+        # indefinite blocking if the consumer crashes. The current design accepts
+        # the race in exchange for resilience — document rather than change.
         lock_acquired = await uow.try_advisory_lock(cmd.portfolio_id)  # type: ignore[attr-defined]
         if not lock_acquired:
             logger.info(  # type: ignore[no-any-return]
@@ -362,6 +378,22 @@ def _replay_avco(transactions: list) -> list[ResolvedSnapshotPosition]:
         elif is_sell:
             # AVCO sell: reduce qty, keep total_cost proportional so the per-unit
             # average is unchanged (remaining lots inherit the same avg cost).
+            # DP-002: detect oversell (SELL qty > running qty) and warn.
+            # sold_fraction > 1 makes new_cost negative; we clamp to 0 below.
+            # The warning helps operators diagnose data quality issues (short-sale
+            # in historical imports, missing BUY records) without crashing or
+            # leaving a corrupted holding row — same pattern as FIFO oversell.
+            if qty > prev_qty and prev_qty > Decimal(0):
+                logger.warning(
+                    "avco_oversell_detected",
+                    instrument_id=str(iid),
+                    sell_qty=str(qty),
+                    running_qty=str(prev_qty),
+                    reason=(
+                        "SELL quantity exceeds AVCO running position — possible short-sell "
+                        "or inconsistent transaction history; excess discarded"
+                    ),
+                )
             sold_fraction = qty / prev_qty if prev_qty > Decimal(0) else Decimal(1)
             new_qty = prev_qty - qty
             # Reduce cost proportionally to the sold fraction.

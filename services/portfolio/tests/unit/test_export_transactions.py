@@ -338,6 +338,53 @@ async def test_fifo_realized_pnl_with_fees(
     assert abs(realized - Decimal("95")) < Decimal("0.00000001")
 
 
+# ── FQ-006: None-ticker instrument renders as empty string in CSV ─────────────
+
+
+@pytest.mark.asyncio
+async def test_none_ticker_instrument_renders_empty_string(
+    uow: FakeUnitOfWork,
+    tenant: object,
+    user: object,
+    portfolio: object,
+) -> None:
+    """FQ-006: transaction whose instrument has no symbol → ticker cell is '' not 'None'.
+
+    WHY: ExportTransactionsUseCase builds ticker_map by excluding instruments where
+    inst.symbol is None. For such instruments ``ticker_map.get(tx.instrument_id, '')``
+    returns '' (empty string). This test asserts the empty-string behaviour and confirms
+    no crash occurs — the behaviour matches the PRD §5.1 FR-3 table spec.
+    """
+    # instrument_id is a UUID not registered in any instrument row (simulating an
+    # instrument whose symbol column is NULL — same effect as ticker_map miss).
+    unknown_instrument_id = uuid4()
+    tx = Transaction(
+        tenant_id=tenant.id,  # type: ignore[attr-defined]
+        portfolio_id=portfolio.id,  # type: ignore[attr-defined]
+        instrument_id=unknown_instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("5"),
+        price=Decimal("200"),
+        currency="USD",
+        executed_at=_utc(2026, 5, 1),
+    )
+    await uow.transactions.save(tx)
+
+    uc = ExportTransactionsUseCase()
+    csv_iter = await uc.execute(
+        portfolio.id,  # type: ignore[attr-defined]
+        user.id,  # type: ignore[attr-defined]
+        tenant.id,  # type: ignore[attr-defined]
+        TransactionFilter(),
+        uow,
+    )
+    rows = _parse_csv(_join_csv(csv_iter))
+    assert len(rows) == 1
+    # ticker cell MUST be "" not "None" — confirmed by this assertion.
+    assert rows[0]["ticker"] == "", f"Expected empty ticker for unknown instrument, got '{rows[0]['ticker']}'"
+
+
 # ── total_value computed correctly ────────────────────────────────────────────
 
 

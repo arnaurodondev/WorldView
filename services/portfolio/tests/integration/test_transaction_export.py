@@ -201,3 +201,54 @@ async def test_export_invalid_date_range_returns_400(integration_client) -> None
         params={"from_date": "2026-06-30", "to_date": "2026-01-01"},
     )
     assert resp.status_code == 400
+
+
+async def test_export_ticker_filter_case_insensitive(integration_client, db_session) -> None:
+    """FQ-005: ticker filter is tested at integration level (SQL ILIKE path).
+
+    Seeds two instruments (AAPL and TSLA) and two transactions.
+    Exports with ticker='aapl' (lowercase) — only AAPL transaction is returned.
+    Also verifies uppercase 'AAPL' returns the same result (case-insensitive).
+
+    WHY integration test (not unit): FakeTransactionRepository does not implement
+    ticker filtering (requires an instrument JOIN). This test exercises the ILIKE
+    path in SqlAlchemyTransactionRepository._build_filter_clauses() against a
+    real PostgreSQL database. See FQ-005 and fakes.py:_apply_tx_filter() comment.
+    """
+    portfolio_id = await _create_portfolio(integration_client)
+    aapl_id = str(await _seed_instrument(db_session, "AAPL", "NASDAQ"))
+    tsla_id = str(await _seed_instrument(db_session, "TSLA", "NASDAQ"))
+
+    # Seed one AAPL transaction and one TSLA transaction.
+    await _post_tx(integration_client, portfolio_id, aapl_id, "2026-03-01T10:00:00Z")
+    await _post_tx(integration_client, portfolio_id, tsla_id, "2026-03-02T10:00:00Z")
+
+    # --- lowercase ticker filter ---
+    resp_lower = await integration_client.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions/export",
+        params={"ticker": "aapl"},
+    )
+    assert resp_lower.status_code == 200, f"lowercase ticker filter failed: {resp_lower.text}"
+    rows_lower = _parse_csv_response(resp_lower.content)
+    assert len(rows_lower) == 1, f"Expected 1 AAPL row, got {len(rows_lower)}"
+    assert rows_lower[0]["ticker"] == "AAPL"
+
+    # --- uppercase ticker filter ---
+    resp_upper = await integration_client.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions/export",
+        params={"ticker": "AAPL"},
+    )
+    assert resp_upper.status_code == 200, f"uppercase ticker filter failed: {resp_upper.text}"
+    rows_upper = _parse_csv_response(resp_upper.content)
+    assert len(rows_upper) == 1, f"Expected 1 AAPL row (uppercase), got {len(rows_upper)}"
+    assert rows_upper[0]["ticker"] == "AAPL"
+
+    # --- TSLA filter should return the other transaction ---
+    resp_tsla = await integration_client.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions/export",
+        params={"ticker": "tsla"},
+    )
+    assert resp_tsla.status_code == 200
+    rows_tsla = _parse_csv_response(resp_tsla.content)
+    assert len(rows_tsla) == 1
+    assert rows_tsla[0]["ticker"] == "TSLA"

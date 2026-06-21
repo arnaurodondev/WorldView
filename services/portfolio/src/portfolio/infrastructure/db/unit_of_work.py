@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
+from portfolio.domain.errors import IdempotencyConflictError
 from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
     SqlAlchemyEntitySuppressionRepository,
@@ -508,8 +509,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return bool(result.scalar())
 
     async def commit(self) -> None:
+        # ARCH-001: translate SQLAlchemy IntegrityError into a domain exception
+        # so the application layer never needs to import from sqlalchemy.exc.
+        # The import is here (infrastructure layer) where it belongs per R25 /
+        # IG-LAYER-002. The use case catches IdempotencyConflictError — a pure
+        # domain type — rather than the ORM-specific IntegrityError.
+        from sqlalchemy.exc import IntegrityError  # local import — infra only
+
         assert self._session is not None, "UnitOfWork not entered"
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            raise IdempotencyConflictError(str(exc)) from exc
         if self._on_commit is not None:
             self._on_commit()
 

@@ -7,6 +7,14 @@ WHY test through the use case rather than the repository directly: the filter
 is constructed at the API layer and passed to the use case — the use case is
 the contract boundary we need to verify.  Repository-level SQL logic is
 covered by integration tests against a real database.
+
+FQ-005 NOTE: The ``ticker`` filter is intentionally NOT tested here.
+FakeTransactionRepository._apply_tx_filter() explicitly skips ticker filtering
+because it would require an instrument lookup the fake doesn't implement.
+Ticker filter coverage lives in:
+  tests/integration/test_transaction_export.py
+    → test_export_ticker_filter_case_insensitive (exercises the ILIKE SQL path
+      end-to-end against a real PostgreSQL database with seeded instruments).
 """
 
 from __future__ import annotations

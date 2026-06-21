@@ -1341,9 +1341,26 @@ async def export_transactions(portfolio_id: str, request: Request) -> Any:
     PLAN-0114 / T-W2-07 (FR-3). Streams the CSV response back to the client
     and forwards the ``Content-Disposition`` header so browsers prompt a save
     dialog.
+
+    SEC-102 fix: portfolio_id is validated as a UUID before forwarding to S1 and
+    before it is interpolated into the Content-Disposition header. This prevents:
+    (1) Path confusion: a non-UUID string passed to the S1 URL gets blocked here
+        rather than reaching S1 with an unexpected shape.
+    (2) Header injection risk: the Content-Disposition fallback uses portfolio_id in
+        an f-string; rejecting non-UUID values at the gate limits the character set
+        to [0-9a-f-], eliminating any injection surface.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    # SEC-102: validate UUID shape — consistent with the manual _uuid.UUID() guard
+    # used in other portfolio routes (e.g. get_portfolio_value_history line ~705).
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(  # noqa: B904
+            status_code=422,
+            detail="portfolio_id must be a valid UUID",
+        )
     headers = _portfolio_headers(request)
     clients = _clients(request)
     resp = await clients.portfolio.get(

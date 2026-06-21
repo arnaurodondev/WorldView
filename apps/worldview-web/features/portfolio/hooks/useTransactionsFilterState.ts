@@ -221,15 +221,42 @@ export function useTransactionsFilterState() {
       }
     }
 
-    // Date range — only set when non-empty ISO date strings are present.
+    // FE-005: date range validation — if both bounds are present and the range
+    // is logically impossible (from > to), omit to_date from the request rather
+    // than sending an inverted range that returns 0 rows with no feedback.
+    // The dateRangeError field signals the UI to show an inline error.
+    // WHY omit to_date (not from_date): the start date is the user's primary
+    // intent ("show me transactions since January"); silently dropping the end
+    // date is less surprising than dropping the start date. The error message
+    // in dateRangeError guides the user to correct the end date.
     if (dateFrom) params.from_date = dateFrom;
-    if (dateTo) params.to_date = dateTo;
+    if (dateTo) {
+      const rangeInvalid = dateFrom !== "" && dateTo < dateFrom;
+      if (!rangeInvalid) {
+        params.to_date = dateTo;
+      }
+      // If rangeInvalid, to_date is intentionally omitted from params.
+      // TransactionsFilterBar reads dateRangeError to render the inline message.
+    }
 
     // Ticker — only set when the user typed something.
     if (ticker) params.ticker = ticker;
 
     return params;
   }
+
+  /**
+   * dateRangeError — non-null when from_date > to_date (logically impossible range).
+   *
+   * FE-005: surface the error to TransactionsFilterBar so it can render an
+   * inline validation message below the date inputs. The backend params are
+   * still derivable (toBackendParams() silently drops to_date) but the user
+   * sees immediate feedback rather than an unexplained empty table.
+   */
+  const dateRangeError: string | null =
+    dateFrom !== "" && dateTo !== "" && dateTo < dateFrom
+      ? "End date must be on or after the start date"
+      : null;
 
   // ── Batch setter ────────────────────────────────────────────────────────
   /**
@@ -278,5 +305,5 @@ export function useTransactionsFilterState() {
     void setSearch(null);    // → ""
   }
 
-  return { filters, setFilters, resetFilters, toBackendParams, hasActiveFilters };
+  return { filters, setFilters, resetFilters, toBackendParams, hasActiveFilters, dateRangeError };
 }

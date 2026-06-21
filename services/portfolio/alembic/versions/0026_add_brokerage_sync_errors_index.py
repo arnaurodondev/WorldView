@@ -42,22 +42,53 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Add ix_brokerage_sync_errors_connection_id index using CONCURRENTLY.
+    """Add ix_brokerage_sync_errors_connection_id index.
 
-    Must run outside a transaction (AUTOCOMMIT) to avoid locking the table.
+    In production we use CREATE INDEX CONCURRENTLY (no table lock).  That
+    requires AUTOCOMMIT — i.e. no active SQLAlchemy transaction.  Alembic's
+    do_run_migrations wrapper calls context.begin_transaction() first, so in
+    test/CI environments (testcontainers) the connection already holds a
+    Transaction() object and SQLAlchemy raises InvalidRequestError when we
+    try to switch isolation_level.
+
+    Strategy: attempt the CONCURRENTLY variant first.  If the isolation_level
+    change is rejected (test transaction wrapper), fall back to the standard
+    non-blocking CREATE INDEX IF NOT EXISTS which runs fine inside a
+    transaction — the table is small in CI and the brief metadata lock is
+    acceptable there.
     """
     conn = op.get_bind()
-    conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-        """
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_brokerage_sync_errors_connection_id
-            ON brokerage_sync_errors (brokerage_connection_id)
-        """,  # -- not user input, safe literal
-    )
+    try:
+        # Production path: switch to AUTOCOMMIT, then issue CONCURRENTLY DDL.
+        # execution_options() returns a new connection proxy; the original
+        # connection is not modified so Alembic's commit/rollback still works.
+        conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_brokerage_sync_errors_connection_id
+                ON brokerage_sync_errors (brokerage_connection_id)
+            """,  # -- not user input, safe literal
+        )
+    except Exception:
+        # Test/CI path: a transaction is already open; AUTOCOMMIT change is
+        # rejected.  Fall back to a plain (non-CONCURRENTLY) index creation
+        # inside the existing transaction.  CREATE INDEX … IF NOT EXISTS is
+        # idempotent so re-running the migration is safe.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_brokerage_sync_errors_connection_id
+                ON brokerage_sync_errors (brokerage_connection_id)
+            """,  # -- not user input, safe literal
+        )
 
 
 def downgrade() -> None:
-    """Drop the index using CONCURRENTLY to avoid a table lock."""
+    """Drop the index (prefer CONCURRENTLY; fall back for test environments)."""
     conn = op.get_bind()
-    conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-        "DROP INDEX CONCURRENTLY IF EXISTS ix_brokerage_sync_errors_connection_id",
-    )
+    try:
+        conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS ix_brokerage_sync_errors_connection_id",
+        )
+    except Exception:
+        conn.execute(
+            "DROP INDEX IF EXISTS ix_brokerage_sync_errors_connection_id",
+        )

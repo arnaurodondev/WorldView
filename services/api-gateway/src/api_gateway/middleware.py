@@ -407,6 +407,14 @@ _FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
 # entry but tight enough to stop accidental loops or misbehaving clients.
 _FINANCIAL_MUTATION_LIMIT = 20
 
+# SEC-103: export endpoints are GET requests so they bypass the financial-mutation
+# method guard (POST/PUT/DELETE only). However the CSV export does a full-table scan
+# + in-memory FIFO replay — expensive enough to be a DoS surface and a data-harvesting
+# amplifier if a session token is stolen. Cap at 10/min per authenticated user.
+# Path suffix match keeps the rule narrow (only /export URLs, not all GET /portfolios).
+_EXPORT_PATH_SUFFIX = "/export"
+_EXPORT_RATE_LIMIT = 10  # requests per window
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding-window rate limiter backed by Valkey.
@@ -432,6 +440,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         financial_mutation_limit: int = _FINANCIAL_MUTATION_LIMIT,
         unauthenticated_limit: int = 20,
         public_feedback_limit: int = 120,
+        # SEC-103: dedicated low-rate bucket for export endpoints (GET /*/export).
+        export_limit: int = _EXPORT_RATE_LIMIT,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
@@ -440,6 +450,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.financial_mutation_limit = financial_mutation_limit
         self.unauthenticated_limit = unauthenticated_limit
         self.public_feedback_limit = public_feedback_limit
+        self.export_limit = export_limit
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -501,12 +512,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             path.startswith(pfx) for pfx in _FINANCIAL_MUTATION_PREFIXES
         )
 
+        # SEC-103: export sub-tier — GET requests ending in /export trigger a
+        # separate, tighter bucket (10/min) regardless of HTTP method. The
+        # export endpoint does a full-table scan + FIFO replay; without a
+        # dedicated bucket an attacker with a stolen token could fire 2000
+        # exports per minute under the default authenticated budget.
+        is_export = path.endswith(_EXPORT_PATH_SUFFIX)
+
         # BUG-004 / BP-480: require ``user`` to be a dict before calling
         # ``.get("user_id")`` so a malformed value (e.g. a string slipped in
         # by future code) cannot raise AttributeError mid-dispatch. The
         # ``isinstance`` check makes the contract explicit at the call site.
         if user and isinstance(user, dict) and user.get("user_id"):
-            if is_financial_mutation:
+            if is_export:
+                # SEC-103: export sub-tier — separate key and tight limit.
+                # Checked before is_financial_mutation so a POST /export (if
+                # such a route were ever added) would also be capped here.
+                key = f"rl:v1:export:{user['user_id']}"
+                limit = self.export_limit
+            elif is_financial_mutation:
                 # Separate Valkey key so the financial-mutation counter does
                 # not eat the general dashboard budget. A user can perform
                 # up to 20 transaction writes per minute while simultaneously

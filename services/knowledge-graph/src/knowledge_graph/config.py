@@ -257,6 +257,26 @@ class Settings(BaseSettings):
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
 
+    # ── PLAN-0113 FIX-2: static-membership consumer instance IDs ─────────────
+    # Each Kafka consumer group that runs in a KG container may be configured
+    # with a stable group.instance.id so that Kafka's static membership protocol
+    # (KIP-345) avoids a full consumer-group rebalance on every rolling restart.
+    # Default: "" (empty) — the consumer falls back to dynamic membership.
+    # Override in docker-compose via KNOWLEDGE_GRAPH_KAFKA_*_CONSUMER_INSTANCE_ID.
+    kafka_enriched_consumer_instance_id: str = ""
+    kafka_entity_consumer_instance_id: str = ""
+    kafka_fundamentals_consumer_instance_id: str = ""
+    kafka_instrument_consumer_instance_id: str = ""
+    kafka_instrument_discovered_consumer_instance_id: str = ""
+    kafka_temporal_event_consumer_instance_id: str = ""
+    kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
+    kafka_economic_events_dataset_consumer_instance_id: str = ""
+    kafka_insider_transactions_dataset_consumer_instance_id: str = ""
+    kafka_macro_indicator_dataset_consumer_instance_id: str = ""
+    kafka_narrative_refresh_consumer_instance_id: str = ""
+    kafka_provisional_queued_consumer_instance_id: str = ""
+    kafka_structured_enrichment_consumer_instance_id: str = ""
+
     # SummaryWorker Gemini fallback (SA-2 / PLAN-0088).
     # When the primary extraction chain (DeepInfra → Ollama) is exhausted,
     # SummaryWorker makes one additional attempt via Gemini 2.5 Flash Lite.
