@@ -132,8 +132,66 @@ services:
       KAFKA_CONTROLLER_QUORUM_ELECTION_TIMEOUT_MS: 30000
       KAFKA_BROKER_HEARTBEAT_INTERVAL_MS: 5000
       KAFKA_BROKER_SESSION_TIMEOUT_MS: 30000
+      # ── Connection-churn / GC-pause hardening (broker scope) ─────────────────
+      # ROOT CAUSE (diagnosed 2026-06-20 from live broker logs): under a ~24k-event
+      # backlog drain + 48 consumers (each holding producer+consumer+admin TCP
+      # connections to this single broker), the broker JVM stalls. Evidence:
+      #   * default heap is -Xms1G -Xmx1G (confirmed via `ps` in-container) — far
+      #     too small for the drain working set → stop-the-world GC pauses freeze
+      #     the network acceptor + the in-process controller event loop.
+      #   * broker logs show its OWN in-process heartbeat to its in-process
+      #     QuorumController timing out for 15s / 27s / 47s / 70s / 111s (one at
+      #     23min): "processExpiredBrokerHeartbeat: controller event queue
+      #     overloaded" + "Disconnecting from node 1 due to request timeout".
+      #   * "Attempting to send response via channel for which there is no open
+      #     connection" — clients already gave up (rdkafka 31s CONNECT timeout).
+      # When the single JVM freezes it serves NEITHER the in-process controller
+      # channel NOR external connection handshakes → producers + consumers all
+      # time out in state CONNECT at the same instants. Same stall, two symptoms.
+      #
+      # Heap 1G→4G: kill the GC pauses (host has 48GB / 14 CPU; 4G is generous and
+      # leaves ample room for 48 consumers + ML containers). This is the dominant
+      # fix — a non-pausing JVM keeps the event loop + acceptor responsive.
+      KAFKA_HEAP_OPTS: "-Xms4G -Xmx4G"
+      # G1GC with a low pause target so the larger heap still collects in short,
+      # predictable pauses instead of long full GCs that re-trigger the stall.
+      KAFKA_JVM_PERFORMANCE_OPTS: "-XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35"
+      # Network/IO threads: defaults are 3/8. With ~48 consumers churning
+      # connections against ONE broker, 3 acceptor/network threads is the
+      # secondary bottleneck once GC is out of the way — raise to absorb the
+      # connection + request fan-in. Host has 14 CPU, so 6/12 is well within budget.
+      KAFKA_NUM_NETWORK_THREADS: 6
+      KAFKA_NUM_IO_THREADS: 12
+      KAFKA_BACKGROUND_THREADS: 12
+      # Socket buffers + accept backlog: cushion bursty connection storms during
+      # backlog drain so SYNs queue instead of being dropped (a dropped SYN is
+      # exactly what surfaces client-side as a CONNECT timeout). Defaults are
+      # 102400 send/recv and listen backlog 50.
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 1048576
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 1048576
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 209715200
+      KAFKA_QUEUED_MAX_REQUESTS: 1000
+      KAFKA_SOCKET_LISTEN_BACKLOG_SIZE: 256
+      # Connection limits: dev single broker serving 48 consumers + producers +
+      # admin + kafka-ui. Default max.connections is unbounded but per-listener
+      # acceptor pressure benefits from an explicit, generous ceiling rather than
+      # a per-IP throttle (all clients share the docker bridge / few source IPs,
+      # so a tight per-IP cap would self-DoS). Keep per-IP high.
+      KAFKA_MAX_CONNECTIONS: 2000
+      KAFKA_MAX_CONNECTIONS_PER_IP: 2000
     volumes:
       - kafka_data:/var/lib/kafka/data
+    # PRD-0113 FR-10 intent (broker scope): guarantee the event backbone CPU+mem
+    # so ML inference (gliner/ollama) cannot starve it. ML-container CPU *caps*
+    # are owned by PLAN-0113 W1 (the commented deploy blocks on gliner/ollama);
+    # this reservation is the kafka half and is additive to that work.
+    deploy:
+      resources:
+        reservations:
+          cpus: "2.0"
+          memory: 5G
+        limits:
+          memory: 6G
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
