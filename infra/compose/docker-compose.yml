@@ -1380,6 +1380,17 @@ services:
       # beyond, so MAX_BATCH caps there. WAIT_MS bounds the fill window.
       GLINER_MAX_BATCH: "16"
       GLINER_BATCH_WAIT_MS: "25"
+      # CPU-bottleneck fix (2026-06-21 cpu-bottleneck investigation): PyTorch defaults
+      # to one OpenMP thread per HOST core (14 here) but the container is capped at 4
+      # CPUs (deploy.limits below) — 14 threads on a 4-core CFS quota thrash/throttle,
+      # so inference drew only ~12% CPU and a single article took >300s. Pin the thread
+      # pools to MATCH the CPU cap so the 4 cores are used efficiently (server.py also
+      # calls torch.set_num_threads). Align all the BLAS/OpenMP knobs.
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "4"
+      NUMEXPR_NUM_THREADS: "4"
+      TORCH_NUM_THREADS: "4"
     volumes:
       - gliner_model_cache:/home/appuser/.cache/huggingface  # persist model across restarts
     healthcheck:
@@ -1388,15 +1399,17 @@ services:
       timeout: 10s
       retries: 5
       start_period: 600s  # allow 10 min for first-boot model download on slow connections
-    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps, finally applied) ────
+    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps) ─────────────────────
     # GLiNER (DeBERTa-large) holds the model + micro-batch forward-pass tensors.
-    # Observed RSS ≈ 2.6G under the 48-concurrent /ner fleet; cap at 4G with
-    # headroom so a batch spike cannot starve Kafka/MinIO during a rebuild wave.
+    # 2026-06-21: the 4G cap was the exit-137 OOM cause — live RSS sat at 3.99/4.0
+    # GiB (99.8%) and any batch's activation tensors tipped it over → kernel kill
+    # (38h outage). Raised to 8G so the ~2.6-4G model + batch tensors have real
+    # headroom. cpus stays 4 and is now matched by the pinned thread count above.
     deploy:
       resources:
         limits:
           cpus: "4.0"
-          memory: 4G
+          memory: 8G
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
     # Merge the device reservation INTO the deploy.resources block above.
     # deploy:
