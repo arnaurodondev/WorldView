@@ -76,8 +76,17 @@ async def test_ohlcv_consumer_main_stop_before_run() -> None:
     """Pre-set stop_event causes main() to exit immediately after starting consumer."""
     mock_engine = AsyncMock()
     mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    # FAILURE MODE 2 supervision: a real run() blocks until stop() is signalled.
+    # Model that contract so the supervisor takes the graceful-stop path (a
+    # bare AsyncMock that returns instantly would now be flagged as an
+    # unexpected run() exit — which is exactly the wedge-detection behaviour).
+    _run_gate = _REAL_ASYNCIO_EVENT()
+
+    async def _run_until_stopped() -> None:
+        await _run_gate.wait()
+
+    mock_consumer.run = _run_until_stopped
+    mock_consumer.stop = MagicMock(side_effect=lambda: _run_gate.set())
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),
@@ -97,8 +106,7 @@ async def test_ohlcv_consumer_main_stop_before_run() -> None:
 
         await main()
 
-    # Consumer was started and gracefully stopped
-    mock_consumer.run.assert_called_once()
+    # Consumer was started and gracefully stopped (stop() drains the run loop).
     mock_consumer.stop.assert_called_once()
 
 
@@ -108,8 +116,14 @@ async def test_ohlcv_consumer_main_engine_disposed() -> None:
     mock_write_engine = AsyncMock()
     mock_read_engine = AsyncMock()
     mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    # run() blocks until stop() — see test_ohlcv_consumer_main_stop_before_run.
+    _run_gate = _REAL_ASYNCIO_EVENT()
+
+    async def _run_until_stopped() -> None:
+        await _run_gate.wait()
+
+    mock_consumer.run = _run_until_stopped
+    mock_consumer.stop = MagicMock(side_effect=lambda: _run_gate.set())
 
     with (
         patch("market_data.config.Settings", return_value=_mock_settings()),

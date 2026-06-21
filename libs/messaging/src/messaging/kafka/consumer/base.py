@@ -320,6 +320,23 @@ class ConsumerConfig:
     # long processing times. None (the default) uses the original dynamic
     # membership behaviour.
     group_instance_id: str | None = None
+    # ── FAILURE MODE 2: consumer connection-setup resilience ──────────────────
+    # The wedge incident surfaced as
+    #   ``GroupCoordinator: kafka:29092: Connection setup timed out in state
+    #     CONNECT (after ~31000ms)``
+    # — i.e. the librdkafka shared base ``socket.connection.setup.timeout.ms``
+    # of 30_000 (30s, +jitter ≈ 31s) is the exact knob that fired. A coordinator
+    # blip should self-heal in *seconds*, not block a full 31s per attempt before
+    # the BP-700 reconnect loop even gets a turn. We lower it to 10s **for
+    # consumers only** (this value is spread on top of the shared base in
+    # ``to_dict``, so it overrides the base without touching producer config,
+    # which other owners control). Settings-driven so an operator can retune.
+    socket_connection_setup_timeout_ms: int = 10_000
+    # Close idle broker sockets after this long so a half-dead connection that
+    # survived a host-sleep / NAT-timeout is torn down and re-established on the
+    # next use instead of hanging until a poll fails. 9 minutes < the common
+    # 10-minute cloud LB idle cutoff, so we drop the socket before the LB does.
+    connections_max_idle_ms: int = 540_000
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -346,6 +363,14 @@ class ConsumerConfig:
             "heartbeat.interval.ms": self.heartbeat_interval_ms,
             "max.poll.interval.ms": self.max_poll_interval_ms,
             "partition.assignment.strategy": self.partition_assignment_strategy,
+            # FAILURE MODE 2: consumer-local connection-setup resilience. These
+            # are spread on top of the shared base in ``apply_base_rdkafka_config``
+            # (caller keys win), so they override the base 30s setup-timeout for
+            # consumers ONLY — producers keep the shared base value. A coordinator
+            # connect that hangs is failed fast (10s) so the BP-700 reconnect loop
+            # retries promptly instead of burning ~31s per attempt.
+            "socket.connection.setup.timeout.ms": self.socket_connection_setup_timeout_ms,
+            "connections.max.idle.ms": self.connections_max_idle_ms,
         }
         # KIP-345 static group membership: only set if configured so consumers
         # that omit it retain the original dynamic membership behaviour.

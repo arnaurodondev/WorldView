@@ -261,6 +261,69 @@ Do **not** flip the flag without steps 1–2: without a durable store the attemp
 count resets to `0` on every redelivery and the message loops until
 `dead_letter_cap` trips.
 
+### Consumer connection-setup resilience (FAILURE MODE 2)
+
+`ConsumerConfig` carries consumer-local connection knobs that override the
+shared base (`messaging.kafka_config._BASE_RDKAFKA_CONFIG`) for consumers only —
+producers keep the base values. These directly address the wedge signature
+`GroupCoordinator: Connection setup timed out in state CONNECT (after ~31000ms)`:
+
+| Field | Default | rdkafka key | Why |
+|-------|---------|-------------|-----|
+| `socket_connection_setup_timeout_ms` | `10_000` | `socket.connection.setup.timeout.ms` | The shared base is 30s (+jitter ≈ 31s). A coordinator CONNECT that hasn't handshaked in 10s is almost certainly dead — abort fast so the BP-700 in-loop reconnect retries promptly instead of burning ~31s per attempt. |
+| `connections_max_idle_ms` | `540_000` | `connections.max.idle.ms` | Tear down an idle socket (9 min) before a host-sleep / NAT / LB idle-cutoff leaves a half-dead connection that hangs until the next poll fails. |
+
+Both are dataclass fields → env/settings-retunable. The values are spread on top
+of the base in `to_dict()`, so producer config (a separate workstream) is
+unaffected.
+
+### Run()-task supervision (`messaging.kafka.consumer.supervisor`)
+
+`run_consumer_supervised(consumer, stop_event, *, liveness_probe=...)` is the
+standalone-`_main.py` entry-point wrapper that replaces the historical
+`create_task(consumer.run()); await stop_event.wait()` shape. That shape wedged
+the process: if `run()` raised (e.g. the initial connect hit the
+connection-setup timeout), the task became a failed Future nobody awaited
+(`Task exception was never retrieved`) while `main()` parked forever on
+`stop_event.wait()` — process up, HTTP healthcheck green, zero progress.
+
+The supervisor **races** `run()` against the stop event:
+
+* `run()` raises → logs `consumer_run_task_crashed` (critical) and raises
+  `ConsumerExited` (original error as `__cause__`) so the entry point
+  `sys.exit(1)`s and Docker/k3s restarts the container.
+* Stop signalled → `consumer.stop()`, drain up to `graceful_stop_timeout_s`,
+  cancel on overrun, return normally (exit 0).
+* `run()` returns on its own (never happens for a healthy consumer) → treated as
+  an unexpected exit → `ConsumerExited`.
+
+Pass a `liveness_probe` (see below) and the run() task is attached to it so
+`/healthz` flips to 503 the instant `run()` finishes — even on a crash before
+the first poll-loop heartbeat. **Scope:** the supervisor lives at the entry-point
+layer and does NOT touch the in-loop BP-700 reconnect in
+`messaging.kafka.consumer.base` (that is the PLAN-0113 surface); the two compose
+— base.py survives *transient* blips, the supervisor fails loudly on a
+*terminal* run() exit.
+
+### Consumer liveness probe (`observability.make_liveness_probe`)
+
+`make_liveness_probe()` returns a `ConsumerLivenessProbe` — a callable
+`() -> bool` wired into `start_metrics_server(..., liveness_probe=...)` so
+`/healthz` reflects real poll-loop progress instead of always returning 200:
+
+```python
+liveness = make_liveness_probe()
+start_metrics_server(service_name=..., liveness_probe=liveness)
+liveness.bind(consumer)   # after the consumer is constructed
+await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness)
+```
+
+Health rules: healthy while unbound (startup); unhealthy once the attached
+run() task finishes; healthy with no progress tick only within `startup_grace_s`
+of `bind`; otherwise healthy iff `seconds_since_progress() <= stale_after_s`. It
+reads the consumer's BP-700 heartbeat (`seconds_since_progress`) but owns none of
+the reconnect logic.
+
 ### Kafka Producer (`messaging.kafka.producer`)
 
 | Symbol | Purpose |

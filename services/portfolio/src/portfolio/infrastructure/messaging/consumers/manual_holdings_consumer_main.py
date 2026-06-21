@@ -27,6 +27,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from portfolio.config import Settings
     from portfolio.infrastructure.db.session import _build_factories
     from portfolio.infrastructure.messaging.consumers.manual_holdings_consumer import (
@@ -86,15 +90,13 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # FAILURE MODE 2 supervision (see ohlcv_consumer_main): a crashed run()
+        # no longer hangs main() behind a green healthcheck — it raises
+        # ConsumerExited so we exit non-zero and Docker restarts the container.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("manual_holdings_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("manual_holdings_consumer_fatal_error", error=str(exc))
         sys.exit(1)

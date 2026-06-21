@@ -20,6 +20,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -32,6 +33,10 @@ async def main() -> None:
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVConsumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -46,9 +51,14 @@ async def main() -> None:
     log.info("ohlcv_consumer_starting", service=settings.service_name)
 
     # PLAN-0107 B-3: expose Prometheus /metrics so this consumer is scrape-able.
+    # FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when the poll
+    # loop wedges (connection-setup timeout) or the run() task dies — without it
+    # the wedged consumer kept a GREEN healthcheck and was never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="market-data-ohlcv-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -97,6 +107,8 @@ async def main() -> None:
         dedup_client=valkey,
         price_snapshot_cache=PriceSnapshotCache(valkey),
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -109,15 +121,15 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # FAILURE MODE 2 supervision: races run() against the stop event so a
+        # crashed run() (e.g. GroupCoordinator connection-setup timeout) can no
+        # longer leave an un-awaited dead task while main() hangs on
+        # ``stop_event.wait()``. A terminal run() exit raises ConsumerExited →
+        # we exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("ohlcv_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("ohlcv_consumer_fatal_error", error=str(exc))
         sys.exit(1)

@@ -85,3 +85,53 @@ class TestConsumerConfigCarriesBaseKeys:
         assert cfg["bootstrap.servers"] == "kafka:9092"
         assert cfg["group.id"] == "my-grp"
         assert cfg["partition.assignment.strategy"] == "cooperative-sticky"
+
+
+class TestConsumerConnectionResilience:
+    """FAILURE MODE 2: consumer connection-setup resilience knobs.
+
+    The wedge incident fired as ``Connection setup timed out in state CONNECT
+    (after ~31000ms)`` — the shared-base 30s setup timeout. Consumers override
+    it to 10s (and add ``connections.max.idle.ms``) WITHOUT touching producers.
+    """
+
+    def test_consumer_setup_timeout_lowered_to_10s(self) -> None:
+        cfg = ConsumerConfig(bootstrap_servers="kafka:9092", group_id="g").to_dict()
+        # Consumer-local override wins over the shared 30s base.
+        assert cfg["socket.connection.setup.timeout.ms"] == 10_000
+
+    def test_consumer_has_connections_max_idle(self) -> None:
+        cfg = ConsumerConfig(bootstrap_servers="kafka:9092", group_id="g").to_dict()
+        assert cfg["connections.max.idle.ms"] == 540_000
+
+    def test_consumer_setup_timeout_is_settings_driven(self) -> None:
+        cfg = ConsumerConfig(
+            bootstrap_servers="kafka:9092",
+            group_id="g",
+            socket_connection_setup_timeout_ms=5_000,
+        ).to_dict()
+        assert cfg["socket.connection.setup.timeout.ms"] == 5_000
+
+    def test_consumer_override_is_independent_of_producer(self) -> None:
+        """Consumer setup-timeout is driven by ITS OWN field, not the producer.
+
+        (The producer carries its own fast connection knobs — a parallel
+        workstream — so we assert the consumer field is independently settable
+        and does not read from producer config.)
+        """
+        consumer_cfg = ConsumerConfig(
+            bootstrap_servers="kafka:9092",
+            group_id="g",
+            socket_connection_setup_timeout_ms=7_777,
+        ).to_dict()
+        producer_cfg = KafkaProducerConfig(bootstrap_servers="kafka:9092").to_dict()
+        assert consumer_cfg["socket.connection.setup.timeout.ms"] == 7_777
+        # Producer is unaffected by the consumer's per-instance override.
+        assert producer_cfg["socket.connection.setup.timeout.ms"] != 7_777
+
+    def test_consumer_session_and_poll_keys_present(self) -> None:
+        """Group/session knobs stay sane for the workload (unchanged)."""
+        cfg = ConsumerConfig(bootstrap_servers="kafka:9092", group_id="g").to_dict()
+        assert cfg["session.timeout.ms"] == 60_000
+        assert cfg["heartbeat.interval.ms"] == 20_000
+        assert cfg["max.poll.interval.ms"] == 600_000
