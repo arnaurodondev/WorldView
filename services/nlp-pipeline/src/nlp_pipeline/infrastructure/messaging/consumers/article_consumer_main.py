@@ -235,6 +235,46 @@ async def main() -> None:
         )
         log.info("extraction_ollama_adapter_selected", model_id=settings.extraction_model_id)
 
+    # ── ENHANCEMENT #6: optional co-mention entailment check (default OFF) ─────────
+    # When NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED is set, build a DEDICATED
+    # cheap Qwen3-235B client (a reasoning model — reasoning_effort="low" so it returns
+    # non-empty content; small max_tokens since the verdict JSON is tiny) and a config
+    # from settings, and pass both to the consumer. The check then runs after the
+    # deterministic gate on the 5 high-risk predicates only. Left None when disabled →
+    # run_deep_extraction_block no-ops the check (unchanged behaviour).
+    entailment_client: Any = None
+    entailment_config: Any = None
+    if settings.relation_entailment_check_enabled and _extraction_api_key:
+        from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
+            DeepSeekExtractionAdapter as _EntailmentAdapter,
+        )
+
+        from nlp_pipeline.application.blocks.deep_extraction import EntailmentCheckConfig
+
+        entailment_config = EntailmentCheckConfig(
+            enabled=True,
+            predicates=frozenset(
+                p.strip() for p in settings.relation_entailment_check_predicates.split(",") if p.strip()
+            ),
+            min_drop_confidence=settings.relation_entailment_check_min_drop_confidence,
+            max_per_doc=settings.relation_entailment_check_max_per_doc,
+        )
+        entailment_client = _EntailmentAdapter(
+            api_key=_extraction_api_key,
+            model_id=entailment_config.model_id,  # Qwen3-235B (validated: 0% FP on high-risk)
+            base_url=settings.extraction_api_base_url,
+            semaphore=extraction_sem,
+            reasoning_effort="low",
+            max_tokens=1024,
+            metrics=ml_metrics,
+        )
+        log.info(
+            "relation_entailment_check_enabled",
+            model_id=entailment_config.model_id,
+            predicates=sorted(entailment_config.predicates),
+            max_per_doc=entailment_config.max_per_doc,
+        )
+
     # Backpressure controller
     bp = BackpressureController(
         max_depth=settings.max_ollama_queue_depth,
@@ -389,6 +429,9 @@ async def main() -> None:
         valkey_client=valkey,
         # PLAN-0111 C-6: None unless mode is shadow/live (and key present).
         learned_router=learned_router,
+        # ENHANCEMENT #6: None unless the entailment check is enabled (and key present).
+        entailment_client=entailment_client,
+        entailment_config=entailment_config,
     )
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.

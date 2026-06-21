@@ -418,6 +418,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         usage_logger: LlmUsageLogProtocol | None = None,
         valkey_client: ValkeyClient | None = None,
         learned_router: LearnedRouter | None = None,
+        entailment_client: ExtractionClient | None = None,
+        entailment_config: Any = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -434,6 +436,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._ner = ner_client
         self._emb = embedding_client
         self._ext = extraction_client
+        # ENHANCEMENT #6: cheap co-mention entailment client (Qwen3-235B) + config.
+        # None when the feature is off → run_ml_phase forwards None and the check no-ops.
+        self._entailment_client = entailment_client
+        self._entailment_config = entailment_config
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
@@ -1179,6 +1185,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 ext=self._ext,
                 watchlist_client=self._watchlist._client,  # type: ignore[attr-defined]
                 usage_logger=self._usage_logger,
+                entailment_client=self._entailment_client,
+                entailment_config=self._entailment_config,
                 _deep_extraction_fn=run_deep_extraction_block,
                 _alias_repo=entity_alias_repo,
                 _profile_emb_repo=entity_profile_emb_repo,
