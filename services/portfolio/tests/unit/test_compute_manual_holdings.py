@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+import pytest
 from portfolio.application.use_cases.compute_manual_holdings import (
     ComputeManualHoldingsCommand,
     ComputeManualHoldingsUseCase,
@@ -412,3 +413,108 @@ class TestBrokeragePortfolioRejected:
 
         # In all cases, no holdings were written
         assert len(uow.holdings._store) == 0
+
+
+class TestAvcoOversellNoPriorBuy:
+    """FQ-009: AVCO SELL before BUY (or oversell from zero) — no crash, clean no-op.
+
+    WHY this test matters:
+    The AVCO replayer guards against oversell when prev_qty > 0 (logs a warning
+    and clamps to zero).  The special case is a SELL with prev_qty == 0 (no prior
+    BUY at all).  In that case sold_fraction = qty/prev_qty triggers the zero-guard
+    (defaults to Decimal(1)), making new_qty = 0 - qty < 0, which is then clamped
+    to 0 by max(Decimal(0), new_qty).  The position disappears cleanly.
+
+    This test confirms:
+    1. No exception is raised.
+    2. The position is not written to holdings (qty clamped to 0, excluded).
+    3. Consistent with FIFO oversell treatment (FQ-001 / TestFifoOversell).
+    """
+
+    def test_avco_sell_before_buy_no_crash(self) -> None:
+        """SELL 10 units with zero prior BUYs → no holding row, no exception."""
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.AVCO)
+        txs = [
+            _make_tx(INSTRUMENT_A, TransactionType.SELL, "10", "100.00", _utc(2025, 6, 1)),
+        ]
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        uow.transactions._store.update({t.id: t for t in txs})
+
+        use_case = ComputeManualHoldingsUseCase()
+        # Must not raise — avco_oversell_detected warning is emitted internally
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        assert not result.skipped
+        # qty clamped to 0 → position suppressed → no holding row written
+        assert len(uow.holdings._store) == 0
+
+    def test_avco_sell_exceeds_buy_clamps_to_zero(self) -> None:
+        """BUY 5 then SELL 20: qty goes negative, clamped to 0 — no crash."""
+        portfolio = _make_portfolio(cost_basis_method=CostBasisMethod.AVCO)
+        txs = [
+            _make_tx(INSTRUMENT_A, TransactionType.BUY, "5", "100.00", _utc(2025, 7, 1)),
+            _make_tx(INSTRUMENT_A, TransactionType.SELL, "20", "110.00", _utc(2025, 7, 2)),
+        ]
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        uow.transactions._store.update({t.id: t for t in txs})
+
+        use_case = ComputeManualHoldingsUseCase()
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        assert not result.skipped
+        assert len(uow.holdings._store) == 0  # net qty ≤ 0 → suppressed
+
+
+class TestOwnerIdIdarCheck:
+    """SEC-104: ComputeManualHoldingsUseCase must verify portfolio.owner_id == cmd.owner_id.
+
+    WHY: defense-in-depth against crafted Kafka events. The Kafka consumer builds
+    the command from the event payload; if the topic were compromised a mismatched
+    owner_id should raise AuthorizationError, not silently recompute another user's
+    holdings.
+    """
+
+    def test_wrong_owner_id_raises_authorization_error(self) -> None:
+        """Mismatched owner_id on the command → AuthorizationError raised."""
+        from portfolio.domain.errors import AuthorizationError
+
+        portfolio = _make_portfolio(kind=PortfolioKind.MANUAL)
+        # portfolio.owner_id == OWNER_ID; we send a command with a different owner
+        wrong_owner = UUID("00000000-0000-0000-0000-000000000999")
+        cmd = ComputeManualHoldingsCommand(
+            portfolio_id=PORTFOLIO_ID,
+            tenant_id=TENANT_ID,
+            owner_id=wrong_owner,
+        )
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+
+        use_case = ComputeManualHoldingsUseCase()
+        with pytest.raises(AuthorizationError):
+            asyncio.get_event_loop().run_until_complete(use_case.execute(cmd, uow))
+
+        # No holdings must be written — authorization check fired before any replay
+        assert len(uow.holdings._store) == 0
+
+    def test_correct_owner_id_proceeds_normally(self) -> None:
+        """Matching owner_id must NOT raise — normal recompute proceeds."""
+        portfolio = _make_portfolio(kind=PortfolioKind.MANUAL)
+        txs = [
+            _make_tx(INSTRUMENT_A, TransactionType.BUY, "5", "100.00", _utc(2025, 8, 1)),
+        ]
+
+        uow = FakeUnitOfWork()
+        uow.portfolios._store[PORTFOLIO_ID] = portfolio
+        uow.transactions._store.update({t.id: t for t in txs})
+
+        use_case = ComputeManualHoldingsUseCase()
+        # OWNER_ID matches portfolio.owner_id — must not raise
+        result = asyncio.get_event_loop().run_until_complete(use_case.execute(_cmd(), uow))
+
+        assert not result.skipped
+        assert result.upserted == 1

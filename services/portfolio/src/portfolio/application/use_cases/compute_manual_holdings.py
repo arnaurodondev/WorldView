@@ -59,6 +59,7 @@ from portfolio.domain.enums import (  # type: ignore[attr-defined]
     TradeSide,
     TransactionType,
 )
+from portfolio.domain.errors import AuthorizationError  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
@@ -145,6 +146,17 @@ class ComputeManualHoldingsUseCase:
                 tenant_id=str(cmd.tenant_id),
             )
             return ComputeManualHoldingsResult(upserted=0, deleted=0, skipped=True)
+
+        # SEC-104: defense-in-depth ownership check. The command's owner_id is
+        # sourced from the Kafka event payload produced by RecordTransactionUseCase
+        # (which already validates ownership at the API layer). If the topic were
+        # ever compromised or a new call site added, a crafted event with the
+        # wrong portfolio_id but a valid tenant_id could trigger recomputation on
+        # another user's portfolio. Checking owner_id here mirrors the pattern used
+        # in ListTransactionsUseCase and ExportTransactionsUseCase and adds a second
+        # ownership gate that doesn't depend on the event producer being trustworthy.
+        if portfolio.owner_id != cmd.owner_id:
+            raise AuthorizationError(f"Portfolio {cmd.portfolio_id} is not owned by user {cmd.owner_id}")
 
         if portfolio.kind != PortfolioKind.MANUAL:
             # Defensive: should never be called for non-MANUAL portfolios because
@@ -308,6 +320,22 @@ def _replay_fifo(transactions: list) -> list[ResolvedSnapshotPosition]:
                         "or inconsistent transaction history; excess discarded"
                     ),
                 )
+        else:
+            # DP-004: a transaction type that is neither in _SKIP_TYPES nor a
+            # recognised BUY/SELL is a no-op that should NEVER happen in normal
+            # operation.  Warn loudly so new TransactionType values introduced
+            # without updating _SKIP_TYPES/_BUY_TYPES/_SELL_TYPES surface
+            # immediately rather than silently dropping the transaction.
+            logger.warning(
+                "fifo_unknown_transaction_type",
+                instrument_id=str(iid),
+                transaction_type=str(tx.transaction_type),
+                reason=(
+                    "Transaction type is not in _BUY_TYPES, _SELL_TYPES, or "
+                    "_SKIP_TYPES — it was silently skipped during FIFO replay. "
+                    "Add it to one of the sets in compute_manual_holdings.py."
+                ),
+            )
 
     # Build output positions
     positions: list[ResolvedSnapshotPosition] = []
@@ -399,6 +427,19 @@ def _replay_avco(transactions: list) -> list[ResolvedSnapshotPosition]:
             # Reduce cost proportionally to the sold fraction.
             new_cost = prev_cost * (Decimal(1) - sold_fraction)
             accumulators[iid] = (max(Decimal(0), new_qty), max(Decimal(0), new_cost))
+        else:
+            # DP-004: same exhaustiveness guard as _replay_fifo — warn on any
+            # transaction type that is not BUY/SELL and not in _SKIP_TYPES.
+            logger.warning(
+                "avco_unknown_transaction_type",
+                instrument_id=str(iid),
+                transaction_type=str(tx.transaction_type),
+                reason=(
+                    "Transaction type is not in _BUY_TYPES, _SELL_TYPES, or "
+                    "_SKIP_TYPES — it was silently skipped during AVCO replay. "
+                    "Add it to one of the sets in compute_manual_holdings.py."
+                ),
+            )
 
     positions: list[ResolvedSnapshotPosition] = []
     for iid, (total_qty, total_cost) in accumulators.items():

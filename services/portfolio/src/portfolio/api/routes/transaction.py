@@ -291,11 +291,26 @@ async def export_transactions(
     if to_date:
         filename += f"_{to_date}"
     filename += ".csv"
+    # SEC-106: use RFC 6266 filename* encoding (UTF-8 percent-encoded) alongside
+    # the legacy filename= fallback for browsers that only understand RFC 2183.
+    # WHY both: RFC 6266 §5 recommends the dual form for maximum compatibility.
+    # The filename* parameter takes precedence in RFC 6266-aware browsers
+    # (Chrome 20+, Firefox 20+, Safari 7+). Older/minimal clients fall back to
+    # the quoted filename= form.
+    # WHY this matters even though the current filename only contains ASCII safe
+    # chars (UUID hex + ISO dates): future-proofing — if a portfolio name or
+    # ticker with non-ASCII chars were ever added to the filename the quoted form
+    # alone would malform the header.  filename* is always the correct approach.
+    # NOTE: urllib.parse.quote() with safe='' percent-encodes everything except
+    # letters/digits/_ . - ~ per RFC 3986 §2.3 — safe for header values.
+    from urllib.parse import quote as _url_quote  # local import to keep module-level clean
+
+    filename_encoded = _url_quote(filename, safe="")
     return StreamingResponse(
         csv_iter,
         media_type="text/csv",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": (f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_encoded}"),
             # Defence-in-depth: prevent MIME-sniffing by Chromium-based browsers.
             # Although _sanitize_csv_cell guards against CSV injection, older
             # Chromium builds may treat a text/csv response as HTML if opened

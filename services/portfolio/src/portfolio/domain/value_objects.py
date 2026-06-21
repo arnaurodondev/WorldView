@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -166,4 +166,32 @@ class TransactionFilter:
                 raise ValueError(
                     f"Date range {delta} days exceeds the 5-year cap ({self._MAX_RANGE_DAYS} days). "
                     "Split the request into smaller date ranges."
+                )
+        elif self.from_date is not None:
+            # FQ-007: open-ended range (from_date only, no to_date) was bypassing
+            # the 5-year cap because the guard above required BOTH dates.  A query
+            # with only from_date scans from that date to *now*, which can exceed
+            # the cap if from_date is in the distant past.  Validate against today
+            # so the cap is enforced regardless of whether to_date is supplied.
+            # WHY timedelta(days=_MAX_RANGE_DAYS): mirrors the closed-range check
+            # above; "today - from_date <= 5 years" is the equivalent open-ended cap.
+            days_from_start = (datetime.now(UTC).date() - self.from_date).days
+            if days_from_start > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"from_date ({self.from_date}) is more than 5 years ago "
+                    f"({days_from_start} days). Provide a to_date or use a more "
+                    "recent from_date to stay within the 5-year cap."
+                )
+        elif self.to_date is not None:
+            # Open-ended range with only to_date: the lower bound is "the beginning
+            # of time" for that portfolio. Cap: to_date must not be more than 5 years
+            # in the future (prevents absurd queries like to_date=2099-01-01).
+            # WHY: a to_date far in the future combined with no from_date could scan
+            # all historical rows plus every future projected row if the schema ever
+            # gains forward-looking records.  Bound it symmetrically.
+            days_to_end = (self.to_date - datetime.now(UTC).date()).days
+            if days_to_end > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"to_date ({self.to_date}) is more than 5 years in the future "
+                    f"({days_to_end} days). Provide a from_date or use a sooner to_date."
                 )

@@ -27,6 +27,7 @@ Rollback:
 
 from __future__ import annotations
 
+import sqlalchemy.exc
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -68,11 +69,14 @@ def upgrade() -> None:
                 ON brokerage_sync_errors (brokerage_connection_id)
             """,  # -- not user input, safe literal
         )
-    except Exception:
-        # Test/CI path: a transaction is already open; AUTOCOMMIT change is
-        # rejected.  Fall back to a plain (non-CONCURRENTLY) index creation
-        # inside the existing transaction.  CREATE INDEX … IF NOT EXISTS is
-        # idempotent so re-running the migration is safe.
+    except sqlalchemy.exc.InvalidRequestError:
+        # DP-007: only catch the specific error raised when AUTOCOMMIT isolation
+        # level change is rejected because an existing transaction is already open
+        # (test/CI path with testcontainers).  A bare `except Exception` was too
+        # broad — it would silently swallow real errors (network failures, OOM,
+        # permission denied) and attempt the fallback, losing the original error
+        # context.  InvalidRequestError is the precise SQLAlchemy error for
+        # "cannot change isolation level within a transaction".
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS ix_brokerage_sync_errors_connection_id
@@ -88,7 +92,9 @@ def downgrade() -> None:
         conn.execution_options(isolation_level="AUTOCOMMIT").execute(
             "DROP INDEX CONCURRENTLY IF EXISTS ix_brokerage_sync_errors_connection_id",
         )
-    except Exception:
+    except sqlalchemy.exc.InvalidRequestError:
+        # Same narrow catch as upgrade() — only swallow the transaction-context
+        # isolation error, not real failures.
         conn.execute(
             "DROP INDEX IF EXISTS ix_brokerage_sync_errors_connection_id",
         )

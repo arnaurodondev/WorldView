@@ -148,6 +148,26 @@ export function ExportTransactionsButton({
       // for the browser download dialog.
       const blob = await response.blob();
 
+      // ── FE-006: guard against empty-export (0 data rows) ──────────────────
+      // WHY: a 200 response with only the CSV header row is a valid HTTP
+      // success (response.ok=true) but produces a useless download. The
+      // backend always emits the header line (~100 bytes) even for empty
+      // result sets. We check blob.size against a generous threshold (512 bytes
+      // = header + a handful of padding) to detect the header-only case without
+      // being brittle to minor header wording changes.
+      // WHY 512 bytes: the CSV header is ~90 chars; any real data row is at
+      // least 30 chars. 512 gives a comfortable margin while still being well
+      // below a single-row export (~200 bytes total).
+      // WHY toast.info (not toast.warning): this is an expected outcome when
+      // the user's filters are too narrow — it is informational, not an error.
+      const HEADER_ONLY_THRESHOLD_BYTES = 512;
+      if (blob.size <= HEADER_ONLY_THRESHOLD_BYTES) {
+        toast.info("No transactions", {
+          description: "No transactions match the current filters. Try broadening your date range or removing filters.",
+        });
+        return; // skip the download — setIsLoading(false) runs in finally
+      }
+
       // ── Trigger browser download ───────────────────────────────────────────
       // WHY createObjectURL + programmatic click: the canonical approach for
       // downloading a file from a fetch response. The <a> gets a temporary
