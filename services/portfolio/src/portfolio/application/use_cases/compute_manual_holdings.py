@@ -277,8 +277,21 @@ def _replay_fifo(transactions: list) -> list[ResolvedSnapshotPosition]:
                     instrument_lots.appendleft((lot_qty - remaining_sell, lot_cost))
                     remaining_sell = Decimal(0)
             # If remaining_sell > 0 after draining all lots, the position is
-            # short-sold or the history is inconsistent — we ignore the excess
-            # (the net quantity will clamp to 0 in the output step below).
+            # short-sold or the history is inconsistent.  We do NOT crash here
+            # (the caller already persisted the transaction and crashing would
+            # leave holdings stale), but we emit a warning so operators can
+            # investigate data integrity issues without silent data loss.
+            if remaining_sell > Decimal(0):
+                logger.warning(
+                    "fifo_oversell_detected",
+                    instrument_id=str(iid),
+                    excess_qty=str(remaining_sell),
+                    sold_qty=str(qty),
+                    reason=(
+                        "SELL quantity exceeds all open lots — possible short-sell "
+                        "or inconsistent transaction history; excess discarded"
+                    ),
+                )
 
     # Build output positions
     positions: list[ResolvedSnapshotPosition] = []

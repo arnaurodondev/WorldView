@@ -130,6 +130,12 @@ async function renderChatPageWithThread() {
 describe("Chat page — server suggestions preference (Wave 2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // WHY: hookState is a module-level mutable object — its serverSuggestions
+    // array persists across tests in the same worker when running in parallel
+    // mode.  Resetting it here guarantees each test starts from a clean slate,
+    // preventing the "server suggestions" test from reading a value left behind
+    // by a prior test (and vice-versa for the fallback test).
+    hookState.serverSuggestions = [];
   });
 
   it("renders the SERVER suggestions when the hook surfaced them", async () => {
