@@ -415,6 +415,14 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
   on the triple `(subject_entity_id, object_entity_id, canonical_type)`.
 - `relation_evidence_raw` has NO `canonicalized_evidence_text` column. That column exists only
   on `relation_evidence` (the monthly-partitioned processed table).
+- `relation_evidence_raw` has TWO independent lifecycle markers — do not conflate them:
+  - `processed` / `processed_at` — owned by the **ConfidenceWorker** (Worker 13A); set after a
+    triple's confidence is recomputed. Does NOT mean "promoted".
+  - `promoted_at` (added in migration 0061) — owned by the **RelationEvidencePromoterWorker**
+    (Worker 13B); set in the same transaction as the INSERT into `relation_evidence`. The
+    promoter filters `promoted_at IS NULL` (partial index `idx_raw_evidence_unpromoted`) so it
+    scans only the unpromoted frontier instead of re-scanning the entire already-promoted backlog
+    every 5 minutes (the prior behaviour pinned Postgres for 7.5–12+ min/run — UI-timeout incident).
 
 ### Multi-View Embedding Architecture (`entity_embedding_state`)
 

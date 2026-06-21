@@ -1,8 +1,16 @@
 """Worker 13B: periodic relation_evidence_raw → relation_evidence promotion (PRD §6.7 Block 13B).
 
-Runs every 300 seconds (5 minutes).  Promotes unprocessed rows from the
-``relation_evidence_raw`` staging table to the immutable, range-partitioned
-``relation_evidence`` table in batches of 200.
+Runs every 300 seconds (5 minutes).  Promotes not-yet-promoted rows
+(``promoted_at IS NULL``) from the ``relation_evidence_raw`` staging table to
+the immutable, range-partitioned ``relation_evidence`` table in batches of 200.
+
+Scan-bound discipline (UI-timeout incident fix): the fetch query filters
+``promoted_at IS NULL`` so each run scans only the unpromoted frontier, not the
+entire already-promoted backlog.  ``promoted_at`` is stamped by this worker in
+the same transaction as the INSERT, and backfilled for the pre-existing backlog
+by migration 0061.  This is DISTINCT from the ``processed`` boolean, which is
+owned by Worker 13A (ConfidenceWorker) and marks "confidence recomputed", not
+"promoted".
 
 Promotion criteria (mirrors the one-shot ``scripts/ops/promote_relation_evidence.py``):
   * ``entity_provisional = false`` — only non-provisional evidence is canon.
@@ -62,10 +70,22 @@ _DENSITY_THRESHOLD = 0.05
 # SQL: fetch a batch of promotable rows.
 #
 # Promotion eligibility:
+#   0. promoted_at IS NULL  → skip the already-promoted backlog.  This is the
+#      primary scan-bound filter: without it the worker re-scanned every
+#      already-promoted non-provisional row (81,769 on live dev) on every 5-min
+#      run, promoting 0 rows and pinning Postgres for 7.5-12+ minutes per run
+#      (the UI-timeout incident).  ``promoted_at`` is set by this worker after
+#      the INSERT (see _MARK_PROMOTED_SQL) and is backfilled for the existing
+#      already-promoted backlog by migration 0061.  NOTE: this is distinct from
+#      the ``processed`` flag, which is owned by Worker 13A (ConfidenceWorker)
+#      and marks "confidence recomputed", NOT "promoted".
 #   1. entity_provisional = false  → only confirmed entities.
 #   2. JOIN relations on the triple (subject, object, canonical_type) to
 #      resolve the UUID relation_id — raw rows store the triple, not the UUID.
-#   3. NOT EXISTS dedup check against relation_evidence so re-runs are safe.
+#   3. NOT EXISTS dedup check against relation_evidence — retained as a belt-and-
+#      braces guard against the rare TOCTOU race where two rows share the same
+#      (relation, doc, evidence_date) key; the promoted_at filter handles the
+#      common case.
 #   4. E-3 quality gate: at least one of:
 #        a. extraction_confidence >= :conf_threshold  (strong single-doc signal)
 #        b. evidence density >= :density_threshold  (broad corpus corroboration)
@@ -93,6 +113,7 @@ JOIN relations r
   AND r.object_entity_id  = rer.object_entity_id
   AND r.canonical_type    = rer.canonical_type
 WHERE rer.entity_provisional = false
+  AND rer.promoted_at IS NULL
   AND NOT EXISTS (
     SELECT 1 FROM relation_evidence re
     WHERE re.relation_id   = r.relation_id
@@ -154,6 +175,7 @@ _COUNT_GATED_QUALITY_SQL = """
 SELECT count(*)
 FROM relation_evidence_raw rer
 WHERE rer.entity_provisional = false
+  AND rer.promoted_at IS NULL
   AND EXISTS (
     SELECT 1 FROM relations r
     WHERE r.subject_entity_id = rer.subject_entity_id
@@ -203,6 +225,17 @@ INSERT INTO relation_evidence (
     :extraction_confidence, :source_weight, :evidence_date, :claim_id
 )
 ON CONFLICT DO NOTHING
+"""
+
+# SQL: stamp the raw row as promoted so subsequent runs skip it via the
+# ``promoted_at IS NULL`` filter in _FETCH_SQL.  Runs in the SAME transaction as
+# the INSERT above, so promotion + marking commit atomically — a crash between
+# the two cannot leave a promoted row unmarked (which would only cost a redundant
+# ON CONFLICT DO NOTHING re-insert next run anyway, never a duplicate).
+_MARK_PROMOTED_SQL = """
+UPDATE relation_evidence_raw
+SET promoted_at = now()
+WHERE raw_id = :raw_id
 """
 
 
@@ -265,7 +298,9 @@ class RelationEvidencePromoterWorker:
                 )
                 rows = result.fetchall()
 
-                # Insert each row into the partitioned table.
+                # Insert each row into the partitioned table, then stamp the
+                # raw row's promoted_at in the same transaction so the next run
+                # skips it via the ``promoted_at IS NULL`` filter.
                 for row in rows:
                     await session.execute(
                         text(_INSERT_SQL),
@@ -279,6 +314,11 @@ class RelationEvidencePromoterWorker:
                             "evidence_date": row[7],
                             "claim_id": str(row[8]) if row[8] else None,
                         },
+                    )
+                    # Mark the raw row promoted (row[0] = rer.raw_id).
+                    await session.execute(
+                        text(_MARK_PROMOTED_SQL),
+                        {"raw_id": str(row[0])},
                     )
                     promoted += 1
 
