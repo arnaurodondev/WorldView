@@ -314,6 +314,31 @@ class Settings(BaseSettings):
     extraction_window_size_tokens: int = 6000
     extraction_window_overlap_tokens: int = 500
 
+    # ── Co-mention entailment check (ENHANCEMENT #6, prototype — default OFF) ──────
+    # A cheap LLM entailment gate that drops relations whose evidence merely
+    # CO-MENTIONS subject and object instead of asserting the relation with a
+    # relation-bearing verb/phrase. Measured on a 443-relation strong-judge gold set
+    # (docs/audits/2026-06-21-relation-entailment-check-prototype.md):
+    #   Qwen3-235B: 0% false-positive on high-risk predicates, 88.6% defect recall,
+    #   ~$0.07 per 1k checks. gpt-oss-20b was rejected (27.6% FP — kills good relations).
+    # Default OFF so this is a safe, opt-in prototype: enabling it changes extraction
+    # output, so it must be turned on deliberately (and watched) in any environment.
+    # Enabling ALSO requires wiring an entailment_client in article_consumer_main (a
+    # Qwen3-235B adapter) — until then the block stays a no-op even if this flag is True.
+    relation_entailment_check_enabled: bool = False  # NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED
+    # Only relations whose predicate is in this set are checked (high-risk co-mention
+    # promoters per the audit). Comma-separated env override. Keep tight: every other
+    # predicate skips the LLM call entirely (cost + latency control).
+    relation_entailment_check_predicates: str = (
+        "competes_with,regulates,produces,partner_of,supplier_of"  # NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_PREDICATES
+    )
+    # Confidence floor below which the check's NOT_ASSERTED verdict is IGNORED (kept).
+    # The prompt is tuned to only answer NOT_ASSERTED when confident; this is a second
+    # guard so a low-confidence "drop" never destroys a relation.
+    relation_entailment_check_min_drop_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Max risky relations checked per document (hard cap on added cost/latency per article).
+    relation_entailment_check_max_per_doc: int = Field(default=20, ge=0, le=200)
+
     # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
     # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),
     # NOT CPU-bound.  The base Kafka consumer loop is strictly serial (one article

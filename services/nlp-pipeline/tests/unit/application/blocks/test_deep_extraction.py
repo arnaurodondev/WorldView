@@ -21,6 +21,7 @@ from nlp_pipeline.application.blocks.deep_extraction import (
     SINGLE_WINDOW_TOKEN_LIMIT,
     WINDOW_OVERLAP_TOKENS,
     WINDOW_SIZE_TOKENS,
+    _build_prompt,
     _build_windows,
     _merge_results_safe,
     run_deep_extraction_block,
@@ -51,13 +52,14 @@ def _make_mention(
     text: str,
     resolved_entity_id: uuid.UUID | None = None,
     doc_id: uuid.UUID | None = None,
+    mention_class: MentionClass = MentionClass.ORGANIZATION,
 ) -> EntityMention:
     m = EntityMention(
         mention_id=uuid.uuid4(),
         doc_id=doc_id or uuid.uuid4(),
         section_id=uuid.uuid4(),
         mention_text=text,
-        mention_class=MentionClass.ORGANIZATION,
+        mention_class=mention_class,
         confidence=0.90,
         char_start=0,
         char_end=len(text),
@@ -133,6 +135,51 @@ class TestMergeResultsSafe:
         }
         merged = _merge_results_safe([r1, r2])
         assert len(list(merged["events"])) == 2  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+class TestBuildPrompt:
+    """ENHANCEMENT #1: type-annotated entity allow-list rendered into the prompt.
+
+    Each distinct entity surface is tagged with its GLiNER ``mention_class``
+    so the model can enforce relation precision + direction (2026-06-20
+    stored-relation-quality audit: ~22% entity type/resolution errors).
+    """
+
+    def test_renders_class_annotations(self) -> None:
+        mentions = [
+            _make_mention("Apple Inc.", mention_class=MentionClass.ORGANIZATION),
+            _make_mention("Tim Cook", mention_class=MentionClass.PERSON),
+            _make_mention("S&P 500", mention_class=MentionClass.INDEX),
+            _make_mention("US Dollar", mention_class=MentionClass.CURRENCY),
+        ]
+        prompt = _build_prompt("some article text", mentions)
+        assert "Apple Inc. [organization]" in prompt
+        assert "Tim Cook [person]" in prompt
+        assert "S&P 500 [index]" in prompt
+        assert "US Dollar [currency]" in prompt
+
+    def test_order_preserving_dedup_first_class_wins(self) -> None:
+        """Duplicate surfaces are collapsed; the FIRST-seen class wins and the
+        original insertion order is preserved. Uses surfaces that do NOT appear
+        in the prompt's static examples so the assertion targets only the
+        dynamically-rendered entity allow-list."""
+        mentions = [
+            _make_mention("Acme Robotics", mention_class=MentionClass.ORGANIZATION),
+            _make_mention("Jane Roe", mention_class=MentionClass.PERSON),
+            # Duplicate surface with a DIFFERENT class — must be dropped, first wins.
+            _make_mention("Acme Robotics", mention_class=MentionClass.FINANCIAL_INSTITUTION),
+        ]
+        prompt = _build_prompt("text", mentions)
+        # Exactly one rendering of Acme, tagged organization (first-seen).
+        assert prompt.count("Acme Robotics [organization]") == 1
+        assert "Acme Robotics [financial_institution]" not in prompt
+        # Order preserved: Acme appears before Jane Roe in the entity list.
+        assert prompt.index("Acme Robotics [organization]") < prompt.index("Jane Roe [person]")
+
+    def test_empty_mentions_uses_fallback(self) -> None:
+        prompt = _build_prompt("text", [])
+        assert "none identified" in prompt
 
 
 @pytest.mark.unit
