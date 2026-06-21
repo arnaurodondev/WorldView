@@ -277,12 +277,14 @@ class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             for bar in canonical_bars
         ]
 
-        # ── Resample each source bar into all coarser derived timeframes ───────
+        # ── Resample the WHOLE batch in one pass ──────────────────────────────
+        # CPU/IO fix (2026-06-21): the old ``for bar: execute(bar)`` loop issued
+        # len(bars) * len(targets) range SELECTs (~3,315 round-trips for a 663-bar
+        # message), re-fetching windows already held in ``domain_bars``. execute_batch
+        # does the output-equivalent work with a single range fetch + in-memory grouping.
         use_case = ResampledOHLCVUseCase(uow, source_timeframe=self._source_tf)
-        total_derived = 0
-        for bar in domain_bars:
-            derived = await use_case.execute(bar)
-            total_derived += len(derived)
+        derived = await use_case.execute_batch(domain_bars)
+        total_derived = len(derived)
 
         logger.info(
             "intraday_resampling.processed",

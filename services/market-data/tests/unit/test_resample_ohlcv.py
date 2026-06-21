@@ -1012,3 +1012,74 @@ async def test_resampling_scalability_500_bars() -> None:
 
     # 500 bars processed => 500 upsert batches
     assert len(acc.upserted_derived) == 500
+
+
+# ---------------------------------------------------------------------------
+# execute_batch (2026-06-21 CPU/IO fix): batch resampling must be output-
+# equivalent to the per-bar loop while doing a SINGLE range fetch.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_equivalent_to_per_bar_loop() -> None:
+    """execute_batch produces the SAME final derived bars as looping execute()."""
+    base = datetime(2024, 6, 3, 0, 0, tzinfo=UTC)
+    instrument = "instr-batch-eq"
+    bars = [_make_sim_1m_bar(instrument, off, base) for off in range(500)]
+
+    # OLD path: add each bar then resample it (DB grows incrementally).
+    acc_loop = _BarAccumulator()
+    uc_loop = ResampledOHLCVUseCase(_make_sim_uow(acc_loop))
+    for b in bars:
+        acc_loop.add(b)
+        await uc_loop.execute(b)
+
+    # NEW path: one execute_batch over the whole batch (fetch returns [] from the
+    # empty accumulator, so the in-memory batch supplies every source bar).
+    acc_batch = _BarAccumulator()
+    uc_batch = ResampledOHLCVUseCase(_make_sim_uow(acc_batch))
+    await uc_batch.execute_batch(bars)
+
+    for tf in (
+        Timeframe.FIVE_MIN,
+        Timeframe.FIFTEEN_MIN,
+        Timeframe.THIRTY_MIN,
+        Timeframe.ONE_HOUR,
+        Timeframe.FOUR_HOUR,
+    ):
+        loop_bars = acc_loop.derived_by_timeframe(tf)
+        batch_bars = acc_batch.derived_by_timeframe(tf)
+        assert [b.bar_date for b in loop_bars] == [b.bar_date for b in batch_bars], f"{tf}: periods differ"
+        for lb, bb in zip(loop_bars, batch_bars, strict=True):
+            assert (lb.open, lb.high, lb.low, lb.close, lb.volume) == (
+                bb.open,
+                bb.high,
+                bb.low,
+                bb.close,
+                bb.volume,
+            ), f"{tf} @ {lb.bar_date}: OHLCV differs"
+            assert lb.is_partial == bb.is_partial, f"{tf} @ {lb.bar_date}: is_partial differs"
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_does_single_fetch() -> None:
+    """execute_batch issues exactly ONE range SELECT for the whole batch
+    (vs len(bars) * len(targets) in the old per-bar loop)."""
+    base = datetime(2024, 6, 3, 0, 0, tzinfo=UTC)
+    bars = [_make_sim_1m_bar("instr-fetch", off, base) for off in range(200)]
+    uow = _make_uow(source_bars=[])
+    uc = ResampledOHLCVUseCase(uow)
+
+    await uc.execute_batch(bars)
+
+    # 200 bars x 5 targets = 1000 fetches in the old loop → now exactly 1.
+    assert uow.ohlcv.find_by_instrument_timeframe_datetime_range.await_count == 1
+    assert uow.ohlcv.bulk_upsert_derived.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_empty_is_noop() -> None:
+    uow = _make_uow(source_bars=[])
+    uc = ResampledOHLCVUseCase(uow)
+    assert await uc.execute_batch([]) == []
+    assert uow.ohlcv.find_by_instrument_timeframe_datetime_range.await_count == 0

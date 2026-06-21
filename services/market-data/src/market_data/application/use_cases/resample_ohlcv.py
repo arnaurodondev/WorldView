@@ -224,3 +224,95 @@ class ResampledOHLCVUseCase:
             )
 
         return derived_bars
+
+    async def execute_batch(
+        self,
+        bars: list[OHLCVBar],
+        target_timeframes: list[Timeframe] | None = None,
+    ) -> list[OHLCVBar]:
+        """Resample a whole BATCH of source bars in one pass (CPU/IO fix 2026-06-21).
+
+        The intraday-resampling consumer receives a JSONL batch of source bars
+        (a backfill window — hundreds of 1m bars at once). Calling :meth:`execute`
+        per bar issued ``len(bars) * len(targets)`` separate ``find_…_range``
+        SELECTs (~3,315 round-trips for a 663-bar message), each re-fetching
+        overlapping windows already held in memory — the platform's one genuine
+        local CPU/IO defect (docs/audits/2026-06-21-market-data-consumer-cpu-profile.md).
+
+        This method does the SAME work with **a single** range fetch: it pulls the
+        source bars spanning the batch once (to fold in any bars already persisted
+        from earlier messages for the boundary periods), merges the in-memory batch
+        on top (freshest wins, keyed by bar_date), then groups by target period and
+        aggregates in memory — one ``bulk_upsert_derived`` at the end.
+
+        It is OUTPUT-EQUIVALENT to looping :meth:`execute` over the same bars: the
+        final derived bar per (timeframe, period) is identical because each period's
+        ``is_partial`` is computed from the LAST source bar IN THAT PERIOD (exactly
+        the value the per-bar loop's final upsert for that period would have written),
+        and ``bulk_upsert_derived`` is idempotent overwrite. For a single-bar batch
+        it is equivalent to one ``execute`` call.
+        """
+        if not bars:
+            return []
+        if target_timeframes is None:
+            target_timeframes = _DEFAULT_TARGET_TIMEFRAMES
+
+        source_seconds = _PERIOD_SECONDS.get(self._source_tf, 60)
+        effective_targets = [tf for tf in target_timeframes if _PERIOD_SECONDS.get(tf, 0) > source_seconds]
+        if not effective_targets:
+            return []
+
+        bars_sorted = sorted(bars, key=lambda b: b.bar_date)
+        instrument_id = bars_sorted[0].instrument_id
+        last_dt = bars_sorted[-1].bar_date
+
+        # ONE range fetch covering every affected period: floor the earliest batch
+        # bar to the COARSEST target period so smaller periods are fully covered too.
+        coarsest_seconds = max(_PERIOD_SECONDS[tf] for tf in effective_targets)
+        fetch_start = _floor_to_period(bars_sorted[0].bar_date, coarsest_seconds)
+        db_bars = await self._uow.ohlcv.find_by_instrument_timeframe_datetime_range(
+            instrument_id=instrument_id,
+            timeframe=self._source_tf,
+            start_dt=fetch_start,
+            end_dt=last_dt,
+        )
+
+        # Merge DB (cross-message history) + this batch; batch wins on bar_date
+        # collisions because it is the freshest copy of the same source bar.
+        by_date: dict[datetime, OHLCVBar] = {b.bar_date: b for b in db_bars}
+        for b in bars:
+            by_date[b.bar_date] = b
+        all_bars = sorted(by_date.values(), key=lambda b: b.bar_date)
+
+        derived_bars: list[OHLCVBar] = []
+        for target_tf in effective_targets:
+            period_sec = _PERIOD_SECONDS[target_tf]
+            periods: dict[datetime, list[OHLCVBar]] = {}
+            for b in all_bars:
+                periods.setdefault(_floor_to_period(b.bar_date, period_sec), []).append(b)
+            for period_start, period_bars in periods.items():
+                period_end = period_start + timedelta(seconds=period_sec)
+                # Trigger = last bar in THIS period → same is_partial the per-bar
+                # loop's final upsert for this period would have produced.
+                derived_bars.append(
+                    _aggregate_bars(
+                        instrument_id=instrument_id,
+                        target_tf=target_tf,
+                        period_start=period_start,
+                        period_end=period_end,
+                        source_bars=period_bars,
+                        trigger_bar=period_bars[-1],
+                    )
+                )
+
+        if derived_bars:
+            await self._uow.ohlcv.bulk_upsert_derived(derived_bars)
+            logger.debug(
+                "intraday_resampling_batch_processed",
+                instrument_id=instrument_id,
+                source_timeframe=str(self._source_tf),
+                source_bars=len(bars),
+                derived_count=len(derived_bars),
+                fetches=1,
+            )
+        return derived_bars
