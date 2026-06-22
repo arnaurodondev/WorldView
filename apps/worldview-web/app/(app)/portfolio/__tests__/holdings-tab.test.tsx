@@ -383,3 +383,215 @@ describe("HoldingsTab — PLAN-0108 W3 anchored layout", () => {
     expect(skeletons.length).toBeGreaterThan(0);
   });
 });
+
+// ── PRD-0114 W4: empty states + brokerage badges ────────────────────────────
+// WHY a separate describe block (not extending the W3 suite above):
+// W3 tests cover the layout contract for populated holdings. W4 tests cover the
+// KIND-AWARE decision tree that runs INSTEAD of the table when holdings are empty.
+// These two concerns are orthogonal and the W4 tests need additional mocks for
+// the new components (ManualPortfolioEmptyState, BrokerageEmptyState, etc.).
+//
+// MOCKS in this block:
+//   - ManualPortfolioEmptyState → stub (renders testid "manual-portfolio-empty-state")
+//   - BrokerageEmptyState      → stub (renders testid based on variant prop)
+//   - BrokerageStatusBanner    → stub (renders testid "brokerage-status-banner")
+//   - LastSyncedBadge          → stub (renders testid "last-synced-badge")
+//   - SyncErrorBadge           → renders real component (pure, no queries)
+//
+// WHY mock ManualPortfolioEmptyState / BrokerageEmptyState:
+//   They fire Link navigations and use Next.js routing context. Mocking at the
+//   boundary keeps this test focused on the HoldingsTab routing logic (which
+//   empty state is selected) rather than the copy inside the state itself.
+// WHY mock BrokerageStatusBanner:
+//   It fires a useQuery for brokerage connection status. Mocking prevents HTTP.
+describe("HoldingsTab — PRD-0114 W4 empty states + badges", () => {
+  // ── Additional mocks for W4 components ──────────────────────────────────────
+  vi.mock("@/components/portfolio/ManualPortfolioEmptyState", () => ({
+    ManualPortfolioEmptyState: vi.fn(
+      ({ onOpenAddPosition }: { onOpenAddPosition: () => void }) => (
+        <div
+          data-testid="manual-portfolio-empty-state"
+          onClick={onOpenAddPosition}
+          role="button"
+        />
+      ),
+    ),
+  }));
+
+  vi.mock("@/components/portfolio/BrokerageEmptyState", () => ({
+    BrokerageEmptyState: vi.fn(
+      ({ variant }: { variant?: "awaiting-sync" | "no-connection" }) => (
+        <div
+          data-testid={
+            variant === "awaiting-sync"
+              ? "brokerage-empty-state-awaiting"
+              : "brokerage-empty-state-no-connection"
+          }
+        />
+      ),
+    ),
+  }));
+
+  vi.mock("@/components/portfolio/BrokerageStatusBanner", () => ({
+    BrokerageStatusBanner: vi.fn(({ portfolioId }: { portfolioId: string }) => (
+      <div data-testid="brokerage-status-banner" data-portfolio-id={portfolioId} />
+    )),
+  }));
+
+  // WHY mock LastSyncedBadge: it calls useFormattedTimestamp which uses Date.now().
+  // Mocking at the boundary keeps test output stable across time.
+  vi.mock("@/components/portfolio/LastSyncedBadge", () => ({
+    LastSyncedBadge: vi.fn(({ lastSyncedAt }: { lastSyncedAt: string | null }) => (
+      <span data-testid="last-synced-badge" data-value={lastSyncedAt ?? "null"} />
+    )),
+  }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders ManualPortfolioEmptyState when kind='manual' and holdings are empty", () => {
+    // WHY: an empty MANUAL portfolio must show the manual-specific empty state,
+    // not the table or the brokerage empty state.
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          enrichedHoldings={[]}
+          holdingsResp={{
+            portfolio_id: "port-1",
+            holdings: [],
+            total_value: 0,
+            total_cost: 0,
+            total_unrealised_pnl: 0,
+            total_unrealised_pnl_pct: 0,
+          }}
+          portfolioKind="manual"
+          onOpenAddPosition={vi.fn()}
+        />,
+      ),
+    );
+
+    // The manual empty state must be visible.
+    expect(
+      screen.getByTestId("manual-portfolio-empty-state"),
+    ).toBeInTheDocument();
+
+    // The brokerage empty state must NOT appear for manual portfolios.
+    expect(
+      screen.queryByTestId("brokerage-empty-state-awaiting"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders BrokerageEmptyState (awaiting-sync) when kind='brokerage' and holdings are empty", () => {
+    // WHY: an empty BROKERAGE portfolio must show "awaiting first sync" copy,
+    // not the manual CTA (that would prompt them to record transactions, which
+    // brokerage portfolios don't support).
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          enrichedHoldings={[]}
+          holdingsResp={{
+            portfolio_id: "port-1",
+            holdings: [],
+            total_value: 0,
+            total_cost: 0,
+            total_unrealised_pnl: 0,
+            total_unrealised_pnl_pct: 0,
+          }}
+          portfolioKind="brokerage"
+        />,
+      ),
+    );
+
+    // The awaiting-sync variant of BrokerageEmptyState must be visible.
+    expect(
+      screen.getByTestId("brokerage-empty-state-awaiting"),
+    ).toBeInTheDocument();
+
+    // ManualPortfolioEmptyState must NOT appear for brokerage portfolios.
+    expect(
+      screen.queryByTestId("manual-portfolio-empty-state"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders SemanticHoldingsTable (not empty state) when kind='manual' + holdings present", () => {
+    // WHY: once a MANUAL portfolio has holdings, the empty state must give way
+    // to the real table. This guards a regression where the kind check was
+    // accidentally OR-ed instead of AND-ed with enrichedHoldings.length === 0.
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          enrichedHoldings={MOCK_HOLDINGS}
+          holdingsResp={MOCK_HOLDINGS_RESP}
+          portfolioKind="manual"
+          onOpenAddPosition={vi.fn()}
+        />,
+      ),
+    );
+
+    // Neither empty state should appear when there are real holdings.
+    expect(
+      screen.queryByTestId("manual-portfolio-empty-state"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("brokerage-empty-state-awaiting"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders brokerage sync status strip for kind='brokerage'", () => {
+    // WHY: the sync-status strip (LastSyncedBadge + SyncErrorBadge) must
+    // appear ONLY for brokerage portfolios. This test verifies the strip
+    // testid is present and the badge is wired to the correct holdingsResp field.
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          enrichedHoldings={MOCK_HOLDINGS}
+          holdingsResp={{
+            ...MOCK_HOLDINGS_RESP,
+            brokerage_last_synced_at: "2026-06-20T10:00:00Z",
+            brokerage_sync_error_count: 2,
+          }}
+          portfolioKind="brokerage"
+        />,
+      ),
+    );
+
+    // The strip container must be present.
+    expect(
+      screen.getByTestId("brokerage-sync-status-strip"),
+    ).toBeInTheDocument();
+
+    // LastSyncedBadge must receive the timestamp.
+    const badge = screen.getByTestId("last-synced-badge");
+    expect(badge).toHaveAttribute("data-value", "2026-06-20T10:00:00Z");
+
+    // BrokerageStatusBanner must be rendered (errors > 0).
+    expect(
+      screen.getByTestId("brokerage-status-banner"),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT render brokerage sync badges for kind='manual'", () => {
+    // WHY: brokerage sync metadata is meaningless for MANUAL portfolios.
+    // Rendering "Never synced" for a manual portfolio would confuse users
+    // into thinking their portfolio is disconnected.
+    render(
+      wrap(
+        <HoldingsTab
+          {...defaultProps()}
+          enrichedHoldings={MOCK_HOLDINGS}
+          holdingsResp={MOCK_HOLDINGS_RESP}
+          portfolioKind="manual"
+        />,
+      ),
+    );
+
+    expect(
+      screen.queryByTestId("brokerage-sync-status-strip"),
+    ).not.toBeInTheDocument();
+  });
+});

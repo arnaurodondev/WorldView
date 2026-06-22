@@ -285,9 +285,16 @@ describe("WatchlistQuickViewWidget", () => {
     renderWithClient(<WatchlistQuickViewWidget />);
     await waitFor(() => expect(screen.getByText("AAPL")).toBeInTheDocument());
 
+    // WHY waitFor: in parallel runs the P&L cells may not be populated in the
+    // same render cycle as the ticker label — the batch-quote response drives a
+    // second async state update that computes change × qty.  Wrapping in waitFor
+    // polls until both values are present, eliminating the timing-sensitive
+    // getByText failure that shows up under jsdom worker concurrency.
     // AAPL: +2.5 × 10 shares = +$25.00, positive token.
-    const gain = screen.getByText("+$25.00");
-    expect(gain).toHaveClass("text-positive");
+    await waitFor(() => {
+      const gain = screen.getByText("+$25.00");
+      expect(gain).toHaveClass("text-positive");
+    });
     // MSFT: −3 × 4 = −$12.00, negative token. (U+2212 minus — see widget WHY.)
     const loss = screen.getByText("−$12.00");
     expect(loss).toHaveClass("text-negative");

@@ -24,6 +24,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -32,6 +33,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.intelligence_db.session import (
         _build_intelligence_factories,
@@ -52,9 +57,14 @@ async def main() -> None:
 
     # PLAN-0107 B-3: expose Prometheus /metrics so this consumer is scrape-able.
     # Compose already declares ``expose: ["9100"]`` for this service.
+    # BP-704 FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when
+    # the poll loop wedges or the run() task dies — without it a wedged consumer
+    # keeps a GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-entity-refresh-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -81,6 +91,8 @@ async def main() -> None:
         config=config,
         intelligence_session_factory=intel_sf,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -92,26 +104,24 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()  # type: ignore[attr-defined]
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # BP-704 supervision: race run() against the stop event so a crashed
+        # run() can no longer leave an un-awaited dead task while main() hangs
+        # on stop_event.wait(). A terminal run() exit raises ConsumerExited →
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("entity_refresh_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("entity_refresh_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("entity_refresh_consumer_stopped")
     finally:
         await intel_engine.dispose()
         if intel_read_engine is not intel_engine:
             await intel_read_engine.dispose()
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("entity_refresh_consumer_stopped")
 
 
 if __name__ == "__main__":

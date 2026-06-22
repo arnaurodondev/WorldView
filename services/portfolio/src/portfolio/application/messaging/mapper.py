@@ -11,6 +11,7 @@ if TYPE_CHECKING:
         InstrumentRefCreated,
         PortfolioArchived,
         PortfolioCreated,
+        PortfolioHoldingRecomputeRequested,
         PortfolioRenamed,
         TenantCreated,
         TransactionRecorded,
@@ -158,6 +159,18 @@ def watchlist_item_deleted_to_dict(event: WatchlistItemDeleted) -> dict[str, Any
 
 
 # Registry mapping event_type -> mapper function
+
+
+def holding_recompute_requested_to_dict(
+    event: PortfolioHoldingRecomputeRequested,
+) -> dict[str, Any]:
+    """Build Avro-compatible dict for portfolio.holding.recompute_requested events."""
+    d = event_to_envelope_dict(event)
+    d["portfolio_id"] = str(event.portfolio_id)
+    d["owner_id"] = str(event.owner_id)
+    return d
+
+
 EVENT_MAPPER_REGISTRY: dict[str, Any] = {
     "tenant.created": tenant_created_to_dict,
     "user.created": user_created_to_dict,
@@ -172,4 +185,5 @@ EVENT_MAPPER_REGISTRY: dict[str, Any] = {
     "watchlist.renamed": watchlist_renamed_to_dict,
     "watchlist.item_added": watchlist_item_added_to_dict,
     "watchlist.item_deleted": watchlist_item_deleted_to_dict,
+    "portfolio.holding.recompute_requested": holding_recompute_requested_to_dict,
 }

@@ -54,10 +54,50 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _NAME_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f<>]")
 _NAME_MAX_LEN = 200  # matches sanitize_entity_name cap
 
+# News-grounding (PRD description audit 2026-06-17): cap on each evidence snippet
+# and the number of snippets injected into the prompt. The live A/B showed 3
+# snippets is enough to anchor the description in real facts; more just bloats
+# the prompt (and the KV-cache miss) without measurable fabrication gain.
+_NEWS_SNIPPET_MAX_LEN = 300
+_NEWS_MAX_SNIPPETS = 3
+
 
 def _sanitize_entity_name(name: str) -> str:
     """Strip control chars + angle brackets and cap at 200 chars (PRD-0073 §12)."""
     return _NAME_CONTROL_CHAR_RE.sub("", name)[:_NAME_MAX_LEN]
+
+
+def _build_news_block(news_context: list[str] | None) -> str:
+    """Render the news-grounding block appended to the user turn.
+
+    When ``news_context`` carries snippets we inject up to ``_NEWS_MAX_SNIPPETS``
+    of them so the model paraphrases real facts instead of fabricating. Each
+    snippet is *untrusted* (it comes from upstream news extraction →
+    ``relation_evidence_raw.evidence_text``) so it is sanitized with the same
+    ``_NAME_CONTROL_CHAR_RE`` used for the entity name (strips control chars +
+    angle brackets so a malicious snippet can't break out of the data block or
+    inject ``Ignore previous instructions``-style payloads) and truncated to
+    ``_NEWS_SNIPPET_MAX_LEN`` chars.
+
+    When ``news_context`` is None/empty we inject the no-news guard instead: the
+    live A/B (2026-06-17) showed 78% of obscure entities have no corroborating
+    news, and confidently fabricating biographies for them is the single worst
+    KG-quality failure — so the guard is a first-class branch, not an afterthought.
+    """
+    snippets = [s for s in (news_context or []) if s and s.strip()]
+    if not snippets:
+        return (
+            "\n\n## No corroborating news found. If you are not independently certain of "
+            "specific facts about this entity, describe only its general category and type — "
+            "do not invent roles, titles, affiliations, or biographical detail."
+        )
+    lines = [
+        "\n\n## Recent news context (ground your description in these facts; state nothing they do not support):",
+    ]
+    for snippet in snippets[:_NEWS_MAX_SNIPPETS]:
+        safe = _NAME_CONTROL_CHAR_RE.sub("", snippet)[:_NEWS_SNIPPET_MAX_LEN]
+        lines.append(f"- {safe}")
+    return "\n".join(lines)
 
 
 # System prompt — static across all calls so DeepInfra can KV-cache it.
@@ -198,13 +238,18 @@ class DeepInfraDescriptionAdapter:
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None:
         """Generate a world-knowledge description using Qwen3 via DeepInfra.
 
         Tries the primary model first; falls back to the secondary model on any error.
         Returns None (without calling the API) when the monthly cost cap is exceeded.
+
+        ``news_context`` (optional): recent news snippets about this entity. When
+        present they are injected as a grounding block so the model paraphrases
+        real facts; when absent a no-news guard tells the model to stay generic.
         """
-        prompt = _build_prompt(canonical_name, entity_type, context_hints)
+        prompt = _build_prompt(canonical_name, entity_type, context_hints, news_context)
 
         # Atomic cost-cap reserve before any API call
         reserved, estimated_cost = await self._reserve_cost(prompt)
@@ -376,7 +421,12 @@ class DeepInfraDescriptionAdapter:
             logger.warning("deepinfra_desc_cost_undo_failed", error=str(exc))
 
 
-def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:
+def _build_prompt(
+    canonical_name: str,
+    entity_type: str,
+    context_hints: dict[str, str],
+    news_context: list[str] | None = None,
+) -> str:
     """Build the user-turn entity request. The system prompt supplies task + examples.
 
     PRD-0073 §12 (F-SEC-02 / F-S01 / F-A05): the ``canonical_name`` originates from
@@ -386,6 +436,12 @@ def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str
     contents as data rather than instructions. ``entity_type`` is constrained to a
     fixed enum upstream but is also length-capped defensively. Context-hint values
     are length-capped per key/value to bound prompt size.
+
+    ``news_context`` (optional): when supplied, ``_build_news_block`` appends a
+    grounding block of sanitized recent-news snippets; when None/empty it appends
+    the no-news guard. The base line stays first so the static portion of the user
+    turn is stable. (The system prompt itself is never mutated — keeping it static
+    preserves DeepInfra's server-side KV-cache.)
     """
     safe_name = _sanitize_entity_name(canonical_name)
     safe_type = entity_type[:64]
@@ -393,4 +449,5 @@ def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str
     hints_str = "; ".join(f"{k[:64]}: {str(v)[:256]}" for k, v in context_hints.items()) if context_hints else ""
     context_part = f"; {hints_str}" if hints_str else ""
     # Wrap the (untrusted) name in <entity> delimiters per PRD-0073 §12.
-    return f"Write a description for: <entity>{safe_name}</entity> (entity_type: {safe_type}{context_part})"
+    base = f"Write a description for: <entity>{safe_name}</entity> (entity_type: {safe_type}{context_part})"
+    return base + _build_news_block(news_context)

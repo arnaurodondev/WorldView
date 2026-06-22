@@ -8,7 +8,7 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+from portfolio.domain.enums import CostBasisMethod, PortfolioKind, PortfolioStatus
 from portfolio.domain.errors import PortfolioArchivedError, RootPortfolioNotArchivableError
 
 
@@ -33,6 +33,9 @@ class Portfolio:
     # Default ``MANUAL`` keeps backwards compatibility with all existing
     # construction sites (CreatePortfolioUseCase, brokerage flows, tests).
     kind: PortfolioKind = PortfolioKind.MANUAL
+    # PLAN-0114 W1: cost basis algorithm for MANUAL portfolios.
+    # R11-compatible: nullable default keeps brokerage + old rows unchanged.
+    cost_basis_method: CostBasisMethod = CostBasisMethod.FIFO
     created_at: datetime = field(default_factory=utc_now)
     # REQ-002a: caller-supplied ``Idempotency-Key`` (UUID) recorded on creation.
     # Nullable for legacy rows + callers that don't send the header. A partial

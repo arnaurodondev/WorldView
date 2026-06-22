@@ -2,7 +2,8 @@
 
 Materialises per-transaction insider feed from object storage into Postgres.
 Intended to run as a separate container/process (mirrors the
-``fundamentals_consumer_main`` pattern).
+``ohlcv_consumer_main`` pattern, including the F-005 / BP-704 stall-aware
+``/healthz`` wiring).
 
 Usage (standalone)::
 
@@ -13,16 +14,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger, log_runtime_banner  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    log_runtime_banner,
+    make_liveness_probe,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 async def main() -> None:
-    """Async entrypoint — mirrors ``fundamentals_consumer_main.main`` exactly."""
+    """Async entrypoint — mirrors ``ohlcv_consumer_main.main`` exactly."""
     from market_data.config import Settings
     from market_data.infrastructure.db.session import (
         build_read_engine,
@@ -34,6 +42,10 @@ async def main() -> None:
         InsiderTransactionsConsumer,
     )
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -46,6 +58,18 @@ async def main() -> None:
     )
     log = get_logger("market_data.insider_transactions_consumer_main")  # type: ignore[no-any-return]
     log.info("insider_transactions_consumer_starting", service=settings.service_name)
+
+    # F-005 / BP-704: expose Prometheus /metrics + /healthz on 9100 so the Docker
+    # healthcheck has a real endpoint to hit, and bind a stall-aware liveness
+    # probe so /healthz flips to 503 when the poll loop wedges or run() dies —
+    # without it this consumer had NO metrics server at all, so /healthz on 9100
+    # refused connection and the container reported UNHEALTHY despite working.
+    liveness_probe = make_liveness_probe()
+    metrics_handle = start_metrics_server(
+        service_name="market-data-insider-transactions-consumer",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
+    )
 
     stop_event = asyncio.Event()
 
@@ -88,6 +112,8 @@ async def main() -> None:
         ),
         dedup_client=valkey,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -100,15 +126,14 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # F-005 / BP-704 supervision: races run() against the stop event so a
+        # crashed run() can no longer leave an un-awaited dead task while main()
+        # hangs on ``stop_event.wait()``. A terminal run() exit raises
+        # ConsumerExited → we exit non-zero so Docker restarts the container.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("insider_transactions_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("insider_transactions_consumer_fatal_error", error=str(exc))
         sys.exit(1)
@@ -117,6 +142,8 @@ async def main() -> None:
         await write_engine.dispose()
         if read_engine is not write_engine:
             await read_engine.dispose()
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
         log.info("insider_transactions_consumer_stopped")
 
 

@@ -181,6 +181,28 @@ def _system_headers(request: Request) -> dict[str, str]:
 # ── Pure stat functions (extracted so they're independently unit-testable) ──
 
 
+def _parse_iso_date(raw: str) -> date:
+    """Parse a date from either a bare ``YYYY-MM-DD`` or a full ISO datetime.
+
+    BP-682 (2026-06-20): S3's OHLCV ``bar_date`` is a ``datetime`` field,
+    serialised as ``"2025-08-28T00:00:00Z"`` — a string that
+    ``date.fromisoformat`` REJECTS (it only accepts a bare date, and the
+    trailing ``Z`` is invalid even for ``datetime.fromisoformat`` before
+    Python 3.11). The previous code called ``date.fromisoformat`` directly,
+    so EVERY SPY bar raised ``ValueError`` and was skipped, collapsing the
+    benchmark series to empty → ``benchmark="no_data"`` → ``beta``/``alpha``
+    null even though ~275 daily SPY bars existed. S1's value-history ``date``
+    is a bare date so that leg was unaffected — hence the asymmetry.
+
+    Strategy: take the date portion before any ``T`` (works for both shapes)
+    and parse that with ``date.fromisoformat``. Raises ``ValueError`` on a
+    genuinely malformed token so the caller's ``except`` still skips it.
+    """
+    # Split on 'T' (ISO datetime separator) and parse only the date head.
+    # "2025-08-28" -> "2025-08-28"; "2025-08-28T00:00:00Z" -> "2025-08-28".
+    return date.fromisoformat(raw.split("T", 1)[0])
+
+
 def _daily_returns(values: list[float]) -> list[float]:
     """Return r_t = (V_t - V_{t-1}) / V_{t-1} for t >= 1.
 
@@ -505,7 +527,10 @@ async def _fetch_value_history(
     out: list[tuple[date, float]] = []
     for p in points:
         try:
-            d = date.fromisoformat(str(p["date"]))
+            # BP-682: tolerate a full ISO datetime as well as a bare date.
+            # S1 currently emits bare dates, but parsing defensively prevents
+            # the same silent-drop failure if that ever changes.
+            d = _parse_iso_date(str(p["date"]))
             v = float(p["value"])
         except Exception:  # noqa: S112 — malformed-row skip is intentional and not actionable
             continue
@@ -606,7 +631,7 @@ async def _fetch_spy_ohlcv(
         if not isinstance(bar, dict):
             continue
         try:
-            d = date.fromisoformat(str(bar["bar_date"]))
+            d = _parse_iso_date(str(bar["bar_date"]))
             close = float(bar["close"])
         except Exception:  # noqa: S112 — malformed-bar skip is intentional and not actionable
             continue

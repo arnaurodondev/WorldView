@@ -59,8 +59,15 @@ class S3ObjectStorage(ObjectStorage):
 
     def __init__(self, settings: StorageSettings) -> None:
         import boto3  # type: ignore[import-untyped]
+        from botocore.config import Config  # type: ignore[import-untyped]
 
         self._settings = settings
+        # Size the underlying urllib3 connection pool to the configured value.
+        # botocore defaults max_pool_connections to 10, which is too small for
+        # consumers issuing many concurrent object fetches (the market-data
+        # ohlcv-consumer floods logs with "Connection pool is full, discarding
+        # connection" under dataset replay). Configurable via STORAGE_MAX_POOL_CONNECTIONS.
+        boto_config = Config(max_pool_connections=settings.max_pool_connections)
         self._client = boto3.client(
             "s3",
             region_name=settings.region,
@@ -68,6 +75,7 @@ class S3ObjectStorage(ObjectStorage):
             aws_access_key_id=settings.access_key,
             aws_secret_access_key=settings.secret_key,
             use_ssl=settings.use_ssl,
+            config=boto_config,
         )
         logger.debug(
             "s3_client_created",

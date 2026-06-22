@@ -91,6 +91,9 @@ class PortfolioResponse(BaseModel):
     # backfilled to 'manual' for historical rows).
     kind: str
     created_at: datetime
+    # PLAN-0114 W6: per-portfolio cost basis accounting method. Default "FIFO"
+    # keeps backwards-compat with clients that don't yet read this field.
+    cost_basis_method: str = "FIFO"
 
 
 class PortfolioRenameRequest(BaseModel):
@@ -189,6 +192,38 @@ class HoldingResponse(BaseModel):
     @field_serializer("quantity", "average_cost")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+class HoldingsListResponse(BaseModel):
+    """Holdings response envelope with brokerage connection metadata (W3 - FR-4, FR-7).
+
+    WHY a dedicated response model instead of reusing ``PaginatedResponse[HoldingResponse]``:
+    the holdings endpoint does not paginate (a portfolio rarely exceeds ~50 positions)
+    so bolting ``brokerage_last_synced_at`` and ``brokerage_sync_error_count`` onto a
+    generic pagination envelope would require either:
+
+    (a) Extending ``PaginatedResponse`` with optional domain-specific fields - which
+        would leak portfolio domain knowledge into a generic schema.
+    (b) Nesting an inner object - which would break existing frontend consumers that
+        already unpack ``{items, total, limit, offset}``.
+
+    This model extends the established shape with two additive nullable fields.
+    Forward-compatible per R11: ``brokerage_last_synced_at`` is nullable (None for
+    non-BROKERAGE portfolios), ``brokerage_sync_error_count`` defaults to 0. Existing
+    consumers that ignore unknown fields continue to work.
+    """
+
+    items: list[HoldingResponse]
+    total: int
+    limit: int
+    offset: int
+    # UTC ISO-8601 timestamp of the last successful brokerage sync.
+    # None for MANUAL/ROOT portfolios or a BROKERAGE portfolio whose connection
+    # has never completed a sync (new connection, pending first sync).
+    brokerage_last_synced_at: datetime | None = None
+    # Total count of brokerage sync errors for this portfolio's connection.
+    # 0 for MANUAL/ROOT portfolios or a BROKERAGE portfolio with no errors.
+    brokerage_sync_error_count: int = 0
 
 
 class TransactionListItem(BaseModel):
@@ -744,3 +779,13 @@ class ConcentrationResponse(BaseModel):
     @field_serializer("top_3_share_pct")
     def _decimals(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+class PortfolioPatchRequest(BaseModel):
+    """Partial update payload for PATCH /portfolios/{id}.
+
+    PLAN-0114 / T-W1: allows updating mutable portfolio settings without a
+    full PUT. All fields are optional — absent fields are not updated.
+    """
+
+    cost_basis_method: str | None = None

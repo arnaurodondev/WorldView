@@ -108,14 +108,38 @@ describe("AiSignalsWidget — news momentum rows", () => {
     expect(container.innerHTML).not.toContain("text-[hsl(var(--positive))]");
   });
 
-  it("shows '+N' for new coverage when the prior window was empty", async () => {
+  it("shows a capped percentage (not '+N') for new coverage when the prior window was empty", async () => {
+    // WHY: the display unit must be consistent across all rows in the same widget —
+    // always a % (financial convention). Prior=0 is valid data (new coverage) but
+    // switching to an absolute count "+N" while other rows show "↑200%" is a mixed-
+    // unit bug. The raw counts are visible in the hover tooltip so nothing is lost.
     gatewayMocks.getAiSignals.mockResolvedValue({
       signals: [item({ count: 5, prior_count: 0, delta: 5, delta_pct: 500 })],
       window_hours: 24,
     });
     render(<AiSignalsWidget />, { wrapper });
-    // Prior=0 → prefer the honest "+5" reading over a giant "↑500%".
-    expect(await screen.findByText("+5")).toBeInTheDocument();
+
+    // Prior=0, delta_pct=500 → renders as "↑500%" (not the old "+5").
+    expect(await screen.findByText("↑500%")).toBeInTheDocument();
+    // The old absolute reading must NOT appear — it would break unit consistency.
+    expect(screen.queryByText("+5")).not.toBeInTheDocument();
+  });
+
+  it("caps the momentum percentage at 999% to prevent slot overflow", async () => {
+    // WHY the cap: the trend label lives in a fixed ~w-[44px] slot. An uncapped
+    // delta_pct (e.g. 12 000% for a ticker going from 1→121 articles) would
+    // overflow it. 999% is the maximum 3-digit % that still fits with the ↑ glyph.
+    // The tooltip (trendTitle) still shows the full article counts.
+    gatewayMocks.getAiSignals.mockResolvedValue({
+      signals: [item({ count: 121, prior_count: 1, delta: 120, delta_pct: 12000 })],
+      window_hours: 24,
+    });
+    render(<AiSignalsWidget />, { wrapper });
+
+    // delta_pct=12000 → capped to ↑999%
+    expect(await screen.findByText("↑999%")).toBeInTheDocument();
+    // Must NOT render the raw uncapped value.
+    expect(screen.queryByText("↑12000%")).not.toBeInTheDocument();
   });
 
   it("navigates to /instruments/[ticker] when the row is clicked", async () => {
@@ -168,5 +192,82 @@ describe("AiSignalsWidget — news momentum rows", () => {
 
     expect(await screen.findByText(/No news momentum yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1W" })).toBeInTheDocument();
+  });
+});
+
+describe("AiSignalsWidget — momentum sort selector", () => {
+  // A 3-ticker fixture with distinct delta_pct so the ORDER is unambiguous:
+  //   GAIN  ↑300% (most positive)   FLAT  ↑20%   DROP  ↓50% (most negative)
+  // The server returns them in an arbitrary order so we can prove the client sort
+  // actually re-orders (rather than coincidentally matching the input order).
+  function trio() {
+    return {
+      signals: [
+        item({ entity_id: "flat", ticker: "FLAT", name: "Flat Co", delta: 1, delta_pct: 20 }),
+        item({ entity_id: "gain", ticker: "GAIN", name: "Gainer", delta: 9, delta_pct: 300 }),
+        item({ entity_id: "drop", ticker: "DROP", name: "Dropper", count: 2, prior_count: 4, delta: -2, delta_pct: -50 }),
+      ],
+      window_hours: 24,
+    };
+  }
+
+  /** Read the rendered ticker order off the row buttons (DOM order = visual order). */
+  function tickerOrder(): string[] {
+    return screen
+      .getAllByRole("button", { name: /GAIN|DROP|FLAT/i })
+      .map((b) => b.querySelector("span")?.textContent ?? "");
+  }
+
+  it("defaults to TOP (server order) — the rows are not re-ordered", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    // TOP is the active sort, and the order matches the server payload as-is.
+    expect(screen.getByRole("button", { name: "TOP" })).toHaveAttribute("aria-pressed", "true");
+    expect(tickerOrder()).toEqual(["FLAT", "GAIN", "DROP"]);
+  });
+
+  it("'Biggest Increase' (▲) orders by delta_pct DESCENDING", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    await userEvent.click(screen.getByRole("button", { name: "▲" }));
+
+    // delta_pct desc: GAIN(300) → FLAT(20) → DROP(-50).
+    expect(tickerOrder()).toEqual(["GAIN", "FLAT", "DROP"]);
+    expect(screen.getByRole("button", { name: "▲" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("'Biggest Decrease' (▼) orders by delta_pct ASCENDING", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    await userEvent.click(screen.getByRole("button", { name: "▼" }));
+
+    // delta_pct asc: DROP(-50) → FLAT(20) → GAIN(300).
+    expect(tickerOrder()).toEqual(["DROP", "FLAT", "GAIN"]);
+    expect(screen.getByRole("button", { name: "▼" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles the active sort button state and does NOT refetch when switching sort", async () => {
+    gatewayMocks.getAiSignals.mockResolvedValue(trio());
+    render(<AiSignalsWidget />, { wrapper });
+
+    await screen.findByText("Gainer");
+    // One fetch for the initial load.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "▲" }));
+    expect(screen.getByRole("button", { name: "▲" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "TOP" })).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(screen.getByRole("button", { name: "▼" }));
+    expect(screen.getByRole("button", { name: "▼" })).toHaveAttribute("aria-pressed", "true");
+
+    // Sorting is a pure client-side re-order — it must never hit the gateway.
+    expect(gatewayMocks.getAiSignals).toHaveBeenCalledTimes(1);
   });
 });

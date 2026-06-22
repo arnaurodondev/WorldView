@@ -87,6 +87,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.provisional import (
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.signal_events import _enqueue_signal_events
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.storage import (
     download_article,
+    extract_title_from_silver,
     extract_url_from_silver,
 )
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events import (
@@ -417,6 +418,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         usage_logger: LlmUsageLogProtocol | None = None,
         valkey_client: ValkeyClient | None = None,
         learned_router: LearnedRouter | None = None,
+        entailment_client: ExtractionClient | None = None,
+        entailment_config: Any = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
@@ -433,6 +436,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._ner = ner_client
         self._emb = embedding_client
         self._ext = extraction_client
+        # ENHANCEMENT #6: cheap co-mention entailment client (Qwen3-235B) + config.
+        # None when the feature is off → run_ml_phase forwards None and the check no-ops.
+        self._entailment_client = entailment_client
+        self._entailment_config = entailment_config
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
@@ -723,6 +730,24 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         extracted_at: datetime = common.time.utc_now()
         doc_title: str | None = str(value["title"]) if value.get("title") is not None else None
 
+        # BUG #35: sec_edgar/newsapi events carry no ``title`` → NULL
+        # ``chunks.title_denorm`` → the learned router scores the doc near-floor
+        # and dumps it to LIGHT (no deep extraction).  When the event has no
+        # title, recover it from the silver envelope (NewsAPI's title lives in
+        # the inner raw-news JSON re-encoded into ``body``; see BUG #34).  This
+        # is best-effort — genuine title-less docs (most sec_edgar filings)
+        # still fall through to the C-8 degenerate-input fallback in
+        # ``_apply_live_learned_tier``.
+        if not (doc_title or "").strip():
+            recovered_title = await extract_title_from_silver(self._storage, self._settings.silver_bucket, minio_key)
+            if recovered_title:
+                doc_title = recovered_title
+                logger.info(  # type: ignore[no-any-return]
+                    "article_consumer.title_recovered_from_silver",
+                    doc_id=str(doc_id),
+                    source_type=source_type,
+                )
+
         # F-MAJOR-001: idempotency check BEFORE acquiring the backpressure semaphore.
         async with self._nlp_sf() as check_session:
             if await RoutingDecisionRepository(check_session).get_by_doc(doc_id) is not None:
@@ -746,7 +771,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         url = value.get("url") or await extract_url_from_silver(self._storage, self._settings.silver_bucket, minio_key)
         await self._write_source_metadata(
             doc_id=doc_id,
-            title=value.get("title"),
+            # BUG #35: persist the recovered title (not the bare event field) so
+            # document_source_metadata.title is populated for sec_edgar/newsapi too.
+            title=doc_title or value.get("title"),
             url=url,
             published_at=published_at,
             source_name=source_name,
@@ -1158,6 +1185,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 ext=self._ext,
                 watchlist_client=self._watchlist._client,  # type: ignore[attr-defined]
                 usage_logger=self._usage_logger,
+                entailment_client=self._entailment_client,
+                entailment_config=self._entailment_config,
                 _deep_extraction_fn=run_deep_extraction_block,
                 _alias_repo=entity_alias_repo,
                 _profile_emb_repo=entity_profile_emb_repo,

@@ -221,7 +221,11 @@ async def test_fetch_ohlcv_batch_chunks_1001_symbols() -> None:
 
 
 def test_fetch_ohlcv_timeframe_mapping() -> None:
-    """All 6 internal timeframe codes map to the correct Alpaca API format."""
+    """All internal timeframe codes map to the correct Alpaca API format.
+
+    Includes ``1d`` → ``1Day`` (PLAN-0036: daily is now polled directly from
+    Alpaca as the deep-history daily source).
+    """
     expected = {
         "1m": "1Min",
         "5m": "5Min",
@@ -229,8 +233,56 @@ def test_fetch_ohlcv_timeframe_mapping() -> None:
         "30m": "30Min",
         "1h": "1Hour",
         "4h": "4Hour",
+        "1d": "1Day",
     }
     assert _TIMEFRAME_MAP == expected
+
+
+@pytest.mark.asyncio
+async def test_fetch_daily_sends_1day_timeframe_and_adjustment() -> None:
+    """Daily fetch maps to ``1Day`` and requests corporate-action adjustment.
+
+    Without ``adjustment=all`` Alpaca returns RAW (split-unadjusted) daily prices,
+    which would be inconsistent with the EODHD failover daily and the 1w/1mo bars
+    derived from this series (PLAN-0036).
+    """
+    from datetime import UTC, datetime
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=_bars_response("AAPL", 2)))
+    adapter = _make_adapter(client=client)
+
+    await adapter.fetch_ohlcv(
+        "AAPL",
+        "1d",
+        datetime(2020, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    params = client.get.call_args.kwargs.get("params", {})
+    assert params["timeframe"] == "1Day"
+    assert params["adjustment"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_fetch_intraday_omits_adjustment() -> None:
+    """Intraday (1m) fetch must NOT request adjustment — bars stay raw within a session."""
+    from datetime import UTC, datetime
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=_bars_response("AAPL", 2)))
+    adapter = _make_adapter(client=client)
+
+    await adapter.fetch_ohlcv(
+        "AAPL",
+        "1m",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    params = client.get.call_args.kwargs.get("params", {})
+    assert params["timeframe"] == "1Min"
+    assert "adjustment" not in params
 
 
 # ---------------------------------------------------------------------------

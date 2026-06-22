@@ -423,3 +423,164 @@ class TestMigration0022:
         mod = _load_migration(self._FILE)
         bind = self._run("downgrade", exists=False)
         assert len(bind.deletes) == len(mod._planned_rows())
+
+
+# ---------------------------------------------------------------------------
+# Migration 0023 — seed Alpaca 1d polling policies; disable EODHD 1d polling
+# ---------------------------------------------------------------------------
+
+
+class _FetchingBind:
+    """Mock SQLAlchemy bind that captures executed SQL and returns configurable rows.
+
+    Used for migrations whose upgrade() SELECTs rows then INSERTs per row.
+    ``seed_rows`` are returned by the first SELECT; subsequent SELECTs return [].
+    All INSERT/UPDATE/DELETE SQL strings are recorded in ``statements``.
+    """
+
+    class _Result:
+        def __init__(self, rows: list) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list:
+            return self._rows
+
+    def __init__(self, seed_rows: list | None = None) -> None:
+        self._seed_rows = seed_rows or []
+        self._select_count = 0
+        self.statements: list[str] = []
+        self.insert_params: list[dict] = []
+
+    def execute(self, clause: object, params: dict | None = None) -> _FetchingBind._Result:
+        sql = str(clause)
+        self.statements.append(sql)
+        sql_upper = sql.strip().upper()
+        if sql_upper.startswith("SELECT"):
+            self._select_count += 1
+            # First SELECT (upgrade 1m query) returns seed rows; others return empty.
+            return self._Result(self._seed_rows if self._select_count == 1 else [])
+        if sql_upper.startswith("INSERT") and params is not None:
+            self.insert_params.append(params)
+        return self._Result([])
+
+
+class TestMigration0023:
+    """Revision chain + SQL semantics for the Alpaca 1d seed / EODHD 1d disable migration."""
+
+    _FILE = "0023_alpaca_daily_polling.py"
+
+    def test_revision_is_0023(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.revision == "0023"
+
+    def test_down_revision_is_0022(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert mod.down_revision == "0022"
+
+    def test_upgrade_and_downgrade_are_callable(self) -> None:
+        mod = _load_migration(self._FILE)
+        assert callable(mod.upgrade)
+        assert callable(mod.downgrade)
+
+    def test_ulid_from_seed_is_deterministic(self) -> None:
+        mod = _load_migration(self._FILE)
+        seed = "alpaca:ohlcv:AAPL:US:1d:"
+        assert mod._ulid_from_seed(seed) == mod._ulid_from_seed(seed)
+
+    def test_ulid_has_correct_format(self) -> None:
+        mod = _load_migration(self._FILE)
+        uid = mod._ulid_from_seed("alpaca:ohlcv:TSLA:US:1d:")
+        assert len(uid) == 26
+        assert uid.startswith("01HX")
+
+    def _run_upgrade(self, seed_rows: list) -> _FetchingBind:
+        mod = _load_migration(self._FILE)
+        bind = _FetchingBind(seed_rows=seed_rows)
+        mod.op.get_bind = lambda: bind  # type: ignore[attr-defined]
+        mod.upgrade()
+        return bind
+
+    def _run_downgrade(self, seed_rows: list) -> _FetchingBind:
+        mod = _load_migration(self._FILE)
+        bind = _FetchingBind(seed_rows=seed_rows)
+        mod.op.get_bind = lambda: bind  # type: ignore[attr-defined]
+        mod.downgrade()
+        return bind
+
+    def test_upgrade_select_filters_enabled_1m_symbols(self) -> None:
+        """H-1 regression: the source SELECT must include ``AND enabled = true``."""
+        bind = self._run_upgrade([])
+        select_sql = next(s for s in bind.statements if "SELECT" in s.upper())
+        assert "enabled = true" in select_sql, (
+            "upgrade() SELECT is missing 'AND enabled = true' — would create 1d policies "
+            "for intentionally-disabled 1m symbols (H-1)"
+        )
+
+    def test_upgrade_select_targets_alpaca_ohlcv_1m(self) -> None:
+        """The source query must scope to alpaca / ohlcv / 1m."""
+        bind = self._run_upgrade([])
+        select_sql = next(s for s in bind.statements if "SELECT" in s.upper())
+        assert "alpaca" in select_sql
+        assert "ohlcv" in select_sql
+        assert "1m" in select_sql
+
+    def test_upgrade_inserts_one_1d_policy_per_seed_row(self) -> None:
+        """One INSERT per enabled-1m symbol, no more, no less."""
+        seed = [("AAPL", "US", 1), ("MSFT", "US", 1), ("TSLA", "US", 2)]
+        bind = self._run_upgrade(seed)
+        assert len(bind.insert_params) == len(seed)
+
+    def test_upgrade_inserted_policies_are_alpaca_1d(self) -> None:
+        seed = [("NVDA", "US", 1)]
+        bind = self._run_upgrade(seed)
+        assert len(bind.insert_params) == 1
+        row = bind.insert_params[0]
+        assert row["provider"] == "alpaca"
+        assert row["timeframe"] == "1d"
+        assert row["dataset_type"] == "ohlcv"
+        assert row["enabled"] is True
+
+    def test_upgrade_policy_id_is_deterministic_ulid(self) -> None:
+        """The inserted ID must match _ulid_from_seed for the expected seed string."""
+        mod = _load_migration(self._FILE)
+        seed = [("AAPL", "US", 1)]
+        bind = self._run_upgrade(seed)
+        expected_id = mod._ulid_from_seed("alpaca:ohlcv:AAPL:US:1d:")
+        assert bind.insert_params[0]["id"] == expected_id
+
+    def test_upgrade_ids_are_unique_across_symbols(self) -> None:
+        seed = [("AAPL", "US", 1), ("MSFT", "US", 1), ("GOOGL", "US", 1)]
+        bind = self._run_upgrade(seed)
+        ids = [r["id"] for r in bind.insert_params]
+        assert len(ids) == len(set(ids)), "Duplicate policy IDs generated by upgrade()"
+
+    def test_upgrade_disables_eodhd_1d(self) -> None:
+        """Upgrade must emit an UPDATE that disables eodhd/ohlcv/1d rows."""
+        bind = self._run_upgrade([])
+        update_sql = " ".join(s for s in bind.statements if "UPDATE" in s.upper())
+        assert "eodhd" in update_sql
+        assert "enabled = false" in update_sql
+        assert "1d" in update_sql
+
+    def test_upgrade_eodhd_disable_is_idempotent(self) -> None:
+        """The EODHD UPDATE WHERE must include ``enabled = true`` (idempotent guard)."""
+        bind = self._run_upgrade([])
+        update_sql = next(s for s in bind.statements if "UPDATE" in s.upper())
+        assert "enabled = true" in update_sql, (
+            "EODHD-disable UPDATE is missing 'AND enabled = true' — re-runs would "
+            "touch already-disabled rows unnecessarily"
+        )
+
+    def test_downgrade_re_enables_eodhd_1d(self) -> None:
+        """Downgrade must emit an UPDATE that re-enables eodhd/ohlcv/1d rows."""
+        bind = self._run_downgrade([])
+        update_sql = " ".join(s for s in bind.statements if "UPDATE" in s.upper())
+        assert "eodhd" in update_sql
+        assert "enabled = true" in update_sql
+        assert "1d" in update_sql
+
+    def test_downgrade_emits_delete_for_alpaca_1d(self) -> None:
+        """Downgrade must emit a DELETE to remove the Alpaca 1d policies."""
+        bind = self._run_downgrade([("AAPL", "US")])
+        delete_sql = " ".join(s for s in bind.statements if "DELETE" in s.upper())
+        assert "polling_policies" in delete_sql

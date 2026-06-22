@@ -27,7 +27,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { priceChangeClass, formatPercentDirect, cn } from "@/lib/utils";
+import { priceChangeClass, cn } from "@/lib/utils";
+// 2026-06-19 wrap fix: formatChangePct bounds extreme % moves so they fit the
+// fixed 44px %-change slot in this narrow sidebar row (replaces formatPercentDirect,
+// which used an unbounded toFixed(2); see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatChangePct } from "@/lib/format";
 // PRD-0089 W1 §4.5 — Sparkline column uses the F1 primitive (3-state trend per FU-5.6).
 import { Sparkline } from "@/components/primitives/Sparkline";
 import type { WatchlistMember } from "@/types/api";
@@ -296,7 +300,7 @@ export function WatchlistPanel() {
                */
               <div
                 key={member.entity_id}
-                className="flex h-[20px] items-center cursor-pointer px-2 hover:bg-muted/40"
+                className="flex h-[20px] min-w-0 items-center cursor-pointer overflow-hidden px-2 hover:bg-muted/40"
                 onClick={() => {
                   // WHY ?? member.entity_id: graceful fallback when ticker is missing.
                   // In practice all watchlist members have tickers, but the type
@@ -306,22 +310,25 @@ export function WatchlistPanel() {
                 aria-label={`${member.ticker ?? member.entity_id} — view instrument detail`}
               >
                 {/* Ticker — 44px fixed, mono for column alignment (plan §4.5) */}
-                <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground truncate">
+                <span className="w-[44px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-foreground truncate">
                   {member.ticker ?? member.entity_id.slice(0, 6)}
                 </span>
-                {/* Price — flex-1 right-aligned, mono; "—" when quote not yet loaded */}
-                <span className="flex-1 text-right font-mono text-[11px] tabular-nums text-foreground">
+                {/* Price — flex-1 right-aligned, mono; "—" when quote not yet loaded.
+                    min-w-0 lets the flex price column shrink instead of pushing
+                    the %-change slot off the row edge. */}
+                <span className="min-w-0 flex-1 whitespace-nowrap text-right font-mono text-[11px] tabular-nums text-foreground">
                   {quote != null ? quote.price.toFixed(2) : "—"}
                 </span>
-                {/* Change% — 44px, colored by sign per design token §0.4 */}
+                {/* Change% — 44px, colored by sign per design token §0.4.
+                    formatChangePct bounds extreme moves so the string fits 44px. */}
                 <span
-                  className={`w-[44px] shrink-0 text-right font-mono text-[11px] tabular-nums ${
+                  className={`w-[44px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums ${
                     quote != null
                       ? priceChangeClass(quote.change_pct)
                       : "text-muted-foreground"
                   }`}
                 >
-                  {quote != null ? formatPercentDirect(quote.change_pct) : "—"}
+                  {quote != null ? formatChangePct(quote.change_pct) : "—"}
                 </span>
                 {/*
                  * Sparkline column — 40×16 trend-tinted SVG (F1 primitive).

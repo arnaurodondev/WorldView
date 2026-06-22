@@ -968,6 +968,20 @@ export interface HoldingsResponse {
   total_cost: number | null;
   total_unrealised_pnl: number | null;
   total_unrealised_pnl_pct: number | null;
+  /**
+   * PRD-0114 W3/W4 (FR-4 / G-4): ISO 8601 UTC timestamp of the last successful
+   * SnapTrade sync for BROKERAGE portfolios. null for MANUAL and ROOT portfolios,
+   * and for BROKERAGE portfolios that have never synced successfully.
+   * Optional so older S9 builds (pre-W3) keep compiling.
+   */
+  brokerage_last_synced_at?: string | null;
+  /**
+   * PRD-0114 W3/W4 (FR-7 / G-7): count of unresolved rows in the
+   * brokerage_sync_errors table for this portfolio's brokerage connection.
+   * 0 for MANUAL, ROOT, and BROKERAGE portfolios with no errors.
+   * Optional so older S9 builds (pre-W3) keep compiling — treat undefined as 0.
+   */
+  brokerage_sync_error_count?: number;
 }
 
 export interface TransactionsResponse {

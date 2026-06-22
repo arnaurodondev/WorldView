@@ -190,6 +190,18 @@ class FakeTransactionRepo(TransactionRepository):
         items.sort(key=lambda t: (t.executed_at, t.created_at))
         return items
 
+    # PLAN-0114 / T-W2-02 — stubs for the new filtered repository methods.
+    # Real filtering is exercised in test_list_transactions_filtered.py via
+    # the FakeTransactionRepo in tests/unit/fakes.py.
+    async def list_by_portfolio_filtered(self, portfolio_id, tenant_id, tx_filter):
+        return [], 0
+
+    async def list_by_portfolio_ids_filtered(self, portfolio_ids, tenant_id, tx_filter):
+        return [], 0
+
+    async def list_all_for_portfolio_filtered(self, portfolio_id, tenant_id, tx_filter):
+        return []
+
 
 class FakeHoldingRepo(HoldingRepository):
     def __init__(self) -> None:
@@ -587,10 +599,10 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
     assert len(uow._transactions.saved) == 1
-    # T-G-1-02 (PLAN-0046 update): outbox must have exactly 1 record now —
-    # only TransactionRecorded. HoldingChanged is no longer emitted by this
-    # use case (BP-264; ownership moved to UpsertHoldingsFromSnapshotUseCase).
-    assert len(uow._outbox.saved) == 1, "outbox must not be doubled by a duplicate idempotent call"
+    # T-G-1-02 (PLAN-0046 update / PLAN-0114 W1):
+    # First call emits 2 outbox records: TransactionRecorded + PortfolioHoldingRecomputeRequested.
+    # Second (idempotent) call returns early and saves nothing new — total stays 2.
+    assert len(uow._outbox.saved) == 2, "outbox must not be doubled by a duplicate idempotent call"
     # PLAN-0046 / BP-264: holdings table is no longer touched here.
     holdings = await uow._holdings.list_by_portfolio(cmd_with_key.portfolio_id)
     assert len(holdings) == 0
@@ -671,24 +683,27 @@ async def test_idempotency_uses_atomic_dedup_not_check_then_record(uow, cmd) -> 
 
 
 # ── T-C-1-04: IntegrityError → 409 (concurrent same-key commit) ──────────────
-
-
-def _make_integrity_error():
-    """Create a minimal sqlalchemy IntegrityError for use in tests."""
-    from sqlalchemy.exc import IntegrityError as SAIntegrityError
-
-    return SAIntegrityError("INSERT ...", {}, Exception("UNIQUE constraint failed"))
+#
+# ARCH-001 fix: SqlAlchemyUnitOfWork.commit() now translates SQLAlchemy
+# IntegrityError → IdempotencyConflictError (a domain type) so the application
+# layer (RecordTransactionUseCase) never imports sqlalchemy.exc.  These fake UoW
+# classes mirror that contract: their commit() raises IdempotencyConflictError
+# directly (not SAIntegrityError) so tests exercise the same signal the real UoW
+# produces.  The translation happens in infrastructure; tests verify domain behaviour.
 
 
 class _IntegrityErrorUoW(FakeUoW):
-    """FakeUoW whose commit() raises IntegrityError to simulate a concurrent-commit race.
+    """FakeUoW whose commit() raises IdempotencyConflictError to simulate a concurrent-commit race.
 
-    rollback() clears pending in-memory saves to mimic real DB transaction isolation
-    (in a real DB, a rolled-back write is not visible to subsequent queries).
+    Mirrors SqlAlchemyUnitOfWork.commit() which wraps SQLAlchemy IntegrityError →
+    IdempotencyConflictError (ARCH-001). rollback() clears pending in-memory saves
+    to mimic real DB transaction isolation.
     """
 
     async def commit(self) -> None:
-        raise _make_integrity_error()
+        from portfolio.domain.errors import IdempotencyConflictError
+
+        raise IdempotencyConflictError("UNIQUE constraint failed (simulated by fake UoW)")
 
     async def rollback(self) -> None:
         # Clear all pending saves — simulates the DB rollback undoing the writes.
@@ -700,9 +715,10 @@ class _IntegrityErrorUoW(FakeUoW):
 class _IntegrityErrorUoWWithWinner(FakeUoW):
     """FakeUoW where the 'winner' concurrent request already committed its transaction.
 
-    commit() raises IntegrityError (the unique constraint the loser hits),
-    rollback() clears the loser's pending writes but keeps the winner's committed row.
-    find_by_external_ref then finds the winner's transaction, and the use case returns it.
+    commit() raises IdempotencyConflictError (what the real UoW emits after wrapping
+    SQLAlchemy IntegrityError per ARCH-001), rollback() clears the loser's pending
+    writes but keeps the winner's committed row. find_by_external_ref then finds the
+    winner's transaction, and the use case returns it.
     """
 
     def __init__(self, *args, winner_tx, **kwargs) -> None:
@@ -712,7 +728,9 @@ class _IntegrityErrorUoWWithWinner(FakeUoW):
         self._transactions.saved.append(winner_tx)
 
     async def commit(self) -> None:
-        raise _make_integrity_error()
+        from portfolio.domain.errors import IdempotencyConflictError
+
+        raise IdempotencyConflictError("UNIQUE constraint failed (simulated by fake UoW)")
 
     async def rollback(self) -> None:
         # Wipe the loser's pending saves, then restore the winner's committed row.

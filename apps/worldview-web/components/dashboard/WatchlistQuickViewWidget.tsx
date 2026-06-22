@@ -61,7 +61,9 @@ import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 import { Wallet } from "lucide-react";
 import { Sparkline } from "@/components/primitives/Sparkline";
 import { cn } from "@/lib/utils";
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: "$1.20M" for a large day P&L so it fits the fixed 64px
+// P&L slot (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPrice, formatPriceCompact } from "@/lib/format";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
 import type { Holding, Quote } from "@/types/api";
 
@@ -454,7 +456,9 @@ function QuickViewRow({ holding, quote, displayTicker, sparkline }: QuickViewRow
       // WHY 24px rows (vs the 22px Row-2 strips): Row 3 has more vertical
       // budget and the sparkline needs 16px + breathing room.
       // Round 3 (item 5): inset focus-visible ring for keyboard tabbing.
-      className="flex h-[24px] cursor-pointer items-center gap-2 px-2 transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden clip overflow within the
+      // 24px row so a large day P&L never bleeds past the row edge.
+      className="flex h-[24px] min-w-0 cursor-pointer items-center gap-2 overflow-hidden px-2 transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter") router.push(`/instruments/${navId}`);
@@ -499,13 +503,14 @@ function QuickViewRow({ holding, quote, displayTicker, sparkline }: QuickViewRow
           +/− IS the signal (same rationale as MarketSnapshotWidget). */}
       <span
         className={cn(
-          "w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[64px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums",
           dayPnl == null && "text-muted-foreground",
           dayPnl != null && (isUp ? "text-positive" : "text-negative"),
         )}
       >
+        {/* formatPriceCompact ("$1.20M") keeps a large day P&L inside 64px. */}
         {dayPnl != null
-          ? `${isUp ? "+" : "−"}${formatPrice(Math.abs(dayPnl))}`
+          ? `${isUp ? "+" : "−"}${formatPriceCompact(Math.abs(dayPnl))}`
           : "—"}
       </span>
     </div>

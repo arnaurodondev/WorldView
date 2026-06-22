@@ -12,6 +12,8 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 
 from market_ingestion.application.services.provider_routing_cache import ProviderRoutingCache
@@ -23,6 +25,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    start_metrics_server,
 )
 
 logger = get_logger(__name__)
@@ -66,6 +69,13 @@ async def _run_reclaim_worker() -> None:
     try:
         worker = _create_reclaim_worker(settings)
 
+        # F-005 / BP-704 — expose Prometheus /metrics + /healthz so the Docker
+        # healthcheck on METRICS_PORT (default 9100) can reach /healthz.
+        metrics_handle = start_metrics_server(
+            service_name="market-ingestion-reclaim-worker",
+            port=int(os.environ.get("METRICS_PORT", "9100")),
+        )
+
         log_runtime_banner(
             "market-ingestion-reclaim-worker",
             dependencies={
@@ -77,7 +87,11 @@ async def _run_reclaim_worker() -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, worker.stop)
 
-        await worker.run()
+        try:
+            await worker.run()
+        finally:
+            with contextlib.suppress(Exception):
+                await metrics_handle.aclose()
     except Exception:
         log.exception("market_ingestion_reclaim_worker_startup_failed")
         raise

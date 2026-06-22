@@ -74,11 +74,16 @@ class ChainedDescriptionAdapter:
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None:
         """Try each adapter in order; return first non-None result or None.
 
         A per-adapter ``asyncio.wait_for`` guard prevents one provider from
         blocking the chain beyond ``per_adapter_timeout_s`` seconds.
+
+        ``news_context`` (optional) is forwarded verbatim to every wrapped
+        adapter so the news-grounding block / no-news guard reaches whichever
+        provider ultimately serves the request.
         """
         for idx, adapter in enumerate(self._adapters):
             adapter_name = type(adapter).__name__
@@ -89,6 +94,7 @@ class ChainedDescriptionAdapter:
                         canonical_name=canonical_name,
                         entity_type=entity_type,
                         context_hints=context_hints,
+                        news_context=news_context,
                     ),
                     timeout=self._timeout,
                 )

@@ -187,6 +187,146 @@ async def test_worker_watermark_never_future() -> None:
 
 
 # ---------------------------------------------------------------------------
+# BP-701 — backfill of an already-covered range (range_end <= watermark) must
+# STILL emit the outbox event when bars were produced.  Regression for the
+# silent-suppression bug that dropped 618 SPY backfill bars: they were fetched
+# and written to MinIO but the outbox emit was conflated with the
+# watermark-advance decision, so the bars never materialized downstream.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_backfill_below_watermark_still_emits_outbox() -> None:
+    """A backfill whose range_end <= current watermark, but which produced
+    bars (row_count > 0, new content), must EMIT the outbox event even though
+    the watermark does not advance.
+
+    This is the exact scenario that silently dropped SPY backfill bars: the
+    historical range is older than the live high-water mark, so ``new_ts`` does
+    not exceed ``current_bar_ts`` and the watermark legitimately stays put — but
+    the fetched bars must still be published so downstream S5 materializes them.
+    """
+    now = utc_now()
+    # Watermark already sits at "today" — the live high-water mark.
+    current_wm_ts = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Backfill a range that ENDS a week ago — strictly below the watermark.
+    backfill_start = current_wm_ts - timedelta(days=10)
+    backfill_end = current_wm_ts - timedelta(days=7)
+
+    task = IngestionTask.create_ohlcv_task(
+        provider=Provider.ALPACA,
+        symbol="SPY",
+        timeframe=Timeframe("1d"),
+        date_range=DateRange(start=backfill_start, end=backfill_end),
+    )
+    task.claim("worker-1")
+    assert task.status == IngestionTaskStatus.RUNNING
+
+    watermark = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="SPY",
+        timeframe="1d",
+        current_bar_ts=current_wm_ts,
+        # Distinct from the canonical ref's sha ("a"*64) so the fetched payload
+        # registers as new content (a real backfill brings new bars).
+        content_hash="b" * 64,
+    )
+    uow = _make_uow([], watermark)
+
+    await commit_transaction(
+        task=task,
+        bronze_ref=_object_ref(),
+        canonical_ref=_object_ref(),
+        row_count=618,  # the backfill produced bars
+        uow=uow,
+        log=MagicMock(),
+    )
+
+    # The bug: outbox.add was never awaited because the watermark didn't advance.
+    uow.outbox.add.assert_awaited_once()
+    emitted = uow.outbox.add.await_args.kwargs["events"]
+    assert len(emitted) == 1
+    assert emitted[0].symbol == "SPY"
+    assert emitted[0].row_count == 618
+    assert emitted[0].is_backfill is True
+
+    # The watermark itself must NOT advance backwards — it stays at the live HWM.
+    persisted: Watermark = uow.watermarks.save.call_args[0][0]
+    assert persisted.current_bar_ts == current_wm_ts
+
+
+@pytest.mark.unit
+async def test_empty_fetch_does_not_emit_outbox() -> None:
+    """A genuinely-empty fetch (row_count == 0) must NOT emit an outbox event,
+    even on the incremental path — there is nothing to publish."""
+    now = utc_now()
+    task = IngestionTask.create_ohlcv_task(
+        provider=Provider.ALPACA,
+        symbol="SPY",
+        timeframe=Timeframe("1d"),
+        date_range=DateRange(start=now.replace(hour=0, minute=0, second=0, microsecond=0), end=now),
+    )
+    task.claim("worker-1")
+
+    watermark = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="SPY",
+        timeframe="1d",
+        current_bar_ts=None,
+        content_hash="b" * 64,  # new content, but zero rows
+    )
+    uow = _make_uow([], watermark)
+
+    await commit_transaction(
+        task=task,
+        bronze_ref=_object_ref(),
+        canonical_ref=_object_ref(),
+        row_count=0,  # nothing fetched
+        uow=uow,
+        log=MagicMock(),
+    )
+
+    uow.outbox.add.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_identical_refetch_does_not_emit_outbox() -> None:
+    """An identical re-fetch (same SHA256 as the watermark's content_hash) must
+    NOT emit — the byte-identical-duplicate guard still suppresses no-op work."""
+    now = utc_now()
+    task = IngestionTask.create_ohlcv_task(
+        provider=Provider.ALPACA,
+        symbol="SPY",
+        timeframe=Timeframe("1d"),
+        date_range=DateRange(start=now.replace(hour=0, minute=0, second=0, microsecond=0), end=now),
+    )
+    task.claim("worker-1")
+
+    watermark = Watermark(
+        provider="alpaca",
+        dataset_type="ohlcv",
+        symbol="SPY",
+        timeframe="1d",
+        current_bar_ts=None,
+        content_hash="a" * 64,  # SAME as _object_ref().sha256 → no new content
+    )
+    uow = _make_uow([], watermark)
+
+    await commit_transaction(
+        task=task,
+        bronze_ref=_object_ref(),
+        canonical_ref=_object_ref(),
+        row_count=5,
+        uow=uow,
+        log=MagicMock(),
+    )
+
+    uow.outbox.add.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Defect 3 — FIX-INTRADAY-DEDUP: per-minute dedupe buckets for intraday
 # ---------------------------------------------------------------------------
 

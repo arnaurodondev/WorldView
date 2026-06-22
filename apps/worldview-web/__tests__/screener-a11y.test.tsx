@@ -116,7 +116,13 @@ describe("ScreenerPage — a11y hardening (Round 4 item 2)", () => {
   });
 
   it("the empty-state Reset CTA is keyboard-reachable and Enter-activatable", async () => {
-    const user = userEvent.setup();
+    // WHY delay:null: in parallel jsdom workers the default 50 ms delay between
+    // key events can race against React state updates triggered by prior
+    // concurrent test teardown, causing intermediate renders to miss the
+    // empty-state element.  delay:null removes the artificial inter-event gap
+    // so the action sequence completes synchronously within the microtask queue,
+    // making the test deterministic regardless of wall-clock load.
+    const user = userEvent.setup({ delay: null });
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     await screen.findByText("AAPL");
 

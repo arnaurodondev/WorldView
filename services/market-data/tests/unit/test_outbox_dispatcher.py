@@ -6,7 +6,7 @@ Tests run without a live Kafka or schema registry — all external deps are mock
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -35,6 +35,8 @@ def _make_dispatcher():
     settings.kafka_bootstrap_servers = "mock:9092"
     session_factory = MagicMock()
 
+    from messaging.kafka.dispatcher.base import DispatcherConfig
+
     dispatcher = MarketDataOutboxDispatcher.__new__(MarketDataOutboxDispatcher)
     dispatcher._settings = settings
     dispatcher._session_factory = session_factory
@@ -43,10 +45,78 @@ def _make_dispatcher():
         "market.instrument.created": MagicMock(),
         "market.instrument.updated": MagicMock(),
     }
+    # Base ``_dispatch_record`` reads ``_config`` and ``_metrics``; provide them so
+    # tests that exercise the base recovery path (GAP-A) work with ``__new__``.
+    dispatcher._config = DispatcherConfig(delivery_timeout_seconds=0.1)
+    dispatcher._metrics = MagicMock()
     return dispatcher
 
 
 # ── QA-016 regression guard ───────────────────────────────────────────────────
+
+
+class TestBrokenProducerRecovery:
+    """GAP-A: a wedged producer (delivery TimeoutError) must be discarded.
+
+    market-data overrides only ``_dispatch_batch`` (for reclaim warnings) and
+    delegates each record to the *base* ``_dispatch_record``, which already
+    carries the producer-recovery path. These tests prove that path is live for
+    this service (not bypassed) and that the failure is logged with a non-empty
+    ``error_type``/``error_repr`` (``str(TimeoutError())`` is empty).
+    """
+
+    def _make_record(self) -> MagicMock:
+        record = MagicMock()
+        record.id = "01HX00000000000000000000MD"
+        record.event_type = "market.instrument.created"
+        record.topic = "market.instrument.created"
+        record.payload = {"instrument_id": "inst-1"}
+        record.attempts = 0
+        record.partition_key = None
+        return record
+
+    def _make_uow(self) -> MagicMock:
+        uow = MagicMock()
+        uow.outbox = AsyncMock()
+        return uow
+
+    async def test_timeout_error_resets_producer_and_logs_type(self) -> None:
+        dispatcher = _make_dispatcher()
+        # flush() raises TimeoutError → signature of a wedged producer.
+        dispatcher._producer.produce = MagicMock()
+        dispatcher._producer.flush = MagicMock(side_effect=TimeoutError())
+
+        record = self._make_record()
+        uow = self._make_uow()
+
+        with (
+            patch.object(dispatcher, "_reset_producer", wraps=dispatcher._reset_producer) as mock_reset,
+            patch("messaging.kafka.dispatcher.base.logger") as mock_logger,
+        ):
+            result = await dispatcher._dispatch_record(record, uow)
+
+        assert result.success is False
+        mock_reset.assert_called_once()
+        uow.outbox.increment_attempts.assert_awaited_once()
+        warn_calls = [
+            c for c in mock_logger.warning.call_args_list if c.args and c.args[0] == "outbox_record_dispatch_failed"
+        ]
+        assert warn_calls, "expected an outbox_record_dispatch_failed warning"
+        assert warn_calls[0].kwargs["error_type"] == "TimeoutError"
+
+    async def test_non_timeout_error_does_not_reset_producer(self) -> None:
+        dispatcher = _make_dispatcher()
+        dispatcher._producer.produce = MagicMock(side_effect=ValueError("bad"))
+        dispatcher._producer.flush = MagicMock()
+
+        record = self._make_record()
+        uow = self._make_uow()
+
+        with patch.object(dispatcher, "_reset_producer") as mock_reset:
+            result = await dispatcher._dispatch_record(record, uow)
+
+        assert result.success is False
+        mock_reset.assert_not_called()
 
 
 class TestDispatcherTopicRouting:

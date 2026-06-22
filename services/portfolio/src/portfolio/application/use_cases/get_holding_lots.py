@@ -49,8 +49,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-import structlog
-
+from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.use_cases.get_realized_pnl import _allocate_pro_rata, _OpenLot
 from portfolio.domain.enums import TransactionType
 from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
@@ -58,7 +57,11 @@ from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork
 
-logger = structlog.get_logger(__name__)
+# WHY get_logger (not structlog.get_logger): CLAUDE.md rule 13 mandates using
+# shared libs. libs/observability exposes get_logger() as the canonical wrapper
+# around structlog — direct structlog usage bypasses any future observability
+# instrumentation (e.g. request-id injection, structured field enforcement).
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 # Same threshold as get_realized_pnl._LONG_TERM_DAYS — kept as a private

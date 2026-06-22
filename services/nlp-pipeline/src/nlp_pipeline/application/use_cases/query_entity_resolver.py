@@ -324,22 +324,23 @@ class QueryEntityResolverUseCase:
         # all-caps tokens across the entire query rather than per-window.
         candidates = _candidate_mentions(normalized)
 
+        # ── Stages 1-3: collect candidate matches, defer canonical fetch ──────
+        # PERF (2026-06-18, RC-3 follow-up): the previous form did one
+        # ``canonical_repo.get(entity_id)`` round-trip *per match* inside each
+        # stage loop (an N+1 against canonical_entities).  For a typical chat
+        # query the 1/2/3-gram windows yield several Stage-1 + Stage-3 matches,
+        # so this was 5-15 sequential DB round-trips on the chat hot path
+        # (the ~7.4s entity_resolution phase).  We now collect lightweight
+        # ``_PendingMatch`` descriptors from all three batched alias stages,
+        # fetch every referenced canonical in ONE ``batch_get`` call, then
+        # replay ``_update_best`` in the original stage/iteration order so the
+        # highest-confidence-per-entity dedup result is byte-for-byte identical.
+        pending: list[_PendingMatch] = []
+
         # Stage 1 — exact alias match (batch: one query for all candidates)
         exact = await self._alias_repo.batch_exact_match(candidates)
         for _text, entity_id in exact.items():
-            entity_data = await self._canonical_repo.get(entity_id)
-            if entity_data:
-                r = EntityResolutionResult(
-                    entity_id=entity_id,
-                    canonical_name=str(entity_data["canonical_name"]),
-                    entity_type=str(entity_data["entity_type"]),
-                    confidence=_CONF_EXACT,
-                    matched_text=_text,
-                    resolution_stage=1,
-                    ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
-                    isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
-                )
-                _update_best(best, r)
+            pending.append(_PendingMatch(entity_id, _CONF_EXACT, _text, 1))
 
         # Stage 2 — ticker / ISIN match (scans the full normalised text)
         tickers = _TICKER_RE.findall(normalized.upper())
@@ -347,19 +348,7 @@ class QueryEntityResolverUseCase:
         if tickers or isins:
             ticker_isin_map = await self._alias_repo.batch_ticker_isin_match(tickers, isins)
             for _key, entity_id in ticker_isin_map.items():
-                entity_data = await self._canonical_repo.get(entity_id)
-                if entity_data:
-                    r = EntityResolutionResult(
-                        entity_id=entity_id,
-                        canonical_name=str(entity_data["canonical_name"]),
-                        entity_type=str(entity_data["entity_type"]),
-                        confidence=_CONF_TICKER_ISIN,
-                        matched_text=_key,
-                        resolution_stage=2,
-                        ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
-                        isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
-                    )
-                    _update_best(best, r)
+                pending.append(_PendingMatch(entity_id, _CONF_TICKER_ISIN, _key, 2))
 
         # Stage 3 — fuzzy trigram (batch across all candidate windows)
         # WHY pass all candidates: "apple inc" has higher trigram sim against the
@@ -370,20 +359,17 @@ class QueryEntityResolverUseCase:
         )
         for _text, matches in fuzzy.items():
             for entity_id, sim in matches:
-                confidence = sim * _CONF_FUZZY_SCALE
-                entity_data = await self._canonical_repo.get(entity_id)
+                pending.append(_PendingMatch(entity_id, sim * _CONF_FUZZY_SCALE, _text, 3))
+
+        # Single batched canonical fetch for every entity referenced above.
+        # Missing IDs are simply absent from the dict (same as a ``get`` miss,
+        # which the old per-match loop skipped via ``if entity_data``).
+        if pending:
+            entity_data_by_id = await self._canonical_repo.batch_get([p.entity_id for p in pending])
+            for p in pending:
+                entity_data = entity_data_by_id.get(p.entity_id)
                 if entity_data:
-                    r = EntityResolutionResult(
-                        entity_id=entity_id,
-                        canonical_name=str(entity_data["canonical_name"]),
-                        entity_type=str(entity_data["entity_type"]),
-                        confidence=confidence,
-                        matched_text=_text,
-                        resolution_stage=3,
-                        ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
-                        isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
-                    )
-                    _update_best(best, r)
+                    _update_best(best, _result_from(p.entity_id, entity_data, p.confidence, p.matched_text, p.stage))
 
         # Stage 4 — GLiNER NER (optional — API process has no ML clients)
         if self._ner is not None:
@@ -469,6 +455,46 @@ class QueryEntityResolverUseCase:
                 _update_best(best, r)
         except Exception:
             _log.warning("resolver_ann_stage_failed", exc_info=True)  # type: ignore[no-any-return]
+
+
+@dataclasses.dataclass(frozen=True)
+class _PendingMatch:
+    """A stage 1-3 alias hit awaiting its batched canonical-entity fetch.
+
+    Lets ``_run_cascade`` collect every match from the (already-batched) alias
+    stages and resolve all their ``canonical_entities`` rows in a single
+    ``batch_get`` instead of one ``get`` per match (RC-3 follow-up: removes the
+    canonical-lookup N+1 on the chat hot path).
+    """
+
+    entity_id: UUID
+    confidence: float
+    matched_text: str
+    stage: int
+
+
+def _result_from(
+    entity_id: UUID,
+    entity_data: dict[str, Any],
+    confidence: float,
+    matched_text: str,
+    stage: int,
+) -> EntityResolutionResult:
+    """Build an :class:`EntityResolutionResult` from a fetched canonical row.
+
+    Shared by stages 1-3 so the field mapping (ticker/isin null-coalescing,
+    str-casting) stays identical regardless of which stage produced the hit.
+    """
+    return EntityResolutionResult(
+        entity_id=entity_id,
+        canonical_name=str(entity_data["canonical_name"]),
+        entity_type=str(entity_data["entity_type"]),
+        confidence=confidence,
+        matched_text=matched_text,
+        resolution_stage=stage,
+        ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
+        isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
+    )
 
 
 def _update_best(best: dict[str, EntityResolutionResult], r: EntityResolutionResult) -> None:

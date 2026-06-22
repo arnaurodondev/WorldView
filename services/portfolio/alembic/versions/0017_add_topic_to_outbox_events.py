@@ -78,6 +78,7 @@ _EVENT_TOPIC_BACKFILL: list[tuple[str, str]] = [
     ("watchlist.renamed", "portfolio.watchlist.updated.v1"),
     ("watchlist.item_added", "portfolio.watchlist.updated.v1"),
     ("watchlist.item_deleted", "portfolio.watchlist.updated.v1"),
+    ("portfolio.holding.recompute_requested", "portfolio.holding.recompute_requested.v1"),
 ]
 
 

@@ -67,15 +67,21 @@ describe("CreatePortfolioDialog — currency field (BP-329)", () => {
     // A shadcn Select trigger has role="combobox".
     // WHY combobox: ARIA spec maps combobox to a control that opens a listbox.
     // A plain Input would have role="textbox".
-    const currencyTrigger = screen.getByRole("combobox");
-    expect(currencyTrigger).toBeInTheDocument();
+    // PLAN-0114 W6: there are now two comboboxes (currency + cost_basis_method).
+    // We specifically look for the one that contains a USD-family value.
+    const comboboxes = screen.getAllByRole("combobox");
+    expect(comboboxes.length).toBeGreaterThanOrEqual(1);
+    // At least one must be present (the currency combobox).
+    expect(comboboxes[0]).toBeInTheDocument();
   });
 
   it("shows USD as the default selected currency", () => {
     renderDialog();
-    const trigger = screen.getByRole("combobox");
-    // The trigger displays the selected value text.
-    expect(trigger).toHaveTextContent(/USD/);
+    // PLAN-0114 W6: two comboboxes now — find the one containing "USD".
+    const comboboxes = screen.getAllByRole("combobox");
+    const currencyTrigger = comboboxes.find((el) => el.textContent?.includes("USD"));
+    expect(currencyTrigger).toBeTruthy();
+    expect(currencyTrigger).toHaveTextContent(/USD/);
   });
 });
 
@@ -124,7 +130,9 @@ describe("CreatePortfolioDialog — success path", () => {
     await user.type(screen.getByPlaceholderText(/main portfolio/i), "My Fund");
     await user.click(screen.getByRole("button", { name: /create portfolio/i }));
     await waitFor(() => {
-      expect(mockCreatePortfolio).toHaveBeenCalledWith("My Fund", "USD");
+      // PLAN-0114 W6: createPortfolio now takes 3 args (name, currency, cost_basis_method).
+      // Default cost_basis_method is "FIFO".
+      expect(mockCreatePortfolio).toHaveBeenCalledWith("My Fund", "USD", "FIFO");
     });
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalledWith(SAMPLE_PORTFOLIO);

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from portfolio.domain.enums import AuthAuditEventType
+    from portfolio.domain.enums import AuthAuditEventType, TransactionType
 
 _PRECISION = Decimal("0.00000001")  # (18,8) scale
 
@@ -120,3 +122,76 @@ class AuthAuditEvent:
     email: str | None
     detail: dict[str, str]
     ip_address: str | None = None
+
+
+@dataclass(frozen=True)
+class TransactionFilter:
+    """Server-side filter value object for ListTransactions / ExportTransactions.
+
+    PLAN-0114 / T-W2-03: all fields are optional. Absent fields are not
+    applied as WHERE predicates by the repository.
+
+    Validation (``__post_init__``):
+    - ``to_date >= from_date`` when both are present.
+    - Range <= 5 years (1826 days) to prevent runaway queries.
+    """
+
+    from_date: date | None = None
+    to_date: date | None = None
+    transaction_types: list[TransactionType] = field(default_factory=list)
+    ticker: str | None = None
+    limit: int = 50
+    offset: int = 0
+    # Non-configurable constant: 5-year cap in days.
+    _MAX_RANGE_DAYS: int = field(default=1826, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Ticker guard: max 20 chars, alphanumeric + dot/caret/hyphen only.
+        # WHY here: even if the API layer validates Query params, the domain VO
+        # is the canonical guard — callers that construct TransactionFilter
+        # directly (e.g. export use case) benefit from the same constraint.
+        if self.ticker is not None:
+            if len(self.ticker) > 20:
+                raise ValueError(f"ticker must be at most 20 characters, got {len(self.ticker)}")
+            if not re.fullmatch(r"[A-Z0-9.\^-]*", self.ticker):
+                raise ValueError(
+                    f"ticker '{self.ticker}' contains invalid characters. "
+                    "Only uppercase letters, digits, '.', '^', and '-' are allowed."
+                )
+        if self.from_date is not None and self.to_date is not None:
+            if self.to_date < self.from_date:
+                raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")
+            delta = (self.to_date - self.from_date).days
+            if delta > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"Date range {delta} days exceeds the 5-year cap ({self._MAX_RANGE_DAYS} days). "
+                    "Split the request into smaller date ranges."
+                )
+        elif self.from_date is not None:
+            # FQ-007: open-ended range (from_date only, no to_date) was bypassing
+            # the 5-year cap because the guard above required BOTH dates.  A query
+            # with only from_date scans from that date to *now*, which can exceed
+            # the cap if from_date is in the distant past.  Validate against today
+            # so the cap is enforced regardless of whether to_date is supplied.
+            # WHY timedelta(days=_MAX_RANGE_DAYS): mirrors the closed-range check
+            # above; "today - from_date <= 5 years" is the equivalent open-ended cap.
+            days_from_start = (datetime.now(UTC).date() - self.from_date).days
+            if days_from_start > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"from_date ({self.from_date}) is more than 5 years ago "
+                    f"({days_from_start} days). Provide a to_date or use a more "
+                    "recent from_date to stay within the 5-year cap."
+                )
+        elif self.to_date is not None:
+            # Open-ended range with only to_date: the lower bound is "the beginning
+            # of time" for that portfolio. Cap: to_date must not be more than 5 years
+            # in the future (prevents absurd queries like to_date=2099-01-01).
+            # WHY: a to_date far in the future combined with no from_date could scan
+            # all historical rows plus every future projected row if the schema ever
+            # gains forward-looking records.  Bound it symmetrically.
+            days_to_end = (self.to_date - datetime.now(UTC).date()).days
+            if days_to_end > self._MAX_RANGE_DAYS:
+                raise ValueError(
+                    f"to_date ({self.to_date}) is more than 5 years in the future "
+                    f"({days_to_end} days). Provide a from_date or use a sooner to_date."
+                )

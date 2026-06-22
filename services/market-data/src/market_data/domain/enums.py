@@ -40,18 +40,20 @@ class DatasetType(StrEnum):
 # conflict resolution was effectively disabled and a late EODHD tick could clobber
 # a higher-quality Yahoo/derived bar (the NVDA eodhd<->derived flip-flop).
 #
-# Priority ladder (higher wins): derived Alpaca-1m aggregates are the authoritative
-# source for every timeframe they cover and are written via the unconditional
-# ``bulk_upsert_derived`` path, but we still rank ``alpaca``/``derived`` at the top
-# so that any priority-guarded comparison agrees with that intent.  Yahoo (deep
-# daily) outranks EODHD so EODHD only wins when it is genuinely the sole source.
+# Priority ladder (higher wins). FINAL TOPOLOGY (PLAN-0036, 2026-06-16): Alpaca is
+# now the single source for BOTH intraday (1m → derived 5m..4h) AND deep daily
+# (polled 1Day, ~6y split-adjusted). It therefore sits at the top so a polled
+# Alpaca daily bar (110) and a derived intraday bar (110) both outrank the EODHD
+# daily failover (60). Yahoo Finance is DROPPED from OHLCV routing — its entries
+# remain only so any historical ``yahoo_finance`` rows still compare consistently;
+# nothing new is routed to Yahoo.
 _PROVIDER_PRIORITIES: dict[str, int] = {
-    "alpaca": 110,  # 1m bars + their derived higher timeframes — single source of truth
-    "derived": 110,  # locally-derived (from Alpaca 1m) — authoritative for covered window
+    "alpaca": 110,  # 1m intraday + polled 1Day daily — single source of truth
+    "derived": 110,  # locally-derived (from Alpaca 1m) — authoritative for covered intraday window
     "polygon": 100,  # alternate intraday provider (registered only when keyed)
-    "yahoo_finance": 80,  # deep daily history (free/keyless) — preferred over EODHD
+    "yahoo_finance": 80,  # DROPPED from routing — historical rows only
     "yahoo": 80,  # legacy alias — kept so historical rows compare consistently
-    "eodhd": 60,  # last-resort daily failover only
+    "eodhd": 60,  # daily failover only (Alpaca-1Day primary)
     "alpha_vantage": 40,
     "macrotrends": 20,
     "unknown": 0,

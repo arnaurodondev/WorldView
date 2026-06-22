@@ -16,7 +16,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { formatPercentDirect } from "@/lib/utils";
+import { formatPercent } from "@/lib/utils";
 import type { AllocationSlice } from "@/features/portfolio/lib/kpi";
 
 interface ConcentrationSectorTeaseStripProps {
@@ -139,11 +139,13 @@ export function ConcentrationSectorTeaseStrip({
           ) : null}
 
           {/* ── Top-3 sector weights ───────────────────────────────────────────
-               WHY formatPercentDirect (not formatPercent):
-                 AllocationSlice.pct is produced by kpi.ts as (value / total) * 100,
-                 i.e. already in percent scale (0-100). formatPercent multiplies by
-                 100 again (expects 0-1 fraction) which would show "2500%" for a 25%
-                 allocation. formatPercentDirect renders the value as-is with a sign. */}
+               WHY formatPercent (× 100): AllocationSlice.pct is a 0-1 fraction
+               (server sector-breakdown `weight` is 0-1, and the kpi.ts client
+               fallback now also emits 0-1 — see kpi.ts computeAllocations).
+               formatPercent multiplies by 100 to render "43.5%". This MUST match
+               SectorAllocationBar (the sibling strip consuming the same bySector
+               prop) — both treat pct as 0-1. Using formatPercentDirect here was a
+               bug (BP-487): it rendered the raw 0-1 value as "0.4%". */}
           {top3.length > 0 && (
             <>
               <span className="text-[10px] text-muted-foreground">·</span>
@@ -153,7 +155,7 @@ export function ConcentrationSectorTeaseStrip({
                   {/* WHY 4-char abbreviation: keeps the strip narrow at any viewport width.
                       TECH, HLTH, FINL are Bloomberg-standard sector codes. */}
                   {s.label.substring(0, 4).toUpperCase()}{" "}
-                  {formatPercentDirect(s.pct, 1)}
+                  {formatPercent(s.pct, 1)}
                 </span>
               ))}
             </>
@@ -168,7 +170,7 @@ export function ConcentrationSectorTeaseStrip({
             <span className="text-[10px] uppercase text-muted-foreground">Sectors:</span>
             {top3.map((s) => (
               <span key={s.label} className="font-mono text-[11px] tabular-nums text-foreground">
-                {s.label.substring(0, 4).toUpperCase()} {formatPercentDirect(s.pct, 1)}
+                {s.label.substring(0, 4).toUpperCase()} {formatPercent(s.pct, 1)}
               </span>
             ))}
           </>

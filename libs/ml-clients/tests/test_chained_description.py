@@ -155,6 +155,59 @@ class TestChainedDescriptionAdapterRouting:
         assert await _call(chain) == "Third description"
 
 
+class TestChainedDescriptionAdapterNewsContext:
+    """Verify ``news_context`` is forwarded verbatim to the wrapped adapters."""
+
+    async def test_news_context_forwarded_to_primary(self) -> None:
+        """The grounding snippets must reach the adapter that serves the request."""
+        primary = _mock_adapter("desc")
+        chain = ChainedDescriptionAdapter([primary])
+        snippets = ["a real fact", "another fact"]
+
+        await chain.generate_description(
+            entity_id=_ENTITY_ID,
+            canonical_name=_NAME,
+            entity_type=_TYPE,
+            context_hints=_HINTS,
+            news_context=snippets,
+        )
+
+        primary.generate_description.assert_awaited_once_with(
+            entity_id=_ENTITY_ID,
+            canonical_name=_NAME,
+            entity_type=_TYPE,
+            context_hints=_HINTS,
+            news_context=snippets,
+        )
+
+    async def test_news_context_forwarded_to_fallback(self) -> None:
+        """When the primary returns None, the fallback receives news_context too."""
+        primary = _mock_adapter(None)
+        fallback = _mock_adapter("fallback desc")
+        chain = ChainedDescriptionAdapter([primary, fallback])
+        snippets = ["fact"]
+
+        await chain.generate_description(
+            entity_id=_ENTITY_ID,
+            canonical_name=_NAME,
+            entity_type=_TYPE,
+            context_hints=_HINTS,
+            news_context=snippets,
+        )
+
+        for adapter in (primary, fallback):
+            assert adapter.generate_description.await_args.kwargs["news_context"] == snippets
+
+    async def test_news_context_defaults_to_none(self) -> None:
+        """Calling without news_context forwards None (backward-compatible)."""
+        primary = _mock_adapter("desc")
+        chain = ChainedDescriptionAdapter([primary])
+
+        await _call(chain)
+
+        assert primary.generate_description.await_args.kwargs["news_context"] is None
+
+
 class TestChainedDescriptionAdapterTimeout:
     """Verify the per-adapter asyncio.wait_for timeout guard."""
 

@@ -30,6 +30,7 @@ from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ig
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -88,12 +89,18 @@ class OutboxDispatcher:
         producer: KafkaProducerProtocol,
         poll_interval_s: float = 1.0,
         batch_size: int = 50,
+        producer_factory: Callable[[], KafkaProducerProtocol] | None = None,
     ) -> None:
         self._sf = session_factory
-        self._producer = producer
+        self._producer: KafkaProducerProtocol | None = producer
         self._poll_interval = poll_interval_s
         self._batch_size = batch_size
         self._running = False
+        # GAP-A: factory used to REBUILD the producer after a wedge. ``main()``
+        # passes one (a closure over the broker config); when absent (e.g. tests
+        # that inject a mock) the reset only discards the wedged producer and the
+        # next produce raises a clear error instead of timing out forever.
+        self._producer_factory = producer_factory
 
     async def run_forever(self) -> None:
         """Poll and dispatch until cancelled."""
@@ -113,6 +120,48 @@ class OutboxDispatcher:
     def stop(self) -> None:
         """Signal the dispatcher to stop after the current batch."""
         self._running = False
+
+    # ── Producer recovery (GAP-A / BP outbox-dispatcher-wedged-producer) ───────
+
+    def _get_producer(self) -> KafkaProducerProtocol:
+        """Return the live producer, rebuilding it if it was reset after a wedge."""
+        if self._producer is None:
+            if self._producer_factory is None:
+                msg = "knowledge-graph outbox producer was reset but no factory is wired to rebuild it"
+                raise RuntimeError(msg)
+            self._producer = self._producer_factory()
+            logger.info("outbox_producer_rebuilt")  # type: ignore[no-any-return]
+        return self._producer
+
+    @staticmethod
+    def _is_broken_producer_error(error: BaseException | None) -> bool:
+        """Return True when *error* signals the cached producer must be rebuilt.
+
+        Mirrors ``BaseOutboxDispatcher._is_broken_producer_error``: a delivery
+        ``TimeoutError`` (alias of ``asyncio.TimeoutError`` on 3.11+) is the
+        signature of a wedged producer whose produce/flush never completes.
+        """
+        return isinstance(error, TimeoutError)
+
+    def _reset_producer(self) -> None:
+        """Discard the cached producer so the next dispatch rebuilds + reconnects.
+
+        This dispatcher does NOT extend ``BaseOutboxDispatcher`` (it produces
+        pre-serialized Avro bytes via a raw injected producer), so the recovery
+        helper is reimplemented against this class's own ``self._producer``.
+        """
+        producer = self._producer
+        if producer is None:
+            return
+        import contextlib
+
+        # Best-effort non-blocking drain; never let teardown block or raise.
+        with contextlib.suppress(Exception):
+            flush = getattr(producer, "flush", None)
+            if callable(flush):
+                flush(0)
+        self._producer = None
+        logger.warning("outbox_producer_reset", reason="delivery_failure")  # type: ignore[no-any-return]
 
     async def _dispatch_batch(self) -> int:
         """Fetch and dispatch one batch.  Returns number of events dispatched."""
@@ -148,20 +197,29 @@ class OutboxDispatcher:
                     continue
 
                 try:
-                    self._producer.produce(
+                    producer = self._get_producer()
+                    producer.produce(
                         topic=topic,
                         key=partition_key,
                         value=payload,
                     )
-                    self._producer.flush(timeout=5.0)
+                    producer.flush(timeout=5.0)
                     await outbox_repo.mark_dispatched(event_id, utc_now())  # type: ignore[no-any-return, arg-type]
                     await session.commit()
                     dispatched += 1
                 except Exception as exc:
+                    # GAP-A: a delivery TimeoutError is the signature of a wedged
+                    # cached producer — discard it so the next dispatch rebuilds +
+                    # reconnects. Log type + repr because ``str`` is EMPTY for
+                    # TimeoutError (how this wedge stayed invisible as ``error:""``).
+                    if self._is_broken_producer_error(exc):
+                        self._reset_producer()
                     logger.error(  # type: ignore[no-any-return]
                         "outbox_dispatch_failed",
                         topic=topic,
                         event_id=str(event_id),
+                        error_type=type(exc).__name__,
+                        error_repr=repr(exc),
                         error=str(exc),
                     )
                     await outbox_repo.mark_failed(event_id)  # type: ignore[arg-type]

@@ -214,6 +214,34 @@ function emptyBrief(): BriefingResponse {
   };
 }
 
+// Empty-AI-brief investigation (2026-06-19): when the backend cannot reach any
+// upstream (transient gateway/auth blip) it returns a 200 with a NON-empty
+// narrative composed entirely of the literal "No specific items today."
+// placeholder under each heading, and confidence: 0. The old string-only guard
+// let this through and rendered six dead lines. This fixture reproduces that
+// degenerate payload so we can pin the new confidence===0 guard.
+function allPlaceholderBrief(): BriefingResponse {
+  return {
+    narrative:
+      "## Portfolio\n\nNo specific items today.\n\n" +
+      "## Market Snapshot\n\nNo specific items today.\n\n" +
+      "## News\n\nNo specific items today.\n\n" +
+      "## Events\n\nNo specific items today.\n\n" +
+      "## Alerts\n\nNo specific items today.\n\n" +
+      "## Risk\n\nNo specific items today.",
+    summary: "No specific items today.",
+    risk_summary: null,
+    entity_mentions: [],
+    citations: [],
+    generated_at: new Date().toISOString(),
+    cached: false,
+    entity_id: null,
+    sections: [],
+    // The backend's "I had no usable context" signal.
+    confidence: 0,
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("MorningBriefCard — PLAN-0049 T-D-4-01 contract", () => {
@@ -377,5 +405,46 @@ describe("MorningBriefCard — Round 1 named empty state", () => {
     await waitFor(() => {
       expect(mockGetMorningBrief.mock.calls.length).toBeGreaterThan(callsBefore);
     });
+  });
+
+  // Empty-AI-brief investigation (2026-06-19): a zero-confidence brief whose
+  // body is ALL placeholders ("No specific items today.") used to render six
+  // dead lines because the empty guard only checked for empty strings. It must
+  // now fall through to the named EmptyState with Regenerate, exactly like a
+  // truly-empty brief.
+  it("renders the empty state for a zero-confidence all-placeholder brief", async () => {
+    mockGetMorningBrief.mockResolvedValue(allPlaceholderBrief());
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    // The Regenerate affordance must be present so the user can retry.
+    expect(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    ).toBeInTheDocument();
+    // And the dead placeholder line must NOT be rendered anywhere.
+    expect(screen.queryByText(/No specific items today/i)).not.toBeInTheDocument();
+  });
+
+  // Guard conservatism: a brief with REAL prose must still render even if its
+  // confidence happens to be 0 — we never want to hide a genuine brief.
+  it("still renders a brief that has real prose despite confidence 0", async () => {
+    mockGetMorningBrief.mockResolvedValue({
+      ...allPlaceholderBrief(),
+      narrative:
+        "## Portfolio\n\nAAPL led your holdings up +2.1% on strong iPhone demand. " +
+        LONG_NARRATIVE_PADDING,
+      summary: "AAPL led your holdings up +2.1%.",
+    });
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    // The real summary must render — NOT the empty state.
+    await waitFor(() => {
+      expect(screen.getByText(/AAPL led your holdings/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/AI brief unavailable/i)).not.toBeInTheDocument();
   });
 });

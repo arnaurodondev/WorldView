@@ -91,7 +91,7 @@ class CreatePortfolioUseCase:
                         # misusing the header (reused key for a different
                         # request). Surfacing it loudly prevents silent drift.
                         raise IdempotencyConflictError(
-                            f"Idempotency key {cmd.idempotency_key!r} already used " "with a different request body",
+                            f"Idempotency key {cmd.idempotency_key!r} already used with a different request body",
                         )
                     return CreatePortfolioResult(portfolio=existing, created=False)
                 # The idempotency row exists but the portfolio doesn't — a

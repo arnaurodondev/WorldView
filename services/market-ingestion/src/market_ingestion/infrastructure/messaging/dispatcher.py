@@ -192,13 +192,30 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
                 topic=record.topic,
             )
         else:
+            # GAP-A (BP outbox-dispatcher-wedged-producer): this override bypassed
+            # the base ``_dispatch_record`` recovery path, so a delivery TimeoutError
+            # left the cached ``self._producer`` wedged forever (every subsequent
+            # produce()/flush() timed out → permanent outbox wedge ~every 10 min).
+            # Discard the broken producer so the next dispatch rebuilds + reconnects.
+            # ``_reset_producer``/``_is_broken_producer_error`` are inherited from
+            # ``BaseOutboxDispatcher`` and operate on ``self._producer`` (the attr
+            # this dispatcher uses), so the reset targets the right producer.
+            if self._is_broken_producer_error(delivery_error):
+                self._reset_producer()
             new_attempts = record.attempts + 1
+            # Surface the exception type + repr (mirrors base dispatcher): ``str`` is
+            # EMPTY for asyncio.TimeoutError, which is exactly how this wedge stayed
+            # invisible (the live ``error:""`` stream).
+            error_type = type(delivery_error).__name__ if delivery_error is not None else "None"
+            error_repr = repr(delivery_error) if delivery_error is not None else None
             if new_attempts >= self._config.max_attempts:
                 await uow.outbox.move_to_dead_letter_simple(record.id)
                 logger.error(
                     "outbox_record_dead_lettered",
                     record_id=record.id,
                     attempts=new_attempts,
+                    error_type=error_type,
+                    error_repr=error_repr,
                     topic=record.topic,
                 )
             else:
@@ -207,7 +224,9 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
                     "outbox_record_dispatch_failed",
                     record_id=record.id,
                     attempts=new_attempts,
-                    error=str(delivery_error),
+                    error_type=error_type,
+                    error_repr=error_repr,
+                    error=str(delivery_error) if delivery_error is not None else "",
                     topic=record.topic,
                 )
 

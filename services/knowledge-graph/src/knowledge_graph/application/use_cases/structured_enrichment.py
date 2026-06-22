@@ -105,6 +105,7 @@ class DescriptionLlmClientProtocol(Protocol):
         canonical_name: str,
         entity_type: str,
         context_hints: dict[str, str],
+        news_context: list[str] | None = None,
     ) -> str | None: ...
 
 
@@ -280,6 +281,22 @@ class StructuredEnrichmentUseCase:
             if metadata.get("country"):
                 context_hints["country"] = str(metadata["country"])
 
+            # News-grounding (description audit 2026-06-17): fetch the entity's own
+            # recent news evidence so the LLM paraphrases real facts instead of
+            # fabricating. Best-effort — a quick open/close read NOT held across the
+            # LLM I/O; on ANY error we degrade to news_context=None (the adapter then
+            # injects its no-news guard) rather than blocking enrichment.
+            news: list[str] | None
+            try:
+                news = await self._adapter.fetch_recent_evidence(entity.entity_id)
+            except Exception as exc:
+                logger.warning(  # type: ignore[no-any-return]
+                    "enrichment_news_fetch_failed",
+                    entity_id=str(entity.entity_id),
+                    error_type=type(exc).__name__,
+                )
+                news = None
+
             try:
                 # F-A07 / F-P2-02: observe wall-clock latency on the LLM call.
                 # ``time()`` rather than ``time_ns()`` keeps the math direct for
@@ -294,6 +311,7 @@ class StructuredEnrichmentUseCase:
                             canonical_name=entity.canonical_name,
                             entity_type=entity.entity_type,
                             context_hints=context_hints,
+                            news_context=news,
                         ),
                         timeout=_LLM_TIMEOUT_S,
                     )
@@ -311,7 +329,7 @@ class StructuredEnrichmentUseCase:
                 elif llm_description is not None:
                     # Response too short — non-retryable (PRD-0073 §13.5)
                     raise FatalEnrichmentError(
-                        f"LLM description too short ({len(llm_description)} chars) for " f"entity {entity.entity_id}"
+                        f"LLM description too short ({len(llm_description)} chars) for entity {entity.entity_id}"
                     )
             except TimeoutError as exc:
                 raise RetryableEnrichmentError("LLM timed out") from exc

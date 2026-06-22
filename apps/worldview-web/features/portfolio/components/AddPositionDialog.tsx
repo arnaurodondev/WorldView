@@ -30,6 +30,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { toast } from "sonner";
 import { createGateway } from "@/lib/gateway";
 import {
   Dialog,
@@ -94,6 +95,14 @@ export interface AddPositionDialogProps {
   onSuccess: () => void;
   portfolioId: string;
   accessToken: string | null | undefined;
+  /**
+   * PRD-0114 W4 (FR-8 / G-8): drives the success toast copy so MANUAL portfolio
+   * users see "within seconds" (async W1 Kafka consumer path) while BROKERAGE
+   * users see a generic success message.
+   * WHY lowercase: PortfolioKind StrEnum serialises to lowercase ("manual", "brokerage", "root").
+   * Optional — existing call sites keep working.
+   */
+  portfolioKind?: "manual" | "brokerage" | "root" | null;
 }
 
 export function AddPositionDialog({
@@ -102,6 +111,7 @@ export function AddPositionDialog({
   onSuccess,
   portfolioId,
   accessToken,
+  portfolioKind,
 }: AddPositionDialogProps) {
   const form = useForm<AddPositionFormValues>({
     resolver: zodResolver(addPositionSchema),
@@ -155,6 +165,19 @@ export function AddPositionDialog({
       );
 
       form.reset();
+
+      // PRD-0114 W4 (FR-8): portfolio-kind-aware success toast.
+      // "within seconds" sets the correct expectation for the async W1 consumer.
+      // WHY no duration override: centralized Toaster config in app/providers.tsx
+      // pins duration=4000 for all call sites (toast-config.test.ts enforces this).
+      if (portfolioKind === "manual") {
+        toast.success("Transaction recorded", {
+          description: "Holdings will reflect this trade within seconds.",
+        });
+      } else {
+        toast.success("Position added successfully.");
+      }
+
       onSuccess();
     } catch (err) {
       // WHY setError("root"): surfaces the backend error inside the form itself

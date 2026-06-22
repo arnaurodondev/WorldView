@@ -59,6 +59,7 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PanelHeader } from "./PanelHeader";
+import { formatPrice } from "@/lib/format";
 
 interface EarningsBarChartProps {
   instrumentId: string;
@@ -108,10 +109,12 @@ function formatSurprise(v: number): string {
 }
 
 // EPS axis/label formatter: "$6.75". Negative (loss years) → "-$0.42".
+// WHY formatPrice: the architecture gate (no-off-palette-colors.test.ts) bans
+// hand-built `$${value.toFixed(N)}` literals — all USD must go through the
+// shared formatter so locale grouping is applied consistently.
 function formatEps(v: number | null | undefined): string {
   if (v == null) return "—";
-  const sign = v < 0 ? "-" : "";
-  return `${sign}$${Math.abs(v).toFixed(2)}`;
+  return formatPrice(v);
 }
 
 // ── Custom hover tooltip ──────────────────────────────────────────────────────

@@ -169,6 +169,76 @@ async def test_dispatcher_max_attempts_moves_to_dead_letter():
 
 
 @pytest.mark.unit
+async def test_dispatcher_broken_producer_error_resets_producer():
+    """GAP-A: a delivery TimeoutError discards the wedged producer + logs type/repr.
+
+    The override's failure branch previously bypassed the base producer-recovery
+    path, so a wedged producer was reused forever (permanent outbox wedge). This
+    asserts ``_reset_producer`` fires and that the failure log carries
+    ``error_type``/``error_repr`` (str(TimeoutError) is empty).
+    """
+    dispatcher, _ = _make_dispatcher()
+
+    mock_outbox = AsyncMock()
+    mock_outbox.mark_published_simple = AsyncMock()
+    mock_outbox.increment_attempts_simple = AsyncMock()
+    mock_outbox.move_to_dead_letter_simple = AsyncMock()
+
+    mock_uow = MagicMock()
+    mock_uow.outbox = mock_outbox
+
+    # flush() raises TimeoutError → the signature of a wedged cached producer.
+    mock_producer = MagicMock()
+    mock_producer.produce = MagicMock()
+    mock_producer.flush = MagicMock(side_effect=TimeoutError())
+
+    with (
+        patch.object(dispatcher, "get_producer", return_value=mock_producer),
+        patch.object(dispatcher, "_reset_producer", wraps=dispatcher._reset_producer) as mock_reset,
+        patch("market_ingestion.infrastructure.messaging.dispatcher.logger") as mock_logger,
+    ):
+        record = _make_record(attempts=0)
+        result = await dispatcher._dispatch_single(record, mock_uow)
+
+    assert result.success is False
+    mock_reset.assert_called_once()
+    mock_outbox.increment_attempts_simple.assert_awaited_once_with(record.id)
+    # Failure log must include the exception type + repr so the wedge is visible.
+    warn_calls = [
+        c for c in mock_logger.warning.call_args_list if c.args and c.args[0] == "outbox_record_dispatch_failed"
+    ]
+    assert warn_calls, "expected an outbox_record_dispatch_failed warning"
+    kwargs = warn_calls[0].kwargs
+    assert kwargs["error_type"] == "TimeoutError"
+    assert "TimeoutError" in kwargs["error_repr"]
+
+
+@pytest.mark.unit
+async def test_dispatcher_non_broken_error_does_not_reset_producer():
+    """A normal (non-timeout) produce failure must NOT discard the producer."""
+    dispatcher, _ = _make_dispatcher()
+
+    mock_outbox = AsyncMock()
+    mock_outbox.increment_attempts_simple = AsyncMock()
+    mock_uow = MagicMock()
+    mock_uow.outbox = mock_outbox
+
+    mock_producer = MagicMock()
+    mock_producer.produce = MagicMock(side_effect=ValueError("bad payload"))
+    mock_producer.flush = MagicMock()
+
+    with (
+        patch.object(dispatcher, "get_producer", return_value=mock_producer),
+        patch.object(dispatcher, "_reset_producer") as mock_reset,
+    ):
+        record = _make_record(attempts=0)
+        result = await dispatcher._dispatch_single(record, mock_uow)
+
+    assert result.success is False
+    mock_reset.assert_not_called()
+
+
+@pytest.mark.unit
 def test_dispatcher_get_producer_builds_lazily():
     dispatcher, _ = _make_dispatcher()
     assert dispatcher._producer is None

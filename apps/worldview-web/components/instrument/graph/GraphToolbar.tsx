@@ -162,7 +162,7 @@ export function GraphToolbar({
             className={cn(
               "flex h-7 w-[150px] items-center justify-between rounded-[2px] border border-border/40 bg-card px-2 text-[11px]",
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              "disabled:cursor-not-allowed disabled:opacity-50",
+              "disabled:cursor-not-allowed disabled:opacity-40",
             )}
             aria-label="Filter graph by entity type"
           >

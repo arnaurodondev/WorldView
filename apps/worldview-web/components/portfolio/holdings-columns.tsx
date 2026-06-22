@@ -45,6 +45,12 @@ export interface EnrichedHoldingRow {
   dayChangePct: number | null;
   /** position-level day P&L = dayChange (per share) × quantity */
   dayChangeValue: number | null;
+  /**
+   * PLAN-0114 W6: annualised dividend yield (ratio, e.g. 0.024 = 2.4%).
+   * Injected by S9's get_holdings fan-out to S3 fundamentals. Null when
+   * fundamentals data is unavailable.
+   */
+  annualizedDividendYield: number | null;
 }
 
 // ── Helpers (exported for tests) ──────────────────────────────────────────────
@@ -283,5 +289,23 @@ export const holdingsColumns: ColumnDef<EnrichedHoldingRow>[] = [
         {row.original.sector ?? "—"}
       </span>
     ),
+  },
+
+  // ── PLAN-0114 W6: dividend yield ──────────────────────────────────────────
+  // WHY non-sortable: yield is an instrument property, not a position metric.
+  // WHY formatPercentUnsigned: yield is always non-negative — no '+' prefix.
+  {
+    id: "divYld",
+    header: "DIV YLD",
+    size: 80,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const yld = row.original.annualizedDividendYield;
+      return (
+        <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">
+          {yld == null ? "—" : formatPercentUnsigned(yld)}
+        </span>
+      );
+    },
   },
 ];

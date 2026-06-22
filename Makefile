@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval python-base build-bases
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval python-base build-bases dev-lean dev-full dev-lean-status
 
 # ── Docker base images ────────────────────────────────────────────────────────
 # `python-base` must be built before any service image that derives from it.
@@ -198,12 +198,61 @@ dev-logs:
 dev-ps:
 	$(COMPOSE_DEV) ps
 
+# ── Lean dev mode (CPU-bottleneck relief — 2026-06-21 cpu-bottleneck audit) ───
+# The full dev stack runs the entire production topology (~78 containers) on one
+# Docker VM. On a CPU-constrained host the idle/low-frequency consumers add base
+# poll + Kafka-rebalance overhead that starves the hot paths (GLiNER NER, KG
+# queries). ``dev-lean`` STOPS the Tier-1 idle consumers and collapses the
+# article-consumer fleet 3->1; ``dev-full`` brings everything back. Both are
+# REVERSIBLE and NON-destructive — containers are stopped/started (not removed),
+# no rebuild, no data loss. NOT touched: the active market-data / KG / extraction
+# consumers (stop those individually with ``$(COMPOSE_DEV) stop <svc>`` if needed).
+#
+# Tier-1 = low-frequency dataset loaders + niche consumers nothing produces to in
+# idle local dev. Edit this list to taste.
+SLIM_SERVICES := \
+  knowledge-graph-insider-transactions-dataset-consumer \
+  knowledge-graph-macro-indicator-dataset-consumer \
+  knowledge-graph-economic-events-dataset-consumer \
+  knowledge-graph-earnings-calendar-dataset-consumer \
+  knowledge-graph-instrument-discovered-consumer \
+  knowledge-graph-provisional-queued-consumer \
+  market-data-insider-transactions-consumer \
+  market-data-prediction-market-consumer
+
+## Slim the running dev stack: stop Tier-1 idle consumers + collapse article-consumer 3->1 (reversible, no data loss)
+dev-lean:
+	$(COMPOSE_DEV) stop $(SLIM_SERVICES)
+	$(COMPOSE_DEV) up -d --no-build --no-deps --no-recreate --scale nlp-pipeline-article-consumer=1 nlp-pipeline-article-consumer
+	@echo ""
+	@echo "🍃 Lean mode ON — Tier-1 consumers stopped + article-consumer scaled to 1."
+	@echo "   Restore the full platform with:  make dev-full"
+
+## Restore the full dev stack: start Tier-1 consumers + article-consumer back to 3 replicas
+dev-full:
+	$(COMPOSE_DEV) start $(SLIM_SERVICES)
+	$(COMPOSE_DEV) up -d --no-build --no-deps --no-recreate --scale nlp-pipeline-article-consumer=3 nlp-pipeline-article-consumer
+	@echo ""
+	@echo "🚀 Full mode — all Tier-1 consumers started + article-consumer scaled to 3."
+
+## Show running/stopped status of just the Tier-1 (slimmable) services
+dev-lean-status:
+	$(COMPOSE_DEV) ps --all $(SLIM_SERVICES) nlp-pipeline-article-consumer
+
 ## Rebuild all images without cache and restart
 dev-rebuild:
 	@lsof -ti :3001 | xargs -r kill -9 2>/dev/null || true
 	$(COMPOSE_DEV) build --no-cache
 	$(COMPOSE_DEV) up -d --force-recreate
 	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
+
+## Rebuild + recreate EVERY variant of ONE service family (app + migrate +
+## consumers + workers). Each variant has its own build:/image in compose, so
+## `docker compose build <svc>` alone ships STALE code to the siblings — this
+## target rebuilds them all. Usage: make rebuild SVC=market-data [CACHE=1]
+rebuild:
+	@test -n "$(SVC)" || { echo "Usage: make rebuild SVC=<family> [CACHE=1] (e.g. SVC=market-data)"; exit 2; }
+	./scripts/rebuild_service.sh $(SVC) $(if $(CACHE),--cache,)
 
 ## Remove local docker.env files (re-run setup-dev.sh from worldview-gitops to restore)
 dev-clean:

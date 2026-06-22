@@ -80,8 +80,13 @@ async def test_rate_limit_blocks_over_threshold() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_failclosed_on_valkey_error() -> None:
-    """D-001: When Valkey operation fails, return 503 (fail-closed)."""
+async def test_rate_limit_failopen_on_transient_builtin_error() -> None:
+    """F-007: a *transient* Valkey error (builtin ConnectionError) fails OPEN.
+
+    The retry path is exhausted first (both attempts raise), then the request is
+    allowed through (200) rather than 503ing the caller — a momentary Valkey blip
+    must not block real traffic.
+    """
     valkey = AsyncMock()
     valkey.incr = AsyncMock(side_effect=ConnectionError("valkey down"))
 
@@ -89,7 +94,73 @@ async def test_rate_limit_failclosed_on_valkey_error() -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
-        assert resp.status_code == 503  # D-001: fail-closed
+        assert resp.status_code == 200  # F-007: fail-open on transient error
+    # incr is attempted twice: original + one 50ms-backoff retry.
+    assert valkey.incr.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_failopen_on_redis_timeout_error() -> None:
+    """F-007 ROOT CAUSE: redis.exceptions.TimeoutError must be classified transient.
+
+    redis-py's TimeoutError/ConnectionError do NOT inherit from the Python
+    builtins, so the previous allowlist (builtins only) never matched a real
+    Valkey timeout — every blip hard-failed as ``503_no_retry``. This is exactly
+    the /v1/quotes symptom. With the redis exception classes in the allowlist the
+    request now fails OPEN (200).
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    valkey = AsyncMock()
+    valkey.incr = AsyncMock(side_effect=RedisTimeoutError("Timeout reading from valkey:6379"))
+
+    app = _make_app(valkey, max_requests=5)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test")
+        assert resp.status_code == 200  # F-007: fail-open on real Valkey timeout
+    assert valkey.incr.await_count == 2  # original + retry
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_retry_recovers_after_transient_blip() -> None:
+    """F-007: first incr raises a transient redis error, retry succeeds → 200.
+
+    Verifies the retry path actually fires for the redis exception classes (it
+    was dead code before) and the request proceeds normally on recovery.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    valkey = AsyncMock()
+    valkey.incr = AsyncMock(side_effect=[RedisConnectionError("blip"), 1])
+    valkey.expire = AsyncMock()
+
+    app = _make_app(valkey, max_requests=5)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test")
+        assert resp.status_code == 200
+    assert valkey.incr.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_failclosed_on_nontransient_error() -> None:
+    """F-007: a NON-transient Valkey error (ResponseError) still fails CLOSED (503).
+
+    Programmer/config errors will not self-heal, so we refuse to run the limiter
+    wide-open. No retry is attempted for non-transient errors.
+    """
+    from redis.exceptions import ResponseError
+
+    valkey = AsyncMock()
+    valkey.incr = AsyncMock(side_effect=ResponseError("WRONGTYPE"))
+
+    app = _make_app(valkey, max_requests=5)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test")
+        assert resp.status_code == 503  # fail-closed for non-transient errors
+    assert valkey.incr.await_count == 1  # no retry for non-transient
 
 
 # ── F-05: Rate limiter skips health/metrics/internal paths ────────────────────

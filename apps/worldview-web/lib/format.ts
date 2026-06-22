@@ -291,6 +291,61 @@ export function formatPercentUnsigned(
 }
 
 /**
+ * formatChangePct — bounded directional percentage for FIXED-WIDTH row slots.
+ *
+ * WHY this exists (separate from formatPercent): the dense mover/watchlist rows
+ * render the change% inside a ~52px fixed-width slot (`w-[52px]`). A raw
+ * `toFixed(2)` on an extreme move overflows that slot and visually bleeds into
+ * the neighbouring price column (e.g. a short-squeeze "+135.43%" = 8 chars ≈
+ * 54px > 52px; a crypto "+1543.21%" is far worse). This helper caps the digit
+ * count so the rendered string ALWAYS fits the slot:
+ *
+ *   |pct| < 100   → 2 decimals   "+2.34%"   / "-12.50%"
+ *   |pct| ≥ 100   → 1 decimal    "+135.4%"  (drops a char vs "+135.43%")
+ *   |pct| ≥ 1000  → K suffix     "+1.54K%"  (collapses 4+ integer digits)
+ *
+ * IMPORTANT — UNITS: the input is ALREADY in percent units (e.g. pass `135.4`
+ * for "+135.4%", NOT `1.354`). This matches the mover feeds' `change_pct`
+ * field, which is a percent number. (Contrast `formatPercent`, which takes a
+ * FRACTION like `0.0234` and multiplies by 100.) Keeping the units aligned with
+ * the call sites avoids the silent ×100 mismatch class of bugs.
+ *
+ * Examples:
+ *   formatChangePct(2.34)    → "+2.34%"
+ *   formatChangePct(-12.5)   → "-12.50%"
+ *   formatChangePct(99.99)   → "+99.99%"   // still < 100 → 2 decimals
+ *   formatChangePct(100)     → "+100.0%"   // ≥ 100 → 1 decimal
+ *   formatChangePct(135.43)  → "+135.4%"
+ *   formatChangePct(999.9)   → "+999.9%"
+ *   formatChangePct(1000)    → "+1.0K%"
+ *   formatChangePct(1543.21) → "+1.5K%"
+ *   formatChangePct(-1543.21)→ "-1.5K%"
+ */
+export function formatChangePct(
+  value: number | null | undefined,
+): string {
+  // Null / NaN / Infinity → em-dash placeholder (never render "NaN%").
+  if (value == null || !Number.isFinite(value)) return DASH;
+
+  // Explicit sign prefix: traders scan by sign before colour, and it keeps the
+  // value screen-reader-readable. Negative numbers already carry their own "-".
+  const sign = value > 0 ? "+" : "";
+  const abs = Math.abs(value);
+
+  if (abs >= 1000) {
+    // Collapse 4+ integer digits to a "K%" suffix so the slot never overflows.
+    // `value / 1000` preserves the sign; toFixed(1) keeps it to ~6 chars.
+    return `${sign}${(value / 1000).toFixed(1)}K%`;
+  }
+  if (abs >= 100) {
+    // 3 integer digits + 1 decimal = "+135.4%" (7 chars) fits w-[52px].
+    return `${sign}${value.toFixed(1)}%`;
+  }
+  // Normal range: full 2-decimal precision.
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+/**
  * formatBasisPoints — render a fractional change as basis points.
  *
  * 1 basis point = 0.01%. Used in fixed-income spreads, yield-curve deltas,

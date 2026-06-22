@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # loss), which crash-looped the entity-refresh consumer on a missing
     # Settings attribute; restored here.
     kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
+    # PLAN-0113 FIX-2: opt-in static group membership (KIP-345). Empty (default)
+    # = dynamic membership, byte-identical to legacy behaviour. Set per-process
+    # to a unique, restart-stable id (dev: numbered compose service e.g.
+    # ``article-consumer-0``; prod: StatefulSet pod metadata.name) to skip
+    # rebalances on restart. One knob per consumer scope so each fleet can be
+    # made static independently.
+    kafka_consumer_instance_id: str = ""
+    kafka_watchlist_consumer_instance_id: str = ""
+    kafka_entity_refresh_consumer_instance_id: str = ""
+    kafka_document_deletion_consumer_instance_id: str = ""
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
@@ -136,6 +146,26 @@ class Settings(BaseSettings):
     # Verified DeepInfra slug; OpenAI-compatible JSON-mode. Empty = fallback disabled.
     # NLP_PIPELINE_EXTRACTION_FALLBACK_MODEL_ID
     extraction_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+
+    # ── Extraction reasoning_effort + max_tokens (PLAN-0111, 2026-06-16 A/B swap) ─
+    # gpt-oss-120b / gpt-oss-20b are REASONING models: with no explicit
+    # reasoning_effort they spend the whole budget on hidden reasoning and return
+    # EMPTY content (docs/audits/2026-06-16-extraction-model-ab-results.md §4).  The
+    # value MUST therefore be set explicitly and passed to the adapter.
+    #   * Primary  (gpt-oss-120b) = "medium" — validated optimal: recall 3.62 /
+    #     precision 4.93 / adherence 4.98 / ~0 fabrication / ~25s p50.
+    #   * Fallback (gpt-oss-20b)  = "low"    — validated best fast fallback; does not
+    #     need the primary's reasoning budget.  Empty => inherit the primary's effort.
+    # NLP_PIPELINE_EXTRACTION_REASONING_EFFORT
+    extraction_reasoning_effort: str = "medium"
+    # NLP_PIPELINE_EXTRACTION_FALLBACK_REASONING_EFFORT
+    extraction_fallback_reasoning_effort: str = "low"
+    # max_tokens completion CAP — a ceiling, not a target.  gpt-oss-120b@medium emits
+    # at most ~3k completion tokens on the golden set (p50 ~1.4k), so 8192 is pure
+    # safety margin the model never fills; the 8192-vs-4096 check measured NO latency
+    # difference (same audit).  Kept high so a verbose article never truncates JSON.
+    # NLP_PIPELINE_EXTRACTION_MAX_TOKENS
+    extraction_max_tokens: int = 8192
 
     # ── Deep-extraction timeout / retry budget (task #5, 2026-06-16) ──────────
     # The 235B deep tier is LATENCY-bound: the throughput audit measured p50=161s,
@@ -283,6 +313,31 @@ class Settings(BaseSettings):
     extraction_single_window_tokens: int = 24000
     extraction_window_size_tokens: int = 6000
     extraction_window_overlap_tokens: int = 500
+
+    # ── Co-mention entailment check (ENHANCEMENT #6, prototype — default OFF) ──────
+    # A cheap LLM entailment gate that drops relations whose evidence merely
+    # CO-MENTIONS subject and object instead of asserting the relation with a
+    # relation-bearing verb/phrase. Measured on a 443-relation strong-judge gold set
+    # (docs/audits/2026-06-21-relation-entailment-check-prototype.md):
+    #   Qwen3-235B: 0% false-positive on high-risk predicates, 88.6% defect recall,
+    #   ~$0.07 per 1k checks. gpt-oss-20b was rejected (27.6% FP — kills good relations).
+    # Default OFF so this is a safe, opt-in prototype: enabling it changes extraction
+    # output, so it must be turned on deliberately (and watched) in any environment.
+    # Enabling ALSO requires wiring an entailment_client in article_consumer_main (a
+    # Qwen3-235B adapter) — until then the block stays a no-op even if this flag is True.
+    relation_entailment_check_enabled: bool = False  # NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED
+    # Only relations whose predicate is in this set are checked (high-risk co-mention
+    # promoters per the audit). Comma-separated env override. Keep tight: every other
+    # predicate skips the LLM call entirely (cost + latency control).
+    relation_entailment_check_predicates: str = (
+        "competes_with,regulates,produces,partner_of,supplier_of"  # NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_PREDICATES
+    )
+    # Confidence floor below which the check's NOT_ASSERTED verdict is IGNORED (kept).
+    # The prompt is tuned to only answer NOT_ASSERTED when confident; this is a second
+    # guard so a low-confidence "drop" never destroys a relation.
+    relation_entailment_check_min_drop_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Max risky relations checked per document (hard cap on added cost/latency per article).
+    relation_entailment_check_max_per_doc: int = Field(default=20, ge=0, le=200)
 
     # ── Concurrency (Task #14 — ~50 articles in flight platform-wide) ──────────
     # Deep extraction on DeepInfra is I/O-bound (12-22s network wait per article),

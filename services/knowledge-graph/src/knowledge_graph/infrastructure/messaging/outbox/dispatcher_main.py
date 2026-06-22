@@ -86,12 +86,18 @@ async def main() -> None:
     # Write factory only — dispatcher reads/updates outbox rows in write txn
     engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
-    producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    # GAP-A: pass a factory so the dispatcher can REBUILD the producer after a
+    # wedge (delivery TimeoutError) instead of reusing a permanently-broken one.
+    def _build_producer() -> Producer:
+        return Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+
+    producer = _build_producer()
     dispatcher = OutboxDispatcher(
         session_factory=write_factory,
         producer=producer,  # type: ignore[arg-type]
         poll_interval_s=settings.dispatcher_poll_interval_s,
         batch_size=settings.dispatcher_batch_size,
+        producer_factory=_build_producer,  # type: ignore[arg-type]
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.

@@ -160,3 +160,21 @@ allowlist:
       the underlying `entity_refresh` upsert which is naturally idempotent under
       re-delivery. Granted pending the formal mixin retrofit.
     granted_at: "2026-06-05"
+
+  # ── PLAN-0114 W1 (2026-06-20) ─────────────────────────────────────────────
+  - class_name: ManualHoldingsRecomputeConsumer
+    module_path: services.portfolio.src.portfolio.infrastructure.messaging.consumers.manual_holdings_consumer
+    justification: >
+      BP-035 pattern (atomic DB dedup): event_id dedup is handled atomically inside
+      process_message via uow.idempotency.create_if_not_exists(event_uid) — an
+      INSERT … ON CONFLICT DO NOTHING … RETURNING that runs within the same DB
+      transaction as the holdings upsert. This provides stronger exactly-once
+      guarantees than Valkey TTL-based dedup: the idempotency record and the
+      holdings snapshot are committed atomically, so a crash between the two
+      operations is impossible. is_duplicate() returns False unconditionally
+      because the pre-UoW Valkey check would race with the atomic DB check
+      (double-check anti-pattern). UpsertHoldingsFromSnapshotUseCase additionally
+      performs an idempotent diff-and-upsert, providing a second layer of natural
+      idempotency under re-delivery. ValkeyDedupMixin would be redundant overhead.
+      PLAN-0114 W1 / T-W1-07.
+    granted_at: "2026-06-20"

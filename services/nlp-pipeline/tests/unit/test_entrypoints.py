@@ -40,6 +40,32 @@ def _preset_event(*_args: object, **_kwargs: object) -> asyncio.Event:
     return e
 
 
+def _gated_consumer() -> MagicMock:
+    """Build a consumer mock whose run() blocks until stop() is called.
+
+    BP-704: the consumer mains now drive run() through ``run_consumer_supervised``,
+    which RACES run() against the stop event (``asyncio.wait(FIRST_COMPLETED)``).
+    A naive instantly-returning ``AsyncMock`` run() would non-deterministically
+    win that race and be treated as an *unexpected* run() exit → ``ConsumerExited``
+    → ``sys.exit(1)``.  A healthy consumer's run() only returns AFTER stop() is
+    signalled, so we model that contract here: run() awaits an internal event that
+    stop() sets.  The supervised-shutdown invariant we then assert is
+    ``consumer.stop()`` was called (NOT ``run`` returned instantly).
+    """
+    consumer = MagicMock()
+    _stopped = asyncio.Event()
+
+    async def _run() -> None:
+        await _stopped.wait()
+
+    def _stop() -> None:
+        _stopped.set()
+
+    consumer.run = MagicMock(side_effect=_run)
+    consumer.stop = MagicMock(side_effect=_stop)
+    return consumer
+
+
 def _mock_settings(**overrides: object) -> MagicMock:
     s = MagicMock()
     s.log_level = "INFO"
@@ -90,9 +116,7 @@ async def test_article_consumer_main_two_engines_disposed() -> None:
     mock_nlp_engine = AsyncMock()
     mock_intel_engine = AsyncMock()
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _gated_consumer()
 
     with (
         patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
@@ -129,13 +153,11 @@ async def test_article_consumer_main_two_engines_disposed() -> None:
 
 @pytest.mark.asyncio
 async def test_article_consumer_main_graceful_stop() -> None:
-    """wait_for(30s) is used and valkey.close() called on graceful stop."""
+    """valkey.close() called on graceful (supervised) stop."""
     mock_nlp_engine = AsyncMock()
     mock_intel_engine = AsyncMock()
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _gated_consumer()
 
     with (
         patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
@@ -171,13 +193,11 @@ async def test_article_consumer_main_graceful_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_article_consumer_main_stop_pre_set() -> None:
-    """Consumer is started (create_task called) even with a pre-set stop event."""
+    """Supervised shutdown invokes consumer.stop() when stop event is pre-set."""
     mock_nlp_engine = AsyncMock()
     mock_intel_engine = AsyncMock()
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _gated_consumer()
 
     with (
         patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
@@ -207,8 +227,9 @@ async def test_article_consumer_main_stop_pre_set() -> None:
 
         await main()
 
-    # Consumer.run() is called via asyncio.create_task — always happens before wait()
-    mock_consumer.run.assert_called_once()
+    # BP-704 supervised-shutdown invariant: run() is driven by the supervisor and
+    # a pre-set stop event drains it via consumer.stop() (the correct shutdown path).
+    mock_consumer.stop.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +241,7 @@ async def test_article_consumer_main_stop_pre_set() -> None:
 async def test_watchlist_consumer_main_graceful_stop() -> None:
     """valkey.close() called on stop signal; consumer.stop() invoked."""
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _gated_consumer()
 
     with (
         patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
@@ -246,11 +265,9 @@ async def test_watchlist_consumer_main_graceful_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_watchlist_consumer_main_stop_pre_set() -> None:
-    """Consumer is created and run() called even when stop_event pre-set."""
+    """Supervised shutdown invokes consumer.stop() when stop_event is pre-set."""
     mock_valkey = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _gated_consumer()
 
     with (
         patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
@@ -268,7 +285,153 @@ async def test_watchlist_consumer_main_stop_pre_set() -> None:
 
         await main()
 
-    mock_consumer.run.assert_called_once()
+    # BP-704 supervised-shutdown invariant: a pre-set stop event drains run()
+    # via consumer.stop() rather than being treated as an unexpected exit.
+    mock_consumer.stop.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# BP-704 / F-005: stall-aware /healthz — every Kafka consumer main must pass a
+# liveness_probe to start_metrics_server so /healthz turns 503 when the poll
+# loop wedges or run() dies.  We patch each module's bound ``start_metrics_server``
+# name and assert it was called with a non-None ``liveness_probe`` kwarg.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_article_consumer_main_wires_liveness_probe() -> None:
+    """article_consumer_main passes a liveness_probe to start_metrics_server."""
+    mock_nlp_engine = AsyncMock()
+    mock_intel_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = _gated_consumer()
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main.start_metrics_server",
+        ) as mock_start,
+        patch(
+            "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "nlp_pipeline.infrastructure.intelligence_db.session._build_intelligence_factories",
+            return_value=(mock_intel_engine, mock_intel_engine, MagicMock(), MagicMock()),
+        ),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("nlp_pipeline.infrastructure.valkey.watchlist_cache.WatchlistCache", return_value=MagicMock()),
+        patch("ml_clients.adapters.ollama_embedding.OllamaEmbeddingAdapter", return_value=MagicMock()),
+        patch("ml_clients.adapters.ollama_extraction.OllamaExtractionAdapter", return_value=MagicMock()),
+        patch("ml_clients.adapters.gliner_local.GLiNERLocalAdapter", return_value=MagicMock()),
+        patch("nlp_pipeline.infrastructure.backpressure.controller.BackpressureController", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.ArticleProcessingConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main import main
+
+        await main()
+
+    mock_start.assert_called_once()
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
+
+
+@pytest.mark.asyncio
+async def test_watchlist_consumer_main_wires_liveness_probe() -> None:
+    """watchlist_consumer_main passes a liveness_probe to start_metrics_server."""
+    mock_valkey = AsyncMock()
+    mock_consumer = _gated_consumer()
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main.start_metrics_server",
+        ) as mock_start,
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("nlp_pipeline.infrastructure.valkey.watchlist_cache.WatchlistCache", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer.WatchlistEventConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main import main
+
+        await main()
+
+    mock_start.assert_called_once()
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
+
+
+@pytest.mark.asyncio
+async def test_document_deletion_consumer_main_wires_liveness_probe() -> None:
+    """document_deletion_consumer_main passes a liveness_probe to start_metrics_server."""
+    mock_nlp_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = _gated_consumer()
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer_main.start_metrics_server",
+        ) as mock_start,
+        patch(
+            "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
+        ),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer.DocumentDeletionConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer_main import main
+
+        await main()
+
+    mock_start.assert_called_once()
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_consumer_main_wires_liveness_probe() -> None:
+    """entity_refresh_consumer_main passes a liveness_probe to start_metrics_server."""
+    mock_intel_engine = AsyncMock()
+    mock_consumer = _gated_consumer()
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=_mock_settings()),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main.start_metrics_server",
+        ) as mock_start,
+        patch(
+            "nlp_pipeline.infrastructure.intelligence_db.session._build_intelligence_factories",
+            return_value=(mock_intel_engine, mock_intel_engine, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer.EntityRefreshConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main import main
+
+        await main()
+
+    mock_start.assert_called_once()
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
 
 
 # ---------------------------------------------------------------------------

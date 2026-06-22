@@ -313,7 +313,9 @@ async def test_intelligence_consumer_watchdog_exits_on_stall() -> None:
         raise _ForcedExitError(code)
 
     consumer = MagicMock()
-    # Progress timestamp is far in the past → immediately stalled.
+    # F-006: the watchdog now gates on the poll-cycle marker. A genuinely
+    # WEDGED loop stops cycling → its poll marker is far in the past → stalled.
+    consumer.last_poll_monotonic = 0.0
     consumer.last_progress_monotonic = 0.0
     stop_event = _REAL_ASYNCIO_EVENT()  # never set
     log = MagicMock()
@@ -334,6 +336,55 @@ async def test_intelligence_consumer_watchdog_exits_on_stall() -> None:
 
 
 @pytest.mark.asyncio
+async def test_intelligence_consumer_watchdog_idle_topic_does_not_exit() -> None:
+    """F-006 regression: an IDLE-but-alive consumer must NOT trip the watchdog.
+
+    Reproduces the crash-loop: the topic is idle so no MESSAGE has been
+    processed in a long time (``last_progress_monotonic`` is ancient), but the
+    poll loop keeps cycling (``last_poll_monotonic`` stays fresh). The watchdog
+    must gate on the poll marker and NOT force-exit.
+    """
+    import importlib
+    import time
+
+    from alert.infrastructure.messaging.consumers import intelligence_consumer_main
+
+    importlib.reload(intelligence_consumer_main)
+
+    consumer = MagicMock()
+    # No message processed for ~1h (idle topic) — the OLD watchdog would exit.
+    consumer.last_progress_monotonic = time.monotonic() - 3600.0
+    # But the poll loop is cycling: poll marker refreshed "now".
+    consumer.last_poll_monotonic = time.monotonic()
+    stop_event = _REAL_ASYNCIO_EVENT()  # never set — consumer "running"
+    log = MagicMock()
+
+    def _boom(code: int) -> None:  # pragma: no cover — must not be called
+        raise AssertionError(f"watchdog exited with {code} on an idle-but-alive consumer")
+
+    async def _drive() -> None:
+        with patch.object(intelligence_consumer_main.os, "_exit", _boom):
+            # Stall threshold 300s; poll fast. The poll marker is fresh, so the
+            # watchdog should keep looping (never exit) until we stop it.
+            await intelligence_consumer_main._liveness_watchdog(
+                consumer,
+                stop_event,
+                log,
+                stall_seconds=300.0,
+                poll_seconds=0.01,
+            )
+
+    task = asyncio.create_task(_drive())
+    # Let the watchdog run several check cycles, then request graceful stop.
+    await asyncio.sleep(0.05)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    # Idle ≠ wedged: no critical log, no exit.
+    log.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
     """The watchdog returns (no exit) when the stop signal fires."""
     import importlib
@@ -343,6 +394,7 @@ async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
     importlib.reload(intelligence_consumer_main)
 
     consumer = MagicMock()
+    consumer.last_poll_monotonic = 0.0
     consumer.last_progress_monotonic = 0.0
     stop_event = _REAL_ASYNCIO_EVENT()
     stop_event.set()  # graceful shutdown requested
@@ -368,14 +420,33 @@ async def test_intelligence_consumer_watchdog_stops_gracefully() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _make_supervised_consumer() -> MagicMock:
+    """Build a mock consumer whose run() blocks until stop() — the real contract.
+
+    BP-704: ``watchlist_consumer_main`` now drives run() via
+    ``run_consumer_supervised``, which treats a run() that returns on its own
+    (without a stop signal) as an unexpected wedge/crash and raises
+    ``ConsumerExited``. A bare ``AsyncMock`` returns instantly and would trip
+    that path, so we model a healthy consumer: run() awaits a gate that stop()
+    sets, so the supervisor takes the graceful-stop path.
+    """
+    mock_consumer = MagicMock()
+    _run_gate = _REAL_ASYNCIO_EVENT()
+
+    async def _run_until_stopped() -> None:
+        await _run_gate.wait()
+
+    mock_consumer.run = _run_until_stopped
+    mock_consumer.stop = MagicMock(side_effect=lambda: _run_gate.set())
+    return mock_consumer
+
+
 @pytest.mark.asyncio
 async def test_watchlist_consumer_graceful_stop() -> None:
-    """wait_for(30s) + s1_client.close + valkey.close called on stop."""
+    """Supervised graceful stop + s1_client.close + valkey.close called on stop."""
     mock_valkey = AsyncMock()
     mock_s1 = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
     settings = _mock_settings()
 
     with (
@@ -405,9 +476,7 @@ async def test_watchlist_consumer_stop_pre_set() -> None:
     """Consumer task is started then stopped immediately when stop_event is pre-set."""
     mock_valkey = AsyncMock()
     mock_s1 = AsyncMock()
-    mock_consumer = MagicMock()
-    mock_consumer.run = AsyncMock()
-    mock_consumer.stop = MagicMock()
+    mock_consumer = _make_supervised_consumer()
     settings = _mock_settings()
 
     with (
@@ -432,6 +501,69 @@ async def test_watchlist_consumer_stop_pre_set() -> None:
 
     mock_consumer.stop.assert_called_once()
     mock_valkey.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# BP-704 — stall-aware /healthz liveness probe wired into start_metrics_server
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intelligence_consumer_wires_liveness_probe() -> None:
+    """BP-704: the intelligence consumer main must pass a non-None liveness_probe
+    to start_metrics_server so the Docker /healthz reflects poll-loop liveness."""
+    mock_engine = AsyncMock()
+    mock_valkey = AsyncMock()
+    mock_consumer = MagicMock()
+    mock_consumer.run = AsyncMock()
+    mock_consumer.stop = MagicMock()
+    mock_s1 = AsyncMock()
+    settings = _mock_settings()
+
+    with _intelligence_patches(mock_engine, mock_valkey, mock_consumer, mock_s1, settings):
+        import importlib
+
+        from alert.infrastructure.messaging.consumers import intelligence_consumer_main
+
+        importlib.reload(intelligence_consumer_main)
+        # Patch the name as bound in the main module's namespace.
+        with patch.object(intelligence_consumer_main, "start_metrics_server", return_value=MagicMock()) as mock_start:
+            await intelligence_consumer_main.main()
+
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
+
+
+@pytest.mark.asyncio
+async def test_watchlist_consumer_wires_liveness_probe() -> None:
+    """BP-704: the watchlist consumer main must pass a non-None liveness_probe
+    to start_metrics_server so the Docker /healthz reflects poll-loop liveness."""
+    mock_valkey = AsyncMock()
+    mock_s1 = AsyncMock()
+    mock_consumer = _make_supervised_consumer()
+    settings = _mock_settings()
+
+    with (
+        patch("alert.config.Settings", return_value=settings),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
+        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.messaging.consumers.watchlist_consumer.WatchlistConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        import importlib
+
+        from alert.infrastructure.messaging.consumers import watchlist_consumer_main
+
+        importlib.reload(watchlist_consumer_main)
+        with patch.object(watchlist_consumer_main, "start_metrics_server", return_value=MagicMock()) as mock_start:
+            await watchlist_consumer_main.main()
+
+    assert mock_start.call_args.kwargs["liveness_probe"] is not None
 
 
 # ---------------------------------------------------------------------------

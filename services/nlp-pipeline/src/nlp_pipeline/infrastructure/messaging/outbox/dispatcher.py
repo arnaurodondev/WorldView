@@ -61,6 +61,39 @@ class NLPPipelineOutboxDispatcher:
             )
         return self._producer
 
+    # ── Producer recovery (GAP-A / BP outbox-dispatcher-wedged-producer) ───────
+
+    @staticmethod
+    def _is_broken_producer_error(error: BaseException | None) -> bool:
+        """Return True when *error* signals the cached producer must be rebuilt.
+
+        Mirrors ``BaseOutboxDispatcher._is_broken_producer_error``: a produce/flush
+        ``TimeoutError`` (alias of ``asyncio.TimeoutError`` on 3.11+) is the
+        signature of a wedged producer that never completes.
+        """
+        return isinstance(error, TimeoutError)
+
+    def _reset_producer(self) -> None:
+        """Discard the cached producer so ``_get_producer`` rebuilds + reconnects.
+
+        This dispatcher does NOT extend ``BaseOutboxDispatcher`` (the NLP outbox
+        stores pre-serialized bytes), so the recovery helper is reimplemented
+        against this class's own ``self._producer`` attribute — which already has
+        a lazy rebuild path in ``_get_producer``.
+        """
+        producer = self._producer
+        if producer is None:
+            return
+        import contextlib
+
+        # Best-effort non-blocking drain; never let teardown block or raise.
+        with contextlib.suppress(Exception):
+            flush = getattr(producer, "flush", None)
+            if callable(flush):
+                flush(0)
+        self._producer = None
+        logger.warning("outbox_producer_reset", reason="delivery_failure")  # type: ignore[no-any-return]
+
     # ── Dispatch cycle ────────────────────────────────────────────────────────
 
     async def _dispatch_batch(self) -> int:
@@ -113,9 +146,17 @@ class NLPPipelineOutboxDispatcher:
                     success = bool(delivered) and delivered[0]
                 except Exception as exc:
                     success = False
+                    # GAP-A: a produce/flush TimeoutError is the signature of a
+                    # wedged cached producer — discard it so the next dispatch
+                    # rebuilds + reconnects. Log type + repr because ``str`` is
+                    # EMPTY for TimeoutError (how this wedge stayed invisible).
+                    if self._is_broken_producer_error(exc):
+                        self._reset_producer()
                     logger.error(  # type: ignore[no-any-return]
                         "outbox_produce_exception",
                         event_id=str(record.event_id),
+                        error_type=type(exc).__name__,
+                        error_repr=repr(exc),
                         error=str(exc),
                     )
 

@@ -543,7 +543,7 @@ export function createPortfoliosApi(t: string | undefined) {
      * @param name     - Portfolio display name (e.g., "My Main Portfolio")
      * @param currency - 3-letter ISO currency code (default: "USD")
      */
-    async createPortfolio(name: string, currency = "USD"): Promise<Portfolio> {
+    async createPortfolio(name: string, currency = "USD", cost_basis_method: "FIFO" | "AVCO" = "FIFO"): Promise<Portfolio> {
       // POST to S9, which injects owner_user_id from JWT before forwarding to S1
       const raw = await apiFetch<{
         id: string;
@@ -562,6 +562,16 @@ export function createPortfoliosApi(t: string | undefined) {
         token: t,
       });
 
+      // PLAN-0114 W6: two-step create — POST creates the portfolio (default FIFO),
+      // then PATCH sets cost_basis_method if non-FIFO.
+      // WHY two-step: avoids changing the POST schema (backward compatible).
+      if (cost_basis_method !== "FIFO") {
+        await apiFetch<unknown>(
+          `/v1/portfolios/${encodeURIComponent(raw.id)}`,
+          { method: "PATCH", body: { cost_basis_method }, token: t },
+        );
+      }
+
       // Map S1's PortfolioResponse (id) → frontend Portfolio type (portfolio_id)
       return {
         portfolio_id: raw.id,
@@ -571,6 +581,19 @@ export function createPortfoliosApi(t: string | undefined) {
         created_at: raw.created_at,
         updated_at: raw.created_at, // S1 has no updated_at; use created_at as fallback
       };
+    },
+
+    /**
+     * patchPortfolio — partial-update portfolio settings (PLAN-0114 W6 / T-W6-02).
+     *
+     * WHY PATCH instead of PUT: only mutable settings (cost_basis_method) live
+     * here; name changes go through the rename endpoint.
+     */
+    async patchPortfolio(portfolioId: string, patch: { cost_basis_method?: "FIFO" | "AVCO" }): Promise<void> {
+      await apiFetch<unknown>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}`,
+        { method: "PATCH", body: patch, token: t },
+      );
     },
 
     /**

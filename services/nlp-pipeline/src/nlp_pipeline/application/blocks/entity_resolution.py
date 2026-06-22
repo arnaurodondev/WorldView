@@ -39,6 +39,28 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
+
+def _ticker_candidate(surface: str) -> str | None:
+    """Return the ticker symbol to look up for ``surface``, or None if it is not
+    ticker-shaped.
+
+    A ticker is an ALL-UPPERCASE symbol of <=6 chars, after stripping a trailing
+    ``.EXCHANGE`` venue qualifier (``AAPL.MX`` -> ``AAPL``).
+
+    The case-sensitivity (``isupper()``) is LOAD-BEARING — it is what stops a
+    mixed-case company name/acronym (``xAI``, ``Citi``, ``eBay``) from being
+    treated as a ticker and colliding with an unrelated security that happens to
+    own that ticker (the 2026-06-20 ``xAI`` -> "XAI Octagon ... Trust" fund
+    mis-resolution class). ``strip_exchange_qualifier`` preserves case, so a
+    mixed-case surface stays mixed-case here and is correctly rejected. Extracted
+    into a single helper (used by both the per-mention and batch Stage-2 paths) so
+    the guard is testable and cannot silently regress.
+    """
+    candidate = strip_exchange_qualifier(surface.strip()) or surface.strip()
+    if candidate.isupper() and len(candidate) <= 6:
+        return candidate
+    return None
+
 # ── Resolution thresholds (PRD §6.7 Block 9) ─────────────────────────────────
 
 # PLAN-0052 QA-R6: Option C (threshold 0.72→0.62, multiplier 0.80→0.95).
@@ -109,9 +131,11 @@ async def _stage2_ticker_isin(
     audit: list[MentionResolution],
 ) -> tuple[UUID | None, float]:
     """Stage 2 — ticker/ISIN match against canonical_entities."""
-    # Attempt to parse ticker from the mention text (bare uppercase word)
+    # Attempt to parse ticker from the mention text (bare uppercase word).
+    # _ticker_candidate enforces the case-sensitive gate that keeps mixed-case
+    # company acronyms (xAI/Citi) from colliding with unrelated tickers.
     text = mention.mention_text.strip()
-    ticker = text if text.isupper() and len(text) <= 6 else None
+    ticker = _ticker_candidate(text)
     isin = text if len(text) == 12 and text[:2].isalpha() and text[2:].isalnum() else None
 
     entity_id = await alias_repo.ticker_isin_match(ticker=ticker, isin=isin)
@@ -463,8 +487,8 @@ async def run_entity_resolution_block(
     s2_lookup_key: dict[str, str] = {}  # mention_text.strip() -> ticker/isin value queried
     for m in mentions:
         text_stripped = m.mention_text.strip()
-        ticker_candidate = strip_exchange_qualifier(text_stripped) or text_stripped
-        if ticker_candidate.isupper() and len(ticker_candidate) <= 6:
+        ticker_candidate = _ticker_candidate(text_stripped)
+        if ticker_candidate is not None:
             tickers.append(ticker_candidate)
             s2_lookup_key[text_stripped] = ticker_candidate
         if len(text_stripped) == 12 and text_stripped[:2].isalpha() and text_stripped[2:].isalnum():

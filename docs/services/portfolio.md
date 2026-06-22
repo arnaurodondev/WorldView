@@ -43,6 +43,8 @@ from the verified JWT claims.
 | Instrument consumer | `portfolio.infrastructure.messaging.consumers.instrument_consumer_main` | Syncs instruments from S3/S2 |
 | Brokerage sync worker | `portfolio.workers.brokerage_sync_worker` | 4-hour SnapTrade sync cycle |
 | Portfolio snapshot worker | `portfolio.workers.portfolio_snapshot_worker` | Daily 21:30 UTC snapshot writer (value history) |
+| **Manual holdings consumer** | `portfolio.infrastructure.messaging.consumers.manual_holdings_consumer_main` | **PLAN-0114 W1** Consumes `portfolio.holding.recompute_requested.v1`; calls `ComputeManualHoldingsUseCase` |
+| **Manual holdings worker** | `portfolio.workers.manual_holdings_worker` | **PLAN-0114 W1** Nightly 22:00 UTC fallback sweep; recomputes all MANUAL portfolios with ≥1 transaction |
 
 ---
 
@@ -74,7 +76,9 @@ All require `X-Internal-JWT` (RS256, issued by S9 per request).
 |--------|------|-------------|
 | GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio. Items carry `ticker`/`name`/`entity_id`/`asset_class` enriched via instruments LEFT JOIN (all nullable; `asset_class` added 2026-06-10, sprint gap #1) |
 | POST | `/api/v1/transactions` | Record transaction |
-| GET | `/api/v1/transactions` | List transactions — paginated |
+| GET | `/api/v1/transactions` | List transactions — paginated. PLAN-0114 W2: supports `from_date`, `to_date`, `transaction_type[]`, `ticker` server-side filter params |
+| GET | `/api/v1/portfolios/{id}/transactions` | Nested alias — same filter params as flat list |
+| GET | `/api/v1/portfolios/{id}/transactions/export` | Download transactions as CSV (PLAN-0114 W2 FR-3). Params: `from_date`, `to_date`, `transaction_type[]`, `ticker`. Max date range 5 years. CSV injection-safe. Streams via `StreamingResponse`. |
 | GET | `/api/v1/instruments` | List local instrument refs — paginated |
 | GET | `/api/v1/instruments/{id}` | Get instrument by ID |
 
@@ -247,6 +251,7 @@ Response:
 |-------|-------------|
 | `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created`, `watchlist.created`, `watchlist.deleted` |
 | `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed`, `watchlist.renamed` |
+| `portfolio.holding.recompute_requested.v1` | `portfolio.holding.recompute_requested` — emitted for MANUAL portfolios on every `RecordTransactionUseCase` call; triggers `ManualHoldingsRecomputeConsumer` (PLAN-0114 W1) |
 
 ### Consumed
 
@@ -255,6 +260,7 @@ Response:
 | `market.instrument.discovered.v1` | `portfolio-instrument-sync` | Seeds InstrumentRef with `name=None` (no fundamentals yet) |
 | `market.instrument.created` | `portfolio-instrument-sync` | Full fundamentals available — populates ISIN/FIGI/LEI |
 | `market.instrument.updated` | `portfolio-instrument-sync` | Updates local instrument cache |
+| `portfolio.holding.recompute_requested.v1` | `portfolio-manual-holdings-recompute` | Replays full transaction history to rebuild `holdings` for MANUAL portfolios (PLAN-0114 W1) |
 
 ### `holding.changed` emission (gated)
 

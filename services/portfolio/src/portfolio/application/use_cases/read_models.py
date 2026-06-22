@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -14,6 +15,7 @@ from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork
     from portfolio.domain.entities import Holding, Transaction
+    from portfolio.domain.value_objects import TransactionFilter
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -45,14 +47,14 @@ class EnrichedHolding:
     """Holding with instrument metadata joined from the instruments table.
 
     WHY a separate DTO (not modifying domain Holding entity): the instruments
-    JOIN is an infrastructure concern — the Holding domain entity must not carry
+    JOIN is an infrastructure concern -- the Holding domain entity must not carry
     optional ticker/name fields that only exist when the instrument ref is present.
     This DTO is purely application-layer transport.
 
     2026-06-10 (frontend-enhancement sprint, gap #1): ``asset_class`` joins
     the enrichment set. Holdings previously lacked it, forcing the frontend
-    to derive the ASSET column from the *transactions* page — holdings whose
-    transactions weren't on the current page rendered "—". Same nullable
+    to derive the ASSET column from the *transactions* page -- holdings whose
+    transactions weren't on the current page rendered "--". Same nullable
     semantics as ticker/name: ``None`` when the instrument record is absent.
     """
 
@@ -61,8 +63,34 @@ class EnrichedHolding:
     name: str | None
     entity_id: UUID | None
     # Nullable + defaulted so existing constructor call sites (fakes, tests)
-    # keep working — forward-compatible field add per R11.
+    # keep working -- forward-compatible field add per R11.
     asset_class: str | None = None
+
+
+@dataclass
+class HoldingsResponse:
+    """Enriched holdings with brokerage connection metadata (W3 - FR-4, FR-7).
+
+    WHY a wrapper dataclass instead of mutating the bare list return: the API
+    layer and the frontend both need ``brokerage_last_synced_at`` and
+    ``brokerage_sync_error_count`` alongside the items, but the items
+    themselves (EnrichedHolding) are already a settled DTO. Adding envelope
+    fields at the item level would violate the single-responsibility of the
+    item DTO and duplicate the fields across every row.
+
+    For MANUAL and ROOT portfolios these fields are always ``None`` / ``0`` --
+    they have no brokerage connection to report on. The API layer exposes them
+    unconditionally in the envelope, and the frontend gates visibility on
+    ``portfolio.kind === "brokerage"``.
+    """
+
+    holdings: list[EnrichedHolding]
+    # ISO-8601 UTC timestamp of the last successful brokerage sync, or None
+    # when the portfolio has never synced (new connection) or is not BROKERAGE.
+    brokerage_last_synced_at: datetime | None = field(default=None)
+    # Count of rows in brokerage_sync_errors for this portfolio's connection.
+    # 0 for non-BROKERAGE portfolios or a brokerage portfolio with no errors.
+    brokerage_sync_error_count: int = field(default=0)
 
 
 class GetHoldingsUseCase:
@@ -74,11 +102,11 @@ class GetHoldingsUseCase:
         uow: ReadOnlyUnitOfWork,
         *,
         include_closed: bool = False,
-    ) -> list[EnrichedHolding]:
+    ) -> HoldingsResponse:
         """Return enriched holdings for a portfolio.
 
         F-303 (QA iter-3 2026-04-28): zero-quantity rows are noise in the
-        default UI — they're either fully-sold positions retained for tax
+        default UI -- they're either fully-sold positions retained for tax
         reporting OR orphans left behind when the F-201 repair script
         zeroed quantities and a sparse broker resync didn't repopulate
         every row. Either way, mixing them with active positions in the
@@ -88,12 +116,26 @@ class GetHoldingsUseCase:
         Default behaviour: hide ``quantity == 0`` rows. Pro users can
         opt-in via ``include_closed=True`` (mapped from a ``?include_closed``
         query param at the API layer) when they want to see the historic
-        position list — e.g. for tax / audit reporting.
+        position list -- e.g. for tax / audit reporting.
 
         The filter is applied AFTER aggregation for the ROOT case so a
         position that's net-zero across sub-portfolios (rebalanced flat)
-        is also hidden by default — that matches user expectation more
+        is also hidden by default -- that matches user expectation more
         than "show every leg".
+
+        W3 (FR-4, FR-7): the return value is now a ``HoldingsResponse``
+        envelope that carries ``brokerage_last_synced_at`` and
+        ``brokerage_sync_error_count`` alongside the items list. For
+        BROKERAGE portfolios we do two additional cheap reads:
+
+        1. ``brokerage_connections.get_by_portfolio_id()`` -- single row
+           lookup by portfolio_id + tenant_id (O(1) with the existing PK
+           index on brokerage_connection_id + new portfolio_id lookup).
+        2. ``brokerage_sync_errors.count_for_connection()`` -- scalar COUNT
+           against the new index on brokerage_connection_id (migration 0026).
+
+        For MANUAL and ROOT portfolios both fields return None/0 -- no extra
+        queries are issued.
         """
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
@@ -117,7 +159,23 @@ class GetHoldingsUseCase:
         if not include_closed:
             holdings = [eh for eh in holdings if eh.holding.quantity != Decimal(0)]
 
-        return holdings
+        # W3 -- FR-4, FR-7: attach brokerage metadata to the envelope.
+        # Only BROKERAGE portfolios have a brokerage_connection row; MANUAL
+        # and ROOT portfolios return the zero-value defaults.
+        brokerage_last_synced_at: datetime | None = None
+        brokerage_sync_error_count: int = 0
+
+        if portfolio.kind == PortfolioKind.BROKERAGE:
+            connection = await uow.brokerage_connections.get_by_portfolio_id(portfolio_id, tenant_id)
+            if connection is not None:
+                brokerage_last_synced_at = connection.last_synced_at
+                brokerage_sync_error_count = await uow.brokerage_sync_errors.count_for_connection(connection.id)
+
+        return HoldingsResponse(
+            holdings=holdings,
+            brokerage_last_synced_at=brokerage_last_synced_at,
+            brokerage_sync_error_count=brokerage_sync_error_count,
+        )
 
 
 class ListTransactionsUseCase:
@@ -129,19 +187,25 @@ class ListTransactionsUseCase:
         uow: ReadOnlyUnitOfWork,
         limit: int = 100,
         offset: int = 0,
+        tx_filter: TransactionFilter | None = None,
     ) -> tuple[list[EnrichedTransaction], int]:
         """List transactions for a portfolio with instrument enrichment.
 
         F-205 (QA iter-2): the response now carries ``ticker``/``name`` per
         row. Previously ``TransactionListItem`` left them empty and the
         frontend had to maintain a ``tickerByInstrumentId`` workaround keyed
-        on holdings — which broke the moment the user filtered transactions
+        on holdings -- which broke the moment the user filtered transactions
         before holdings loaded. Mobile/3rd-party clients had no escape at
         all. Now we resolve the instruments at the application layer and
         the API surfaces the enriched fields directly.
 
+        PLAN-0114 / T-W2-03: the optional ``tx_filter`` parameter activates
+        server-side filtering via ``TransactionFilter``. When present, the
+        filtered repository methods are used (database-side WHERE predicates).
+        When absent the existing unfiltered path is used (backward compatible).
+
         Implementation note: we do NOT add a new ``list_by_instrument_ids``
-        method to the InstrumentRepository — instead we read the small
+        method to the InstrumentRepository -- instead we read the small
         local instruments cache via the existing ``list_all`` and build an
         in-memory ``{id: ticker/name}`` map. That cache is bounded by the
         tenants' actual instrument footprint (typically <500 rows) so the
@@ -155,8 +219,26 @@ class ListTransactionsUseCase:
 
         # PLAN-0046 Wave 3 / T-46-3-03: ROOT portfolios show the union of
         # transactions across the user's sub-portfolios, sorted newest-first.
-        # No aggregation — every original transaction row is preserved.
-        if portfolio.kind == PortfolioKind.ROOT:
+        # No aggregation -- every original transaction row is preserved.
+        #
+        # PLAN-0114 / T-W2-03: when tx_filter is supplied, dispatch to the
+        # filtered repository methods so the database applies WHERE predicates
+        # (fixes G-2: client-side filtering only covered the current page).
+        if tx_filter is not None:
+            if portfolio.kind == PortfolioKind.ROOT:
+                sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
+                transactions, total = await uow.transactions.list_by_portfolio_ids_filtered(
+                    sub_ids,
+                    tenant_id,
+                    tx_filter,
+                )
+            else:
+                transactions, total = await uow.transactions.list_by_portfolio_filtered(
+                    portfolio_id,
+                    tenant_id,
+                    tx_filter,
+                )
+        elif portfolio.kind == PortfolioKind.ROOT:
             sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
             transactions, total = await uow.transactions.list_by_portfolio_ids(
                 sub_ids,
@@ -172,13 +254,13 @@ class ListTransactionsUseCase:
                 offset=offset,
             )
 
-        # F-205 enrichment — build a single instrument_id → (ticker, name) lookup
+        # F-205 enrichment -- build a single instrument_id -> (ticker, name) lookup
         # for every distinct instrument referenced in the page. ``list_all`` is
         # already bounded by the tenant footprint (no separate query per row).
         instrument_ids_in_page = {tx.instrument_id for tx in transactions}
         # PLAN-0053 T-D-4-02: pull asset_class through the same lookup so the
         # API layer can surface it without a second hop. We extend the tuple
-        # rather than introducing a parallel map — same number of keys, more
+        # rather than introducing a parallel map -- same number of keys, more
         # complete value, no extra memory pressure on a bounded list.
         if instrument_ids_in_page:
             all_instruments, _ = await uow.instruments.list_all(limit=10_000, offset=0)

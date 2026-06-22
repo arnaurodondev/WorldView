@@ -59,7 +59,12 @@ import { EmptyState } from "@/components/primitives/EmptyState";
 import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { TrendingUp } from "lucide-react";
 // HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses very large prices (≥$1M, e.g. "$1.20M") to a
+// suffix so they don't overflow the fixed price slot; below $1M it stays
+// full-precision (the whitespace-nowrap + row overflow-hidden clamping handles
+// the rest). formatChangePct: bounds extreme % moves so they fit the fixed
+// w-[52px] %-change slot (see lib/format.ts).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Mover, TopMoversResponse } from "@/types/api";
 
@@ -398,7 +403,10 @@ function MoverRow({ mover, sparkline }: MoverRowProps) {
     <div
       // Round 3 (item 5): inset focus-visible ring — rows are tabbable
       // (tabIndex=0) and need a visible keyboard-focus affordance.
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden CLIP any horizontal
+      // overflow inside the fixed 22px row instead of letting it bleed past the
+      // column edge into the sibling list (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-[22px] min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter") router.push(`/instruments/${navId}`);
@@ -407,8 +415,11 @@ function MoverRow({ mover, sparkline }: MoverRowProps) {
       tabIndex={0}
       aria-label={`Navigate to ${mover.ticker} instrument page`}
     >
-      {/* Ticker — fixed 44px for column alignment */}
-      <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+      {/* Ticker — fixed 44px for column alignment.
+          overflow-hidden + whitespace-nowrap: a long fallback ticker (e.g. the
+          first word of a company name) is CLIPPED to 44px rather than bleeding
+          into the name span. */}
+      <span className="w-[44px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-foreground">
         {mover.ticker}
       </span>
 
@@ -444,19 +455,22 @@ function MoverRow({ mover, sparkline }: MoverRowProps) {
       {/* Price — right-aligned, muted: context, not the signal.
           WHY "—" when price is 0: truthfulness — the movers feed carries no
           price and the overview patch may not have resolved; never $0.00. */}
-      <span className="w-[60px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {mover.price > 0 ? formatPrice(mover.price) : "—"}
+      {/* whitespace-nowrap: keep the price on one line. formatPriceCompact
+          collapses ≥$1M prices to a suffix ("$1.20M") so they fit the 60px slot. */}
+      <span className="w-[60px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {mover.price > 0 ? formatPriceCompact(mover.price) : "—"}
       </span>
 
-      {/* % change — right-aligned, colored by direction */}
+      {/* % change — right-aligned, colored by direction. formatChangePct bounds
+          extreme moves (e.g. "+135.4%" / "+1.5K%") so the string never overflows
+          this fixed 52px slot. whitespace-nowrap keeps it on one line. */}
       <span
         className={cn(
-          "w-[52px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums",
           isUp ? "text-positive" : "text-negative",
         )}
       >
-        {isUp ? "+" : ""}
-        {mover.change_pct.toFixed(2)}%
+        {formatChangePct(mover.change_pct)}
       </span>
     </div>
   );

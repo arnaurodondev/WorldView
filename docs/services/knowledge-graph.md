@@ -438,7 +438,7 @@ SHA-256 change detection on all views: unchanged text never triggers re-embeddin
 | Model | Task | Provider | Notes |
 |-------|------|----------|-------|
 | `BAAI/bge-large-en-v1.5` | Entity embeddings (definition/narrative/fundamentals) + relation summary embeddings | DeepInfra (`KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER=deepinfra`) or Ollama | Must match S6 — same 1024-dim vector space |
-| `Qwen/Qwen3-235B-A22B-Instruct-2507` | Entity description generation, relation summary generation | DeepInfra (`KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY`) | Primary extraction model |
+| `Qwen/Qwen3-235B-A22B-Instruct-2507` | Entity description generation, relation summary generation | DeepInfra (`KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY`) | Primary extraction model. Description calls are **news-grounded** (see below) |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Description fallback, noise classification Layer 2 | DeepInfra | Confirmed available on project account |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct` | Narrative generation (Worker 13D-3) | DeepInfra | Weekly Sunday batch |
 | `gemini-3.1-flash-lite` | Entity descriptions (when `DESCRIPTION_PROVIDER=gemini`) | Google AI Studio (`KNOWLEDGE_GRAPH_GEMINI_API_KEY`) | Fallback to deterministic template when key empty |
@@ -456,6 +456,29 @@ All LLM calls (summary generation, entity descriptions, narrative generation) go
 
 When the entire chain fails, `SummaryWorker` still marks the relation summary as updated (clears
 `summary_stale=true`) to prevent retry storms. The stale flag is re-set when new evidence arrives.
+
+### Entity-description news-grounding (Worker 13J, Step 3)
+
+To stop the model fabricating biographies for obscure entities, `StructuredEnrichmentUseCase`
+grounds the description LLM call in the entity's own recent news **before** generating:
+
+1. **Fetch** — `EntityEnrichmentAdapter.fetch_recent_evidence(entity_id, limit=3)` runs a pure
+   read-replica `SELECT` over `relation_evidence_raw` (subject OR object, newest first), dedups
+   verbatim repeats preserving recency, and truncates each snippet to ~300 chars. The read is a
+   quick open/close — it is **not** held across the LLM I/O — and is best-effort: any error logs
+   `enrichment_news_fetch_failed` and degrades to `news_context=None` so enrichment is never blocked.
+2. **Inject** — the snippets are threaded through `generate_description(..., news_context=...)`
+   (DeepInfra / Gemini / chained adapters). The adapter appends a sanitized *"Recent news context"*
+   block to the user turn (snippets stripped of control chars + angle brackets — `relation_evidence_raw`
+   is untrusted news, a prompt-injection surface). The static system prompt is never mutated, so
+   DeepInfra's KV-cache still hits.
+3. **No-news guard** — when no corroborating news exists (the common case for obscure entities), the
+   adapter instead injects an explicit guard telling the model to describe only the entity's general
+   category/type and invent no roles, titles, affiliations, or biographical detail.
+
+Live A/B (`docs/audits/2026-06-17-description-volume-gemini-grounding.md`) cut obscure-person
+fabrication ~2.0→0.25 with no model swap (kept Qwen3-235B). The `news_context` arg is defaulted
+(`None`) and forward-compatible across the whole description-client surface.
 
 ### Provisional Enrichment — Two-Layer Noise Filter (Worker 13E)
 

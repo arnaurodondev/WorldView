@@ -104,6 +104,28 @@ class Settings(BaseSettings):
         "deepseek-ai/DeepSeek-V4-Flash"  # RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL
     )
 
+    # FIX-LIVE-BRIEF (2026-06-19): morning/instrument brief synthesis token
+    # budgets.  ROOT CAUSE of the "chars=300, sections_count=0, confidence=0.0"
+    # fresh-brief regression: the configured completion model is a *reasoning*
+    # model (openai/gpt-oss-120b in the live stack; DeepSeek-V4-Flash-Thinking
+    # by config default).  Reasoning tokens count against ``max_tokens``.  With
+    # the previous hardcoded ``max_tokens=2000`` for the morning brief, the
+    # heavy brief prompt (full portfolio context + ~53 news items + macro +
+    # earnings) made the model spend the entire budget on chain-of-thought and
+    # truncate the structured ``## section`` output (finish_reason=length) — the
+    # parser then saw 0 well-formed sections and the defensive injector filled
+    # all six with "No specific items today." (the exact 300-char blob).  The
+    # email brief path already used 6000 and never regressed, which is the tell.
+    # We raise the floor and make it env-tunable so a future reasoning-model swap
+    # never silently starves the structured answer again.  Instrument brief gets
+    # a slightly smaller budget (single-entity, less context).
+    morning_brief_synthesis_max_tokens: int = Field(
+        default=8000, ge=2000, le=32000
+    )  # RAG_CHAT_MORNING_BRIEF_MAX_TOKENS
+    instrument_brief_synthesis_max_tokens: int = Field(
+        default=6000, ge=1500, le=32000
+    )  # RAG_CHAT_INSTRUMENT_BRIEF_MAX_TOKENS
+
     # FIX-LIVE-EE (2026-05-25): Provider-chain exponential backoff for the
     # iteration-0 chat_with_tools turn. Q4 v1 + similar queries surfaced a
     # transient DeepInfra failure rate of 60-100% under chained-test load (5x
@@ -217,6 +239,27 @@ class Settings(BaseSettings):
     # user still gets the substantive answer.  Override via
     # RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS.
     entity_grounding_rewrite_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
+
+    # RC-1 (2026-06-18 internal-tool latency investigation) — configurable model
+    # for the SINGLE combined grounding-repair rewrite. The combined
+    # numeric+entity grounding pass fires at most one repair completion per turn
+    # (the dominant tail-latency cost: a full completion on the 235B model).
+    # Setting this lets an operator A/B the repair rewrite on a cheaper/faster
+    # model (e.g. gpt-oss-120b / gpt-oss-20b) WITHOUT a code change, while the
+    # primary synthesis turn keeps the default ``completion_model``.
+    #
+    # DEFAULT None → the rewrite uses the existing completion model (the chain's
+    # active provider model), so behaviour is byte-for-byte unchanged when unset.
+    # When set to a non-empty model id, the combined rewrite's ``stream_chat``
+    # call is issued with ``model=<this>`` so the provider adapter routes the
+    # single repair completion to the override model.
+    #
+    # NOTE: if a gpt-oss model is selected, the DeepInfra adapter must send
+    # ``reasoning_effort`` for that family — this field does NOT set it. The
+    # operator configures reasoning_effort separately (see the adapter's gpt-oss
+    # handling); we deliberately do not hardcode it here.
+    # Override via RAG_CHAT_GROUNDING_REWRITE_MODEL.
+    grounding_rewrite_model: str | None = None
 
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:

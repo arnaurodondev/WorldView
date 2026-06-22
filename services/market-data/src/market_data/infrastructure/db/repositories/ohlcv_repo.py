@@ -22,7 +22,83 @@ from market_data.domain.value_objects import ProviderPriority
 from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+# PostgreSQL's wire protocol caps a single statement at 65_535 bound parameters
+# (a uint16 in the Bind message).  ``INSERT ... VALUES`` binds one parameter per
+# column per row, so a multi-row VALUES with N columns blows past the cap at
+# ``65_535 / N`` rows.  A single OHLCV combined upsert can carry tens of
+# thousands of rows (a full poll cycle of ~50 symbols x hundreds of 1m bars, or
+# a deep backfill), which previously failed the statement, stalled the Kafka
+# offset, and crash-looped the consumer (BP: combined-upsert wire-param overflow).
+#
+# We chunk every multi-row INSERT to a safe ROW count well under the limit.  At
+# 13 columns (the widest VALUES row here — the derived path) the hard ceiling is
+# ``65_535 / 13 ≈ 5_041`` rows, so a 5_000-row chunk leaves comfortable headroom
+# for any future column added to the VALUES list and stays a round number.
+_MAX_PARAMS = 65_535
+_UPSERT_CHUNK_ROWS = 5_000
+
+
+def _chunk_rows(values: list[dict[str, Any]], chunk_size: int = _UPSERT_CHUNK_ROWS) -> Iterator[list[dict[str, Any]]]:
+    """Yield ``values`` in row-count chunks that stay under the param limit.
+
+    Splitting by a fixed ROW count (rather than a param count) keeps each chunk's
+    bound-parameter total at ``chunk_size * columns`` — guaranteed < 65_535 for
+    any VALUES row with ≤ 13 columns.  An empty input yields nothing.
+    """
+    for start in range(0, len(values), chunk_size):
+        yield values[start : start + chunk_size]
+
+
+# The conflict key of the ``ohlcv_bars`` unique index that ``ON CONFLICT`` targets.
+_CONFLICT_KEY = ("instrument_id", "timeframe", "bar_date")
+
+
+def _dedupe_by_conflict_key(values: list[dict[str, Any]], *, priority_guarded: bool) -> list[dict[str, Any]]:
+    """Collapse rows sharing the ON CONFLICT key to one winner per key.
+
+    PostgreSQL rejects an ``INSERT ... ON CONFLICT DO UPDATE`` whose VALUES list
+    contains the SAME conflict key ``(instrument_id, timeframe, bar_date)`` more
+    than once — ``CardinalityViolationError: ON CONFLICT DO UPDATE command cannot
+    affect row a second time``.  Backfill / replay batches routinely carry
+    duplicate keys (overlapping crypto 1m windows, e.g. ARB-USD re-published with
+    overlapping ranges), so without this dedup the chunk dies and crash-loops the
+    consumer (it re-reads the same poison batch on restart; 2_686 restarts seen).
+
+    The dedup must reproduce the *final state* the upsert would have reached if
+    Postgres allowed dup keys, so dedup-then-upsert is observationally identical:
+
+    * ``priority_guarded`` (``bulk_upsert_with_priority``): the upsert's WHERE
+      clause only overwrites when ``EXCLUDED.provider_priority >=`` the stored
+      priority.  Within a single statement Postgres processes the VALUES in order,
+      so the surviving value for a key is the one with the highest priority, and
+      on a tie the LAST occurrence (most recent in the batch) wins.  We keep that
+      winner: ``new`` replaces the kept row when its priority is ``>=`` the kept
+      row's priority.
+    * non-guarded (``bulk_upsert_derived``): the upsert overwrites
+      unconditionally, so the LAST occurrence of a key wins.
+
+    Order is preserved by first-seen position so chunking downstream stays stable.
+    """
+    winners: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in values:
+        key = tuple(row[k] for k in _CONFLICT_KEY)
+        existing = winners.get(key)
+        if existing is None:
+            winners[key] = row
+            continue
+        if not priority_guarded:
+            # Unconditional overwrite → last occurrence wins.
+            winners[key] = row
+        elif row["provider_priority"] >= existing["provider_priority"]:
+            # Priority-guarded overwrite (>= mirrors the ON CONFLICT WHERE):
+            # higher priority wins; equal priority → last occurrence wins.
+            winners[key] = row
+    return list(winners.values())
 
 
 class PgOHLCVRepository(OHLCVRepository):
@@ -83,26 +159,43 @@ class PgOHLCVRepository(OHLCVRepository):
             for bar in bars
         ]
 
-        stmt = (
-            insert(OHLCVBarModel)
-            .values(values)
-            .on_conflict_do_update(
-                index_elements=["instrument_id", "timeframe", "bar_date"],
-                set_={
-                    "open": insert(OHLCVBarModel).excluded.open,
-                    "high": insert(OHLCVBarModel).excluded.high,
-                    "low": insert(OHLCVBarModel).excluded.low,
-                    "close": insert(OHLCVBarModel).excluded.close,
-                    "volume": insert(OHLCVBarModel).excluded.volume,
-                    "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
-                    "source": insert(OHLCVBarModel).excluded.source,
-                    "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
-                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
-                },
-                where=(insert(OHLCVBarModel).excluded.provider_priority >= OHLCVBarModel.provider_priority),
+        # Collapse within-batch duplicate conflict keys BEFORE chunking.  A bulk
+        # ON CONFLICT DO UPDATE that sees the same (instrument_id, timeframe,
+        # bar_date) twice in one statement raises CardinalityViolationError, which
+        # crash-looped the consumer on overlapping backfill/replay windows.  We
+        # keep the highest-priority (tie → last) row per key, matching what the
+        # priority-guarded ON CONFLICT WHERE would have resolved to.
+        values = _dedupe_by_conflict_key(values, priority_guarded=True)
+
+        # Chunk the VALUES list so no single INSERT exceeds Postgres's 65_535
+        # bound-parameter wire limit (see ``_UPSERT_CHUNK_ROWS``).  Each chunk is
+        # its own ON CONFLICT upsert and is therefore idempotent: a partial
+        # failure mid-batch leaves earlier chunks applied (this method runs inside
+        # the caller's transaction, so the OUTER commit makes all chunks atomic;
+        # re-delivery re-runs the whole batch and the ON CONFLICT clause is a
+        # no-op for already-stored rows).  We never half-commit silently — any
+        # chunk error propagates and rolls the caller's transaction back.
+        for chunk in _chunk_rows(values):
+            stmt = (
+                insert(OHLCVBarModel)
+                .values(chunk)
+                .on_conflict_do_update(
+                    index_elements=["instrument_id", "timeframe", "bar_date"],
+                    set_={
+                        "open": insert(OHLCVBarModel).excluded.open,
+                        "high": insert(OHLCVBarModel).excluded.high,
+                        "low": insert(OHLCVBarModel).excluded.low,
+                        "close": insert(OHLCVBarModel).excluded.close,
+                        "volume": insert(OHLCVBarModel).excluded.volume,
+                        "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
+                        "source": insert(OHLCVBarModel).excluded.source,
+                        "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                        "is_partial": insert(OHLCVBarModel).excluded.is_partial,
+                    },
+                    where=(insert(OHLCVBarModel).excluded.provider_priority >= OHLCVBarModel.provider_priority),
+                )
             )
-        )
-        await self._session.execute(stmt)
+            await self._session.execute(stmt)
 
     # ── queries ────────────────────────────────────────────────────────────────
 
@@ -214,26 +307,36 @@ class PgOHLCVRepository(OHLCVRepository):
             for bar in bars
         ]
 
-        stmt = (
-            insert(OHLCVBarModel)
-            .values(values)
-            .on_conflict_do_update(
-                index_elements=["instrument_id", "timeframe", "bar_date"],
-                set_={
-                    "open": insert(OHLCVBarModel).excluded.open,
-                    "high": insert(OHLCVBarModel).excluded.high,
-                    "low": insert(OHLCVBarModel).excluded.low,
-                    "close": insert(OHLCVBarModel).excluded.close,
-                    "volume": insert(OHLCVBarModel).excluded.volume,
-                    "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
-                    "source": insert(OHLCVBarModel).excluded.source,
-                    "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
-                    "is_derived": insert(OHLCVBarModel).excluded.is_derived,
-                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
-                },
+        # Dedupe within-batch duplicate conflict keys BEFORE chunking (same
+        # CardinalityViolationError risk as the priority path).  The derived
+        # upsert overwrites unconditionally, so the LAST occurrence of a key is
+        # the winner — mirror that here.
+        values = _dedupe_by_conflict_key(values, priority_guarded=False)
+
+        # Same param-limit chunking as ``bulk_upsert_with_priority`` — the derived
+        # VALUES row is the widest here (13 columns), so ``_UPSERT_CHUNK_ROWS``
+        # (5_000) is sized to keep ``5_000 * 13 = 65_000`` < 65_535.
+        for chunk in _chunk_rows(values):
+            stmt = (
+                insert(OHLCVBarModel)
+                .values(chunk)
+                .on_conflict_do_update(
+                    index_elements=["instrument_id", "timeframe", "bar_date"],
+                    set_={
+                        "open": insert(OHLCVBarModel).excluded.open,
+                        "high": insert(OHLCVBarModel).excluded.high,
+                        "low": insert(OHLCVBarModel).excluded.low,
+                        "close": insert(OHLCVBarModel).excluded.close,
+                        "volume": insert(OHLCVBarModel).excluded.volume,
+                        "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
+                        "source": insert(OHLCVBarModel).excluded.source,
+                        "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                        "is_derived": insert(OHLCVBarModel).excluded.is_derived,
+                        "is_partial": insert(OHLCVBarModel).excluded.is_partial,
+                    },
+                )
             )
-        )
-        await self._session.execute(stmt)
+            await self._session.execute(stmt)
 
     async def find_by_instrument_timeframe_datetime_range(
         self,

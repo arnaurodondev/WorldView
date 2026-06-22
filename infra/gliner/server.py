@@ -64,6 +64,20 @@ def _log(event: str, **fields: Any) -> None:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+# CPU-bottleneck fix (2026-06-21): cap the PyTorch intra-op thread pool to the
+# container's CPU quota (TORCH_NUM_THREADS, default 4). PyTorch otherwise defaults
+# to one OpenMP thread per HOST core (14 here) while the container is capped at 4
+# CPUs — 14 threads on a 4-core CFS quota thrash/throttle, so inference used only
+# ~12% CPU and a single article took >300s. The OMP_/MKL_ env vars (set in compose)
+# cover the BLAS pools; this pins torch's own intra-op pool explicitly and early,
+# before the model loads. No effect on output, only on threading efficiency.
+try:
+    import torch as _torch
+
+    _torch.set_num_threads(int(os.environ.get("TORCH_NUM_THREADS", "4")))
+except Exception:  # noqa: BLE001 — never let thread tuning break startup
+    pass
+
 _MODEL_PATH = os.environ.get("GLINER_MODEL_PATH", "urchade/gliner_large-v2.1")
 
 # Dual-trigger micro-batch knobs (overridable via compose env).

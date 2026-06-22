@@ -49,10 +49,34 @@ except Exception:  # — prometheus_client missing in some test contexts
 # Transient Valkey errors worth retrying once (50ms backoff). Anything outside
 # this allowlist (auth, ResponseError, programmer bugs) fails fast — retrying
 # won't heal it within 50ms.
-_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    ConnectionError,
-    TimeoutError,
-)
+#
+# F-007 (2026-06-21): the redis-py client raises ``redis.exceptions.ConnectionError``
+# and ``redis.exceptions.TimeoutError`` on a dropped socket / socket_timeout —
+# and CRITICALLY these do NOT inherit from the Python builtin ``ConnectionError`` /
+# ``TimeoutError`` (their MRO is ``RedisError -> Exception``). The previous
+# allowlist listed only the builtins, so a real Valkey timeout under the
+# heavily-hit /v1/quotes path (live ping latency ~756ms vs a 5s socket_timeout
+# that the burst exceeds) was NEVER classified as transient: the retry path was
+# dead code and every blip fell straight into ``503_no_retry``, hard-failing
+# real traffic. We now include the redis exception classes. They are imported
+# defensively so the module still loads in test contexts where redis may be
+# absent (the builtins remain as a always-present fallback).
+_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...]
+try:
+    from redis.exceptions import ConnectionError as _RedisConnectionError  # type: ignore[import-untyped]
+    from redis.exceptions import TimeoutError as _RedisTimeoutError
+
+    _VALKEY_TRANSIENT_EXCEPTIONS = (
+        ConnectionError,
+        TimeoutError,
+        _RedisConnectionError,
+        _RedisTimeoutError,
+    )
+except Exception:  # — redis not importable in some minimal test contexts
+    _VALKEY_TRANSIENT_EXCEPTIONS = (
+        ConnectionError,
+        TimeoutError,
+    )
 
 
 async def _record_active_user(valkey: Any, user_id: str) -> None:
@@ -407,6 +431,14 @@ _FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
 # entry but tight enough to stop accidental loops or misbehaving clients.
 _FINANCIAL_MUTATION_LIMIT = 20
 
+# SEC-103: export endpoints are GET requests so they bypass the financial-mutation
+# method guard (POST/PUT/DELETE only). However the CSV export does a full-table scan
+# + in-memory FIFO replay — expensive enough to be a DoS surface and a data-harvesting
+# amplifier if a session token is stolen. Cap at 10/min per authenticated user.
+# Path suffix match keeps the rule narrow (only /export URLs, not all GET /portfolios).
+_EXPORT_PATH_SUFFIX = "/export"
+_EXPORT_RATE_LIMIT = 10  # requests per window
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding-window rate limiter backed by Valkey.
@@ -417,7 +449,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     separately so payment-adjacent writes are strictly controlled while
     read-heavy dashboard loads stay within the default bucket.
     Unauthenticated requests are keyed by sha256(IP)[:16] (20/min).
-    Fail-closed (D-001): returns 503 if Valkey is unavailable.
+
+    Valkey-failure policy (F-007, 2026-06-21):
+      * Valkey unconfigured / ``None`` at request time → 503 (fail-closed): a
+        deploy-time misconfiguration we refuse to silently run wide-open under.
+      * Transient Valkey op error (connection drop / socket timeout) → after a
+        single 50ms-backoff retry, FAIL-OPEN (allow the request). A momentary
+        blip must not 503 real traffic; rate limiting degrades to "allow".
+      * Non-transient op error (auth / ResponseError / programmer bug) → 503
+        (fail-closed): will not self-heal, must not run wide-open.
     """
 
     def __init__(
@@ -432,6 +472,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         financial_mutation_limit: int = _FINANCIAL_MUTATION_LIMIT,
         unauthenticated_limit: int = 20,
         public_feedback_limit: int = 120,
+        # SEC-103: dedicated low-rate bucket for export endpoints (GET /*/export).
+        export_limit: int = _EXPORT_RATE_LIMIT,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
@@ -440,6 +482,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.financial_mutation_limit = financial_mutation_limit
         self.unauthenticated_limit = unauthenticated_limit
         self.public_feedback_limit = public_feedback_limit
+        self.export_limit = export_limit
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -501,12 +544,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             path.startswith(pfx) for pfx in _FINANCIAL_MUTATION_PREFIXES
         )
 
+        # SEC-103: export sub-tier — GET requests ending in /export trigger a
+        # separate, tighter bucket (10/min) regardless of HTTP method. The
+        # export endpoint does a full-table scan + FIFO replay; without a
+        # dedicated bucket an attacker with a stolen token could fire 2000
+        # exports per minute under the default authenticated budget.
+        is_export = path.endswith(_EXPORT_PATH_SUFFIX)
+
         # BUG-004 / BP-480: require ``user`` to be a dict before calling
         # ``.get("user_id")`` so a malformed value (e.g. a string slipped in
         # by future code) cannot raise AttributeError mid-dispatch. The
         # ``isinstance`` check makes the contract explicit at the call site.
         if user and isinstance(user, dict) and user.get("user_id"):
-            if is_financial_mutation:
+            if is_export:
+                # SEC-103: export sub-tier — separate key and tight limit.
+                # Checked before is_financial_mutation so a POST /export (if
+                # such a route were ever added) would also be capped here.
+                key = f"rl:v1:export:{user['user_id']}"
+                limit = self.export_limit
+            elif is_financial_mutation:
                 # Separate Valkey key so the financial-mutation counter does
                 # not eat the general dashboard budget. A user can perform
                 # up to 20 transaction writes per minute while simultaneously
@@ -580,12 +636,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     },
                 )
         except Exception as exc:
-            # D-001: Fail-closed — Valkey operation failure returns 503.
-            # FIX-LIVE-D: distinguish "transient after retry" vs "non-transient"
-            # by inspecting whether the exception class is in the transient
-            # allowlist. The counter label drives Grafana paging decisions.
+            # F-007 (2026-06-21): policy split by error class.
+            #
+            # TRANSIENT errors (Valkey connection drop / socket timeout, now
+            # correctly matched against the redis exception classes — see
+            # ``_VALKEY_TRANSIENT_EXCEPTIONS``) FAIL-OPEN: the retry has already
+            # been exhausted above, so a momentary Valkey blip must NOT 503 real
+            # user traffic. Rate limiting is a protective control, not a
+            # correctness invariant — degrading it open for the duration of a
+            # hiccup is strictly better than handing every /v1/quotes caller a
+            # 503. The request is allowed through and the degradation is
+            # counted + warned so operators can page on a *sustained* outage.
+            #
+            # NON-TRANSIENT errors (auth failure, ResponseError, a programmer
+            # bug in the key/command) FAIL-CLOSED (503): these will not heal on
+            # their own and usually indicate a misconfiguration we do not want
+            # to silently run wide-open under.
             is_transient = isinstance(exc, _VALKEY_TRANSIENT_EXCEPTIONS)
-            label = "503_after_retry" if is_transient else "503_no_retry"
+            label = "fail_open_after_retry" if is_transient else "503_no_retry"
             if _RATE_LIMIT_UNAVAILABLE_COUNTER is not None:
                 _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action=label).inc()  # type: ignore[attr-defined]
             logger.warning(  # type: ignore[no-any-return]
@@ -594,6 +662,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 fallback_action=label,
                 path=str(request.url.path),
             )
+            if is_transient:
+                # Fail-open: a transient Valkey blip degrades rate limiting to
+                # "allow" rather than 503ing the caller.
+                return cast("Response", await call_next(request))
             return Response(
                 content='{"detail":"Service temporarily unavailable"}',
                 status_code=503,

@@ -132,6 +132,22 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         # freshly-started consumer is never considered stalled before it has
         # had a chance to poll.
         self._last_progress_monotonic: float = time.monotonic()
+        # ── F-006: idle-vs-wedged liveness signal ─────────────────────────────
+        # `_last_progress_monotonic` above advances ONLY when a message is
+        # processed, so on an idle low-traffic topic it never advances even
+        # though the poll loop is perfectly alive — the watchdog then mistook
+        # "no traffic" for "wedged" and crash-looped the container (RestartCount
+        # =10, every ~5 min). We add a SEPARATE timestamp that advances on every
+        # healthy poll-loop *cycle* (idle OR message): the base class calls
+        # :meth:`_record_progress` after every successful ``poll()`` return
+        # (base.py ~L1755, BP-700), so overriding it lets us tick a monotonic
+        # "the loop is cycling" marker. The watchdog reads THIS marker — a loop
+        # that keeps returning from poll (even empty) is alive; only a loop that
+        # stops returning from poll (genuinely wedged) lets it go stale.
+        # Seeded to "now" so a freshly-started consumer is never flagged before
+        # its first poll. ``time.monotonic()`` keeps it immune to the wall-clock
+        # skew the 2026-06-16 audit observed on this host.
+        self._last_poll_monotonic: float = time.monotonic()
         # Throttle timestamp for the per-message lag-recording override below.
         # Seeded into the past so the first message records lag immediately.
         self._last_lag_record_monotonic: float = 0.0
@@ -150,10 +166,37 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
     def last_progress_monotonic(self) -> float:
         """Monotonic timestamp of the last successfully processed message.
 
-        Read by the wall-clock watchdog in the entry point to decide whether
-        the poll loop has wedged (no forward progress while a backlog exists).
+        Tracks message-processing throughput (used by the lag/metrics path).
+        NOTE: this advances only when a message is actually handled, so it must
+        NOT be used to decide "wedged" on a low-traffic topic — see
+        :attr:`last_poll_monotonic` and F-006.
         """
         return self._last_progress_monotonic
+
+    @property
+    def last_poll_monotonic(self) -> float:
+        """Monotonic timestamp of the last healthy poll-loop *cycle*.
+
+        Advances on every successful ``poll()`` return — idle (empty poll) OR
+        message — so it reflects "the consume loop is alive and cycling", which
+        is the correct signal for the wedge watchdog. An idle topic keeps this
+        fresh (the loop keeps returning empty polls); a genuinely wedged loop
+        (poll stops returning / lost assignment) lets it go stale. Read by the
+        wall-clock watchdog in the entry point. See F-006.
+        """
+        return self._last_poll_monotonic
+
+    def _record_progress(self) -> None:
+        """Tick the poll-cycle liveness marker on every healthy poll return.
+
+        Overrides :meth:`BaseKafkaConsumer._record_progress`, which the base
+        loop calls after each successful ``poll()`` (idle OR message; BP-700).
+        We advance our monotonic poll marker here so the watchdog treats an
+        idle-but-cycling loop as alive, then delegate to the base to keep its
+        own ``_last_progress_ts`` / Prometheus heartbeat behaviour intact.
+        """
+        self._last_poll_monotonic = time.monotonic()
+        super()._record_progress()
 
     def _touch_heartbeat(self) -> None:
         """Record forward progress for both the watchdog and the healthcheck.

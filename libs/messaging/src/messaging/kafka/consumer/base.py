@@ -314,6 +314,42 @@ class ConsumerConfig:
     # to True, otherwise attempt counts reset to 0 every redelivery and the
     # message loops until ``dead_letter_cap`` trips.  See docs/libs/messaging.md.
     enable_persistent_retry: bool = False
+    # Kafka static group membership (KIP-345). When set, this value is passed
+    # to librdkafka as ``group.instance.id``. Static membership prevents
+    # unnecessary rebalances on consumer restarts — useful for consumers with
+    # long processing times. None (the default) uses the original dynamic
+    # membership behaviour.
+    group_instance_id: str | None = None
+    # ── FAILURE MODE 2: consumer connection-setup resilience ──────────────────
+    # The wedge incident surfaced as
+    #   ``GroupCoordinator: kafka:29092: Connection setup timed out in state
+    #     CONNECT (after ~31000ms)``
+    # — i.e. the librdkafka shared base ``socket.connection.setup.timeout.ms``
+    # of 30_000 (30s, +jitter ≈ 31s) is the exact knob that fired. A coordinator
+    # blip should self-heal in *seconds*, not block a full 31s per attempt before
+    # the BP-700 reconnect loop even gets a turn. We lower it to 10s **for
+    # consumers only** (this value is spread on top of the shared base in
+    # ``to_dict``, so it overrides the base without touching producer config,
+    # which other owners control). Settings-driven so an operator can retune.
+    socket_connection_setup_timeout_ms: int = 10_000
+    # Close idle broker sockets after this long so a half-dead connection that
+    # survived a host-sleep / NAT-timeout is torn down and re-established on the
+    # next use instead of hanging until a poll fails. 9 minutes < the common
+    # 10-minute cloud LB idle cutoff, so we drop the socket before the LB does.
+    connections_max_idle_ms: int = 540_000
+    # CPU-bottleneck fix (2026-06-21 cpu-profile): when a consumer is wedged off
+    # the broker (network-path break / CPU-starved handshake), librdkafka's
+    # background thread retries the connection. Without an explicit, generous
+    # backoff CAP it reconnects aggressively and can busy-spin at ~90% CPU at ZERO
+    # throughput (observed live: 4 market-data consumers + the temporal-event
+    # consumer pegged a core EACH while processing 0 messages — see
+    # docs/audits/2026-06-21-*-cpu-profile.md). Pinning a 1s floor and a 20s cap
+    # makes a disconnected client back off (one attempt per ≤20s) instead of
+    # hot-spinning, bounding the wasted CPU AND easing the reconnect load on an
+    # already-stressed broker. Healthy connections are unaffected (these only
+    # apply while disconnected). Settings-driven so an operator can retune.
+    reconnect_backoff_ms: int = 1_000
+    reconnect_backoff_max_ms: int = 20_000
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -331,18 +367,34 @@ class ConsumerConfig:
         # PLAN-0093 Wave A-2 (F-LOG-003): prepend the rdkafka base config so
         # every consumer carries broker.address.ttl=30s + family=v4.  User
         # keys are spread on top → per-consumer overrides still win.
-        return apply_base_rdkafka_config(
-            {
-                "bootstrap.servers": self.bootstrap_servers,
-                "group.id": self.group_id,
-                "auto.offset.reset": self.auto_offset_reset,
-                "enable.auto.commit": self.enable_auto_commit,
-                "session.timeout.ms": self.session_timeout_ms,
-                "heartbeat.interval.ms": self.heartbeat_interval_ms,
-                "max.poll.interval.ms": self.max_poll_interval_ms,
-                "partition.assignment.strategy": self.partition_assignment_strategy,
-            }
-        )
+        cfg: dict[str, object] = {
+            "bootstrap.servers": self.bootstrap_servers,
+            "group.id": self.group_id,
+            "auto.offset.reset": self.auto_offset_reset,
+            "enable.auto.commit": self.enable_auto_commit,
+            "session.timeout.ms": self.session_timeout_ms,
+            "heartbeat.interval.ms": self.heartbeat_interval_ms,
+            "max.poll.interval.ms": self.max_poll_interval_ms,
+            "partition.assignment.strategy": self.partition_assignment_strategy,
+            # FAILURE MODE 2: consumer-local connection-setup resilience. These
+            # are spread on top of the shared base in ``apply_base_rdkafka_config``
+            # (caller keys win), so they override the base 30s setup-timeout for
+            # consumers ONLY — producers keep the shared base value. A coordinator
+            # connect that hangs is failed fast (10s) so the BP-700 reconnect loop
+            # retries promptly instead of burning ~31s per attempt.
+            "socket.connection.setup.timeout.ms": self.socket_connection_setup_timeout_ms,
+            "connections.max.idle.ms": self.connections_max_idle_ms,
+            # Reconnect backoff (see field docs): bound the disconnected-client
+            # reconnect spin so a wedged consumer backs off instead of pegging a
+            # core at zero throughput.
+            "reconnect.backoff.ms": self.reconnect_backoff_ms,
+            "reconnect.backoff.max.ms": self.reconnect_backoff_max_ms,
+        }
+        # KIP-345 static group membership: only set if configured so consumers
+        # that omit it retain the original dynamic membership behaviour.
+        if self.group_instance_id is not None:
+            cfg["group.instance.id"] = self.group_instance_id
+        return apply_base_rdkafka_config(cfg)
 
 
 @dataclasses.dataclass

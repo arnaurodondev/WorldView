@@ -38,3 +38,11 @@ BROKERAGE_PENDING_CONNECTIONS_AGE = Gauge(
     "s1_brokerage_pending_connections_age_seconds",
     "Age of the oldest pending brokerage connection in seconds",
 )
+
+# ── Manual Holdings (PLAN-0114 W1) ───────────────────────────────────────────
+
+MANUAL_HOLDINGS_RECOMPUTED_TOTAL = Counter(
+    "s1_manual_holdings_recomputed_total",
+    "Manual holdings recomputation outcomes by trigger source",
+    ["trigger"],  # event | scheduled
+)

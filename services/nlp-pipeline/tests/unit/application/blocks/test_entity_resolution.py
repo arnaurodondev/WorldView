@@ -18,12 +18,39 @@ from nlp_pipeline.application.blocks.entity_resolution import (
     _stage1_exact,
     _stage2_ticker_isin,
     _stage3_fuzzy,
+    _ticker_candidate,
     run_entity_resolution_block,
 )
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from nlp_pipeline.domain.models import EntityMention, MentionResolution
 
 pytestmark = pytest.mark.unit
+
+
+class TestTickerCandidate:
+    """Regression guard for the case-sensitive Stage-2 ticker gate.
+
+    The 2026-06-20 stored-relation audit surfaced a class of mis-resolutions where
+    a mixed-case company acronym (xAI, Citi) was treated as a ticker and collided
+    with an unrelated security that owns that symbol (xAI -> "XAI Octagon ... Trust"
+    closed-end fund). The case-sensitive ``isupper()`` gate already prevents this;
+    these tests LOCK that behaviour so it cannot silently regress.
+    """
+
+    @pytest.mark.parametrize("mixed_case", ["xAI", "Citi", "eBay", "iRobot", "PayPal", "Tesla"])
+    def test_mixed_case_acronyms_are_not_tickers(self, mixed_case: str) -> None:
+        assert _ticker_candidate(mixed_case) is None
+
+    @pytest.mark.parametrize("real_ticker", ["AAPL", "XAI", "F", "COST", "BRK"])
+    def test_all_caps_short_symbols_are_tickers(self, real_ticker: str) -> None:
+        assert _ticker_candidate(real_ticker) == real_ticker
+
+    def test_exchange_qualifier_stripped_before_gate(self) -> None:
+        # "AAPL.MX" is length 7 (past the <=6 cap) until the venue suffix is stripped.
+        assert _ticker_candidate("AAPL.MX") == "AAPL"
+
+    def test_long_all_caps_is_not_a_ticker(self) -> None:
+        assert _ticker_candidate("MORGANSTANLEY") is None
 
 
 def _make_mention(text: str, mention_class: MentionClass = MentionClass.ORGANIZATION) -> EntityMention:

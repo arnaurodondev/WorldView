@@ -44,6 +44,7 @@ import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 import { cn } from "@/lib/utils";
 import { Radar } from "lucide-react";
 import { NewsMomentumRow } from "@/components/dashboard/ai-signals/NewsMomentumRow";
+import { sortMomentumItems, type SortMode } from "@/components/dashboard/ai-signals/news-meta";
 import type { NewsMomentumItem } from "@/components/dashboard/ai-signals/types";
 
 // ── Window selector ───────────────────────────────────────────────────────────
@@ -71,6 +72,20 @@ function windowLabelFor(hours: number): string {
 // the scroll area is full; the 22px row height keeps 30 rows cheap to render.
 const ROW_LIMIT = 30;
 
+// ── Sort selector ───────────────────────────────────────────────────────────
+// The ranking modes the user can flip between in the header. "Top" is the
+// server's own surge ranking (default); "Increase"/"Decrease" let the user scan
+// one direction of momentum. These are CLIENT-SIDE re-orderings of the rows we
+// already fetched — no refetch, so flipping is instant and free.
+const SORTS = [
+  { mode: "top", label: "TOP", title: "Server surge ranking (default)" },
+  { mode: "increase", label: "▲", title: "Biggest increase — most positive momentum first" },
+  { mode: "decrease", label: "▼", title: "Biggest decrease — most negative momentum first" },
+] as const satisfies ReadonlyArray<{ mode: SortMode; label: string; title: string }>;
+// "Top" is the default: the backend already ranks by an honest composite surge,
+// so the landing view needs no client re-sort.
+const DEFAULT_SORT_MODE: SortMode = "top";
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
@@ -86,6 +101,11 @@ export function AiSignalsWidget() {
   // Selected look-back window. Local state (not URL) — it's throwaway view
   // state scoped to this widget, lost on reload, which is fine.
   const [windowHours, setWindowHours] = useState<number>(DEFAULT_WINDOW_HOURS);
+
+  // Selected ranking mode (Top / Biggest Increase / Biggest Decrease). Also
+  // throwaway view state — a pure client-side re-order of the already-fetched
+  // rows, so changing it never triggers a refetch.
+  const [sortMode, setSortMode] = useState<SortMode>(DEFAULT_SORT_MODE);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     // Window is part of the key so switching windows refetches (and caches each
@@ -109,12 +129,21 @@ export function AiSignalsWidget() {
     [data],
   );
 
-  // Shared header — the window selector must be present in EVERY state (loading,
-  // error, empty, data) so the user can switch windows even when one is empty.
+  // Apply the user's chosen ranking CLIENT-SIDE. Memoised on (items, sortMode)
+  // so we only re-sort when the data or the mode actually changes — not on every
+  // unrelated render. sortMomentumItems returns a fresh array (never mutates the
+  // query cache). See news-meta.ts for the increase=desc / decrease=asc semantics.
+  const sortedItems = useMemo(() => sortMomentumItems(items, sortMode), [items, sortMode]);
+
+  // Shared header — the window + sort selectors must be present in EVERY state
+  // (loading, error, empty, data) so the user can switch them even when one is
+  // empty.
   const header = (
     <WidgetHeader
       windowHours={windowHours}
       onWindowChange={setWindowHours}
+      sortMode={sortMode}
+      onSortChange={setSortMode}
       count={items.length}
       // Don't let the user spam window switches mid-fetch.
       disabled={isFetching}
@@ -182,7 +211,7 @@ export function AiSignalsWidget() {
     <div className="flex h-full flex-col bg-background" role="region" aria-label="News momentum">
       {header}
       <div className="flex-1 divide-y divide-border/30 overflow-auto">
-        {items.map((item, i) => (
+        {sortedItems.map((item, i) => (
           // entity_id is the stable key; ticker/index fallback for null ids.
           <NewsMomentumRow
             key={item.entity_id ?? item.ticker ?? `row-${i}`}
@@ -205,11 +234,15 @@ export function AiSignalsWidget() {
 function WidgetHeader({
   windowHours,
   onWindowChange,
+  sortMode,
+  onSortChange,
   count,
   disabled,
 }: {
   windowHours: number;
   onWindowChange: (hours: number) => void;
+  sortMode: SortMode;
+  onSortChange: (mode: SortMode) => void;
   count: number;
   disabled: boolean;
 }) {
@@ -218,6 +251,39 @@ function WidgetHeader({
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">NEWS MOMENTUM</span>
 
       <div className="flex items-center gap-1.5">
+        {/* Sort selector — TOP / ▲ (biggest increase) / ▼ (biggest decrease).
+            Pure client-side re-order of the rows already fetched — no refetch,
+            so it is NOT disabled mid-fetch (unlike the window selector). role=group
+            + aria-label gives the control purpose; each button reports aria-pressed
+            so the active ranking is announced to screen readers. */}
+        <div className="flex items-center gap-0.5" role="group" aria-label="Sort by momentum">
+          {SORTS.map((s) => {
+            const active = s.mode === sortMode;
+            return (
+              <button
+                key={s.mode}
+                type="button"
+                onClick={() => onSortChange(s.mode)}
+                aria-pressed={active}
+                title={s.title}
+                className={cn(
+                  "rounded-[2px] px-1 font-mono text-[9px] leading-none tabular-nums transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  active
+                    ? "bg-muted/60 text-foreground"
+                    : "text-muted-foreground/60 hover:bg-muted/30 hover:text-foreground",
+                )}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Thin divider between the sort and window selectors so the two groups
+            read as distinct controls in the dense header. */}
+        <span aria-hidden className="h-2.5 w-px bg-border/60" />
+
         {/* Window selector — three tiny toggle buttons (24H / 3D / 1W).
             role=group + aria-label gives SR users the control's purpose; each
             button reports aria-pressed so the active window is announced. */}

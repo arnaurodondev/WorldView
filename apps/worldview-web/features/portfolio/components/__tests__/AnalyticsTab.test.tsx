@@ -165,6 +165,179 @@ describe("AnalyticsTab (R2 wiring)", () => {
     expect(qqqBtn).toHaveAttribute("aria-pressed", "true");
   });
 
+  // ── Layout-overlap regression (2026-06-19) ─────────────────────────────────
+  // The PERIOD RISK sidebar panel used to overlap the ATTRIBUTION column: the
+  // charts column is a CSS-grid item with the default `min-width: auto`, so a
+  // recharts ResponsiveContainer inside it could grow the 9/12 track past its
+  // share and shove the col-span-3 sidebar sideways until they collided. The
+  // fix pins every grid row with `items-start` and gives each column `min-w-0`
+  // so the tracks size to their fractional share. These assertions lock the
+  // structural guard in place — if a refactor drops min-w-0, the overlap
+  // returns and this test fails loudly.
+  it("lays the analytics grids out with overlap guards (items-start + min-w-0)", async () => {
+    const { container } = render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("client-risk-panel")).toBeInTheDocument();
+    });
+
+    // Every 12-column grid in the tab must pin its items to the top so a tall
+    // sidebar column never stretches a neighbour into overlap.
+    const grids = Array.from(
+      container.querySelectorAll<HTMLElement>(".grid.grid-cols-12"),
+    );
+    expect(grids.length).toBeGreaterThanOrEqual(2);
+    for (const grid of grids) {
+      expect(grid.className).toContain("items-start");
+      // Each direct grid child (a column) carries min-w-0 so the grid track
+      // can shrink to its fractional width instead of its content's intrinsic
+      // minimum (the recharts overflow vector).
+      for (const col of Array.from(grid.children) as HTMLElement[]) {
+        expect(col.className).toContain("min-w-0");
+      }
+    }
+  });
+
+  // ── Pathological-contribution clamping (2026-06-19) ────────────────────────
+  // A cash-flow artifact can inflate the portfolio period return to +2327%,
+  // making a single holding's contribution ~+218,000 bps. Printed raw this is
+  // a ~10-char string that helped bleed the attribution panel into its
+  // neighbour. fmtContribBps collapses 5+ digit bps to a "kbps" suffix and the
+  // cell is whitespace-nowrap, so a hostile-wide value stays clamped.
+  it("clamps a pathologically wide attribution contribution to a kbps suffix", async () => {
+    // A huge period return (last/first − 1 ≈ +21.8x) over a single full-weight
+    // holding → ~+218,000 bps contribution.
+    mockGetValueHistory.mockResolvedValue({
+      points: [
+        { date: "2026-06-01", value: 10_000, cost_basis: 10_000, cash: 0 },
+        { date: "2026-06-02", value: 228_000, cost_basis: 10_000, cash: 0 },
+      ],
+    } satisfies ValueHistoryResponse);
+    mockGetHoldings.mockResolvedValue({
+      portfolio_id: "p-1",
+      holdings: [
+        { ticker: "ZZZZ", quantity: 1, average_cost: 100 } as never,
+      ],
+    });
+
+    const { container } = render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    // The contrib cell renders the bounded "kbps" form, never a raw 6-figure
+    // bps string. We scan the attribution table's value cells for the suffix.
+    await waitFor(() => {
+      const text = container.textContent ?? "";
+      expect(text).toMatch(/[+-]?\d+(\.\d)?kbps/);
+    });
+    // And the un-clamped raw form (e.g. "+218000bps") must NOT appear.
+    expect(container.textContent ?? "").not.toMatch(/\d{5,}bps/);
+  });
+
+  // ── Risk-sidebar metric grouping (2026-06-20 structural redesign) ──────────
+  // The 11 backend-driven risk tiles used to render as a flat, undifferentiated
+  // vertical list. The redesign buckets them into four finance-standard
+  // families (RETURN / RISK-ADJUSTED / DRAWDOWN / vs-SPY) each preceded by a
+  // section header, so a reader can scan a family at a glance. This locks the
+  // four groups + a representative tile in each in place.
+  it("groups the risk sidebar tiles into the four metric families", async () => {
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("risk-sidebar")).toBeInTheDocument();
+    });
+
+    // All four metric-family sections render…
+    for (const group of ["return", "risk-adjusted", "drawdown", "benchmark"]) {
+      expect(screen.getByTestId(`risk-group-${group}`)).toBeInTheDocument();
+    }
+
+    // …and a representative tile lands in each family (the grouping wiring is
+    // what makes the family render, so finding the tile proves the bucket).
+    expect(screen.getByTestId("risk-tile-sharpe")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-max-dd")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-beta-spy")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-tile-vol-ann")).toBeInTheDocument();
+
+    // Every tile decodes its cryptic label via a native title tooltip — no
+    // bare uppercase metric is left unexplained.
+    expect(
+      screen.getByTestId("risk-tile-sharpe").getAttribute("title"),
+    ).toMatch(/sharpe/i);
+  });
+
+  // ── Graceful degraded benchmark (2026-06-20 robustness pass) ───────────────
+  // When the gateway reports data_quality.status === "benchmark_unavailable"
+  // (SPY OHLCV missing), BETA·SPY / ALPHA·SPY must show an explicit "n/a"
+  // affordance with a "benchmark unavailable" tooltip — NOT a bare "—" the user
+  // has to guess about. This is the core ask of the redesign.
+  it("degrades BETA/ALPHA gracefully to 'n/a' + tooltip when the benchmark is unavailable", async () => {
+    mockGetRiskMetrics.mockResolvedValue({
+      portfolio_id: "p-1",
+      lookback_days: 365,
+      drawdown_max: -0.12,
+      drawdown_current: -0.03,
+      volatility_annualized: 0.18,
+      sharpe: 1.2,
+      sortino: 1.5,
+      // Benchmark-relative metrics are null specifically because SPY is missing.
+      beta_vs_spy: null,
+      alpha: null,
+      calmar: 0.9,
+      win_rate: 0.55,
+      var_95: -0.02,
+      n_returns: 250,
+      data_quality: {
+        status: "benchmark_unavailable",
+        n_returns: 250,
+        lookback_days: 365,
+      },
+    });
+
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    const betaTile = await screen.findByTestId("risk-tile-beta-spy");
+    const alphaTile = await screen.findByTestId("risk-tile-alpha-spy");
+
+    // The graceful affordance: "n/a", flagged degraded, and an explanatory
+    // tooltip — never a bare "—".
+    expect(betaTile).toHaveTextContent("n/a");
+    expect(betaTile).not.toHaveTextContent("—");
+    expect(betaTile).toHaveAttribute("data-degraded", "true");
+    expect(betaTile.getAttribute("title")).toMatch(/benchmark unavailable/i);
+
+    expect(alphaTile).toHaveTextContent("n/a");
+    expect(alphaTile).toHaveAttribute("data-degraded", "true");
+    expect(alphaTile.getAttribute("title")).toMatch(/benchmark unavailable/i);
+  });
+
+  // A null beta WITHOUT a benchmark-unavailable signal (e.g. plain insufficient
+  // data) must NOT show the "n/a" affordance — it stays a generic "—". This
+  // guards against over-eagerly attributing every null to a missing benchmark.
+  it("keeps a generic '—' for a null benchmark metric when the cause is not benchmark-unavailable", async () => {
+    mockGetRiskMetrics.mockResolvedValue({
+      portfolio_id: "p-1",
+      lookback_days: 365,
+      drawdown_max: null,
+      drawdown_current: null,
+      volatility_annualized: null,
+      sharpe: null,
+      sortino: null,
+      beta_vs_spy: null,
+      alpha: null,
+      n_returns: 1,
+      data_quality: {
+        status: "insufficient_data",
+        n_returns: 1,
+        lookback_days: 365,
+      },
+    });
+
+    render(wrap(<AnalyticsTab portfolioId="p-1" />));
+
+    const betaTile = await screen.findByTestId("risk-tile-beta-spy");
+    expect(betaTile).toHaveTextContent("—");
+    expect(betaTile).not.toHaveAttribute("data-degraded");
+  });
+
   it("client risk panel shows em-dashes + insufficient-data tooltips below 20 observations", async () => {
     render(wrap(<AnalyticsTab portfolioId="p-1" />));
 

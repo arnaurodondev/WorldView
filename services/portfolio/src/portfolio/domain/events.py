@@ -281,3 +281,22 @@ class WatchlistItemDeleted(DomainEvent):
     @property
     def aggregate_id(self) -> UUID:
         return self.watchlist_id
+
+
+@dataclass
+class PortfolioHoldingRecomputeRequested(DomainEvent):
+    """Emitted when a MANUAL portfolio transaction is recorded.
+
+    Both TransactionRecorded and this event are written as outbox rows before
+    the single uow.commit() (R5). A Kafka consumer recomputes holdings asynchronously.
+    """
+
+    EVENT_TYPE: ClassVar[str] = "portfolio.holding.recompute_requested"
+    AGGREGATE_TYPE: ClassVar[str] = "portfolio"
+
+    portfolio_id: UUID = field(default_factory=new_uuid)
+    owner_id: UUID = field(default_factory=new_uuid)
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.portfolio_id

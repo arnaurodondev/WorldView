@@ -194,6 +194,57 @@ class TestOutboxDispatcherUnknownTopic:
         outbox_repo.mark_failed.assert_awaited_once()
         outbox_repo.mark_dispatched.assert_not_awaited()
 
+    def test_broken_producer_error_resets_and_rebuilds(self) -> None:
+        """GAP-A: a flush TimeoutError discards the wedged producer.
+
+        With a ``producer_factory`` wired, the next dispatch rebuilds + reconnects
+        instead of reusing a permanently-wedged producer (permanent outbox wedge).
+        """
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
+
+        event = _make_event("graph.state.changed.v1")
+        sf, _session, outbox_repo = _make_session_factory([event])
+
+        wedged_producer = MagicMock()
+        wedged_producer.produce = MagicMock()
+        wedged_producer.flush = MagicMock(side_effect=TimeoutError())
+        rebuilt_producer = MagicMock()
+        factory = MagicMock(return_value=rebuilt_producer)
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
+            dispatcher = OutboxDispatcher(sf, wedged_producer, producer_factory=factory)
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
+
+        assert dispatched == 0
+        outbox_repo.mark_failed.assert_awaited_once()
+        # Wedged producer discarded; factory wired so a rebuild is available.
+        assert dispatcher._producer is None
+        # Next get_producer rebuilds via the factory.
+        assert dispatcher._get_producer() is rebuilt_producer
+        factory.assert_called_once()
+
+    def test_non_broken_error_keeps_producer(self) -> None:
+        """A non-timeout produce failure must NOT discard the cached producer."""
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
+
+        event = _make_event("graph.state.changed.v1")
+        sf, _session, outbox_repo = _make_session_factory([event])
+
+        producer = MagicMock()
+        producer.produce = MagicMock(side_effect=RuntimeError("broker down"))
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
+            dispatcher = OutboxDispatcher(sf, producer)
+            asyncio.run(dispatcher._dispatch_batch())
+
+        assert dispatcher._producer is producer
+
     def test_empty_queue_returns_zero(self) -> None:
         """Empty outbox -> zero dispatched, no produce calls."""
         from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher

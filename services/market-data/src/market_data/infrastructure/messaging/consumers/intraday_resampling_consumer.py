@@ -126,29 +126,42 @@ class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         return str(value["event_id"])
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
-        if self._current_uow is None:
-            raise RuntimeError("store_failure called outside of processing context — this is a programming error")
+        # F-004 (idle-in-transaction leak): the failure row MUST be written via a
+        # FRESH, committed UoW — NOT ``self._current_uow``.  ``_handle_failure``
+        # runs AFTER the per-message ``_handle_message`` UoW has already rolled
+        # back AND closed its session (base.py exits the ``async with uow`` on the
+        # processing exception, then dispatches to ``store_failure``).  Writing
+        # through that stale UoW re-checked-out a pooled connection, ran the
+        # INSERT, and — because ``PgFailedTaskRepository.create`` only
+        # ``execute``s without committing — left the backend ``idle in
+        # transaction`` forever (15-23 wedged backends in live QA).  Open our own
+        # UoW and commit so the row is durable and the connection is released.
         payload = {
             "event_id": failure.event_id,
             "topic": failure.topic,
             "error": str(failure.last_error),
         }
-        await self._current_uow.failed_tasks.create(task_type="intraday_resampling_consumer", payload=payload)
+        async with self._uow_factory() as uow:
+            await uow.failed_tasks.create(task_type="intraday_resampling_consumer", payload=payload)
+            await uow.commit()
         return payload
 
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
         pass  # retry tracking is handled by store_failure
 
     async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:
-        if self._current_uow is not None:
-            payload = {
-                "event_id": failure.event_id,
-                "topic": failure.topic,
-                "error": str(failure.last_error),
-            }
-            await self._current_uow.failed_tasks.create(
+        # F-004: same fix as store_failure — persist via a fresh committed UoW
+        # (the per-message UoW is gone / closed by the time we get here).
+        payload = {
+            "event_id": failure.event_id,
+            "topic": failure.topic,
+            "error": str(failure.last_error),
+        }
+        async with self._uow_factory() as uow:
+            await uow.failed_tasks.create(
                 task_type="intraday_resampling_consumer_dead", payload=payload, max_attempts=0
             )
+            await uow.commit()
 
     async def get_pending_retries(self) -> list[FailureInfo[dict]]:
         return []
@@ -264,12 +277,14 @@ class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             for bar in canonical_bars
         ]
 
-        # ── Resample each source bar into all coarser derived timeframes ───────
+        # ── Resample the WHOLE batch in one pass ──────────────────────────────
+        # CPU/IO fix (2026-06-21): the old ``for bar: execute(bar)`` loop issued
+        # len(bars) * len(targets) range SELECTs (~3,315 round-trips for a 663-bar
+        # message), re-fetching windows already held in ``domain_bars``. execute_batch
+        # does the output-equivalent work with a single range fetch + in-memory grouping.
         use_case = ResampledOHLCVUseCase(uow, source_timeframe=self._source_tf)
-        total_derived = 0
-        for bar in domain_bars:
-            derived = await use_case.execute(bar)
-            total_derived += len(derived)
+        derived = await use_case.execute_batch(domain_bars)
+        total_derived = len(derived)
 
         logger.info(
             "intraday_resampling.processed",

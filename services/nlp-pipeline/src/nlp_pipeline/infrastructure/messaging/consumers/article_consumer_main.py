@@ -19,8 +19,10 @@ from typing import Any
 
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
+    create_ml_metrics,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -29,6 +31,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
@@ -53,10 +59,23 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # BP-704 FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when
+    # the poll loop wedges or the run() task dies — without it a wedged consumer
+    # keeps a GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-article-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
+
+    # ML metrics for the extraction adapter (Prometheus namespace ``nlp_pipeline``,
+    # mirroring app.py). WITHOUT this the DeepSeekExtractionAdapter is constructed with
+    # metrics=None and silently emits NO ml_api_* series, so the extraction error-rate /
+    # fallback / latency panels of the "Extraction Health — S6" Grafana dashboard stay
+    # empty. Registered on the default registry the metrics server above already exposes;
+    # scrape reads the registry live, so post-start registration is fine.
+    ml_metrics = create_ml_metrics(settings.service_name)
 
     stop_event = asyncio.Event()
 
@@ -186,6 +205,15 @@ async def main() -> None:
             # against the primary 235B model (post-outage saturation).  Empty string
             # => fallback disabled (behaviour unchanged).
             fallback_model_id=settings.extraction_fallback_model_id,
+            # PLAN-0111 (2026-06-16 A/B swap): gpt-oss-120b/20b are REASONING models;
+            # without an explicit reasoning_effort they return EMPTY content.  Drive it
+            # from config and pass explicitly (do NOT rely on the ml-clients module-level
+            # ML_CLIENTS_* import-time default — the NLP container's env is NLP_PIPELINE_*).
+            # Primary @medium, fallback @low (validated config); max_tokens is a high cap
+            # the model never fills (no latency cost — see the A/B audit).
+            reasoning_effort=settings.extraction_reasoning_effort,
+            fallback_reasoning_effort=settings.extraction_fallback_reasoning_effort,
+            max_tokens=settings.extraction_max_tokens,
             # Task #5 (2026-06-16): drive the per-attempt wall-clock cap, retry count
             # and per-model budget from nlp-pipeline config (NLP_PIPELINE_* env) and
             # pass them EXPLICITLY here.  Previously these came only from the ml-clients
@@ -198,6 +226,10 @@ async def main() -> None:
             total_budget_s=settings.extraction_total_budget_s,
             max_connections=settings.deepinfra_max_connections,
             max_keepalive_connections=settings.deepinfra_max_keepalive,
+            # Emit ml_api_requests_total / ml_api_latency_seconds / tokens / cost,
+            # labelled by the ACTUAL serving model (primary gpt-oss-120b vs fallback
+            # gpt-oss-20b). Powers the extraction error-rate + fallback + latency panels.
+            metrics=ml_metrics,
         )
         log.info(
             "extraction_deepinfra_adapter_selected",
@@ -213,6 +245,46 @@ async def main() -> None:
         )
         log.info("extraction_ollama_adapter_selected", model_id=settings.extraction_model_id)
 
+    # ── ENHANCEMENT #6: optional co-mention entailment check (default OFF) ─────────
+    # When NLP_PIPELINE_RELATION_ENTAILMENT_CHECK_ENABLED is set, build a DEDICATED
+    # cheap Qwen3-235B client (a reasoning model — reasoning_effort="low" so it returns
+    # non-empty content; small max_tokens since the verdict JSON is tiny) and a config
+    # from settings, and pass both to the consumer. The check then runs after the
+    # deterministic gate on the 5 high-risk predicates only. Left None when disabled →
+    # run_deep_extraction_block no-ops the check (unchanged behaviour).
+    entailment_client: Any = None
+    entailment_config: Any = None
+    if settings.relation_entailment_check_enabled and _extraction_api_key:
+        from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
+            DeepSeekExtractionAdapter as _EntailmentAdapter,
+        )
+
+        from nlp_pipeline.application.blocks.deep_extraction import EntailmentCheckConfig
+
+        entailment_config = EntailmentCheckConfig(
+            enabled=True,
+            predicates=frozenset(
+                p.strip() for p in settings.relation_entailment_check_predicates.split(",") if p.strip()
+            ),
+            min_drop_confidence=settings.relation_entailment_check_min_drop_confidence,
+            max_per_doc=settings.relation_entailment_check_max_per_doc,
+        )
+        entailment_client = _EntailmentAdapter(
+            api_key=_extraction_api_key,
+            model_id=entailment_config.model_id,  # Qwen3-235B (validated: 0% FP on high-risk)
+            base_url=settings.extraction_api_base_url,
+            semaphore=extraction_sem,
+            reasoning_effort="low",
+            max_tokens=1024,
+            metrics=ml_metrics,
+        )
+        log.info(
+            "relation_entailment_check_enabled",
+            model_id=entailment_config.model_id,
+            predicates=sorted(entailment_config.predicates),
+            max_per_doc=entailment_config.max_per_doc,
+        )
+
     # Backpressure controller
     bp = BackpressureController(
         max_depth=settings.max_ollama_queue_depth,
@@ -220,10 +292,12 @@ async def main() -> None:
     )
 
     # Consumer
-    article_config = ConsumerConfig(
+    article_config = ConsumerConfig(  # type: ignore[call-arg]
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group,
         topics=[settings.topic_article_stored],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_consumer_instance_id,
         # bge-large CPU inference can take 2-5s per article; increase poll interval
         # to 30 minutes to prevent consumer from leaving the group mid-batch.
         max_poll_interval_ms=1_800_000,
@@ -365,7 +439,12 @@ async def main() -> None:
         valkey_client=valkey,
         # PLAN-0111 C-6: None unless mode is shadow/live (and key present).
         learned_router=learned_router,
+        # ENHANCEMENT #6: None unless the entailment check is enabled (and key present).
+        entailment_client=entailment_client,
+        entailment_config=entailment_config,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.
     # redis.asyncio uses lazy connection; the first call triggers DNS resolution
@@ -390,41 +469,17 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-
-        # If the consumer task crashes before stop_event is set, the process would
-        # stay alive (stuck on stop_event.wait()) but do no useful work.  The done
-        # callback propagates the crash into the normal shutdown path so Docker sees
-        # a clean non-zero exit and triggers restart with full error logging.
-        def _on_consumer_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
-            if task.cancelled():
-                return
-            exc = task.exception()
-            if exc is not None:
-                log.error("article_consumer_task_crashed", error=str(exc), exc_info=exc)
-                stop_event.set()
-
-        consumer_task.add_done_callback(_on_consumer_done)
-
-        await stop_event.wait()
-        consumer.stop()  # type: ignore[attr-defined]
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            try:
-                # Give the task 5 s to honour the cancellation.  If it is stuck
-                # in a thread-pool executor (e.g. socket.getaddrinfo) it cannot
-                # be cancelled; sys.exit lets Docker reclaim the process cleanly.
-                await asyncio.wait_for(consumer_task, timeout=5.0)
-            except (asyncio.CancelledError, TimeoutError):
-                log.warning("consumer_task_stuck_forcing_exit")
-                sys.exit(1)
+        # BP-704 supervision: race run() against the stop event so a crashed
+        # run() can no longer leave an un-awaited dead task while main() hangs
+        # on stop_event.wait(). A terminal run() exit raises ConsumerExited →
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("article_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("article_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("article_consumer_stopped")
     finally:
         await valkey.close()
         await nlp_engine.dispose()
@@ -433,6 +488,7 @@ async def main() -> None:
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("article_consumer_stopped")
 
 
 if __name__ == "__main__":

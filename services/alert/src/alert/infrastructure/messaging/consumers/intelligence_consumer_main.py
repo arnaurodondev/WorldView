@@ -26,6 +26,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -36,18 +37,23 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # reporting `healthy` for 43h. The connectivity probe in BaseKafkaConsumer could
 # not catch it (it only escalates on 3 *consecutive* failures, and the broker
 # only flapped) and the lag-stall warning merely LOGGED. This watchdog ACTS: if
-# no message has been processed for `_WATCHDOG_STALL_SECONDS` it force-exits the
+# the poll loop stops *cycling* for `_WATCHDOG_STALL_SECONDS` it force-exits the
 # process so the orchestrator (Docker `restart: unless-stopped`) restarts a
 # fresh, re-joining consumer that drains the backlog.
 #
-# Why a plain wall-clock timeout (not lag-gated): reading lag requires the
-# broker, which is exactly what is flapping during the failure mode; gating on
-# it would re-introduce the blind spot. The trade-off is that a genuinely idle
-# topic (no traffic at all) would also trip the watchdog — acceptable here
-# because these three intelligence topics carry steady traffic and a needless
-# restart is cheap and self-correcting (a fresh consumer that finds no work just
-# idles and re-touches its heartbeat). The threshold is set well above the
-# slowest realistic per-message time so normal slow batches never trip it.
+# F-006 (2026-06-21): the watchdog originally gated on time-since-last-MESSAGE
+# (`last_progress_monotonic`). That is WRONG for a low-traffic consumer: an idle
+# topic processes no messages, so the timer ran out and the container
+# crash-looped (RestartCount=10, restarting every ~5 min) even though it was
+# connected, assigned, and polling — just IDLE. We now gate on
+# `last_poll_monotonic`, which advances on every healthy poll-loop CYCLE (idle
+# OR message; the base class's BP-700 progress tick). This distinguishes:
+#   • IDLE  → poll keeps returning empty → marker stays fresh → NO restart.
+#   • WEDGED → poll stops returning / loop dies → marker goes stale → restart.
+# Why poll-cycle (not lag-gated): reading lag requires the broker, which is
+# exactly what flaps during the failure mode; gating on it would re-introduce
+# the blind spot. The threshold is set well above the slowest realistic poll
+# interval so a normal poll timeout never trips it.
 # Overridable via env for ops tuning / tests.
 _WATCHDOG_STALL_SECONDS: float = float(os.environ.get("ALERT_CONSUMER_WATCHDOG_STALL_SECONDS", "300"))
 # How often the watchdog samples the progress timestamp.
@@ -62,13 +68,19 @@ async def _liveness_watchdog(
     stall_seconds: float = _WATCHDOG_STALL_SECONDS,
     poll_seconds: float = _WATCHDOG_POLL_SECONDS,
 ) -> None:
-    """Force a process restart if the consumer stops making forward progress.
+    """Force a process restart if the consumer's poll loop stops cycling.
 
-    Polls ``consumer.last_progress_monotonic`` (updated on every processed
-    message) every ``poll_seconds``. If it has not advanced for
+    Polls ``consumer.last_poll_monotonic`` (advanced on every healthy poll-loop
+    cycle — idle OR message) every ``poll_seconds``. If it has not advanced for
     ``stall_seconds`` while we are NOT shutting down, the poll loop is presumed
     wedged (the 43h failure mode) and we exit hard so the orchestrator restarts
     a clean consumer.
+
+    F-006: gating on poll-cycle liveness (not last-message) means an IDLE topic
+    — where the loop keeps returning empty polls — does NOT trip the watchdog,
+    while a genuinely wedged loop (poll stops returning / loop dies) still does.
+    Falls back to ``last_progress_monotonic`` for consumers that don't expose
+    the poll marker, so the watchdog is safe to reuse on other consumers.
 
     ``time.monotonic()`` is used throughout so the wall-clock skew the audit saw
     on this host cannot mask a real stall.
@@ -80,8 +92,14 @@ async def _liveness_watchdog(
         except TimeoutError:
             pass  # interval elapsed — run a check
 
-        last_progress = getattr(consumer, "last_progress_monotonic", time.monotonic())
-        age = time.monotonic() - last_progress
+        # Prefer the poll-cycle marker (alive even when idle); fall back to the
+        # message marker, then to "now" so a missing attribute never false-trips.
+        last_alive = getattr(
+            consumer,
+            "last_poll_monotonic",
+            getattr(consumer, "last_progress_monotonic", time.monotonic()),
+        )
+        age = time.monotonic() - last_alive
         if age >= stall_seconds:
             log.critical(  # type: ignore[attr-defined]
                 "intelligence_consumer_watchdog_stall",
@@ -131,9 +149,18 @@ async def main() -> None:
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a dedicated
     # port so non-HTTP worker processes are scrape-able alongside the FastAPI
     # services.  Defaults to 9100; container compose entry exposes the same port.
+    #
+    # BP-704: bind a stall-aware liveness probe so the Docker healthcheck's
+    # ``GET /healthz`` flips to 503 the moment the poll loop wedges or ``run()``
+    # dies — without it a dead consumer kept a GREEN healthcheck and was never
+    # restarted (the 43h wedge). This complements the in-process
+    # ``_liveness_watchdog`` below: the watchdog force-restarts the process,
+    # while this probe makes the *external* healthcheck observe the stall too.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="alert-intelligence-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -248,6 +275,9 @@ async def main() -> None:
         dedup_client=valkey,
         kg_handler=kg_handler,
     )
+    # BP-704: bind the probe so /healthz reflects this consumer's poll-loop
+    # progress (``seconds_since_progress`` from the BP-700 heartbeat).
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -277,6 +307,9 @@ async def main() -> None:
         # wall-clock watchdog (gap A) concurrently. Whichever finishes first
         # wins; we then decide between graceful shutdown and fatal restart.
         consumer_task = asyncio.create_task(consumer.run(), name="intelligence_consume")
+        # BP-704: attach the run() task so /healthz turns 503 the instant run()
+        # finishes — even if it crashes before its first poll-loop progress tick.
+        liveness_probe.attach_task(consumer_task)
         stop_task = asyncio.create_task(stop_event.wait(), name="intelligence_stop")
         watchdog_task = asyncio.create_task(
             _liveness_watchdog(consumer, stop_event, log),

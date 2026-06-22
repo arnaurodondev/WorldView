@@ -195,6 +195,84 @@ def _sample_instrument_context() -> BriefingContext:
 # ── Test: Morning generates markdown (no HTML) ──────────────────────────────
 
 
+def _make_capturing_llm_chain(output: str) -> tuple[MagicMock, dict[str, object]]:
+    """LLM chain mock that records the kwargs of the last stream() call.
+
+    Returns ``(chain, captured)`` where ``captured`` is mutated in-place with the
+    ``max_tokens``/``temperature`` the use case forwarded. Used to lock in the
+    FIX-LIVE-BRIEF reasoning-model budget so a future hardcode regression fails.
+    """
+    captured: dict[str, object] = {}
+
+    async def _fake_stream(prompt: str, **kwargs: object):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        yield output
+
+    chain = MagicMock()
+    chain.stream = _fake_stream
+    return chain, captured
+
+
+async def test_morning_synthesis_uses_configured_reasoning_budget() -> None:
+    """FIX-LIVE-BRIEF regression: the morning synthesis must forward the
+    configured (large) ``max_tokens`` so a reasoning model's chain-of-thought
+    does not starve the structured ``## section`` answer.
+
+    ROOT CAUSE guarded: previously hardcoded ``max_tokens=2000`` → reasoning
+    consumed the budget → finish_reason=length → 0 sections parsed → the
+    defensive injector emitted the 300-char "No specific items today." blob.
+    """
+    ctx = _sample_morning_context()
+    # A realistic reasoning-model answer: all six sections present + cited.
+    brief = (
+        "## Market Snapshot\n- S&P 500 up 0.4% on strong earnings. [c1]\n\n"
+        "## Your Portfolio Today\n- AAPL leads gains, +1.2% on services strength. [c1]\n\n"
+        "## Macro Today\n- Fed minutes hint dovish tilt. [c1]\n\n"
+        "## News That Matters To You\n- Apple supplier signals demand recovery. [c1]\n\n"
+        "## Risks + Opportunities\n- Concentration risk in mega-cap tech. [c1]\n\n"
+        "## Bonus context\n- Earnings season continues next week. [c1]\n"
+    )
+    llm, captured = _make_capturing_llm_chain(brief)
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(morning_ctx=ctx)
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=llm,
+        valkey=valkey,
+        context_gatherer=gatherer,
+        morning_brief_max_tokens=8000,
+    )
+    result = await uc.execute_public_morning(_USER_ID, _TENANT_ID)
+
+    # PRIMARY GUARANTEE: the synthesis budget must be the configured large value
+    # (NOT the old hardcoded 2000). This is the direct fix — a reasoning model's
+    # chain-of-thought no longer starves the structured answer.
+    assert captured["max_tokens"] == 8000
+    # The real LLM markdown survived into the content (proving the answer was
+    # NOT replaced wholesale by the defensive "No specific items today." fill
+    # that the 2000-token truncation produced live).
+    assert "Market Snapshot" in result["content"]
+    assert "Risks + Opportunities" in result["content"]
+
+
+async def test_instrument_synthesis_uses_configured_reasoning_budget() -> None:
+    """FIX-LIVE-BRIEF: instrument synthesis forwards its configured budget too."""
+    ctx = _sample_instrument_context()
+    llm, captured = _make_capturing_llm_chain("## Overview\n- Apple looks strong. [c1]\n")
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(instrument_ctx=ctx)
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=llm,
+        valkey=valkey,
+        context_gatherer=gatherer,
+        instrument_brief_max_tokens=6000,
+    )
+    await uc.execute_public_instrument(_ENTITY_ID)
+
+    assert captured["max_tokens"] == 6000
+
+
 async def test_morning_generates_markdown() -> None:
     """Output content should be markdown — no <h2> or <table> HTML tags."""
     ctx = _sample_morning_context()

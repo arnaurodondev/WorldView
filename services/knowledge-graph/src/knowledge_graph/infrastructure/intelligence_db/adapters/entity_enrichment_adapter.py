@@ -213,6 +213,52 @@ LIMIT :batch_size
             for row in rows
         ]
 
+    async def fetch_recent_evidence(self, entity_id: UUID, limit: int = 3) -> list[str]:
+        """Return up to ``limit`` recent news-evidence snippets for an entity.
+
+        News-grounding (description audit 2026-06-17): the description LLM call
+        is grounded in the entity's own recent ``relation_evidence_raw.evidence_text``
+        so the model paraphrases real facts instead of fabricating. This is a pure
+        SELECT, so — like ``list_unenriched`` — it opens and closes its OWN session
+        on the read replica (R27 / DEF-034) and MUST NOT be called while the caller
+        holds a session open.
+
+        We over-fetch (LIMIT ~10) the newest rows where the entity is either the
+        subject or object, then dedup verbatim repeats in Python (the same evidence
+        line is frequently attached to several relations) preserving recency order,
+        truncate each snippet to ~300 chars, and return the top ``limit``.
+        """
+        # Over-fetch so Python-side dedup still leaves enough distinct snippets.
+        fetch = max(limit * 3, 10)
+        async with self._read_session_factory() as session:
+            result = await session.execute(
+                text("""
+SELECT evidence_text, extracted_at
+FROM relation_evidence_raw
+WHERE (subject_entity_id = :eid OR object_entity_id = :eid)
+  AND evidence_text IS NOT NULL
+  AND length(btrim(evidence_text)) > 0
+ORDER BY extracted_at DESC
+LIMIT :fetch
+"""),
+                {"eid": str(entity_id), "fetch": fetch},
+            )
+            rows = result.fetchall()
+
+        # Dedup verbatim duplicates while preserving recency order, then cap each
+        # snippet length and take the freshest ``limit`` distinct snippets.
+        seen: set[str] = set()
+        snippets: list[str] = []
+        for row in rows:
+            text_val = str(row[0]).strip()
+            if not text_val or text_val in seen:
+                continue
+            seen.add(text_val)
+            snippets.append(text_val[:300])
+            if len(snippets) >= limit:
+                break
+        return snippets
+
     async def claim_for_enrichment(self, batch_size: int) -> list[CanonicalEntity]:
         """PLAN-0093 T-C-4-01 — atomic claim + attempt-increment in one SQL.
 

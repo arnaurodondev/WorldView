@@ -97,19 +97,40 @@ class TestKeepaliveConfigPresentInBase:
             assert cfg[key] == expected
 
 
+# BP-704: the producer now carries its OWN faster connection-resilience
+# overrides (see ``messaging.kafka.producer.KafkaProducerConfig`` and
+# ``tests/unit/test_producer_connection_resilience.py``).  Because producer
+# keys are spread on TOP of the base, the producer's ``to_dict()`` value for
+# these keys is the FAST override, not the slower base value asserted above.
+# This is an intentional improvement over the 30s-then-wedge behaviour, not a
+# weakening: the keep-alive contract still holds, the connect just heals
+# faster.  The map below records the value the *producer* is expected to emit.
+PRODUCER_OVERRIDDEN_VALUES: dict[str, object] = {
+    "socket.connection.setup.timeout.ms": 10_000,
+    "reconnect.backoff.ms": 250,
+    "reconnect.backoff.max.ms": 5_000,
+    "metadata.max.age.ms": 60_000,
+}
+
+
 class TestProducerInheritsKeepaliveKeys:
-    """End-to-end check: a real ``KafkaProducerConfig`` carries the new keys.
+    """End-to-end check: a real ``KafkaProducerConfig`` carries the keep-alive
+    keys, using the producer override value where BP-704 tightened them.
 
     The producer goes through ``apply_base_rdkafka_config(...)`` which spreads
-    the base on the bottom and user-supplied keys on top.  None of the new
-    keep-alive keys are user-overridable today, so they must always survive.
+    the base on the bottom and the producer's own keys on top.  Keys the
+    producer does not override keep their base value; the four BP-704 keys
+    take the faster producer value.
     """
 
     @pytest.mark.parametrize("key", list(EXPECTED_KEEPALIVE_KEYS))
     def test_producer_config_carries_key(self, key: str) -> None:
         cfg = KafkaProducerConfig(bootstrap_servers="kafka:9092").to_dict()
         assert key in cfg, f"producer.to_dict() missing {key}"
-        assert cfg[key] == EXPECTED_KEEPALIVE_KEYS[key]
+        # Use the producer override value where one exists (BP-704), else the
+        # shared-base keep-alive value (PLAN-0109 F-1-03).
+        expected = PRODUCER_OVERRIDDEN_VALUES.get(key, EXPECTED_KEEPALIVE_KEYS[key])
+        assert cfg[key] == expected
 
 
 class TestDeliveryTimeoutRaised:

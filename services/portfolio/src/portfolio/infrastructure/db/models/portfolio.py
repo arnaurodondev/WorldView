@@ -34,3 +34,6 @@ class PortfolioModel(Base):
     # so legacy rows + non-idempotent callers remain valid. Uniqueness is
     # enforced by a partial unique index on (tenant_id, idempotency_key).
     idempotency_key: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)
+    # PLAN-0114 W1: cost basis algorithm column (migration 0024).
+    # BP-126: server_default="FIFO" ensures all existing rows get a safe default.
+    cost_basis_method: Mapped[str] = mapped_column(default="FIFO", server_default="FIFO")

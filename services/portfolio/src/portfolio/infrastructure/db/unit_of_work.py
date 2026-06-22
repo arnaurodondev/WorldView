@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
+from portfolio.domain.errors import IdempotencyConflictError
 from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
     SqlAlchemyEntitySuppressionRepository,
@@ -495,9 +496,31 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         assert self._notification_preferences is not None, "UnitOfWork not entered"
         return self._notification_preferences
 
+    async def try_advisory_lock(self, portfolio_id: object) -> bool:
+        """Non-blocking pg_try_advisory_xact_lock keyed on portfolio_id."""
+        import hashlib
+
+        from sqlalchemy import text
+
+        assert self._session is not None, "UoW not entered"
+        digest = hashlib.blake2b(str(portfolio_id).encode("utf-8"), digest_size=8).digest()
+        lock_key = int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
+        result = await self._session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key})
+        return bool(result.scalar())
+
     async def commit(self) -> None:
+        # ARCH-001: translate SQLAlchemy IntegrityError into a domain exception
+        # so the application layer never needs to import from sqlalchemy.exc.
+        # The import is here (infrastructure layer) where it belongs per R25 /
+        # IG-LAYER-002. The use case catches IdempotencyConflictError — a pure
+        # domain type — rather than the ORM-specific IntegrityError.
+        from sqlalchemy.exc import IntegrityError  # local import — infra only
+
         assert self._session is not None, "UnitOfWork not entered"
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            raise IdempotencyConflictError(str(exc)) from exc
         if self._on_commit is not None:
             self._on_commit()
 

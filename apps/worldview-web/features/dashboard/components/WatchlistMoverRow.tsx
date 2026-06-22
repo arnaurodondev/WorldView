@@ -25,8 +25,10 @@
 
 import { Newspaper } from "lucide-react";
 import { cn } from "@/lib/utils";
-// HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses ≥$1M prices to a suffix ("$1.20M") so price
+// fits its slot. formatChangePct: bounds extreme % moves to fit the fixed
+// w-[52px] %-change slot (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 import type { WatchlistMover } from "../lib/movers";
 
 export interface WatchlistMoverRowProps {
@@ -67,7 +69,10 @@ export function WatchlistMoverRow({
     <div
       // Round 3 (item 5): inset focus-visible ring — the row is tabbable
       // (tabIndex=0 below) so keyboard users need a visible focus affordance.
-      className="flex h-7 cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden CLIP overflow within the
+      // 28px row so the two-column (gainers | losers) layout never bleeds across
+      // the divider (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-7 min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
@@ -100,7 +105,7 @@ export function WatchlistMoverRow({
       {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
           rendering on dark themes — 600-weight is the maximum for terminal chrome text
           at small sizes (Bloomberg density rule) */}
-      <span className="w-[40px] shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">
+      <span className="w-[40px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] font-semibold tabular-nums text-foreground">
         {mover.ticker}
       </span>
 
@@ -132,8 +137,8 @@ export function WatchlistMoverRow({
 
       {/* Price — right-aligned in a fixed slot. Muted color because change%
           is the primary signal; price is supporting context. */}
-      <span className="w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {formatPrice(mover.price)}
+      <span className="w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {formatPriceCompact(mover.price)}
       </span>
 
       {/* Change % — right-aligned, colored by direction. The `side`
@@ -142,13 +147,13 @@ export function WatchlistMoverRow({
           of changePct. */}
       <span
         className={cn(
-          "w-[52px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums",
           side === "gainer" ? "text-positive" : "text-negative",
         )}
       >
-        {mover.changePct != null
-          ? `${mover.changePct >= 0 ? "+" : ""}${mover.changePct.toFixed(2)}%`
-          : "—"}
+        {/* formatChangePct returns "—" for null and bounds extreme moves so the
+            string always fits this fixed 52px slot. */}
+        {formatChangePct(mover.changePct)}
       </span>
     </div>
   );

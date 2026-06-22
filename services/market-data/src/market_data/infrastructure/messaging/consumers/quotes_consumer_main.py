@@ -20,6 +20,7 @@ from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
     log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -32,6 +33,10 @@ async def main() -> None:
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from market_data.infrastructure.messaging.consumers.quotes_consumer import QuotesConsumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -45,11 +50,14 @@ async def main() -> None:
     log = get_logger("market_data.quotes_consumer_main")  # type: ignore[no-any-return]
     log.info("quotes_consumer_starting", service=settings.service_name)
 
-    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
-    # dedicated port so the worker's counters/gauges become scrape-able.
+    # F-005 / BP-704: expose Prometheus /metrics + /healthz on 9100 (so the
+    # Docker healthcheck has a real endpoint) and bind a stall-aware liveness
+    # probe so /healthz flips to 503 when the poll loop wedges or run() dies.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="market-data-quotes-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -92,6 +100,8 @@ async def main() -> None:
             topics=["market.dataset.fetched"],
         ),
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
     log_runtime_banner(
@@ -104,15 +114,14 @@ async def main() -> None:
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # F-005 / BP-704 supervision: races run() against the stop event so a
+        # crashed run() can no longer leave a dead task while main() hangs on
+        # stop_event.wait(); a terminal run() exit raises ConsumerExited → we
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("quotes_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("quotes_consumer_fatal_error", error=str(exc))
         sys.exit(1)
