@@ -1775,7 +1775,7 @@ services:
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9108/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
