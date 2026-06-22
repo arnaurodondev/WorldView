@@ -76,7 +76,33 @@ _DENSITY_THRESHOLD = 0.05
 # We ORDER BY extracted_at so older rows are promoted first (FIFO queue
 # semantics) — this prevents newer evidence from being indefinitely
 # preferred over older evidence that happens to share the same triple key.
-_FETCH_SQL = """
+# Shared CTEs (CPU fix 2026-06-22): precompute the evidence-density inputs ONCE
+# per query instead of evaluating a per-row correlated subquery for every
+# candidate. ``entity_doc`` is the (entity, doc) mention bridge — a doc "mentions"
+# an entity iff the entity is subject OR object of ANY raw row of that doc; UNION
+# dedups so each (entity, doc) appears once. ``triple_count`` is the per-triple
+# numerator. Replacing the per-row SubPlans with these CTEs cuts each query's plan
+# cost ~32x (1.13M -> ~35.7k). The result set is UNCHANGED: ``relations`` is
+# triple-UNIQUE so the JOIN matches at most one relation (== the old EXISTS), and
+# the entity_doc-union denominator equals the union of docs(subject) and docs(object) (the old
+# IN/OR scan). Proven + verified live: old vs new eligible set identical (31==31,
+# 0 symmetric diff). See docs/audits/2026-06-22-promoter-query-rootcause-and-rewrite.md.
+_DENSITY_CTES = """
+WITH entity_doc AS (
+    SELECT subject_entity_id AS entity_id, source_document_id AS doc_id FROM relation_evidence_raw
+    UNION
+    SELECT object_entity_id  AS entity_id, source_document_id AS doc_id FROM relation_evidence_raw
+),
+triple_count AS (
+    SELECT subject_entity_id, object_entity_id, canonical_type, COUNT(*) AS triple_n
+      FROM relation_evidence_raw
+     GROUP BY 1, 2, 3
+)
+"""
+
+_FETCH_SQL = (
+    _DENSITY_CTES  # noqa: S608 — static SQL constants only; values bound via SQLAlchemy params
+    + """
 SELECT
     rer.raw_id,
     r.relation_id,
@@ -92,6 +118,10 @@ JOIN relations r
   ON  r.subject_entity_id = rer.subject_entity_id
   AND r.object_entity_id  = rer.object_entity_id
   AND r.canonical_type    = rer.canonical_type
+JOIN triple_count tc
+  ON  tc.subject_entity_id = rer.subject_entity_id
+  AND tc.object_entity_id  = rer.object_entity_id
+  AND tc.canonical_type    = rer.canonical_type
 WHERE rer.entity_provisional = false
   AND NOT EXISTS (
     SELECT 1 FROM relation_evidence re
@@ -101,30 +131,16 @@ WHERE rer.entity_provisional = false
   )
   AND (
       rer.extraction_confidence >= :conf_threshold
-      OR (
-          SELECT CAST(COUNT(*) AS float)
-          FROM relation_evidence_raw rer2
-          WHERE rer2.subject_entity_id = rer.subject_entity_id
-            AND rer2.object_entity_id  = rer.object_entity_id
-            AND rer2.canonical_type    = rer.canonical_type
-      ) / NULLIF(
-          (
-              -- Density denominator: distinct documents that mention either
-              -- entity anywhere in the relation-extraction corpus. We use
-              -- relation_evidence_raw itself (intelligence_db) as the
-              -- mention proxy because entity_mentions lives in nlp_db; the
-              -- previous query reached cross-DB (violates R9) and crashed
-              -- every 5 min with UndefinedTableError (Final-QA-1).
-              SELECT COUNT(DISTINCT rer3.source_document_id)
-              FROM relation_evidence_raw rer3
-              WHERE rer3.subject_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
-                 OR rer3.object_entity_id  IN (rer.subject_entity_id, rer.object_entity_id)
-          ), 0
-      ) >= :density_threshold
+      OR tc.triple_n::float / NULLIF((
+            SELECT COUNT(DISTINCT ed.doc_id) FROM entity_doc ed
+             WHERE ed.entity_id = rer.subject_entity_id
+                OR ed.entity_id = rer.object_entity_id
+      ), 0) >= :density_threshold
   )
 ORDER BY rer.extracted_at
 LIMIT :batch_size
 """
+)
 
 # SQL: count raw rows that are blocked because entity_provisional = true.
 # Used for the summary log metric only — does not affect promotion logic.
@@ -150,46 +166,38 @@ WHERE rer.entity_provisional = false
 # promoted, non-provisional) but are blocked by the E-3 quality gate — i.e.
 # extraction_confidence < conf_threshold AND density < density_threshold.
 # Used for the gated_quality diagnostic log metric and Prometheus counter.
-_COUNT_GATED_QUALITY_SQL = """
+# Rewritten 2026-06-22 to share _DENSITY_CTES (same 32x cost cut). EXISTS->JOIN is
+# equivalent because relations is triple-UNIQUE (at most one match); the NOT EXISTS
+# now uses the joined r.relation_id (== the old LIMIT-1 subselect). The gate-fail
+# predicate (confidence < AND density <) and thus the counted set are unchanged.
+_COUNT_GATED_QUALITY_SQL = (
+    _DENSITY_CTES  # noqa: S608 — static SQL constants only; values bound via SQLAlchemy params
+    + """
 SELECT count(*)
 FROM relation_evidence_raw rer
+JOIN relations r
+  ON  r.subject_entity_id = rer.subject_entity_id
+  AND r.object_entity_id  = rer.object_entity_id
+  AND r.canonical_type    = rer.canonical_type
+JOIN triple_count tc
+  ON  tc.subject_entity_id = rer.subject_entity_id
+  AND tc.object_entity_id  = rer.object_entity_id
+  AND tc.canonical_type    = rer.canonical_type
 WHERE rer.entity_provisional = false
-  AND EXISTS (
-    SELECT 1 FROM relations r
-    WHERE r.subject_entity_id = rer.subject_entity_id
-      AND r.object_entity_id  = rer.object_entity_id
-      AND r.canonical_type    = rer.canonical_type
-  )
   AND NOT EXISTS (
     SELECT 1 FROM relation_evidence re
-    WHERE re.relation_id = (
-        SELECT r.relation_id FROM relations r
-        WHERE r.subject_entity_id = rer.subject_entity_id
-          AND r.object_entity_id  = rer.object_entity_id
-          AND r.canonical_type    = rer.canonical_type
-        LIMIT 1
-    )
+    WHERE re.relation_id   = r.relation_id
       AND re.doc_id        = rer.source_document_id
       AND re.evidence_date = rer.evidence_date
   )
   AND rer.extraction_confidence < :conf_threshold
-  AND (
-      SELECT CAST(COUNT(*) AS float)
-      FROM relation_evidence_raw rer2
-      WHERE rer2.subject_entity_id = rer.subject_entity_id
-        AND rer2.object_entity_id  = rer.object_entity_id
-        AND rer2.canonical_type    = rer.canonical_type
-  ) / NULLIF(
-      (
-          -- Same intelligence_db-only density denominator as _FETCH_SQL.
-          -- See note there for the cross-DB rationale (Final-QA-1).
-          SELECT COUNT(DISTINCT rer3.source_document_id)
-          FROM relation_evidence_raw rer3
-          WHERE rer3.subject_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
-             OR rer3.object_entity_id  IN (rer.subject_entity_id, rer.object_entity_id)
-      ), 0
-  ) < :density_threshold
+  AND tc.triple_n::float / NULLIF((
+        SELECT COUNT(DISTINCT ed.doc_id) FROM entity_doc ed
+         WHERE ed.entity_id = rer.subject_entity_id
+            OR ed.entity_id = rer.object_entity_id
+  ), 0) < :density_threshold
 """
+)
 
 # SQL: insert one promotable row into the partitioned immutable table.
 # ON CONFLICT DO NOTHING: the NOT EXISTS pre-filter handles most duplicates
