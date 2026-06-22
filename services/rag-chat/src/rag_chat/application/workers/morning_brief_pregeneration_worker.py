@@ -304,6 +304,11 @@ class MorningBriefPregenerationWorker:
             cached=False,
             entity_id=None,
             summary=result.get("summary"),
+            # BP-624 partial-wiring fix: the dashboard reads the pre-gen cache,
+            # and this builder dropped summary_paragraph (the brief's intro/overview)
+            # — present on the on-demand + background-regen paths but never here, so
+            # the dashboard rendered sections with no lead paragraph. (2026-06-21)
+            summary_paragraph=result.get("summary_paragraph"),
             sections=result.get("sections", []),
             confidence=result.get("confidence", 1.0),
             lead=result.get("lead"),
