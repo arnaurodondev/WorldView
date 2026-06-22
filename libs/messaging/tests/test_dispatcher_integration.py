@@ -43,6 +43,9 @@ class _InMemoryOutboxRepo:
         self._records = {r.id: r for r in records}
         self.published_ids: list[int] = []
         self.dead_letter_ids: list[int] = []
+        # BUG-1: capture the error_detail threaded into move_to_dead_letter so a
+        # test can assert the DLQ failure cause is persisted (not NULL).
+        self.dead_letter_errors: dict[int, str] = {}
 
     async def fetch_pending(self, worker_id: str, lease_seconds: int, batch_size: int) -> list[OutboxRecordProtocol]:
         pending = [
@@ -57,8 +60,9 @@ class _InMemoryOutboxRepo:
         if record_id in self._records:
             self._records[record_id].attempts += 1
 
-    async def move_to_dead_letter(self, record_id: Any) -> None:
+    async def move_to_dead_letter(self, record_id: Any, error_detail: str = "") -> None:
         self.dead_letter_ids.append(record_id)
+        self.dead_letter_errors[record_id] = error_detail
 
 
 class _InMemoryUoW:
@@ -250,6 +254,27 @@ class TestDispatchFailure:
 
         assert 1 in repo.dead_letter_ids
         assert results[0].success is False
+
+    async def test_dead_letter_persists_error_detail(self) -> None:
+        """BUG-1 regression: move_to_dead_letter must receive a non-empty cause.
+
+        Previously the dispatcher called move_to_dead_letter WITHOUT the error,
+        and the repos default error_detail="" → NULL, leaving every DLQ row
+        un-triageable. The dispatcher now threads "<ErrorType>: <repr>" through.
+        """
+        config = DispatcherConfig(max_attempts=3)
+        record = _make_record(record_id=1, attempts=2)  # next failure dead-letters
+        repo = _InMemoryOutboxRepo([record])
+        dispatcher = _TestDispatcher(repo, _MockProducer(fail=True), config)
+
+        await dispatcher.dispatch_now()
+
+        assert 1 in repo.dead_letter_ids
+        detail = repo.dead_letter_errors[1]
+        assert detail, "error_detail must be populated (was NULL — BUG-1)"
+        # The mock raises a delivery error surfaced as RuntimeError(str(err)).
+        assert "RuntimeError" in detail
+        assert "mock delivery error" in detail
 
     async def test_second_attempt_not_dead_lettered(self) -> None:
         config = DispatcherConfig(max_attempts=5)

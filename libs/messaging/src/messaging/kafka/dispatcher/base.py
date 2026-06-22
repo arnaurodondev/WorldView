@@ -172,11 +172,17 @@ class OutboxRepositoryProtocol(Protocol):
         """
         ...
 
-    async def move_to_dead_letter(self, record_id: Any) -> None:
+    async def move_to_dead_letter(self, record_id: Any, error_detail: str = "") -> None:
         """Move *record_id* to the dead-letter store.
 
         Args:
             record_id: Primary key of the outbox record.
+            error_detail: Human-readable failure cause (type + repr of the
+                delivery error). Persisted to ``dead_letter_queue.error_detail``
+                so DLQ rows are triageable from the table alone (BUG-1). Defaults
+                to ``""`` for backward compatibility; an empty string is stored
+                as ``NULL`` by repositories whose DLQ table has an error column,
+                and ignored by those that do not.
         """
         ...
 
@@ -549,8 +555,15 @@ class BaseOutboxDispatcher(ABC):
             # Surface the exception *type name* (not just ``str``, which is empty
             # for TimeoutError) so the failure is never invisible in logs.
             error_type = type(delivery_error).__name__ if delivery_error is not None else "None"
+            # BUG-1 fix: thread the failure cause into the DLQ row.
+            # ``dead_letter_queue.error_detail`` was NULL for every row because
+            # ``move_to_dead_letter`` was called without an error and the repo
+            # defaults to ``""`` → NULL, making DLQ entries un-triageable from the
+            # table alone. ``repr`` is used because ``str`` is empty for
+            # ``TimeoutError`` (the most common wedged-producer failure).
+            dlq_error_detail = f"{error_type}: {delivery_error!r}" if delivery_error is not None else error_type
             if new_attempts >= self._config.max_attempts:
-                await uow.outbox.move_to_dead_letter(record.id)
+                await uow.outbox.move_to_dead_letter(record.id, error_detail=dlq_error_detail)
                 self._metrics.outbox_dispatch_errors_total.inc()
                 logger.error(
                     "outbox_record_dead_lettered",
@@ -558,6 +571,7 @@ class BaseOutboxDispatcher(ABC):
                     attempts=new_attempts,
                     error_type=error_type,
                     error_repr=repr(delivery_error) if delivery_error is not None else None,
+                    error_detail=dlq_error_detail,
                     topic=record.topic,
                 )
             else:
