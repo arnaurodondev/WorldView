@@ -317,9 +317,47 @@ VALUES
         CAST(:ctx AS text)
     )
 ON CONFLICT (normalized_surface, mention_class)
-DO UPDATE SET retry_count = provisional_entity_queue.retry_count
+DO NOTHING
 RETURNING queue_id
 """
+
+
+# Lock-convoy fix (2026-06-22, BP-707): the old ``DO UPDATE SET retry_count =
+# retry_count`` no-op took a row ExclusiveLock on the hot conflicting tuple
+# (``apple``, ``the company`` …) and HELD it across the 12-22s deep-extraction
+# LLM call until commit — convoying ~48 concurrent backends into 40-51s waits →
+# 10-min statement_timeout → 900s message_processing_timeout → DLQ (silent loss).
+# ``DO NOTHING`` acquires NO held write lock; on conflict RETURNING yields no row,
+# so the caller falls back to this lock-free MVCC SELECT for the canonical queue_id.
+_PROVISIONAL_SELECT_SQL = """
+SELECT queue_id
+FROM provisional_entity_queue
+WHERE normalized_surface = lower(trim(CAST(:surface AS varchar(500))))
+  AND mention_class = CAST(:mention_class AS varchar(50))
+"""
+
+# Short transaction-local lock_timeout (ms) for provisional inserts. With
+# DO NOTHING there is no held conflict lock, but any residual wait now fails FAST
+# with lock_not_available (caught by the per-insert SAVEPOINT → mention downgraded
+# to UNRESOLVED + re-attempted by the worker) instead of hanging to the 10-min
+# statement_timeout that killed whole articles into the DLQ.
+_PROVISIONAL_LOCK_TIMEOUT_MS = 2000
+
+
+async def set_provisional_lock_timeout(intelligence_session: object) -> None:
+    """Apply the short provisional-insert ``lock_timeout`` for this transaction.
+
+    Called once at the top of the entity-resolution block (before any provisional
+    INSERT). ``SET LOCAL`` scopes it to the current transaction — auto-reverts on
+    commit/rollback, so it never leaks to pooled connections or other query paths.
+    """
+    from sqlalchemy import text  # type: ignore[import-untyped]
+
+    # lock_timeout cannot be parameterised in SET; the value is an int constant
+    # (never user input), so direct interpolation is injection-safe.
+    await intelligence_session.execute(  # type: ignore[attr-defined]
+        text(f"SET LOCAL lock_timeout = {_PROVISIONAL_LOCK_TIMEOUT_MS}"),
+    )
 
 
 async def _insert_provisional_surface(
@@ -352,7 +390,16 @@ async def _insert_provisional_surface(
             "ctx": None,
         },
     )
-    queue_id_str = result.scalar_one()
+    # DO NOTHING → RETURNING is empty on conflict; scalar_one_or_none is None
+    # exactly then → lock-free SELECT for the canonical pre-existing queue_id
+    # (shared by _insert_provisional and ensure_provisional_for_ref).
+    queue_id_str = result.scalar_one_or_none()
+    if queue_id_str is None:
+        select_result = await intelligence_session.execute(  # type: ignore[attr-defined]
+            text(_PROVISIONAL_SELECT_SQL),
+            {"surface": surface, "mention_class": mention_class_value},
+        )
+        queue_id_str = select_result.scalar_one()
     return UUID(str(queue_id_str))
 
 
@@ -467,6 +514,12 @@ async def run_entity_resolution_block(
     """
     if not mentions:
         return mentions, []
+
+    # Lock-convoy fix (BP-707): bound provisional-insert lock waits for THIS
+    # transaction so a hot-tuple conflict fails fast → UNRESOLVED downgrade
+    # (re-attempted by UnresolvedResolutionWorker) instead of a 10-min
+    # statement_timeout that dead-letters the whole article. SET LOCAL auto-reverts.
+    await set_provisional_lock_timeout(intelligence_session)
 
     all_audit: list[MentionResolution] = []
 
