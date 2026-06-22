@@ -526,7 +526,7 @@ async def run_deep_extraction_block(
             total_windows=total_windows,
         )
         raise RetryableError(
-            f"deep extraction timed out on all {timed_out_windows}/{total_windows} " f"windows for doc {doc_id}",
+            f"deep extraction timed out on all {timed_out_windows}/{total_windows} windows for doc {doc_id}",
         )
 
     # Merge deduplicated results
