@@ -6,14 +6,64 @@ and optional read-replica operations.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     from nlp_pipeline.config import Settings
+
+_log = get_logger(__name__)  # type: ignore[no-any-return]
+
+# Default per-connection statement_timeout (milliseconds) used by the
+# backward-compatible raw-URL factory wrappers, which have no Settings object to
+# read from.  The settings-aware factory paths use ``settings.statement_timeout_ms``.
+# Override via the ``NLP_PIPELINE_STATEMENT_TIMEOUT_MS`` env var.
+_DEFAULT_STATEMENT_TIMEOUT_MS = 60_000
+
+
+def build_connect_args(statement_timeout_ms: int, application_name: str = "nlp-pipeline") -> dict[str, object]:
+    """Build asyncpg ``connect_args`` with application_name + statement_timeout.
+
+    The ``statement_timeout`` is set as an asyncpg ``server_settings`` connection
+    parameter so every SQL session is bounded the moment the connection is
+    established — the backstop that prevents a runaway FTS / batch query from
+    pinning the shared Postgres instance (4.5 h / ~5 min incidents, 2026-06-21).
+
+    When *statement_timeout_ms* <= 0 the timeout is omitted (unbounded), matching
+    the previous behaviour for operators who explicitly disable it.  asyncpg
+    requires every ``server_settings`` value to be a string; a bare-integer
+    string is interpreted by Postgres as milliseconds, which is what we want.
+    """
+    server_settings: dict[str, str] = {"application_name": application_name}
+    if statement_timeout_ms > 0:
+        server_settings["statement_timeout"] = str(statement_timeout_ms)
+    return {"server_settings": server_settings}
+
+
+def statement_timeout_from_env() -> int:
+    """Read the statement_timeout default for the raw-URL wrappers from env.
+
+    Falls back to ``_DEFAULT_STATEMENT_TIMEOUT_MS`` when the env var is unset or
+    malformed (fail-safe: a bad value must not silently disable the backstop).
+    """
+    raw = os.environ.get("NLP_PIPELINE_STATEMENT_TIMEOUT_MS", "").strip()
+    if not raw:
+        return _DEFAULT_STATEMENT_TIMEOUT_MS
+    try:
+        return int(raw)
+    except ValueError:
+        _log.warning(
+            "nlp_statement_timeout_env_invalid",
+            value=raw,
+            fallback_ms=_DEFAULT_STATEMENT_TIMEOUT_MS,
+        )
+        return _DEFAULT_STATEMENT_TIMEOUT_MS
 
 
 def _same_db_endpoint(url1: str, url2: str) -> bool:
@@ -44,7 +94,9 @@ def _build_nlp_factories(
     """
     # BP-502: application_name surfaces this service in pg_stat_activity for
     # connection debugging; pool_recycle=300 defends against stale DNS sockets.
-    _connect_args: dict[str, object] = {"server_settings": {"application_name": "nlp-pipeline"}}
+    # statement_timeout (from settings) bounds every SQL session so no FTS or
+    # batch query can run unbounded again (2026-06-21 incident).
+    _connect_args: dict[str, object] = build_connect_args(settings.statement_timeout_ms)
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,
@@ -106,7 +158,7 @@ def create_session_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[As
         pool_size=10,
         max_overflow=20,
         pool_recycle=300,
-        connect_args={"server_settings": {"application_name": "nlp-pipeline"}},
+        connect_args=build_connect_args(statement_timeout_from_env()),
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=engine,

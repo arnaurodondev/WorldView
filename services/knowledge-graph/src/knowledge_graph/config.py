@@ -32,6 +32,25 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
     db_max_overflow_read: int = 30
+    # Universal per-connection statement_timeout (milliseconds) applied to EVERY
+    # regular (non-AGE) SQL session on intelligence_db.  Backstop introduced
+    # after a single ``RelationEvidencePromoterWorker._FETCH_SQL`` run ran for
+    # 16,188 s (4.5 h) and starved the UI-facing OLTP databases sharing the
+    # Postgres instance.  Set as an asyncpg ``server_settings`` connection
+    # parameter so it applies the moment a connection is established.
+    #
+    # 60_000 ms (60 s) chosen as the default: it is ~3x the slowest legitimate
+    # AGE neighbourhood query (20 s) yet two orders of magnitude below the
+    # pathological 4.5 h.  Background batch workers (promoter, confidence,
+    # summary) operate on bounded batches (<=200 rows) and complete in well
+    # under 60 s once 0049's indexes land; any session exceeding 60 s is, by
+    # definition, the runaway plan this backstop exists to kill.
+    #
+    # PRECEDENCE: AGE Cypher use cases issue ``SET LOCAL statement_timeout`` per
+    # transaction (5/20/30 s) which overrides this connection-level default for
+    # the duration of that transaction only — their explicit bounds are NOT
+    # widened by this value.  Set to 0 to disable (unbounded; not recommended).
+    statement_timeout_ms: int = 60_000
     alembic_enabled: bool = False
 
     # Kafka topics — consumed

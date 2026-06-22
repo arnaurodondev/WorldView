@@ -124,6 +124,47 @@ services:
         aliases:
           - timescaledb
 
+  # ── PostgreSQL (intelligence / OLAP) ─────────────────────────────────────────
+  # WORKLOAD SPLIT (2026-06-08): dedicated instance for the heavy KG/NLP analytical
+  # workload (intelligence_db, nlp_db, kg_db). Splitting these off the main `postgres`
+  # instance stops multi-hour AGE relation scans + multi-minute FTS from starving the
+  # latency-sensitive OLTP queries (portfolio, market-data, gateway, alert).
+  # See docs/audits/2026-06-08-postgres-workload-split.md.
+  #
+  # Same image as `postgres` (timescaledb-pg16 + pgvector + Apache AGE) — AGE +
+  # pgvector are required for intelligence_db/nlp_db. Own volume + own init dir that
+  # creates ONLY the OLAP databases.
+  postgres-intelligence:
+    build:
+      context: ../postgres
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    ports:
+      # SEC-007: bind to localhost only — prevent external DB access.
+      # 5433 on the host avoids clashing with the OLTP instance's 5432.
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_intelligence_data:/var/lib/postgresql/data
+      - ../postgres/init-intelligence:/docker-entrypoint-initdb.d:ro
+    # OLAP tuning: larger work_mem for AGE/FTS sorts; shared_buffers sized for the
+    # 25% rule against this instance's allotted RAM. Adjust mem_limit/cpus per host.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "work_mem=128MB"
+      - "-c"
+      - "max_connections=120"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Kafka (KRaft mode) ──────────────────────────────────────────────────────
   kafka:
     image: confluentinc/cp-kafka:7.6.0
@@ -315,10 +356,11 @@ services:
       dockerfile: Dockerfile
     profiles: [infra, all]
     depends_on:
-      postgres:
+      # Workload split (2026-06-08): intelligence_db now lives on postgres-intelligence.
+      postgres-intelligence:
         condition: service_healthy
     environment:
-      INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres:5432/intelligence_db"
+      INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres-intelligence:5432/intelligence_db"
       EMBEDDING_BASE_URL: "http://ollama:11434"
       EMBEDDING_MODEL: "bge-large:latest"
     restart: "no"
@@ -1428,7 +1470,8 @@ services:
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
     depends_on:
-      postgres:
+      # Workload split (2026-06-08): nlp_db now lives on postgres-intelligence.
+      postgres-intelligence:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
@@ -2429,6 +2472,8 @@ services:
 volumes:
   minio_data:
   postgres_data:
+  # Dedicated OLAP instance volume (workload split 2026-06-08).
+  postgres_intelligence_data:
   kafka_data:
   valkey_data:
   prometheus_data:
