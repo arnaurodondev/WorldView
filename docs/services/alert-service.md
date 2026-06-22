@@ -46,87 +46,6 @@ injects the correct `user_id` from the JWT.
 | Intelligence consumer | `python -m alert.infrastructure.messaging.consumers.intelligence_consumer_main` | `alert-intelligence-consumer` |
 | Watchlist consumer | `python -m alert.infrastructure.messaging.consumers.watchlist_consumer_main` | `alert-watchlist-consumer` |
 | Email scheduler | `python -m alert.infrastructure.email.scheduler_main` | `alert-email-scheduler` |
-| Alert-rule poller | `python -m alert.infrastructure.rules.poller_main` | `alert-rule-poller` |
-
-The **alert-rule poller** (PLAN-0113) is the 5th process (R22). It runs an
-APScheduler interval loop (base tick `ALERT_RULE_POLL_TICK_SECONDS`, default 60s)
-that loads enabled poll-type rules (`PRICE_CROSS`, `FUNDAMENTAL_CROSS`,
-`NEWS_COUNT`, `NEWS_MOMENTUM`), throttles each by its per-type cadence
-(`AlertRule.is_due`), resolves an evaluator from `EVALUATOR_REGISTRY`
-(`register_default_evaluators()` at boot), runs `evaluate → should_fire`, and on
-an edge fires via `FireRuleAlertUseCase`. KG_CONNECTION is event-driven
-(intelligence consumer), not polled. Observability per BP-705:
-`s10_rule_poller_last_success_timestamp_seconds` (liveness gauge),
-`s10_rule_poller_runs_total{outcome}`, `s10_rule_poller_due_rules`,
-`s10_rule_evaluations_total{rule_type,outcome}`, `s10_rule_fired_total{rule_type}`,
-and a per-cycle `asyncio.wait_for` watchdog (`ALERT_RULE_POLLER_WATCHDOG_SECONDS`).
-Set `ALERT_RULE_POLLER_ENABLED=false` to disable evaluation instantly (rules
-stay stored but dormant). Metrics on `:9101`.
-
-#### Rule evaluators (PLAN-0113 Wave 2)
-
-Each poll rule type maps to one `RuleEvaluator` in `application/rules/`. Evaluators
-depend only on the ABC client ports in `application/ports/signal_clients.py`
-(`IS3PriceClient`, `IS6NewsClient`) — never on the concrete HTTP clients (R25). All
-reads are best-effort (a flaky upstream returns None → skip, no state change).
-
-| Rule type | Evaluator | Cadence | Source (REST, R9) | Fires when |
-|---|---|---|---|---|
-| `PRICE_CROSS` | `PriceCrossEvaluator` | 60s | S3 `POST /internal/v1/price/batch` | last price crosses `value` (edge vs `last_state.was_above`) |
-| `FUNDAMENTAL_CROSS` | `FundamentalCrossEvaluator` | 21600s (6h) | S3 `GET /api/v1/fundamentals/timeseries` (latest `value_numeric`) | metric crosses `value` (edge); cooldown re-arm 24h |
-| `NEWS_COUNT` | `NewsCountEvaluator` | 3600s | S6 `GET /internal/v1/instruments/{id}/news-rollup-7d` (7d) or `GET /api/v1/news/trending-entities` (24/72/168h) | count first ≥ `threshold`; re-arms below |
-| `NEWS_MOMENTUM` | `NewsMomentumEvaluator` | 3600s | S6 `GET /api/v1/news/trending-entities` (`delta_pct`, `count`) | `delta_pct ≥ threshold AND count ≥ min_count` (edge) |
-| `KG_CONNECTION` | `KgConnectionEvaluator` | event (`graph.state.changed.v1`) | S7 `GET /api/v1/paths/between` confirm | A↔B first connected within `max_hops` (latch, fires once) |
-
-`FireRuleAlertUseCase` (`application/use_cases/fire_rule_alert.py`) is the shared
-firing path: one transaction writes `alerts` (`alert_type='user_rule'`,
-`severity=rule.severity`, `payload={rule_type, rule_id, observed,
-condition_snapshot}`, `dedup_key=sha256(rule_id:transition_signature)`) +
-a `pending_alerts` row **for `rule.user_id` only** (owner-targeted, never a
-watchlist fan-out) + an `outbox_events` row (R8). It advances
-`rule.last_state.last_fired_at` only on commit; a rolled-back/duplicate fire never
-advances the cooldown clock. Post-commit it pushes over the existing Valkey
-WebSocket channel.
-
-#### KG_CONNECTION (event-driven, PLAN-0113 Wave 3)
-
-`KG_CONNECTION` is the one rule type that is **not** polled. It is driven off the
-intelligence consumer's existing `graph.state.changed.v1` stream by an **additive**
-branch (`KgConnectionEventHandler`, `application/use_cases/kg_connection_handler.py`)
-that runs *after* — and is fully isolated from — the existing `GRAPH_CHANGE`
-watchlist fan-out. The branch is opt-in: the consumer takes an optional
-`kg_handler` (None in every fan-out-only context, so the legacy path is unchanged),
-wired in `intelligence_consumer_main.py` only when `ALERT_RULE_POLLER_ENABLED` is
-on.
-
-Per graph event the handler:
-
-1. **Suppresses backfill** (`is_backfill=true` → skip; AD-10) so a history replay
-   never retro-fires.
-2. **Pre-filters cheaply**: collects the event's `affected_entity_ids` +
-   `primary_entity_id` and keeps only rules whose `node_a` **or** `node_b` appears
-   in that set (a single new edge on one endpoint can complete a multi-hop path).
-3. **Confirms via S7** (`KgConnectionEvaluator` → `IS7GraphClient.confirm_connection`)
-   and, on `should_fire` (latch on first `connected=true`, KG cooldown default 0),
-   fires once via `FireRuleAlertUseCase`. A no-fire still persists `next_state` so
-   the `connected` edge memory advances.
-
-The handler is **fail-soft per rule** and wrapped in an outer try/except in the
-consumer, so a KG-rule failure can never perturb the fan-out path. Idempotency is
-triple-guarded: the consumer's Valkey `event_id` dedup, the `FireRuleAlertUseCase`
-`dedup_key` (includes `rule_id`), and the durable `connected` latch in `last_state`.
-
-**`S7GraphClient`** (`infrastructure/clients/s7_client.py`, NEW — distinct from
-`s7_entity_resolver.py`) implements `IS7GraphClient` (ABC port in
-`application/ports/graph_clients.py`, R25). It calls
-`GET /api/v1/paths/between?source=&target=&max_hops=<1..3>` (reusing the existing
-`s7_knowledge_graph_base_url` + `X-Internal-JWT` config — no new base URL) and
-returns the `connected` boolean; when the rule pins a `relation_type` it
-additionally requires a matching `path_edges[].relation_type` (case-insensitive).
-It is **fail-closed** (BP-235): an explicit `httpx.Timeout` plus an outer
-`asyncio.wait_for`, and any `503` (AGE statement timeout), transport error,
-timeout, or malformed body returns `False` — an unproven connection never fires.
-A missed edge is re-evaluated on the next `graph.state.changed.v1` for that pair.
 
 ### WebSocket Cross-Process Architecture (Valkey Pub/Sub)
 
@@ -166,27 +85,28 @@ channel for the user it is serving.
 | PATCH | `/api/v1/alerts/{alert_id}/snooze` | X-Internal-JWT | Set `snooze_until` (max 30 days) |
 | GET | `/api/v1/alerts/history` | X-Internal-JWT | Paginated tenant alert history |
 
-### Alert-Rule Endpoints (PLAN-0113)
-
-Standing user rules. The `condition` is a discriminated union validated at the
-boundary by `rule_type` (§6.5.3). `tenant_id`/`user_id` come from the JWT, never
-the body. Owner-scoped: a cross-owner read/update/delete is a 404. Proxied by S9
-at `/v1/alert-rules` (auth-gated, `Cache-Control: no-store`).
+### Internal Service-Caller Endpoints (exposed)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/alert-rules` | X-Internal-JWT | Create a standing rule (201; 400 bad condition / unknown rule_type / bad severity / **unknown `metric_key`** for FUNDAMENTAL_CROSS; 422 node_a==node_b; 429 per-user cap). FUNDAMENTAL_CROSS `metric_key` is allow-listed against the S3 `GET /api/v1/fundamentals/screen/fields` vocabulary (fail-open if S3 is unreachable). |
-| GET | `/api/v1/alert-rules` | X-Internal-JWT | List the caller's rules (`?enabled=`, `?rule_type=`, `?limit=&offset=`) → `{items, total}` |
-| GET | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Get one owned rule (404 if missing/cross-owner) |
-| PATCH | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Partial update; changing `condition` re-arms (`last_state=null`); `rule_type` immutable |
-| DELETE | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Delete an owned rule (204; 404 if missing/cross-owner) |
+| GET | `/internal/v1/instruments/{instrument_id}/active-alert-flag` | X-Internal-JWT | Per-entity active-alert summary (screener sync, PLAN-0089 L-5a) |
+| GET | `/internal/v1/users/{user_id}/alerts/pending` | X-Internal-JWT (service caller) | Pending alerts for a given user — service-caller variant of `/api/v1/alerts/pending` |
 
-**Rule types** (`rule_type`, VARCHAR+CHECK per BP-007): `PRICE_CROSS`,
-`NEWS_COUNT`, `NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`. The
-read path (List/Get) uses the read replica (`ReadDbSessionDep`, R27); writes use
-`DbSessionDep`. Reads/writes go only through use cases in
-`application/use_cases/manage_rules.py` (R25), behind the `IAlertRuleRepository`
-ABC port.
+#### `GET /internal/v1/users/{user_id}/alerts/pending`
+
+PLAN-0094 follow-up. Service-caller variant of `/api/v1/alerts/pending` for
+callers that have no per-user JWT (the rag-chat morning-brief scheduler holds a
+single service-account token whose `sub` is `service:rag-chat-brief-scheduler`,
+not a real user). `user_id` comes from the path, not the JWT subject.
+
+**Authorization**: the middleware sets `request.state.role` / `service_name`
+from the verified RS256 token. The route requires `role == "system"` AND
+`service_name` on the alert-side allow-list (`_SERVICE_BRIEF_ALLOWED` =
+`{"rag-chat-brief-scheduler"}`). Any other token — including a normal user
+token — is rejected with **403** so this path can never become a cross-user
+data leak. Response shape is identical to `/api/v1/alerts/pending`
+(`{"alerts": [...], "total", "limit", "offset"}`). Mirrors the portfolio
+service's `/internal/v1/users/{user_id}/portfolio/context` guard.
 
 #### `POST /api/v1/alerts`
 
@@ -299,29 +219,6 @@ needed for each new connection (30 s TTL).
 | GET | `/readyz` | None | Readiness (checks alert_db, Kafka, Valkey, S1) |
 | GET | `/metrics` | None | Prometheus metrics (`s10_` prefix) |
 
-#### Rule-engine monitoring wiring (PLAN-0113 Wave 5, T-5-02)
-
-The poller exposes its `s10_rule_*` metrics on `:9101` (separate from the shared
-`:9100` used by the alert consumers/dispatcher). The full wiring:
-
-- **Scrape job** `alert-rule-poller` (`infra/prometheus/prometheus.yml`) →
-  `alert-rule-poller:9101` (15s interval).
-- **Alert rules** `infra/prometheus/rules/alert_rule_poller.yml` (loaded via
-  `rule_files: /etc/prometheus/rules/*.yml`):
-  - `AlertRulePollerStalled` — `time() - s10_rule_poller_last_success_timestamp_seconds > 120`
-    (2× the 60s base tick, PRD-0113 §13 "2× cadence") `for: 1m`. The canonical
-    "silent stall" page — no rules evaluated, alerts stop firing invisibly.
-  - `AlertRulePollerDown` — `absent(s10_rule_poller_last_success_timestamp_seconds)`
-    `for: 5m` (process never came up / unscraped; the staleness expr produces no
-    series in that case).
-  - `AlertRuleEvaluationErrors` — `sum(rate(s10_rule_evaluations_total{outcome="error"}[10m])) > 0.2`
-    `for: 15m` (fail-soft loop alive but a rule type's upstream S3/S6/S7 read is
-    failing → that type silently not firing).
-- **Dashboard** `infra/grafana/dashboards/alert-rule-engine.json`
-  (uid `worldview-alert-rule-engine`): poller liveness (seconds-since-last-success
-  stat with 60/120s thresholds, cycle-outcome rate, due-rules), plus
-  evaluations-by-type/outcome, fired-by-type, and evaluation-errors-by-type.
-
 ### DLQ Admin Endpoints
 
 | Method | Path | Auth | Description |
@@ -374,36 +271,6 @@ CREATE TABLE alerts (
     snooze_until TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- PLAN-0113 (migration 0010): standing user rules backing the rule engine.
-CREATE TABLE alert_rules (
-    rule_id UUID PRIMARY KEY,              -- UUIDv7
-    tenant_id UUID NOT NULL,
-    user_id UUID NOT NULL,                 -- rule owner (delivery target)
-    rule_type VARCHAR(50) NOT NULL,        -- VARCHAR+CHECK (BP-007), 5 RuleType values
-    name VARCHAR(255) NOT NULL,
-    entity_id UUID,                        -- instrument/entity key (non-KG types)
-    node_a_entity_id UUID,                 -- KG_CONNECTION source
-    node_b_entity_id UUID,                 -- KG_CONNECTION target
-    condition JSONB NOT NULL,              -- discriminated union per rule_type (§6.5.3)
-    severity VARCHAR(10) NOT NULL DEFAULT 'medium',
-    enabled BOOLEAN NOT NULL DEFAULT true,
-    cooldown_seconds INTEGER NOT NULL DEFAULT 0,
-    notify_in_app BOOLEAN NOT NULL DEFAULT true,
-    notify_email BOOLEAN NOT NULL DEFAULT false,
-    last_state JSONB,                      -- edge-trigger memory (was_above/last_count/connected/last_fired_at/...)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- keying CHECK: KG needs two distinct nodes; others need entity_id
-    CONSTRAINT ck_alert_rules_keying CHECK (
-        (rule_type = 'KG_CONNECTION' AND node_a_entity_id IS NOT NULL
-            AND node_b_entity_id IS NOT NULL AND node_a_entity_id <> node_b_entity_id)
-        OR (rule_type <> 'KG_CONNECTION' AND entity_id IS NOT NULL)
-    )
-    -- + CHECK rule_type IN (...), CHECK severity IN (...), CHECK cooldown_seconds >= 0
-);
--- Indexes: (rule_type) WHERE enabled, (entity_id) WHERE enabled,
---          (node_a_entity_id, node_b_entity_id) WHERE enabled, (tenant_id, user_id)
 
 CREATE TABLE pending_alerts (
     pending_id UUID PRIMARY KEY,
@@ -606,18 +473,7 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 base URL for watchlist/user lookups |
 | `ALERT_S7_KNOWLEDGE_GRAPH_BASE_URL` | `http://knowledge-graph:8007` | S7 URL for entity name/ticker enrichment |
 | `ALERT_S8_BASE_URL` | `http://rag-chat:8008` | S8 URL for email digest briefing generation |
-| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data + rule price/fundamental reads |
-| `ALERT_S3_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S3 calls (PLAN-0113). **Required for PRICE_CROSS / FUNDAMENTAL_CROSS evaluation + `metric_key` validation.** Without it the poller's S3 reads 401 and **no price/fundamental rule ever fires** (QA 2026-06-21). |
-| `ALERT_S6_NLP_BASE_URL` | `http://nlp-pipeline:8006` | S6 URL for news-count/momentum rule reads (PLAN-0113, new) |
-| `ALERT_S6_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S6 calls (PLAN-0113) |
-| `ALERT_ALERT_RULE_POLLER_ENABLED` | `true` | Master switch for rule evaluation (false = rules dormant) |
-| `ALERT_ALERT_RULE_POLL_TICK_SECONDS` | `60` | Poller base tick |
-| `ALERT_ALERT_RULE_CADENCE_PRICE_SECONDS` | `60` | PRICE_CROSS poll cadence |
-| `ALERT_ALERT_RULE_CADENCE_NEWS_COUNT_SECONDS` | `3600` | NEWS_COUNT poll cadence |
-| `ALERT_ALERT_RULE_CADENCE_NEWS_MOMENTUM_SECONDS` | `3600` | NEWS_MOMENTUM poll cadence |
-| `ALERT_ALERT_RULE_CADENCE_FUNDAMENTAL_SECONDS` | `21600` | FUNDAMENTAL_CROSS poll cadence (6h) |
-| `ALERT_ALERT_RULE_MAX_PER_USER` | `200` | Per-user rule cap (PRD §9) |
-| `ALERT_ALERT_RULE_POLLER_WATCHDOG_SECONDS` | `180` | Per-cycle `asyncio.wait_for` watchdog (BP-705) |
+| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data in email digests |
 | `ALERT_S1_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S1 calls. **Required for watchlist lookups.** Without it, S1 returns 401. |
 | `ALERT_S7_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S7 entity enrichment. Without it, entity_name/ticker will be null in alerts. |
 | `ALERT_S8_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S8 briefing calls in email digests. **Required for email digest generation.** |

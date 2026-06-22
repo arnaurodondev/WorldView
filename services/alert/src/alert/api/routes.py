@@ -56,7 +56,7 @@ from alert.api.schemas import (
 )
 from alert.application.use_cases.active_alert_flag import GetActiveAlertFlagUseCase
 from alert.application.use_cases.create_alert import CreateAlertRequest as CreateAlertInput
-from alert.domain.entities import Alert
+from alert.domain.entities import Alert, PendingAlert
 from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -68,6 +68,20 @@ router = APIRouter(prefix="/api/v1", tags=["alerts"])
 # service-caller endpoint lives outside the public /api/v1 namespace. Both
 # routers are included in app.py and share the same InternalJWTMiddleware.
 internal_router = APIRouter(prefix="/internal/v1", tags=["alerts-internal"])
+
+# PLAN-0094 follow-up: allow-list of service-token callers that may read ANY
+# user's pending alerts via the internal route below. Each entry corresponds to
+# a ``service_name`` minted by S9's POST /internal/v1/service-token (and present
+# in S9's ``_ALLOWED_SERVICE_NAMES``). Defence-in-depth: a service token alone
+# is not enough — the calling ``service_name`` must also be on this list, so an
+# attacker who somehow obtains a service token still cannot read user alerts
+# unless they are this exact identity. Mirrors the portfolio service's
+# ``_SERVICE_BRIEF_ALLOWED`` (services/portfolio/src/portfolio/api/internal.py).
+_SERVICE_BRIEF_ALLOWED: frozenset[str] = frozenset(
+    {
+        "rag-chat-brief-scheduler",
+    },
+)
 
 
 # ── REST: GET /internal/v1/instruments/{instrument_id}/active-alert-flag ──────
@@ -127,7 +141,78 @@ async def get_pending_alerts(
             ) from None
 
     pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
+    return _build_pending_alerts_response(pairs, limit=limit, offset=offset)
 
+
+# ── REST: GET /internal/v1/users/{user_id}/alerts/pending ─────────────────────
+# PLAN-0094 follow-up: service-caller variant of the route above. The rag-chat
+# morning-brief scheduler holds a single service-account JWT (sub="service:...",
+# role="system") whose subject does NOT map to a real user, so it cannot use the
+# JWT-sub scoping of /api/v1/alerts/pending. This route takes ``user_id`` in the
+# path and authorises the caller by ``service_name`` (allow-list) instead.
+
+
+@internal_router.get(
+    "/users/{user_id}/alerts/pending",
+    response_model=PendingAlertsResponse,
+)
+async def get_pending_alerts_for_user(
+    user_id: UUID,
+    request: Request,
+    uc: GetPendingAlertsUseCaseDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    min_severity: str | None = Query(default=None, description="Minimum severity: low|medium|high|critical"),
+) -> PendingAlertsResponse:
+    """Return paginated unacknowledged alerts for ``user_id`` (service callers only).
+
+    Auth: InternalJWTMiddleware (RS256) sets request.state.role / service_name.
+    Only an allow-listed system caller (``role == "system"`` AND ``service_name``
+    in :data:`_SERVICE_BRIEF_ALLOWED`) may read another user's alerts here. Any
+    other token — including a normal user token — is rejected with 403 so this
+    route can never become a cross-user data leak via the public namespace.
+    """
+    jwt_role = getattr(request.state, "role", "") or ""
+    jwt_service_name = getattr(request.state, "service_name", "") or ""
+
+    if not (jwt_role == "system" and jwt_service_name in _SERVICE_BRIEF_ALLOWED):
+        # 403, not 401: the token is valid but this caller is not authorised to
+        # read arbitrary users' alerts. Don't leak which check failed.
+        raise HTTPException(status_code=403, detail="Service caller not authorised for this route")
+
+    severity_filter: AlertSeverity | None = None
+    if min_severity is not None:
+        try:
+            severity_filter = AlertSeverity(min_severity)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid min_severity: must be low|medium|high|critical",
+            ) from None
+
+    # Audit log so ops can spot unexpected service-caller access (mirrors the
+    # portfolio service's ``portfolio_context_service_caller`` log line).
+    logger.info(
+        "alerts_pending_service_caller",
+        service_name=jwt_service_name,
+        path_user_id=str(user_id),
+    )
+
+    pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
+    return _build_pending_alerts_response(pairs, limit=limit, offset=offset)
+
+
+def _build_pending_alerts_response(
+    pairs: list[tuple[PendingAlert, Alert]],
+    *,
+    limit: int,
+    offset: int,
+) -> PendingAlertsResponse:
+    """Map (pending, alert) pairs to the shared PendingAlertsResponse shape.
+
+    Extracted so the public JWT-sub route and the internal service-caller route
+    return byte-identical payloads (the s5_client expects ``{"alerts": [...]}``).
+    """
     alert_responses = [
         PendingAlertResponse(
             pending_id=p.pending_id,
