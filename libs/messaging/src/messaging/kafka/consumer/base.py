@@ -409,6 +409,11 @@ class FailureInfo(Generic[TFailure]):
         attempt: Current attempt count (1-based).
         last_error: The most recent exception.
         record: Optional failure record for persistence (subclass-defined).
+        raw_payload: Original Kafka message bytes (``msg.value()``).  P0-①
+            (2026-06-18): carried through to :meth:`_dead_letter_impl` so a
+            subclass can persist a REQUEUE-ABLE payload (the original doc_id /
+            minio_silver_key) into its DLQ table instead of a metadata-only
+            stub.  ``None`` when the raw bytes were unavailable at failure time.
     """
 
     event_id: str
@@ -418,6 +423,7 @@ class FailureInfo(Generic[TFailure]):
     attempt: int
     last_error: BaseException
     record: TFailure | None = None
+    raw_payload: bytes | None = None
 
 
 class UnitOfWorkProtocol(ABC):
@@ -1010,14 +1016,39 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     await self.process_message(key, value, headers)
                 await uow.commit()
                 await self.mark_processed(event_id)
-            except TimeoutError:
+            except TimeoutError as timeout_exc:
                 # BP-302 watchdog: poison message hung processing for timeout_s.
-                # Dump a stack trace, dead-letter the message, and continue so
-                # the consumer does not stall on re-delivery of the same message.
+                # Dump a stack trace so the hung frame is captured, then roll back
+                # the whole-article unit of work (no partial-progress checkpoint).
                 import faulthandler
 
                 faulthandler.dump_traceback(file=sys.stderr)
                 await uow.rollback()
+
+                # P0-② (2026-06-18): the watchdog used to FORCE attempt=max_retries
+                # and dead-letter the message INLINE, turning a transient host /
+                # GLiNER saturation into permanent data loss (2,236 of 2,316
+                # historical dead-letters).  For consumers that opt into the
+                # durable attempt-count retry path (enable_persistent_retry=True),
+                # RE-RAISE the timeout as a NetworkTimeoutError so it flows through
+                # ``_handle_failure`` exactly like any other transient failure —
+                # counting as ONE attempt, seeking back with backoff, and dead-
+                # lettering ONLY after genuinely exhausting max_retries.  Poison
+                # protection is preserved: a message that ALWAYS times out reaches
+                # max_retries via the durable counter and is then dead-lettered.
+                #
+                # NetworkTimeoutError is a RetryableError, so the OFF path (legacy
+                # consumers with attempt hardcoded to 1) would loop forever on it —
+                # there the historical terminal-inline-dead-letter is preserved
+                # byte-for-byte below.
+                from messaging.kafka.consumer.errors import NetworkTimeoutError
+
+                if self._config.enable_persistent_retry:
+                    raise NetworkTimeoutError(
+                        f"message_processing_timeout after {timeout_s}s",
+                    ) from timeout_exc
+
+                # ── Legacy OFF path: terminal inline dead-letter (unchanged) ──
                 _timeout_failure: FailureInfo[TFailure] = FailureInfo(
                     event_id=event_id,
                     topic=topic,
@@ -1025,6 +1056,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     offset=msg.offset(),
                     attempt=self._config.max_retries,
                     last_error=TimeoutError(f"message_processing_timeout after {timeout_s}s"),
+                    raw_payload=raw_value,
                 )
                 await self.dead_letter(_timeout_failure)
                 logger.error(  # type: ignore[no-any-return]
@@ -1187,6 +1219,9 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 offset=offset,
                 attempt=1,
                 last_error=exc,
+                # P0-①: carry the ORIGINAL message bytes so a subclass
+                # ``_dead_letter_impl`` can persist a requeue-able payload.
+                raw_payload=raw_value,
             )
             # BP-700: the dead-letter / store_failure persistence below writes to
             # the consuming service's DB.  During the incident a concurrent
@@ -1240,6 +1275,9 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             offset=offset,
             attempt=attempt,
             last_error=exc,
+            # P0-①: carry the ORIGINAL message bytes so a subclass
+            # ``_dead_letter_impl`` can persist a requeue-able payload.
+            raw_payload=raw_value,
         )
 
         if isinstance(exc, FatalError) or attempt >= self._config.max_retries:
