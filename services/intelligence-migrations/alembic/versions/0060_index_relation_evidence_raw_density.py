@@ -1,7 +1,7 @@
 """Add density-subquery indexes on relation_evidence_raw (promoter hot-path).
 
-Revision ID: 0049
-Revises: 0048
+Revision ID: 0060
+Revises: 0059
 Create Date: 2026-06-21
 
 WHY THIS MIGRATION EXISTS:
@@ -59,8 +59,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0049"
-down_revision: str = "0048"
+revision: str = "0060"
+down_revision: str = "0059"
 branch_labels = None
 depends_on = None
 
