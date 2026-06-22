@@ -35,12 +35,17 @@ if TYPE_CHECKING:
 # a deep backfill), which previously failed the statement, stalled the Kafka
 # offset, and crash-looped the consumer (BP: combined-upsert wire-param overflow).
 #
-# We chunk every multi-row INSERT to a safe ROW count well under the limit.  At
-# 13 columns (the widest VALUES row here — the derived path) the hard ceiling is
-# ``65_535 / 13 ≈ 5_041`` rows, so a 5_000-row chunk leaves comfortable headroom
-# for any future column added to the VALUES list and stays a round number.
-_MAX_PARAMS = 65_535
-_UPSERT_CHUNK_ROWS = 5_000
+# We chunk every multi-row INSERT to a safe ROW count well under the limit.
+# CRITICAL (2026-06-21): the real limit is 32_767, NOT 65_535. asyncpg 0.29
+# enforces the SIGNED int16 ceiling client-side before the bind hits the wire —
+# ``asyncpg/protocol/prepared_stmt.pyx``: ``if len(args) > 32767: raise
+# InterfaceError("the number of query arguments cannot exceed 32767")``. The old
+# 65_535 guard + 5_000-row chunk bound 5_000 x 13 = 65_000 params per derived/
+# priority chunk -> every full chunk raised InterfaceError and crash-looped the
+# consumer (the very failure the chunking was meant to prevent). At 13 columns the
+# real ceiling is 32_767 / 13 ~= 2_520 rows; 2_000 leaves headroom for future cols.
+_MAX_PARAMS = 32_767
+_UPSERT_CHUNK_ROWS = 2_000
 
 
 def _chunk_rows(values: list[dict[str, Any]], chunk_size: int = _UPSERT_CHUNK_ROWS) -> Iterator[list[dict[str, Any]]]:
