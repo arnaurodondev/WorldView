@@ -64,7 +64,7 @@ export function MetricPicker({ value, onChange }: MetricPickerProps) {
         onChange={(e) => onChange(e.target.value)}
         disabled={isLoading || isError}
         aria-label="Fundamental metric"
-        className="h-7 rounded-[2px] border border-border bg-background px-2 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+        className="h-7 rounded-[2px] border border-border bg-background px-2 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:text-[hsl(var(--disabled-foreground))] disabled:cursor-not-allowed"
       >
         {/* Placeholder option — value "" is not a valid metric_key, so the
             wizard's Save button stays disabled until a real metric is chosen. */}

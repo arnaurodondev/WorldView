@@ -64,6 +64,7 @@ function buildPinnedParams(
     dayChange: null,
     dayChangePct: null,
     dayChangeValue: null,
+    annualizedDividendYield: null,
     ...rowOverrides,
   };
   return {
@@ -163,6 +164,7 @@ describe("SECTOR cell (DESIGN-QA P-2 — column must not render '—' when a sec
       dayChange: null,
       dayChangePct: null,
       dayChangeValue: null,
+      annualizedDividendYield: null,
       ...rowOverrides,
     };
     return {

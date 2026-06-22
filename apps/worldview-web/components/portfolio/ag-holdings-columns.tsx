@@ -569,6 +569,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     hide: true,
     width: HOLDINGS_AG_COL_WIDTHS.divYld,
+    cellClass: CELL_CLAMP, // P-1: clip + fix height so this column can't overlap rows (merge: PLAN-0114 W6 column predated the P-1 guard)
     valueGetter: (p: import("ag-grid-community").ValueGetterParams<EnrichedHoldingRow>) =>
       p.data?.annualizedDividendYield ?? null,
     cellRenderer: (params: ICellRendererParams<EnrichedHoldingRow>) => {

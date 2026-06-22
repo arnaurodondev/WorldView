@@ -414,7 +414,12 @@ export function SemanticHoldingsTable({
       }
       totalWeight += weight;
 
-      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
+      // PLAN-0114 W6: DIV YLD column reads annualizedDividendYield. The Holding
+      // type carries no yield field yet (no producer wired — the S9 get_holdings
+      // fan-out field is a pending backend gap), so this is null and the column
+      // renders "—" until that data path lands. Kept explicit so the row
+      // satisfies EnrichedHoldingRow.
+      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue, annualizedDividendYield: null };
     });
 
     const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
@@ -472,6 +477,8 @@ export function SemanticHoldingsTable({
       dayChange: null,
       dayChangePct: totalDayChangePct,
       dayChangeValue: dayChangeSeen ? totalDayChange : null,
+      // TOTAL row has no single-position yield → null (DIV YLD renders "—").
+      annualizedDividendYield: null,
     };
 
     return { enrichedRows: rows, pinnedBottomRow: pinned };

@@ -106,7 +106,7 @@ export function NlScreenerSearch({ onApply }: NlScreenerSearchProps) {
             "flex h-7 w-7 items-center justify-center rounded-[2px] border transition-colors",
             "bg-primary/10 border-primary/60 text-primary hover:bg-primary/20",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
+            "disabled:text-[hsl(var(--disabled-foreground))] disabled:cursor-not-allowed",
           )}
         >
           {translate.isPending ? (
