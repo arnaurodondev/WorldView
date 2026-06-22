@@ -169,8 +169,23 @@ class ProcessArticleUseCase:
         # 2. Clean text
         # Unwrap S4 Bronze envelope (JSON with raw_b64) to get actual article bytes
         article_bytes = _unwrap_bronze_envelope(raw_bytes)
-        content_type = _guess_content_type(article.source_type)
-        cleaned_text = clean(article_bytes, content_type)
+
+        # BUG #34 — extract prose from raw-news JSON payloads BEFORE classification.
+        # content-ingestion's eodhd/newsapi adapters emit ``json.dumps(article)`` as
+        # the raw bytes (the EODHD/NewsAPI dict itself, with prose under ``content``/
+        # ``summary``/``description``).  ``_guess_content_type`` maps those sources to
+        # ``"html"``, so feeding the JSON string to readability+bleach left it intact
+        # (no tags to strip) and the silver ``body`` ended up holding the *stringified
+        # JSON envelope* — which nlp-pipeline then chunked as text (chunk_index=0 = the
+        # envelope).  When we recognise that shape we pull the inner prose here and
+        # clean it as plain text, so the silver ``body`` is genuine article prose.
+        # Genuine HTML/XML/text sources fall through to the original classify+clean path.
+        prose = _extract_prose_payload(article_bytes)
+        if prose is not None:
+            cleaned_text = clean(prose.encode("utf-8"), "text")
+        else:
+            content_type = _guess_content_type(article.source_type)
+            cleaned_text = clean(article_bytes, content_type)
         word_count = len(cleaned_text.split()) if cleaned_text else 0
 
         # PLAN-0086 Wave C-1: convert raw tenant_id string from the Avro event
@@ -333,6 +348,52 @@ def _unwrap_bronze_envelope(raw_bytes: bytes) -> bytes:
     except (json.JSONDecodeError, KeyError, ValueError):
         pass
     return raw_bytes
+
+
+# BUG #34 — prose fields, in priority order, used to recover article prose from a
+# raw-news JSON payload (content-ingestion's eodhd/newsapi adapters emit the source
+# dict via ``json.dumps``).  Mirrors nlp-pipeline's defensive ``_PROSE_FIELDS`` so the
+# two stay in lockstep: EODHD prose is under ``content``, Yahoo/seed under ``summary``,
+# NewsAPI under ``content``/``description``.  We intentionally do NOT match a top-level
+# ``body`` here — that is content-store's *own* silver envelope key, not a raw payload —
+# to avoid mistaking already-cleaned output for a raw news envelope.
+_PROSE_FIELDS: tuple[str, ...] = ("content", "summary", "description", "text")
+
+
+def _extract_prose_payload(article_bytes: bytes) -> str | None:
+    """Return inner article prose if *article_bytes* is a raw-news JSON object.
+
+    content-ingestion stores eodhd/newsapi articles as ``json.dumps(article)`` (the
+    raw source dict, e.g. ``{"title": ..., "content": "<prose>", "date": ..., ...}``).
+    Classifying those as ``"html"`` and running readability+bleach leaves the JSON
+    intact (BUG #34).  Detect that shape and pull the first non-empty
+    ``_PROSE_FIELDS`` value so the caller can clean genuine prose instead.
+
+    Returns:
+        The inner prose string when *article_bytes* parses to a JSON object that
+        carries a known prose field; ``None`` otherwise (genuine HTML/XML/text, a
+        bare JSON array, or a dict with no recognised prose field — all of which
+        fall through to the existing classify-then-clean path).
+    """
+    try:
+        decoded = article_bytes.decode("utf-8", errors="replace")
+    except (UnicodeDecodeError, AttributeError):
+        return None
+    stripped = decoded.lstrip()
+    # Cheap guard: only attempt a parse when it actually looks like a JSON object.
+    if not stripped.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    for field in _PROSE_FIELDS:
+        value = parsed.get(field)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 def _guess_content_type(source_type: str) -> str:
