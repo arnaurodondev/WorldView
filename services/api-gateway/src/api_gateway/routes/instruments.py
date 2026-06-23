@@ -14,12 +14,13 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import DownstreamError, get_map_layers, get_relevant_news
 from api_gateway.resolution import (
     InstrumentNotFoundError,
     resolve_security_id,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers, proxy_json_response
 from api_gateway.schemas import InstrumentSearchResult
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -89,7 +90,7 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
             include_ohlcv=True,
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── Batched company overview (FIX F-1) ──────────────────────────────────────
@@ -360,11 +361,8 @@ async def instrument_ohlcv_paginated(
     )
 
     if resp.status_code >= 400:
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            media_type="application/json",
-        )
+        # Forward 4xx verbatim (caller-safe) and sanitize 5xx (BUG-7).
+        return proxy_json_response(request, resp)
 
     raw = resp.json()
     items: list[dict[str, Any]] = raw.get("items") or []
@@ -415,7 +413,7 @@ async def relevant_news(
     try:
         return await get_relevant_news(_clients(request), limit=limit, headers=_system_headers(request))
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── Map ───────────────────────────────────────────────────
@@ -452,7 +450,7 @@ async def instruments_lookup(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Batch ticker → instrument_id resolve (PLAN-0099 W4) ─────────────────────
@@ -537,7 +535,7 @@ async def instrument_peers(instrument_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Manual price refresh (PLAN-0036 W1-11) ────────────────────────────────────
@@ -698,7 +696,7 @@ async def search_instruments(
         params={"query": q, "limit": limit},
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Document Search (PLAN-0064 Wave 4) ──────────────────────────────────────
@@ -728,4 +726,4 @@ async def search_documents(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Search backend unavailable") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

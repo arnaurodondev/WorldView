@@ -408,9 +408,9 @@ async def test_register_redirect_302(app) -> None:
 
 @pytest.mark.asyncio
 async def test_portfolios_downstream_500(authed_app, authed_mock_clients) -> None:
-    """GET /v1/portfolios when S1 returns 500 → 500 forwarded transparently."""
+    """GET /v1/portfolios when S1 returns 500 → sanitized 502, no upstream body leak (BUG-7)."""
     authed_mock_clients.portfolio.get = AsyncMock(
-        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+        return_value=_mock_response(500, b'{"detail": "psql ERROR: relation users does not exist"}'),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -420,7 +420,10 @@ async def test_portfolios_downstream_500(authed_app, authed_mock_clients) -> Non
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    assert resp.status_code == 500
+    assert resp.status_code == 502
+    assert b"psql" not in resp.content
+    assert b"relation users" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}
     authed_mock_clients.portfolio.get.assert_called_once()
 
 
@@ -449,9 +452,9 @@ async def test_watchlist_create_downstream_error(authed_app, authed_mock_clients
 
 @pytest.mark.asyncio
 async def test_transactions_post_downstream_error(authed_app, authed_mock_clients) -> None:
-    """POST /v1/transactions when S1 returns 500 → 500 forwarded transparently."""
+    """POST /v1/transactions when S1 returns 500 → sanitized 502, no upstream body leak (BUG-7)."""
     authed_mock_clients.portfolio.post = AsyncMock(
-        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+        return_value=_mock_response(500, b'{"detail": "Traceback (most recent call last): File app.py"}'),
     )
 
     body = b'{"portfolio_id": "p-1", "symbol": "AAPL", "side": "buy", "quantity": 10}'
@@ -466,7 +469,9 @@ async def test_transactions_post_downstream_error(authed_app, authed_mock_client
             },
         )
 
-    assert resp.status_code == 500
+    assert resp.status_code == 502
+    assert b"Traceback" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}
     authed_mock_clients.portfolio.post.assert_called_once()
 
 

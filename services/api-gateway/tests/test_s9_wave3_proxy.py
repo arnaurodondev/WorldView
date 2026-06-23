@@ -153,13 +153,13 @@ async def test_heatmap_returns_11_sectors(authed_app, authed_mock_clients) -> No
 
 @pytest.mark.asyncio
 async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) -> None:
-    """Heatmap propagates upstream error when sector-returns fails.
+    """Heatmap sanitizes upstream 5xx — no raw body leak (BUG-7).
 
     After BP-fix 2026-05-11 the heatmap delegates to a single GET /sector-returns
-    endpoint. When that endpoint returns 5xx, there is no partial-success path;
-    the heatmap returns the upstream status code to the caller.
+    endpoint. When that endpoint returns 5xx, the gateway now returns a generic
+    sanitized 502 (not the raw upstream 500/body).
     """
-    error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
+    error_resp = _mock_response(500, b'{"detail": "Internal Server Error at db.execute()"}')
     authed_mock_clients.market_data.get = AsyncMock(return_value=error_resp)
 
     transport = ASGITransport(app=authed_app)
@@ -169,8 +169,9 @@ async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) 
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    # DownstreamError → HTTPException with the upstream status code.
-    assert resp.status_code == 500
+    # 5xx normalised to 502; upstream body never leaked.
+    assert resp.status_code == 502
+    assert b"db.execute" not in resp.content
 
 
 # ── Top movers ───────────────────────────────────────────────────────────────
@@ -443,13 +444,14 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
 
 @pytest.mark.asyncio
 async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers when S3 period-movers returns 500 → DownstreamError → 500.
+    """GET /v1/market/top-movers when S3 returns 500 → sanitized 502, no leak (BUG-7).
 
-    get_top_movers() uses clients.market_data.get() (not .post()); it raises
-    DownstreamError on failure, which the route handler converts to HTTPException.
+    get_top_movers() uses clients.market_data.get() and raises DownstreamError on
+    failure; the route handler converts it via downstream_to_http(), which now
+    sanitizes the 5xx (generic 502 + server-side log, never the raw body).
     """
-    error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
-    error_resp.text = '{"detail": "Internal Server Error"}'
+    error_resp = _mock_response(500, b'{"detail": "Internal Server Error: NameError at movers.py"}')
+    error_resp.text = '{"detail": "Internal Server Error: NameError at movers.py"}'
     # Mock .get not .post — the implementation calls market_data.get()
     authed_mock_clients.market_data.get = AsyncMock(return_value=error_resp)
 
@@ -461,7 +463,9 @@ async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> Non
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    assert resp.status_code == 500
+    assert resp.status_code == 502
+    assert b"NameError" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}
     authed_mock_clients.market_data.get.assert_called_once()
 
 
@@ -530,20 +534,22 @@ async def test_economic_calendar_downstream_error(authed_app, authed_mock_client
 
 @pytest.mark.asyncio
 async def test_search_instruments_downstream_error(app, mock_clients) -> None:
-    """GET /v1/search/instruments when S3 returns 500 → 500 forwarded.
+    """GET /v1/search/instruments when S3 returns 500 → sanitized 502 (BUG-7).
 
-    Search is a public endpoint (no auth required), so the 500 from S3 is
-    forwarded transparently to the caller.
+    Search is a public endpoint, which makes leak-prevention even more important:
+    the upstream 5xx body is replaced with a generic envelope, never forwarded.
     """
     mock_clients.market_data.get = AsyncMock(
-        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+        return_value=_mock_response(500, b'{"detail": "Internal Server Error: asyncpg pool exhausted"}'),
     )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/v1/search/instruments", params={"q": "apple"})
 
-    assert resp.status_code == 500
+    assert resp.status_code == 502
+    assert b"asyncpg" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}
     mock_clients.market_data.get.assert_called_once()
 
 
@@ -772,9 +778,9 @@ async def test_fundamentals_snapshot_all_null_fields(authed_app, authed_mock_cli
 
 @pytest.mark.asyncio
 async def test_fundamentals_snapshot_downstream_error_forwarded(authed_app, authed_mock_clients) -> None:
-    """GET /v1/fundamentals/{id}/snapshot when S3 returns 500 → 500 forwarded to client."""
+    """GET /v1/fundamentals/{id}/snapshot when S3 returns 500 → sanitized 502 (BUG-7)."""
     authed_mock_clients.market_data.get = AsyncMock(
-        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+        return_value=_mock_response(500, b'{"detail": "Internal Server Error: KeyError eps_ttm"}'),
     )
     # WHY UUID: F-010 — instrument_id is now UUID-typed; non-UUID values → 422.
     valid_id = "11111111-1111-1111-1111-111111111111"
@@ -785,4 +791,6 @@ async def test_fundamentals_snapshot_downstream_error_forwarded(authed_app, auth
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    assert resp.status_code == 500
+    assert resp.status_code == 502
+    assert b"KeyError" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}

@@ -146,7 +146,7 @@ async def get_market_heatmap(
                 headers=_h(),
             )
             if resp.status_code >= 400:
-                raise DownstreamError("market-data", resp.status_code, resp.text)
+                raise DownstreamError("market-data", resp.status_code, resp.text[:200])
             return cast("dict[str, Any]", resp.json())
 
         try:
@@ -252,7 +252,7 @@ async def get_top_movers(
             f"market-data timeout: {exc.__class__.__name__}",
         ) from exc
     if resp.status_code >= 400:
-        raise DownstreamError("market-data", resp.status_code, resp.text)
+        raise DownstreamError("market-data", resp.status_code, resp.text[:200])
     return cast("dict[str, Any]", resp.json())
 
 

@@ -428,9 +428,15 @@ async def test_briefings_morning_proxied(authed_app, authed_mock_clients) -> Non
 
 @pytest.mark.asyncio
 async def test_ohlcv_proxy_downstream_500(authed_app, authed_mock_clients) -> None:
-    """GET /v1/ohlcv/{id} when S3 returns 500 → 500 forwarded transparently."""
+    """GET /v1/ohlcv/{id} when S3 returns 500 → sanitized 502, no upstream body leak.
+
+    BUG-7: the gateway must NOT forward a backend 5xx body to the client. The raw
+    upstream detail ("Internal Server Error" here, but in production a stack trace
+    / SQL) must be replaced with a generic envelope and the status normalised to
+    502 (the gateway is alive; the upstream is broken).
+    """
     authed_mock_clients.market_data.get = AsyncMock(
-        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+        return_value=_mock_response(500, b'{"detail": "SECRET stack trace at db.py line 42"}'),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -440,7 +446,12 @@ async def test_ohlcv_proxy_downstream_500(authed_app, authed_mock_clients) -> No
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    assert resp.status_code == 500
+    # Status normalised to 502 (not the raw upstream 500).
+    assert resp.status_code == 502
+    # The raw upstream detail must NOT appear in the client-facing body.
+    assert b"SECRET" not in resp.content
+    assert b"stack trace" not in resp.content
+    assert resp.json() == {"detail": "upstream service error"}
     authed_mock_clients.market_data.get.assert_called_once()
 
 

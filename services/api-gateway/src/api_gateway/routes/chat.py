@@ -18,7 +18,7 @@ from api_gateway.routes.chat_safety import (
     is_injection_block_response,
     rewrite_sse_chunk_if_injection_block,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients
+from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -57,11 +57,8 @@ async def chat(request: Request) -> Any:
             status_code=resp.status_code,
             media_type="application/json",
         )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-    )
+    # All other responses: forward 2xx/4xx verbatim, sanitize upstream 5xx (BUG-7).
+    return proxy_json_response(request, resp)
 
 
 @router.post("/chat/stream")
@@ -180,7 +177,7 @@ async def chat_entity_context(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/chat/entity-context/stream", summary="SSE entity-context chat (PLAN-0074 Wave G)")
@@ -314,7 +311,7 @@ async def create_thread(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/threads")
@@ -329,7 +326,7 @@ async def list_threads(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/threads/{thread_id}")
@@ -343,7 +340,7 @@ async def get_thread(thread_id: str, request: Request) -> Any:
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/threads/{thread_id}", status_code=200)
@@ -357,7 +354,7 @@ async def delete_thread(thread_id: str, request: Request) -> Any:
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/threads/{thread_id}")
@@ -380,7 +377,7 @@ async def update_thread(thread_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
@@ -405,7 +402,7 @@ async def get_morning_briefing(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/briefings/instrument/{entity_id}")
@@ -427,7 +424,7 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/morning/generate", status_code=202)
@@ -457,7 +454,7 @@ async def generate_morning_briefing(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/briefings/morning/history")
@@ -481,7 +478,7 @@ async def get_morning_brief_history(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0066 Wave C: brief diff + feedback proxies ───────────────────────────
@@ -505,7 +502,7 @@ async def get_morning_brief_diff(request: Request) -> Any:
         "/api/v1/briefings/morning/diff",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/feedback/bullet", status_code=201)
@@ -529,7 +526,7 @@ async def submit_bullet_feedback(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/feedback/brief", status_code=201)
@@ -549,7 +546,7 @@ async def submit_brief_feedback(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0066 Wave D: chat/discuss + Wave E: create-alert placeholder ─────────
@@ -581,7 +578,7 @@ async def discuss_brief(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/{brief_id}/create-alert", status_code=201)
@@ -605,4 +602,4 @@ async def create_brief_alert(brief_id: str, request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

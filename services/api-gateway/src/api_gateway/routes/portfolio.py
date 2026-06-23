@@ -18,8 +18,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import DownstreamError, get_watchlist_insights
-from api_gateway.routes.helpers import _auth_headers, _clients, _portfolio_headers, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _portfolio_headers, _system_headers, proxy_json_response
 from api_gateway.schemas import (
     DashboardSnapshotResponse,
     PortfolioBundleResponse,
@@ -57,7 +58,7 @@ async def initiate_brokerage_connection(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections")
@@ -76,7 +77,7 @@ async def list_brokerage_connections(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/brokerage-connections/{connection_id}", status_code=200)
@@ -94,7 +95,7 @@ async def disconnect_brokerage_connection(connection_id: str, request: Request) 
         f"/api/v1/brokerage-connections/{connection_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/callback")
@@ -113,7 +114,7 @@ async def brokerage_connection_callback(connection_id: str, request: Request) ->
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/sync-errors")
@@ -133,7 +134,7 @@ async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/brokerage-connections/{connection_id}/sync", status_code=202)
@@ -152,7 +153,7 @@ async def trigger_brokerage_connection_sync(connection_id: str, request: Request
         f"/api/v1/brokerage-connections/{connection_id}/sync",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/balance")
@@ -172,7 +173,7 @@ async def get_brokerage_connection_balance(connection_id: str, request: Request)
         f"/api/v1/brokerage-connections/{connection_id}/balance",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
@@ -193,7 +194,7 @@ async def list_portfolios(request: Request) -> Any:
         "/api/v1/portfolios",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/portfolios", status_code=201)
@@ -238,7 +239,7 @@ async def create_portfolio(request: Request) -> Any:
         content=json.dumps(enriched_body).encode(),
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # F-013 (QA 2026-04-28) — DELETE proxy. S1 already exposes the handler
@@ -264,7 +265,7 @@ async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
     )
     # S1 returns 204 with no body on success. Pass status + body through
     # so the frontend can read the error envelope on failures.
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0070 C-1: Portfolio page bundle ─────────────────────────────────────
@@ -413,7 +414,7 @@ async def get_holdings(
         params={"include_closed": "true"} if include_closed else None,
     )
     if resp.status_code != 200:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     # PLAN-0114 W6 / T-W6-04: fan-out to S3 to inject annualized_dividend_yield
     # per holding. Fail-open: a None yield renders as "—" in the DIV YLD column.
@@ -467,7 +468,7 @@ async def patch_portfolio(portfolio_id: str, request: Request) -> Response:
         content=raw_body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/portfolios/{portfolio_id}/performance")
@@ -680,7 +681,7 @@ async def get_portfolio_value_history(portfolio_id: str, request: Request) -> An
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ────────
@@ -715,7 +716,7 @@ async def get_portfolio_twr(portfolio_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # F-204 (QA iter-2): admin trigger so an operator can rebuild today's
@@ -745,7 +746,7 @@ async def recompute_portfolio_snapshot(portfolio_id: str, request: Request) -> A
         f"/api/v1/admin/portfolios/{portfolio_id}/recompute-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0051 Wave A — realised P&L (T-A-1-04) ───────────────────────────────
@@ -778,12 +779,7 @@ async def get_portfolio_realized_pnl(portfolio_id: str, request: Request) -> Any
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=300"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 @router.get("/portfolios/{portfolio_id}/exposure")
@@ -829,7 +825,7 @@ async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
         except Exception:
             logger.debug("exposure_cache_set_failed", portfolio_id=portfolio_id, exc_info=True)
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
@@ -865,12 +861,7 @@ async def get_holding_lots(portfolio_id: str, instrument_id: str, request: Reque
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=60"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 @router.get("/portfolios/{portfolio_id}/concentration")
@@ -896,12 +887,7 @@ async def get_portfolio_concentration(portfolio_id: str, request: Request) -> An
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=300"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 # ── Portfolio Sector Attribution (PLAN-0091 Wave A-2, T-A-2-03) ──────────────
@@ -1326,7 +1312,7 @@ async def list_transactions(request: Request) -> Any:
         params=qp,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # PLAN-0114 / T-W2-07: CSV export proxy.
@@ -1371,11 +1357,14 @@ async def export_transactions(portfolio_id: str, request: Request) -> Any:
     content_disposition = resp.headers.get(
         "Content-Disposition", f'attachment; filename="transactions_{portfolio_id}.csv"'
     )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
+    # CSV export: on success forward as text/csv with the attachment header; on an
+    # upstream 5xx the helper drops the CSV framing and returns a sanitized JSON
+    # error instead (BUG-7 — never stream an upstream stack trace as a file).
+    return proxy_json_response(
+        request,
+        resp,
         media_type="text/csv",
-        headers={"Content-Disposition": content_disposition},
+        extra_headers={"Content-Disposition": content_disposition},
     )
 
 
@@ -1400,7 +1389,7 @@ async def list_transactions_nested(portfolio_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/transactions")
@@ -1420,7 +1409,7 @@ async def create_transaction(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Watchlists (PRD-0028 Wave S9-2) ─────────────────────────────────────────
@@ -1442,7 +1431,7 @@ async def rename_watchlist(watchlist_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists", response_model=list[WatchlistResponse], response_model_exclude_none=True)
@@ -1459,7 +1448,7 @@ async def list_watchlists(request: Request) -> Any:
         "/api/v1/watchlists",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/watchlists")
@@ -1478,7 +1467,7 @@ async def create_watchlist(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}")
@@ -1495,7 +1484,7 @@ async def get_watchlist(watchlist_id: str, request: Request) -> Any:
         f"/api/v1/watchlists/{watchlist_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/watchlists/{watchlist_id}", status_code=200)
@@ -1512,7 +1501,7 @@ async def delete_watchlist(watchlist_id: str, request: Request) -> Any:
         f"/api/v1/watchlists/{watchlist_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}/members")
@@ -1536,7 +1525,7 @@ async def list_watchlist_members(watchlist_id: str, request: Request) -> Any:
         target_path,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/watchlists/{watchlist_id}/members")
@@ -1555,7 +1544,7 @@ async def add_watchlist_member(watchlist_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/watchlists/{watchlist_id}/members/{entity_id}", status_code=200)
@@ -1572,7 +1561,7 @@ async def remove_watchlist_member(watchlist_id: str, entity_id: str, request: Re
         f"/api/v1/watchlists/{watchlist_id}/members/{entity_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}/insights")
@@ -1599,7 +1588,7 @@ async def watchlist_insights(watchlist_id: str, request: Request) -> Response:
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
     body = json.dumps(payload).encode()
     # WHY private: the response is user-scoped (their watchlist's members
@@ -1638,7 +1627,7 @@ async def feedback_create_submission(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions")
@@ -1652,7 +1641,7 @@ async def feedback_list_submissions(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions/anonymous")
@@ -1671,7 +1660,7 @@ async def feedback_list_anonymous_submissions(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions/{submission_id}")
@@ -1684,7 +1673,7 @@ async def feedback_get_submission(submission_id: str, request: Request) -> Respo
         f"/api/v1/feedback/submissions/{submission_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/submissions/{submission_id}")
@@ -1699,7 +1688,7 @@ async def feedback_update_submission(submission_id: str, request: Request) -> Re
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete(
@@ -1722,7 +1711,7 @@ async def feedback_delete_submission(submission_id: str, request: Request) -> Re
     # type when the backend actually returned a body (e.g. 4xx errors).
     if resp.status_code == 204:
         return Response(status_code=204)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/nps", status_code=201)
@@ -1737,7 +1726,7 @@ async def feedback_post_nps(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/nps/aggregate")
@@ -1751,7 +1740,7 @@ async def feedback_nps_aggregate(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/features")
@@ -1764,7 +1753,7 @@ async def feedback_list_features(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/features", status_code=201)
@@ -1779,7 +1768,7 @@ async def feedback_create_feature(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/features/{feature_request_id}/vote")
@@ -1792,7 +1781,7 @@ async def feedback_vote_feature(feature_request_id: str, request: Request) -> Re
         f"/api/v1/feedback/features/{feature_request_id}/vote",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/features/{feature_request_id}")
@@ -1814,7 +1803,7 @@ async def feedback_update_feature(feature_request_id: str, request: Request) -> 
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/micro-survey", status_code=201)
@@ -1828,7 +1817,7 @@ async def feedback_micro_survey(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/beta-program/enrollment")
@@ -1841,7 +1830,7 @@ async def feedback_get_beta_enrollment(request: Request) -> Response:
         "/api/v1/feedback/beta-program/enrollment",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/beta-program/enrollment")
@@ -1856,7 +1845,7 @@ async def feedback_patch_beta_enrollment(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Notification preferences (W1-BACKEND / MED-022 / CRIT-004) ───────────────
@@ -1881,7 +1870,7 @@ async def get_notification_preferences(request: Request) -> Any:
         "/api/v1/users/me/notification-preferences",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/users/me/notification-preferences")
@@ -1901,4 +1890,4 @@ async def update_notification_preferences(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

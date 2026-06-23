@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import (
     DownstreamError,
     get_market_heatmap,
@@ -29,7 +30,7 @@ from api_gateway.resolution import (
     InstrumentNotFoundError,
     resolve_security_id,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers, proxy_json_response
 from api_gateway.schemas import (
     EarningsCalendarResponse,
     FinancialsBundleResponse,
@@ -185,7 +186,7 @@ async def screen_instruments(request: Request) -> Any:
         logger.warning("screener_upstream_timeout")
         raise HTTPException(status_code=504, detail="Screener upstream timeout")  # noqa: B904
     if resp.status_code >= 400:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     raw = json.loads(resp.content)
     transformed = {
@@ -220,7 +221,7 @@ async def get_screen_fields(request: Request) -> Any:
         "/api/v1/fundamentals/screen/fields",
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/timeseries")
@@ -236,7 +237,7 @@ async def get_fundamentals_timeseries(request: Request) -> Any:
         params=dict(request.query_params),
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: /fundamentals/economic-calendar MUST be registered before /fundamentals/{instrument_id}
@@ -264,7 +265,7 @@ async def economic_calendar(request: Request) -> Any:
         params={"event_type": "macro", **{k: v for k, v in dict(request.query_params).items() if k != "event_type"}},
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: /fundamentals/earnings-calendar MUST be registered before /fundamentals/{instrument_id}
@@ -311,7 +312,7 @@ async def earnings_calendar(request: Request) -> Any:
         },
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: Section routes MUST be registered before /fundamentals/{instrument_id}
@@ -785,7 +786,7 @@ async def _proxy_instrument_stat(path_suffix: str, identifier: str, request: Req
         f"/api/v1/instruments/{resolved.instrument_id}/{path_suffix}",
         headers=_auth_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/instruments/{instrument_id}/intraday-stats")
@@ -873,7 +874,7 @@ async def company_overview_by_ticker(ticker: str, request: Request) -> dict[str,
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 @router.get("/fundamentals/{instrument_id}/technicals")
@@ -892,7 +893,7 @@ async def get_technicals(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/share-statistics")
@@ -910,7 +911,7 @@ async def get_share_statistics(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/share-statistics",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/insider-transactions")
@@ -928,7 +929,7 @@ async def get_insider_transactions(instrument_id: UUID, request: Request) -> Any
         f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/institutional-holders")
@@ -946,7 +947,7 @@ async def get_institutional_holders(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/institutional-holders",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/fund-holders")
@@ -964,7 +965,7 @@ async def get_fund_holders(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/fund-holders",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-trend")
@@ -982,7 +983,7 @@ async def get_earnings_trend(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/earnings-trend",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-annual-trend")
@@ -1000,7 +1001,7 @@ async def get_earnings_annual_trend(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/earnings-annual-trend",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/splits-dividends")
@@ -1018,7 +1019,7 @@ async def get_splits_dividends(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/splits-dividends",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/income-statement")
@@ -1042,7 +1043,7 @@ async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/balance-sheet")
@@ -1065,7 +1066,7 @@ async def get_balance_sheet(instrument_id: UUID, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/cash-flow")
@@ -1085,7 +1086,7 @@ async def get_cash_flow(instrument_id: UUID, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Financials Tab bundle (PLAN-0099 follow-up E) ───────────────────────────
@@ -1256,7 +1257,7 @@ async def get_fundamentals_snapshot(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -1284,7 +1285,7 @@ async def get_fundamentals(instrument_id: UUID, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── OHLCV + Quotes + Fundamentals (PRD-0028 Wave S9-1) ──────────────────────
@@ -1337,7 +1338,7 @@ async def get_ohlcv(instrument_id: UUID, request: Request) -> Any:
         params=params,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Batch OHLCV (PLAN-0049 T-A-1-05) ─────────────────────────────────────────
@@ -1735,7 +1736,7 @@ async def market_heatmap(
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── Top Movers (PRD-0028 Wave S9-3, OQ-03) ──────────────────────────────────
@@ -1773,7 +1774,7 @@ async def top_movers(
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── AI Signals (PRD-0028 Wave S9-3 → real proxy to S6) ────────────────────
@@ -1853,7 +1854,7 @@ async def ai_signals(request: Request) -> Any:
         headers=headers,
     )
     if resp.status_code != 200:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     try:
         body = json.loads(resp.content)
@@ -1922,7 +1923,7 @@ async def ai_signals(request: Request) -> Any:
         return {"signals": signals}
     except Exception:
         logger.warning("ai_signals_transform_failed", exc_info=True)
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
 
 # ── Yield Curve (PLAN-0091 Wave A-2, T-A-2-04 / Wave E-2, T-E-2-02) ─────────

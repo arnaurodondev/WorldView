@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 
-from api_gateway.routes.helpers import _auth_headers, _clients
+from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
 from api_gateway.schemas import (
     EntityIntelligenceBundleResponse,
     PredictionMarket,
@@ -284,7 +284,7 @@ async def get_entity_graph(
     )
     # Pass non-2xx responses through unchanged (404 = entity not found, etc.)
     if resp.status_code >= 400:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     raw: dict[str, Any] = resp.json()
     transformed = _transform_graph_response(raw)
@@ -360,7 +360,7 @@ async def get_entity_contradictions(entity_id: UUID, request: Request) -> Any:
         f"/api/v1/entities/{entity_id}/contradictions",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/relations/{relation_id}")
@@ -393,7 +393,7 @@ async def get_relation_detail(
         params={"evidence_limit": str(evidence_limit)},
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/entities/{entity_id}/events")
@@ -438,7 +438,7 @@ async def get_entity_events(
         params=params,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/search/relations")
@@ -459,7 +459,7 @@ async def search_relations(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/claims/search")
@@ -480,7 +480,7 @@ async def search_claims(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity Intelligence, Narratives, Paths (PLAN-0074 Wave G) ────────────────
@@ -569,7 +569,7 @@ async def get_entity_intelligence(
             # Fail-open: caching is best-effort.
             logger.warning("intelligence_cache_write_failed", entity_id=str(entity_id))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -605,7 +605,7 @@ async def get_entity_narratives(
         params=params,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post(
@@ -665,7 +665,7 @@ async def trigger_entity_narrative_generation(
         f"/api/v1/entities/{entity_id}/narratives/generate",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity refresh trigger (REQ-003 / TASK-W0-06) ─────────────────────────────
@@ -744,7 +744,7 @@ async def trigger_entity_refresh(
         content=body_bytes if body_bytes else None,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -820,7 +820,7 @@ async def get_entity_paths(
         except Exception:
             logger.warning("paths_cache_write_failed", entity_id=str(entity_id))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Pairwise pathfinding (PLAN-0112 W4) ──────────────────────────────────────
@@ -895,7 +895,7 @@ async def get_paths_between(
         except Exception:
             logger.warning("paths_between_cache_write_failed", source=str(source), target=str(target))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Global weird-connections feed (PLAN-0112 W5) ─────────────────────────────
@@ -975,7 +975,7 @@ async def get_weird_connections(
         except Exception:
             logger.warning("weird_connections_cache_write_failed", tenant_id=tenant_id)
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Intelligence-tab bundle (PLAN-0099 H) ────────────────────────────────────
@@ -1311,7 +1311,7 @@ async def list_prediction_markets(
         params=forwarded,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/signals/prediction-markets/categories")
@@ -1335,7 +1335,7 @@ async def get_prediction_market_categories(request: Request) -> Any:
         "/api/v1/prediction-markets/categories",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -1365,7 +1365,7 @@ async def get_prediction_market(
         f"/api/v1/prediction-markets/{market_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/signals/prediction-markets/{market_id}/history")
@@ -1387,7 +1387,7 @@ async def get_prediction_market_history(
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity Sentiment Timeseries (PLAN-0091 Wave A-2 / E-2, T-A-2-02) ─────────
@@ -1415,4 +1415,4 @@ async def get_entity_sentiment_timeseries(
         params={"days": days},
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

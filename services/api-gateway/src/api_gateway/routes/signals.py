@@ -59,9 +59,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from api_gateway.routes.helpers import _auth_headers, _clients
+from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/v1")
@@ -180,7 +180,7 @@ async def ai_signals(
     if resp.status_code != 200:
         # Never fabricate a 200 — pass the upstream status through so the widget
         # can show its (named) error state and offer Retry.
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     try:
         body = json.loads(resp.content)
@@ -191,4 +191,4 @@ async def ai_signals(
         # The transform must never 500 the dashboard. Fall back to the raw S6
         # payload (the frontend treats an unexpected shape as empty).
         logger.warning("ai_signals_transform_failed", exc_info=True)
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
