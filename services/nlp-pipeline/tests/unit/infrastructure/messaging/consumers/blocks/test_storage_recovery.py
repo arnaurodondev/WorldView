@@ -14,8 +14,6 @@ populated and the learned router is no longer blind.
 
 from __future__ import annotations
 
-pytestmark = pytest.mark.unit
-
 import json
 from typing import Any
 from unittest.mock import AsyncMock
@@ -25,6 +23,8 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.storage import (
     download_article,
     extract_title_from_silver,
 )
+
+pytestmark = pytest.mark.unit
 
 # A canonical content-store silver key (BUG #34 fixes only touch the payload, not
 # the key; we still need a valid key so the S-006 guard does not reject it).

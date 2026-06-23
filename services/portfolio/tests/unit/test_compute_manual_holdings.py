@@ -14,8 +14,6 @@ Test matrix:
 
 from __future__ import annotations
 
-pytestmark = pytest.mark.unit
-
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -39,6 +37,8 @@ from portfolio.domain.enums import (
 from .fakes import (
     FakeUnitOfWork,
 )
+
+pytestmark = pytest.mark.unit
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
