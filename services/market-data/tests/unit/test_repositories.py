@@ -111,42 +111,54 @@ class TestOHLCVBulkUpsertChunking:
     multi-row INSERT so no single statement can ever exceed the limit.
     """
 
-    # The widest VALUES row (derived path) has 13 columns; the hard ceiling is
-    # 65_535 / 13 ≈ 5_041 rows.  The chunk size must stay strictly below that.
+    # Derive expectations from the repository's REAL constants so this regression
+    # test follows boundary changes (BUG: hardcoded 5_000/65_535 broke when the
+    # guard was tightened to the true asyncpg limit 32_767 + 2_000-row chunks).
+    from market_data.infrastructure.db.repositories.ohlcv_repo import (
+        _MAX_PARAMS as _PARAM_CEILING,
+    )
+    from market_data.infrastructure.db.repositories.ohlcv_repo import (
+        _UPSERT_CHUNK_ROWS as _CHUNK_ROWS,
+    )
+
     _MAX_COLS = 13
-    _PARAM_CEILING = 65_535
+
+    @staticmethod
+    def _expected_chunks(n_rows: int, chunk: int) -> int:
+        return (n_rows + chunk - 1) // chunk  # ceil
 
     async def test_with_priority_chunks_large_batch(self):
-        """A >5_000-row batch is split into multiple bounded INSERTs."""
+        """A multi-chunk batch is split into multiple bounded INSERTs."""
         session = AsyncMock()
         repo = PgOHLCVRepository(session)
-        # 12_345 rows → ceil(12345 / 5000) = 3 chunks.
-        await repo.bulk_upsert_with_priority(_make_bars(12_345))
-        assert session.execute.call_count == 3
-        self._assert_chunks_bounded(session, n_total=12_345)
+        n = self._CHUNK_ROWS * 6 + 345
+        await repo.bulk_upsert_with_priority(_make_bars(n))
+        assert session.execute.call_count == self._expected_chunks(n, self._CHUNK_ROWS)
+        self._assert_chunks_bounded(session, n_total=n)
 
     async def test_derived_chunks_large_batch(self):
         """The derived upsert path chunks identically."""
         session = AsyncMock()
         repo = PgOHLCVRepository(session)
-        await repo.bulk_upsert_derived(_make_bars(10_001))  # ceil → 3 chunks
-        assert session.execute.call_count == 3
-        self._assert_chunks_bounded(session, n_total=10_001)
+        n = self._CHUNK_ROWS * 5 + 1
+        await repo.bulk_upsert_derived(_make_bars(n))
+        assert session.execute.call_count == self._expected_chunks(n, self._CHUNK_ROWS)
+        self._assert_chunks_bounded(session, n_total=n)
 
     async def test_exactly_one_chunk_at_boundary(self):
-        """Exactly 5_000 rows fits in a single INSERT (boundary)."""
+        """Exactly one chunk's worth of rows fits in a single INSERT (boundary)."""
         session = AsyncMock()
         repo = PgOHLCVRepository(session)
-        await repo.bulk_upsert_with_priority(_make_bars(5_000))
+        await repo.bulk_upsert_with_priority(_make_bars(self._CHUNK_ROWS))
         assert session.execute.call_count == 1
 
     async def test_one_over_boundary_splits(self):
-        """5_001 rows must split into 2 chunks (none exceeding the cap)."""
+        """One row over a chunk boundary must split into 2 chunks (none exceeding the cap)."""
         session = AsyncMock()
         repo = PgOHLCVRepository(session)
-        await repo.bulk_upsert_with_priority(_make_bars(5_001))
+        await repo.bulk_upsert_with_priority(_make_bars(self._CHUNK_ROWS + 1))
         assert session.execute.call_count == 2
-        self._assert_chunks_bounded(session, n_total=5_001)
+        self._assert_chunks_bounded(session, n_total=self._CHUNK_ROWS + 1)
 
     def _assert_chunks_bounded(self, session: AsyncMock, *, n_total: int) -> None:
         """Every executed chunk's row count keeps params < the wire limit, and
@@ -163,7 +175,7 @@ class TestOHLCVBulkUpsertChunking:
             assert n_params < self._PARAM_CEILING, f"chunk has {n_params} params (>= {self._PARAM_CEILING})"
             # Derive the row count from params / columns; must be <= chunk size.
             rows_in_chunk = n_params // self._MAX_COLS
-            assert rows_in_chunk <= 5_000
+            assert rows_in_chunk <= self._CHUNK_ROWS
             total_rows += rows_in_chunk
         # Round-trip: chunks must reconstruct the full batch (no rows dropped or
         # duplicated by the chunker).  Allow the column-count estimate to be a
