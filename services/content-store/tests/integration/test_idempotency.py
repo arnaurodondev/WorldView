@@ -14,6 +14,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
 from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import func, select
 
@@ -66,7 +67,7 @@ async def test_same_message_twice_produces_single_document(session_factory, mini
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
-            object_store=minio_storage,
+            bronze_store=BronzeStorageAdapter(minio_storage, TEST_MINIO_BRONZE_BUCKET),
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
             silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
@@ -84,7 +85,7 @@ async def test_same_message_twice_produces_single_document(session_factory, mini
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
-            object_store=minio_storage,
+            bronze_store=BronzeStorageAdapter(minio_storage, TEST_MINIO_BRONZE_BUCKET),
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
             silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
