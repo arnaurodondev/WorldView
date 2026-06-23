@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     schema_registry_url: str = "http://localhost:8081"
 
+    # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
+    # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
+    # ``create_dispatcher``. Historically market-data built ``DispatcherConfig()``
+    # with no override, so it inherited the lib default ``max_attempts=5``. A
+    # transient broker blip on 2026-06-17 exhausted that 5-attempt budget in
+    # minutes and permanently dead-lettered 44 ``market.instrument.*`` events
+    # (lost downstream InstrumentRef / canonical-entity creation). market-ingestion
+    # already raised this to 20 under BP-612; we now apply the same symmetric fix
+    # here. 20 attempts x ~60 s backoff is ~20 min coverage, enough to ride out a
+    # rolling restart or Kafka blip before dead-lettering.
+    dispatcher_poll_interval_seconds: float = 5.0
+    dispatcher_lease_seconds: int = 30
+    dispatcher_batch_size: int = 100
+    dispatcher_max_attempts: int = 20
+
     # Storage
     storage_endpoint: str = "http://localhost:7480"
     storage_access_key: SecretStr  # Required — set MARKET_DATA_STORAGE_ACCESS_KEY env var

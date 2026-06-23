@@ -241,6 +241,79 @@ class SqlaOutboxRepository(OutboxRepository):
         stmt = update(OutboxEventModel).where(OutboxEventModel.id == record_id).values(status="dead")
         await self._w.execute(stmt)
 
+    # ── Operator requeue (BUG-5) ────────────────────────────────────────────────
+
+    async def count_dead(self, *, topic: str | None = None, older_than: datetime | None = None) -> int:
+        """Count ``dead`` rows, optionally scoped by *topic* / *older_than*.
+
+        Backs the requeue operator script's ``--dry-run`` mode.
+        """
+        from sqlalchemy import func
+
+        stmt = select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "dead")
+        if topic is not None:
+            stmt = stmt.where(OutboxEventModel.topic == topic)
+        if older_than is not None:
+            stmt = stmt.where(OutboxEventModel.created_at <= older_than)
+        result = await self._r.execute(stmt)
+        return int(cast("Any", result).scalar() or 0)
+
+    async def requeue_dead_to_pending(
+        self,
+        *,
+        ids: list[str] | None = None,
+        topic: str | None = None,
+        older_than: datetime | None = None,
+        reset_attempts: bool = True,
+    ) -> int:
+        """Move ``dead`` rows back to ``pending`` so ``claim_batch`` re-picks them.
+
+        BUG-5: ``move_to_dead_letter_simple`` sets ``status='dead'`` but
+        ``claim_batch`` only selects ``status IN ('pending','retry')`` — so the
+        24,163 dead ``market.dataset.fetched`` rows can never be re-dispatched.
+        This is the safe, operator-invokable recovery path used by
+        ``scripts/requeue_dead_outbox.py``.
+
+        Idempotency / safety:
+        * Only rows currently in ``dead`` are touched — re-running is a no-op once
+          they have moved to ``pending``.
+        * The lease (``locked_by``/``locked_until``) is cleared and
+          ``next_attempt_at`` is reset to NULL so the row is immediately claimable
+          (and not held back by a stale backoff timestamp).
+        * ``reset_attempts`` zeroes ``attempt`` so the row gets a full retry budget.
+
+        Bounding: pass ``ids``, ``topic``, and/or ``older_than``. At least one
+        bound MUST be supplied — an unbounded requeue is refused.
+
+        Returns the number of rows transitioned.
+        """
+        if ids is None and topic is None and older_than is None:
+            raise ValueError(
+                "requeue_dead_to_pending requires a bound: pass ids=, topic=, or older_than=. "
+                "An unbounded requeue is refused for safety."
+            )
+
+        values: dict[str, Any] = {
+            "status": "pending",
+            "locked_by": None,
+            "locked_until": None,
+            "next_attempt_at": None,
+        }
+        if reset_attempts:
+            values["attempt"] = 0
+
+        stmt = update(OutboxEventModel).where(OutboxEventModel.status == "dead")
+        if ids is not None:
+            stmt = stmt.where(OutboxEventModel.id.in_([str(i) for i in ids]))
+        if topic is not None:
+            stmt = stmt.where(OutboxEventModel.topic == topic)
+        if older_than is not None:
+            stmt = stmt.where(OutboxEventModel.created_at <= older_than)
+        stmt = stmt.values(**values)
+
+        result = await self._w.execute(stmt)
+        return int(cast("Any", result).rowcount)
+
 
 class _DispatchableOutboxRecord:
     """Adapts OutboxRecord to satisfy OutboxRecordProtocol for BaseOutboxDispatcher."""

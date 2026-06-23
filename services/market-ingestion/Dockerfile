@@ -43,6 +43,8 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /build/services/market-ingestion/src /app/src
 COPY services/market-ingestion/alembic /app/alembic
 COPY services/market-ingestion/alembic.ini /app/alembic.ini
+# BUG-5: bake operator one-shots (e.g. requeue_dead_outbox.py) into the image.
+COPY services/market-ingestion/scripts /app/scripts
 COPY infra/kafka/schemas /app/infra/kafka/schemas
 
 ENV PATH="/app/.venv/bin:$PATH"

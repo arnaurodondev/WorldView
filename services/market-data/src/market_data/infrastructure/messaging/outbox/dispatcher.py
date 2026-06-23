@@ -229,9 +229,22 @@ def create_dispatcher(
     session_factory: async_sessionmaker[AsyncSession],
     config: DispatcherConfig | None = None,
 ) -> MarketDataOutboxDispatcher:
-    """Factory for :class:`MarketDataOutboxDispatcher`."""
+    """Factory for :class:`MarketDataOutboxDispatcher`.
+
+    BUG-4 / BP-612: when no explicit ``config`` is passed we now derive the
+    ``DispatcherConfig`` from ``settings`` rather than falling back to the lib
+    default ``max_attempts=5``. The default ``settings.dispatcher_max_attempts``
+    is 20 (matching market-ingestion), so a transient broker blip can no longer
+    burn through the retry budget in minutes and permanently dead-letter
+    instrument events.
+    """
     if config is None:
-        config = DispatcherConfig()
+        config = DispatcherConfig(
+            poll_interval_seconds=settings.dispatcher_poll_interval_seconds,
+            lease_seconds=settings.dispatcher_lease_seconds,
+            batch_size=settings.dispatcher_batch_size,
+            max_attempts=settings.dispatcher_max_attempts,
+        )
     return MarketDataOutboxDispatcher(
         settings=settings,
         session_factory=session_factory,
