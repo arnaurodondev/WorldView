@@ -313,8 +313,11 @@ class TestRunEntityResolutionBlock:
         _count_result = MagicMock()
         _count_result.scalar_one = MagicMock(return_value=0)
         _insert_result = MagicMock()
-        _insert_result.scalar_one = MagicMock(return_value=str(uuid.uuid4()))
-        intelligence_session.execute = AsyncMock(side_effect=[_count_result, _insert_result])
+        _insert_result.scalar_one_or_none = MagicMock(return_value=str(uuid.uuid4()))
+        # BP-707: run_entity_resolution_block now issues a leading `SET LOCAL
+        # lock_timeout` execute before the churn-COUNT + provisional INSERT.
+        _lock_result = MagicMock()
+        intelligence_session.execute = AsyncMock(side_effect=[_lock_result, _count_result, _insert_result])
         # begin_nested() is used as an async context manager for the savepoint.
         _savepoint = AsyncMock()
         _savepoint.__aenter__ = AsyncMock(return_value=_savepoint)
@@ -518,7 +521,9 @@ def _intelligence_session_mock(*, hourly_count: int = 0, queue_id: uuid.UUID | N
     count_result = MagicMock()
     count_result.scalar_one = MagicMock(return_value=hourly_count)
     insert_result = MagicMock()
-    insert_result.scalar_one = MagicMock(return_value=str(queue_id) if queue_id else None)
+    # BP-707: the insert now uses ON CONFLICT DO NOTHING + scalar_one_or_none
+    # (None on conflict → lock-free fallback SELECT). queue_id is the RETURNING row.
+    insert_result.scalar_one_or_none = MagicMock(return_value=str(queue_id) if queue_id else None)
     session.execute = AsyncMock(side_effect=[count_result, insert_result])
 
     # begin_nested() returns an async context manager. When queue_id is None we

@@ -68,10 +68,14 @@ describe("T-A-1-01 — HeroSection", () => {
     expect(signin).toHaveAttribute("href", "/login");
   });
 
-  it("renders the terminal ASCII workspace preview", () => {
+  it("renders the hero product screenshot frame (intelligence surface)", () => {
+    // Redesign (2026-06-23): the ASCII <pre> mock was replaced by a real
+    // product screenshot in a ProductShot window-chrome frame. While the PNG
+    // is pending capture the frame renders a placeholder panel exposing the
+    // descriptive alt as role="img".
     render(<HeroSection />);
     expect(
-      screen.getByLabelText(/terminal workspace preview/i),
+      screen.getByRole("img", { name: /instrument Intelligence tab/i }),
     ).toBeInTheDocument();
   });
 });
@@ -133,9 +137,10 @@ describe("T-A-1-05 — WorkflowSection", () => {
 });
 
 describe("T-A-1-06 — AIDemoSection", () => {
-  it("renders the example question", () => {
+  it("renders the example slash-command question", () => {
+    // Redesign (2026-06-23): the demo now leads with a /path slash-command.
     render(<AIDemoSection />);
-    expect(screen.getByText(/Why did NVDA drop/i)).toBeInTheDocument();
+    expect(screen.getByText("/path NVDA TSM")).toBeInTheDocument();
   });
 
   it("renders a Sources box with at least 3 citations", () => {

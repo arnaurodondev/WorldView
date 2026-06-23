@@ -6,17 +6,21 @@
  * chain risk wants to know "Apple → TSMC → ASML" even when ASML is not directly
  * linked to Apple. PathInsightsBlock surfaces 3 such paths at a glance.
  *
- * WHY PORTFOLIO POST-FILTER:
- * The raw paths from S9 are entity-agnostic. Post-filtering to paths that contain
- * a ticker in the user's portfolio makes the insights immediately actionable —
- * "this path passes through a stock I already own". If no holding-intersecting
- * paths exist, we fall back to the 3 highest-scored paths so the block is never
- * empty for active analysts.
+ * WHO USES IT: the instrument IntelligenceTab right rail (mounted between the
+ *   Events block and Contradictions). It reads the SAME ["entity-paths", id, {}]
+ *   cache slot that `useEntityIntelligenceBundle` pre-warms on tab mount, so it
+ *   renders straight from the warm cache without firing its own initial fetch.
+ *   (Historically this block lived in the retired entity-overview ContextPanel;
+ *   the standalone /intelligence explorer uses WeirdnessBreakdown instead.)
  *
- * WHO USES IT: ContextPanel (Intelligence tab right rail, entity-overview mode).
+ * WHY NO PORTFOLIO POST-FILTER (kept simple by design):
+ *   PathNodePublic has no ticker field, so comparing n.name ("Apple Inc.")
+ *   against portfolio tickers ("AAPL") always returns false. Showing the
+ *   top-scored paths is strictly more useful than an always-empty filter, so we
+ *   just take the first `limit` paths (already weirdness-ranked by the backend).
+ *
  * DATA SOURCE:
  *   GET /v1/entities/{id}/paths → EntityPathsResponse (via useEntityPaths)
- *   TanStack Query cache read: qk.portfolios.holdings(activePortfolioId)
  * DESIGN REFERENCE: W7 design doc §5.3 (PathInsightsBlock, 38px cards).
  */
 

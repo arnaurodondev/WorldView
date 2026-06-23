@@ -15,6 +15,9 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
+from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import (
+    MAX_DISPATCH_ATTEMPTS as _MAX_DISPATCH_ATTEMPTS,
+)
 from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -24,8 +27,6 @@ if TYPE_CHECKING:
     from nlp_pipeline.config import Settings
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
-_MAX_DISPATCH_ATTEMPTS = 5
 
 
 class NLPPipelineOutboxDispatcher:
@@ -169,9 +170,15 @@ class NLPPipelineOutboxDispatcher:
                         topic=record.topic,
                     )
                 else:
-                    # Increment retry_count via mark_failed
-                    await outbox_repo.mark_failed(record.event_id)
-                    if record.retry_count + 1 >= _MAX_DISPATCH_ATTEMPTS:
+                    # BUG-3 fix: mark_failed now keeps the record ``pending``
+                    # (with a backoff anchor) while attempts remain, and only
+                    # flips it to the terminal ``failed`` status once the cap is
+                    # reached — so the retry loop below is actually reachable.
+                    # It returns the authoritative post-increment retry_count, so
+                    # the DLQ decision no longer relies on the (stale) value read
+                    # at claim time.
+                    new_retry_count = await outbox_repo.mark_failed(record.event_id)
+                    if new_retry_count >= _MAX_DISPATCH_ATTEMPTS:
                         await dlq_repo.move_to_dlq(
                             original_event_id=record.event_id,
                             topic=record.topic,
@@ -182,7 +189,7 @@ class NLPPipelineOutboxDispatcher:
                             "outbox_record_dead_lettered",
                             event_id=str(record.event_id),
                             topic=record.topic,
-                            attempts=record.retry_count + 1,
+                            attempts=new_retry_count,
                         )
 
             await session.commit()

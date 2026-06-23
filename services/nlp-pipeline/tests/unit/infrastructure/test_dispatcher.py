@@ -100,7 +100,7 @@ class TestDispatcherSuccessfulDelivery:
         record = _make_record()
         outbox_repo.claim_batch = AsyncMock(return_value=[record])
         outbox_repo.mark_dispatched = AsyncMock()
-        outbox_repo.mark_failed = AsyncMock()
+        outbox_repo.mark_failed = AsyncMock(return_value=1)
 
         # Simulate a successful produce: on_delivery callback called with err=None
         def fake_produce(topic: str, key: Any, value: Any, on_delivery: Any) -> None:
@@ -149,7 +149,7 @@ class TestDispatcherFailedDelivery:
         record = _make_record(retry_count=0)
         outbox_repo.claim_batch = AsyncMock(return_value=[record])
         outbox_repo.mark_dispatched = AsyncMock()
-        outbox_repo.mark_failed = AsyncMock()
+        outbox_repo.mark_failed = AsyncMock(return_value=1)
         dlq_repo.move_to_dlq = AsyncMock()
 
         # Simulate a failed produce: on_delivery callback called with err != None
@@ -197,7 +197,9 @@ class TestDispatcherFailedDelivery:
         record = _make_record(retry_count=_MAX_DISPATCH_ATTEMPTS - 1)
         outbox_repo.claim_batch = AsyncMock(return_value=[record])
         outbox_repo.mark_dispatched = AsyncMock()
-        outbox_repo.mark_failed = AsyncMock()
+        # BUG-3: the DLQ decision now uses mark_failed's authoritative return; at the
+        # cap it returns MAX_DISPATCH_ATTEMPTS → triggers move_to_dlq.
+        outbox_repo.mark_failed = AsyncMock(return_value=_MAX_DISPATCH_ATTEMPTS)
         dlq_repo.move_to_dlq = AsyncMock()
 
         def fake_produce(topic: str, key: Any, value: Any, on_delivery: Any) -> None:
@@ -247,7 +249,7 @@ class TestDispatcherBrokenProducerRecovery:
         record = _make_record(retry_count=0)
         outbox_repo.claim_batch = AsyncMock(return_value=[record])
         outbox_repo.mark_dispatched = AsyncMock()
-        outbox_repo.mark_failed = AsyncMock()
+        outbox_repo.mark_failed = AsyncMock(return_value=1)
         dlq_repo.move_to_dlq = AsyncMock()
 
         # produce succeeds but flush() raises TimeoutError → wedged producer.
@@ -290,7 +292,7 @@ class TestDispatcherBrokenProducerRecovery:
         dispatcher, outbox_repo, dlq_repo = _make_dispatcher()
         record = _make_record(retry_count=0)
         outbox_repo.claim_batch = AsyncMock(return_value=[record])
-        outbox_repo.mark_failed = AsyncMock()
+        outbox_repo.mark_failed = AsyncMock(return_value=1)
         dlq_repo.move_to_dlq = AsyncMock()
 
         mock_producer = MagicMock()

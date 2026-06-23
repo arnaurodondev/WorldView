@@ -66,7 +66,7 @@ def _intel_session_mint(queue_ids: list[uuid.UUID]) -> MagicMock:
         count_result = MagicMock()
         count_result.scalar_one = MagicMock(return_value=0)  # churn-guard: clear
         insert_result = MagicMock()
-        insert_result.scalar_one = MagicMock(return_value=str(qid))
+        insert_result.scalar_one_or_none = MagicMock(return_value=str(qid))
         side_effects.extend([count_result, insert_result])
     session.execute = AsyncMock(side_effect=side_effects)
     nested_cm = AsyncMock()

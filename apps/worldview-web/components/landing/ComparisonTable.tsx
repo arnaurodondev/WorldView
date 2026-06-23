@@ -55,6 +55,17 @@ const ROWS: Row[] = [
     finviz: "no",
   },
   {
+    // The strongest column to win: no competitor offers weirdness-ranked
+    // indirect path discovery between two entities. Added per §9 of the
+    // landing redesign — this is the signature, non-commodity capability.
+    feature: "Knowledge graph / path discovery",
+    worldview: "yes",
+    bloomberg: "no",
+    ibkr: "no",
+    tradingview: "no",
+    finviz: "no",
+  },
+  {
     // Bloomberg launched BloombergGPT / AI Assistant in 2024. Worldview's
     // edge is the open-architecture grounding (full citation chain to
     // source + price impact); calling Bloomberg "no" risks pushback from
@@ -76,12 +87,11 @@ const ROWS: Row[] = [
     finviz: "no",
   },
   {
-    // Worldview's workspace shipped in PLAN-0059 with limited persistence
-    // and only ~5 panel templates; "yes" is aggressive. Soften to "partial"
-    // until the workspace v2 ships with full layout sharing and template
-    // marketplace. Adjusted in PLAN-0052 Wave A QA iter-1 (design audit M2).
+    // Workspace v2 shipped with layout templates, symbol-linking, and
+    // share-via-URL — so "yes" is now the honest call (bumped from "partial"
+    // per §9 of the landing redesign).
     feature: "Configurable terminal workspace",
-    worldview: "partial",
+    worldview: "yes",
     bloomberg: "yes",
     ibkr: "partial",
     tradingview: "yes",
@@ -188,7 +198,7 @@ export function ComparisonTable() {
           <table className="w-full min-w-[760px] text-left text-sm">
             <caption className="sr-only">
               Worldview compared to Bloomberg, Interactive Brokers,
-              TradingView, and Finviz across nine features and estimated
+              TradingView, and Finviz across ten features and estimated
               monthly cost.
             </caption>
             <thead>
@@ -284,7 +294,7 @@ export function ComparisonTable() {
 
         <p className="mt-4 text-center text-[11px] text-muted-foreground/70">
           Comparisons reflect public marketing and product documentation as of
-          2026-05. Figures are illustrative.
+          2026-06. Figures are illustrative.
         </p>
       </div>
     </section>

@@ -43,6 +43,10 @@ const FAQS: FAQ[] = [
     a: "Every AI answer is grounded in retrieval — articles, filings, and structured data points retrieved from your subscribed sources. The model cites the source for each claim; if it can't ground a claim, it says so. We don't ship answers without citations.",
   },
   {
+    q: "How does the graph find indirect relationships between companies?",
+    a: "Every article and filing is run through entity extraction and relation extraction, building a knowledge graph of typed edges (supplied_by, equipment_from, regulated_by, executive_of, …) over ~80K canonical entities. To connect two names, we run a variable-length path search over the graph and rank the resulting chains by a weirdness score — reliability × unexpectedness × semantic-distance × novelty — so the most surprising, non-obvious connections surface first (e.g. Apple → TSMC → ASML).",
+  },
+  {
     q: "Can I trust the news impact scores?",
     a: "The impact score is the model's prediction of price movement in the 4 windows after publication (t0/t1/t2/t5). It's based on price-window labelling against a curated training set. We expose the underlying t0/t1/t2/t5 returns so you can verify the model against real outcomes.",
   },

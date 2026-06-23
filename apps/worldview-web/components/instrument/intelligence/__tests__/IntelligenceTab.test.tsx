@@ -72,6 +72,16 @@ vi.mock("@/components/instrument/intelligence/context/NarrativeHistoryDisclosure
   NarrativeHistoryDisclosure: () => <div data-testid="narrative-stub" />,
 }));
 
+// PATH INSIGHTS (audit 2026-06-23 §2a): the tab must MOUNT this block (its
+// internals — warm-cache read, weirdness chips, empty state — are pinned by its
+// own suite, so here we only stub it to assert the WIRING and the entityId it
+// receives so the warm-cache key match is exercised by IntelligenceTab.warm.test).
+vi.mock("@/components/instrument/intelligence/context/PathInsightsBlock", () => ({
+  PathInsightsBlock: (p: { entityId: string }) => (
+    <div data-testid="path-insights-stub" data-entity-id={p.entityId} />
+  ),
+}));
+
 vi.mock("@/components/intelligence/EntityChatPanel", () => ({
   EntityChatPanel: () => <div data-testid="chat-stub" />,
 }));
@@ -102,6 +112,11 @@ describe("IntelligenceTab investigation grid", () => {
     expect(screen.getByTestId("events-stub")).toBeInTheDocument();
     expect(screen.getByTestId("contradictions-stub")).toBeInTheDocument();
     expect(screen.getByTestId("narrative-stub")).toBeInTheDocument();
+    // Audit §2a MUST-FIX: the path-insights block is mounted (it was prefetched
+    // into cache then discarded before this fix) and receives the page entityId.
+    const pathStub = screen.getByTestId("path-insights-stub");
+    expect(pathStub).toBeInTheDocument();
+    expect(pathStub.getAttribute("data-entity-id")).toBe("ent-001");
     expect(screen.getByTestId("intel-chat-toggle")).toBeInTheDocument();
     // Chat is CLOSED by default.
     expect(screen.queryByTestId("chat-stub")).not.toBeInTheDocument();

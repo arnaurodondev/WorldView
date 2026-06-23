@@ -168,8 +168,13 @@ class PgOutboxEventRepository(OutboxEventRepository):
             .values(attempts=OutboxEventModel.attempts + 1)
         )
 
-    async def move_to_dead_letter(self, record_id: str) -> None:
-        """Move *record_id* to the dead-letter state (status=DEAD_LETTER)."""
+    async def move_to_dead_letter(self, record_id: str, error_detail: str = "") -> None:
+        """Move *record_id* to the dead-letter state (status=DEAD_LETTER).
+
+        ``error_detail`` is accepted for ``OutboxRepositoryProtocol`` parity
+        (BUG-1) but not persisted: this outbox table has no error column, so the
+        failure cause lives only in the dispatcher logs.
+        """
         await self._session.execute(
             update(OutboxEventModel).where(OutboxEventModel.id == record_id).values(status="dead_letter")
         )

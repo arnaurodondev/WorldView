@@ -266,6 +266,10 @@ export function EntityGraph({
             minWeight={minWeight}
             searchQuery={searchQuery}
             graphData={data}
+            // KG FILTER BUG FIX (2026-06-23): pass the centre entity so the
+            // orphan-node hiding logic never hides the node the analyst is
+            // focused on, even when a relation pill filters away all its edges.
+            centerEntityId={centerEntityId}
             // PLAN-0099 Wave 2: selection highlight is folded into the SAME
             // reducer as the filters (two setSettings callers would clobber
             // each other — see FilterController docstring).

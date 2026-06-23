@@ -505,7 +505,17 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.workers.manual_holdings_worker"]
+    expose: ["9100"]
     restart: unless-stopped
+    # QA fix 2026-06-22: this worker binds metrics+/healthz on 9100 but the block
+    # was missing the override, so it inherited the Dockerfile's API probe
+    # (:8000/readyz) and reported false-unhealthy. Mirror portfolio-snapshot-worker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # ── Portfolio daily value snapshot worker ───────────────────────────────────
   # PLAN-0046 Wave 4 / T-46-4-02 + T-46-4-03.
@@ -1816,6 +1826,10 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
+    # QA fix 2026-06-22: the scheduler binds metrics+/healthz on 9108 (scheduler_main.py;
+    # Prometheus scrapes :9108) — the probe was hitting :9100 → false-unhealthy. 9108 is
+    # load-bearing (Prometheus), so fix the probe, don't move the bind.
+    expose: ["9108"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9108/healthz', timeout=4).status == 200 else 1)"]

@@ -57,6 +57,14 @@ import { ToolCallIndicator, type ToolCallState } from "./ToolCallIndicator";
 // tells the user what the AGENT is doing right now; the indicators tell them
 // what TOOLS have run. Both can be visible simultaneously.
 import { AgentIterationProgress } from "./AgentIterationProgress";
+// Phase-1 Part C: ResearchTimeline is the FIRST-CLASS, always-visible (NOT
+// debug-gated) human-readable agent-step trace. It supersedes the bare
+// AgentIterationProgress strip the moment real tool activity exists — showing
+// the concrete per-tool lines ("✓ 12 articles") grouped by loop step, plus a
+// "Verifying answer…" line during grounding validation. We keep the bare strip
+// only for the brief PLANNING gap (before the first tool_call), so the user is
+// never staring at a silent bubble.
+import { ResearchTimeline } from "./ResearchTimeline";
 // Round 4 Hardening (perf 4a): ThrottledMarkdown caps the markdown re-parse
 // rate at ~30fps for the IN-FLIGHT stream only. react-markdown re-parses the
 // full accumulated text on every prop change — at SSE token cadence
@@ -64,7 +72,7 @@ import { AgentIterationProgress } from "./AgentIterationProgress";
 // answer lengthens. Settled messages (MessageBubble below) keep the direct
 // LazyMarkdownContent — they parse once, so throttling them is pure loss.
 import { ThrottledMarkdown } from "./ThrottledMarkdown";
-import type { AgentIterationEvent } from "@/features/chat/lib/types";
+import type { AgentIterationEvent, ToolTraceEntry } from "@/features/chat/lib/types";
 
 /**
  * TypingIndicator — animated three-dot bubble shown while SSE stream is
@@ -249,12 +257,26 @@ interface StreamingBubbleProps {
    * never emits agent_iteration) shows no strip at all.
    */
   iterationEvent?: AgentIterationEvent | null;
+  /**
+   * Phase-1 Part C: the per-turn tool trace from useChatStream.toolTrace. When
+   * it has entries the ResearchTimeline renders the human-readable agent-step
+   * list (always visible — NOT behind ?debug=1) in place of the bare
+   * AgentIterationProgress strip. Empty array (default) on plain answers.
+   */
+  toolTrace?: ToolTraceEntry[];
+  /**
+   * Phase-1 Part C: useChatStream.verifying — TRUE during post-synthesis
+   * grounding validation. Drives the timeline's "Verifying answer…" line.
+   */
+  verifying?: boolean;
 }
 
 export function StreamingBubble({
   streaming,
   activeTools = [],
   iterationEvent = null,
+  toolTrace = [],
+  verifying = false,
 }: StreamingBubbleProps) {
   return (
     <div className="flex flex-col items-start gap-1">
@@ -286,7 +308,22 @@ export function StreamingBubble({
            * be empty (between tool batches while the LLM reasons over results),
            * so it is the ONLY always-on signal in those windows.
            */}
-          <AgentIterationProgress event={iterationEvent} />
+          {/*
+           * Phase-1 Part C: the ResearchTimeline is the primary, always-visible
+           * agent-step narrative. It takes over the moment ANY real signal
+           * exists (a tool has been called OR the verify phase is running) and
+           * renders the concrete human lines grouped by loop step. Before that
+           * — the brief "planning" gap after Send, when the agent has decided to
+           * use tools but none has fired yet — we fall back to the bare
+           * AgentIterationProgress strip so the bubble is never silent. Once the
+           * first tool_call lands, the richer timeline subsumes the strip (we
+           * render exactly one of the two, never both, to avoid a doubled cue).
+           */}
+          {toolTrace.length > 0 || verifying ? (
+            <ResearchTimeline trace={toolTrace} verifying={verifying} mode="live" />
+          ) : (
+            <AgentIterationProgress event={iterationEvent} />
+          )}
           <ToolCallIndicator tools={activeTools} />
           {/*
            * Round 1 Foundation (no-empty-bubble fix): before the first token
@@ -302,7 +339,13 @@ export function StreamingBubble({
            *   - text present → markdown + cursor as before.
            */}
           {streaming.text === "" ? (
-            activeTools.length === 0 && !iterationEvent ? (
+            // Phase-1 Part C: also suppress the dots when the ResearchTimeline
+            // is showing (tool activity or verifying) — the timeline already
+            // communicates "working", so dots would be a redundant second cue.
+            activeTools.length === 0 &&
+            !iterationEvent &&
+            toolTrace.length === 0 &&
+            !verifying ? (
               <div
                 className="flex gap-1 py-0.5"
                 // WHY aria-label (not visible text): screen readers announce

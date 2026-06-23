@@ -185,6 +185,17 @@ export interface UseChatStreamResult {
    */
   toolTrace: ToolTraceEntry[];
   /**
+   * Phase-1 Research timeline: TRUE while the backend is in the post-synthesis
+   * grounding-validation / repair phase (the `status` event with
+   * step="verifying"). The Research timeline renders a "Verifying answer
+   * against sources…" line during this window. Reset to false at the start of
+   * each send and when the stream settles/cancels/errors.
+   *
+   * WHY state (not ref): the timeline must re-render the verify line the moment
+   * the event lands — a ref would not trigger that render.
+   */
+  verifying: boolean;
+  /**
    * Server-generated follow-up suggestions for the LAST settled turn
    * (frontend-rework Wave 2 — `suggestions` SSE event, Wave-1 backend).
    *
@@ -273,6 +284,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // WHY state (not ref): the drawer renders from it — React must re-render as
   // tool_call/tool_result events land so an open drawer updates live.
   const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
+  // `verifying` — TRUE during the post-synthesis grounding-validation phase
+  // (Phase-1 `status: verifying` event). Drives the Research timeline's
+  // "Verifying answer against sources…" line. Reset per send + on stream end.
+  const [verifying, setVerifying] = useState(false);
   // `serverSuggestions` — follow-up strings from the `suggestions` SSE event
   // (Wave-1 backend addition). Replaced per turn, cleared on thread switch.
   // WHY state (not ref): the page derives the chips row from it — React must
@@ -309,6 +324,13 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // in-flight turn, used to compute client-measured latency when the matching
   // tool_result event arrives. A ref because timestamps never drive a render.
   const toolStartRef = useRef<Map<string, number>>(new Map());
+
+  // `currentIterationRef` — the latest `agent_iteration.iteration` seen this
+  // turn, used to TAG each tool_call's trace entry with the loop step it ran
+  // in (Phase-1 Research timeline grouping). A ref because tagging happens
+  // inside the tool_call handler and must read the freshest iteration without
+  // forcing a re-render or re-binding the send() closure. Reset to 0 per send.
+  const currentIterationRef = useRef(0);
 
   // Cancel any in-flight stream on unmount. Without this, a fast nav-away
   // would leak a half-read fetch + a setState that fires after unmount,
@@ -352,6 +374,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // remain visible after cancellation showing a stale "Reasoning over…"
     // label that no longer reflects reality.
     setIterationEvent(null);
+    // Phase-1: clear the verify flag so the timeline doesn't show a stale
+    // "Verifying…" line after a cancelled turn.
+    setVerifying(false);
   }, []);
 
   /**
@@ -386,6 +411,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // resubmit a question into the wrong thread).
     setToolTrace([]);
     toolStartRef.current.clear();
+    currentIterationRef.current = 0;
+    setVerifying(false);
     lastQuestionRef.current = null;
     // Wave 2: suggestions + tool-usage stats are conversation-scoped — both
     // must reset on thread switch or the new thread's rail/chips would show
@@ -517,6 +544,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       // trace (the drawer always shows the latest turn).
       setToolTrace([]);
       toolStartRef.current.clear();
+      // Phase-1: reset the Research-timeline accumulators for the new turn so
+      // step grouping starts at 0 and no stale "Verifying…" line leaks in.
+      currentIterationRef.current = 0;
+      setVerifying(false);
       // Wave 2: clear the previous turn's server suggestions the moment a new
       // question fires — chips must never suggest follow-ups to an answer the
       // user has already moved past. (toolUsage is NOT cleared here — it is
@@ -713,6 +744,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             // the progress strip MUST disappear at the same time or it would
             // hover next to a settled answer (misleading "still working" cue).
             setIterationEvent(null);
+            // Phase-1: the verify phase (if any) is over once `done` lands.
+            setVerifying(false);
             finalize();
             return "finalized";
           }
@@ -725,6 +758,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             // PLAN-0099 W4: same reasoning — clear the iteration strip on
             // legacy [DONE] sentinel so both end-of-stream paths agree.
             setIterationEvent(null);
+            setVerifying(false);
             finalize();
             return "finalized";
           }
@@ -776,6 +810,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   tools_completed_total: ie.tools_completed_total,
                   elapsed_ms: ie.elapsed_ms,
                 });
+                // Phase-1: remember the current loop step so the NEXT tool_call
+                // gets tagged with it for the Research timeline's step grouping.
+                currentIterationRef.current = ie.iteration;
               }
             } else if (eventName === "thinking") {
               // `thinking` — the LLM is classifying the query and deciding
@@ -833,6 +870,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     result: null,
                     latencyMs: null,
                     latencySource: null,
+                    // Phase-1: tag with the current loop step + seed the
+                    // result label with the call-time label (the tool_result
+                    // event refines it with the input-aware version).
+                    iteration: currentIterationRef.current,
+                    resultLabel: tc.label as string,
                   },
                 ]);
               }
@@ -840,9 +882,14 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // `tool_result` — a tool has completed. The data shape from S8:
               //   { type: "tool_result", tool: string, status: "ok"|"empty"|"error", item_count: number }
               // We map the status onto the existing ToolCallState entry.
-              const tr = data as { tool?: string; status?: string };
+              const tr = data as { tool?: string; status?: string; label?: string };
               if (tr.tool && tr.status) {
                 const resultStatus = (tr.status as ToolCallState["status"]) ?? "error";
+                // Phase-1: the tool_result carries the input-aware human label
+                // (e.g. "Searching news for NVIDIA") — capture it so the
+                // Research timeline shows the specific subject on completion.
+                const resultLabel =
+                  typeof tr.label === "string" && tr.label.length > 0 ? tr.label : null;
                 setActiveTools((prev) =>
                   prev.map((t) =>
                     t.name === tr.tool
@@ -890,6 +937,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                           result: resultPayload,
                           latencyMs,
                           latencySource,
+                          // Phase-1: prefer the result event's input-aware
+                          // label; fall back to the call-time one already set.
+                          resultLabel: resultLabel ?? t.resultLabel,
                         }
                       : t,
                   ),
@@ -1068,13 +1118,26 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // so we don't leave a stale "Reasoning over…" strip hovering
               // above the error banner.
               setIterationEvent(null);
+              setVerifying(false);
               setActiveTools([]);
               // Round 1 Foundation: remember the question so the error
               // banner's Retry button can resubmit it.
               lastQuestionRef.current = question;
               return "errored";
+            } else if (eventName === "status") {
+              // Phase-1: the `status` event carries a coarse pipeline-phase
+              // `step` token. We only act on "verifying" — the post-synthesis
+              // grounding-validation phase that used to be silent. Setting the
+              // flag drives the Research timeline's "Verifying answer against
+              // sources…" line. All other steps (cache_hit, loading_context,
+              // entity_resolution) are accepted silently — the timeline/tool
+              // chrome already covers them.
+              const st = data as { step?: unknown };
+              if (st.step === "verifying") {
+                setVerifying(true);
+              }
             }
-            // status, contradictions — no UI action needed yet; accepted
+            // contradictions — no UI action needed yet; accepted
             // silently so the parser never throws on them.
           } catch {
             // Non-JSON line — keep-alive comment, blank line, etc. Skip.
@@ -1128,6 +1191,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         if (sawAnswerComplete) {
           setActiveTools([]);
           setIterationEvent(null);
+          setVerifying(false);
           finalize();
           return;
         }
@@ -1153,6 +1217,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // and the iteration strip must never hover next to the error banner.
         setActiveTools([]);
         setIterationEvent(null);
+        setVerifying(false);
         if (finalContent || pendingCitations.length > 0) {
           const partialMessage: Message = {
             message_id: crypto.randomUUID(),
@@ -1186,11 +1251,13 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           // already does this for user-initiated aborts, but unmount/race paths
           // also land here. Belt-and-braces clearing avoids a leaked strip.
           setIterationEvent(null);
+          setVerifying(false);
           return;
         }
         setStreaming(null);
         // PLAN-0099 W4: clear strip on the error fallback path too.
         setIterationEvent(null);
+        setVerifying(false);
         // Round 1 Foundation: thrown-error path (network failure, non-2xx,
         // null body) — clear any tool spinners that were mid-flight and arm
         // the Retry button with the failed question.
@@ -1266,6 +1333,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     iterationEvent,
     // Round 1 Foundation: debug tool trace (args/result/latency) for ToolTraceDrawer.
     toolTrace,
+    // Phase-1: verify-phase flag for the Research timeline's "Verifying…" line.
+    verifying,
     // Wave 2: server follow-up suggestions (preferred over the client
     // generator) + conversation-level tool usage for the rail.
     serverSuggestions,

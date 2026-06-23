@@ -33,7 +33,12 @@ import type { RelationFilter } from "./GraphControls";
 // Two divergent copies meant a fix in graphFilterUtils.ts (e.g. the investor /
 // owns_stake_in miss) silently did NOT reach the canvas. Re-export it so the few
 // external importers of `matchesRelFilter` from this module keep working.
-import { matchesRelFilter } from "./graphFilterUtils";
+// KG FILTER BUG FIX (2026-06-23): also import isEdgeVisible — the shared
+// predicate that decides whether an edge survives the relation-pill + strength
+// filters. Both the visible-edge-count effect AND the new orphan-node hiding
+// logic call it, so the "X of Y edges" badge and the painted canvas can never
+// disagree about which edges (and therefore which nodes) are visible.
+import { matchesRelFilter, isEdgeVisible } from "./graphFilterUtils";
 
 export { matchesRelFilter };
 
@@ -227,6 +232,11 @@ interface FilterControllerProps {
   minWeight: number;
   searchQuery: string;
   graphData: EntityGraphData;
+  /** KG FILTER BUG FIX (2026-06-23): the centre (focused) entity of the graph.
+   *  When a relation pill is active and the centre node would otherwise be
+   *  orphaned (all its edges hidden), we still keep it visible — hiding the very
+   *  entity the analyst is inspecting would be confusing. Always rendered. */
+  centerEntityId: string;
   /** PLAN-0099 Wave 2 — the node selected in the inspector (highlighted on canvas). */
   selectedNodeId?: string | null;
   /** PLAN-0099 Wave 2 — the edge selected in the inspector. Key == GraphEdge.id
@@ -247,6 +257,7 @@ export function FilterController({
   activeRelFilter,
   minWeight,
   searchQuery,
+  centerEntityId,
   selectedNodeId = null,
   selectedEdgeId = null,
   onVisibleEdgeCountChange,
@@ -267,11 +278,13 @@ export function FilterController({
     let total = 0;
     graph.forEachEdge((_edge, attrs) => {
       total += 1;
-      const label = ((attrs.label as string) ?? "").toUpperCase();
+      const label = (attrs.label as string) ?? "";
       const weight = (attrs.weight as number) ?? 0;
-      if (weight < minWeight / 100) return;
-      if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) return;
-      visible += 1;
+      // KG FILTER BUG FIX: use the shared isEdgeVisible predicate (was an inline
+      // copy of the same weight + matchesRelFilter logic). The orphan-node
+      // computation in the reducer effect below uses the SAME helper, so the
+      // badge count and the set of nodes we hide can never drift apart.
+      if (isEdgeVisible(label, weight, activeRelFilter, minWeight)) visible += 1;
     });
     onVisibleEdgeCountChange(visible, total);
     // graphData identity changes when a new graph loads (depth/type filter), so
@@ -279,6 +292,37 @@ export function FilterController({
   }, [sigma, activeRelFilter, minWeight, onVisibleEdgeCountChange]);
 
   useEffect(() => {
+    // ── KG FILTER BUG FIX (2026-06-23): hide orphaned nodes ──────────────────
+    // BUG: the relation pills only hid EDGES in edgeReducer; nodes left with
+    // zero surviving edges stayed painted as disconnected dots, so the analyst
+    // perceived "the filter does nothing to the nodes."
+    //
+    // FIX: before building the reducers, compute the set of node ids that still
+    // have at least one VISIBLE edge under the active relation filter + strength
+    // floor (using the SAME isEdgeVisible predicate as the edgeReducer and the
+    // edge-count badge). The nodeReducer then hides any node NOT in this set.
+    //
+    // SAFE re: dangling edges — sigma only errors on an edge whose endpoint is
+    // hidden when the EDGE itself is still visible. We add a node to keptNodeIds
+    // the moment ANY of its edges is visible, so a node is hidden only when ALL
+    // its edges are already hidden by the edgeReducer. No visible edge can ever
+    // point at a hidden node.
+    const graph = sigma.getGraph();
+    const keptNodeIds = new Set<string>();
+    // When no relation pill is active we keep every node — skip the walk so the
+    // canvas matches the pre-fix behaviour (only edges dim via the strength
+    // slider in "all" mode; nodes never hide).
+    if (activeRelFilter !== "all") {
+      graph.forEachEdge((_edge, attrs, source, target) => {
+        const label = (attrs.label as string) ?? "";
+        const weight = (attrs.weight as number) ?? 0;
+        if (isEdgeVisible(label, weight, activeRelFilter, minWeight)) {
+          keptNodeIds.add(source);
+          keptNodeIds.add(target);
+        }
+      });
+    }
+
     // WHY selection lives INSIDE the same reducers as the filters (not a second
     // controller): sigma.setSettings replaces the whole reducer — two sibling
     // components each calling setSettings would silently clobber each other's
@@ -308,6 +352,22 @@ export function FilterController({
         return { ...data, hidden: false };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
+        // ── Orphan-node hiding (KG FILTER BUG FIX, 2026-06-23) ──────────────
+        // Checked FIRST so it runs before the selection-highlight / search-dim
+        // branches. When a relation pill is active, hide any node that has no
+        // surviving edge (not in keptNodeIds) — UNLESS it is the centre entity
+        // (always shown so the analyst never loses the node they're inspecting)
+        // or the explicitly selected node (it stays highlighted below). In "all"
+        // mode keptNodeIds is empty, but we never reach the hide because the
+        // guard short-circuits on activeRelFilter === "all".
+        if (
+          activeRelFilter !== "all" &&
+          node !== centerEntityId &&
+          node !== selectedNodeId &&
+          !keptNodeIds.has(node)
+        ) {
+          return { ...data, hidden: true };
+        }
         // ── Selected-node highlight (PLAN-0099 Wave 2) ──────────────────────
         // WHY checked BEFORE the search dim: an explicitly selected node must
         // stay visible even if the analyst's search box would otherwise dim it.
@@ -336,7 +396,13 @@ export function FilterController({
       },
     });
     sigma.refresh();
-  }, [sigma, activeRelFilter, minWeight, searchQuery, selectedNodeId, selectedEdgeId]);
+    // KG FILTER BUG FIX: centerEntityId added — the orphan-node branch reads it
+    // to keep the centre node visible. keptNodeIds is recomputed inside the
+    // effect from (sigma, activeRelFilter, minWeight), all already deps, so it
+    // does not need its own entry. graphData identity changes also reload the
+    // graph (GraphLoader), and the visible-edge-count effect's sigma dep covers
+    // the post-load recount; this reducer re-runs on the same trigger set.
+  }, [sigma, activeRelFilter, minWeight, searchQuery, centerEntityId, selectedNodeId, selectedEdgeId]);
 
   return null;
 }

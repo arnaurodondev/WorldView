@@ -917,6 +917,13 @@ export interface Holding {
    * that omit the field keep compiling.
    */
   asset_class?: string | null;
+  /**
+   * PLAN-0114 W6 (T-W6-04): annualised dividend yield as a ratio (0.024 = 2.4%),
+   * surfaced by S9 GET /v1/holdings/{portfolio_id} (wire field
+   * `annualized_dividend_yield`, renamed in lib/api/portfolios.ts). Optional +
+   * nullable so older S9 builds / fixtures keep compiling and YIELD renders "—".
+   */
+  annualizedDividendYield?: number | null;
 }
 
 export interface Transaction {

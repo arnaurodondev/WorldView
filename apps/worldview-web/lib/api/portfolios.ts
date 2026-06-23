@@ -108,6 +108,8 @@ export function createPortfoliosApi(t: string | undefined) {
         // the instruments LEFT JOIN (VERIFIED LIVE 2026-06-11: "equity" for
         // every demo holding). Optional + nullable — older S9 builds omit it.
         asset_class?: string | null;
+        // PLAN-0114 W6 (T-W6-04): S9 returns annualised dividend yield as a ratio.
+        annualized_dividend_yield?: number | null;
       };
       const raw = await apiFetch<
         RawHolding[] | { items: RawHolding[]; total: number; limit: number; offset: number }
@@ -137,6 +139,8 @@ export function createPortfoliosApi(t: string | undefined) {
         // Strict null preservation — null/absent on the wire stays null so
         // the ASSET column renders "—" instead of a fabricated default.
         asset_class: h.asset_class ?? null,
+        // PLAN-0114 W6 (T-W6-04): forward S9's annualised dividend yield (ratio) → YIELD column.
+        annualizedDividendYield: h.annualized_dividend_yield ?? null,
         // WHY null: These fields are computed client-side from live quote data, not stored in S1.
         current_price: null,
         unrealised_pnl: null,

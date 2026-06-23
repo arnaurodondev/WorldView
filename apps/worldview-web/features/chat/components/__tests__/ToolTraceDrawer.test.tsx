@@ -24,6 +24,12 @@ const TRACE: ToolTraceEntry[] = [
     latencyMs: 231,
     // Wave 2: server-measured duration_ms — renders WITHOUT the ~ qualifier.
     latencySource: "server",
+    // Phase-1 Research timeline: the hook always tags trace entries with the
+    // loop step (`iteration`) and the input-aware completion label
+    // (`resultLabel`). They are required on ToolTraceEntry, so fixtures must
+    // carry them too (R19 — fixtures track the real contract, never weaken it).
+    iteration: 0,
+    resultLabel: "Searching documents for NVDA margin",
   },
   {
     tool: "get_quote",
@@ -33,6 +39,10 @@ const TRACE: ToolTraceEntry[] = [
     result: null,
     latencyMs: null,
     latencySource: null,
+    // Still running → resultLabel falls back to the call-time label (the
+    // tool_result event has not refined it yet). iteration is the loop step.
+    iteration: 0,
+    resultLabel: "Fetching quote...",
   },
 ];
 
@@ -176,6 +186,9 @@ describe("ToolTraceDrawer", () => {
         result: { error: "timeout" },
         latencyMs: 5000,
         latencySource: "server",
+        // Phase-1 Research timeline required fields (see TRACE above).
+        iteration: 1,
+        resultLabel: "Doing something...",
       },
     ];
     render(<ToolTraceDrawer trace={trace} onClose={() => {}} />);
