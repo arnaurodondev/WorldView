@@ -51,6 +51,11 @@ import { NewsColumn } from "./news/NewsColumn";
 import { EventsBlock } from "./events/EventsBlock";
 import { ContradictionsBlock } from "./context/ContradictionsBlock";
 import { NarrativeHistoryDisclosure } from "./context/NarrativeHistoryDisclosure";
+// PATH INSIGHTS (audit 2026-06-23 §2a, MUST-FIX): the on-mount bundle already
+// hydrates the ["entity-paths", entityId, {}] cache slot, but nothing here read
+// it — the multi-hop "Apple → TSMC → ASML" indirect-connection product was paid
+// for and discarded. PathInsightsBlock reads that SAME warm slot (no new fetch).
+import { PathInsightsBlock } from "./context/PathInsightsBlock";
 // PLAN-0099 H: single-round-trip composite bundle. Hydrates per-widget
 // TanStack caches (entity-detail, brief, depth=2 graph, paths, intelligence
 // summary) so the dossier / graph / inspector render from cache without
@@ -191,6 +196,14 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             <div className="flex-1 min-h-0 overflow-y-auto border-t border-border">
               {/* Wave-1 endpoint: entity-scoped temporal events. */}
               <EventsBlock entityId={entityId} />
+              {/* Path insights (audit §2a) — multi-hop indirect connections.
+                  Reads the warm ["entity-paths", entityId, {}] cache that the
+                  on-mount bundle seeds, so it renders without a new fetch. It
+                  owns its own "PATH INSIGHTS" accent header + empty/loading/
+                  error states, so we only need a divider above it. */}
+              <div className="border-t border-border/40">
+                <PathInsightsBlock entityId={entityId} />
+              </div>
               {/* Contradictions — component reuse; it owns its own
                   "CONTRADICTIONS [N]" header + named empty state. */}
               <div className="px-2 py-1 border-t border-border/40">
