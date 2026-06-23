@@ -68,6 +68,7 @@ from rag_chat.application.metrics.prometheus import (
     record_reranker_position_change,
 )
 from rag_chat.application.observability import PhaseTimings, phase
+from rag_chat.application.pipeline.sse_events import SSEStatusStep
 from rag_chat.application.pipeline.transport_error import TransportErrorMarker
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery  # noqa: F401 (preserved for public surface)
@@ -2515,6 +2516,11 @@ class ChatOrchestratorUseCase:
                 # when present; result_preview lets it render the first items'
                 # titles inline without waiting for the citations event.
                 _duration_ms = int(_per_tool_latency * 1000)
+                # Phase-1: rebuild the SAME human label as the tool_call so the
+                # Research timeline's completion line keeps the subject ("✓
+                # Searching news for NVIDIA"). Deterministic templating — no LLM.
+                _result_input = {k: v for k, v in tc.input.items() if k not in {"query", "text"}}
+                _result_label = p.emitter.human_tool_label(tc.name, _result_input)
                 if _te is not None:
                     yield p.emitter.emit_tool_result(
                         tc.name,
@@ -2524,6 +2530,7 @@ class ChatOrchestratorUseCase:
                         status_code=_te.status_code,
                         elapsed_ms=_te.elapsed_ms,
                         duration_ms=_duration_ms,
+                        label=_result_label,
                     )
                 else:
                     _preview_items = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
@@ -2541,6 +2548,7 @@ class ChatOrchestratorUseCase:
                         duration_ms=_duration_ms,
                         result_preview=p.emitter.build_result_preview(_preview_items),
                         grounding_sample=p.emitter.build_grounding_sample(tc.name, _preview_items),
+                        label=_result_label,
                     )
 
                 # E-12: record each tool call outcome.
@@ -3268,6 +3276,19 @@ class ChatOrchestratorUseCase:
                 )
                 for _chunk in _chunk_text_for_streaming(full_text):
                     yield p.emitter.emit_token(_chunk)
+
+        # ── Phase-1: verify-phase status ─────────────────────────────────────
+        # Everything below (narration scrub, plan-only guard, false-write-action
+        # guard, BP-605 entity grounding, numeric grounding/citation validation
+        # and any repair re-prompt) is the post-synthesis VERIFICATION phase.
+        # Before this it ran silently — on a heavy answer the user saw the token
+        # stream stop and then a multi-second gap before the final answer
+        # settled, with no signal that the agent was checking its work. Emit a
+        # distinct ``verifying`` status so the Research timeline can render
+        # "Verifying answer against sources…". Only emitted when there is text
+        # to verify (a zero-text stream has nothing to ground-check).
+        if full_text:
+            yield p.emitter.emit_status(SSEStatusStep.VERIFYING.value)
 
         # ── PLAN-0107 follow-up Fix #4: post-stream narration scrub ──────────
         # Last-resort cleanup of any tool-call narration that slipped past

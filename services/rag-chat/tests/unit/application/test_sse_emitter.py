@@ -159,15 +159,20 @@ def test_sse_error_event(emitter: SSEEmitter) -> None:
 
 @pytest.mark.unit
 def test_sse_done_event_without_phase_timings(emitter: SSEEmitter) -> None:
-    """emit_done() without phase_timings keeps the legacy {"type":"done"} body.
+    """emit_done() without phase_timings keeps the ``type: done`` body.
 
     Backwards compatibility: existing frontends only key on the ``done``
-    event name; the data body must NOT introduce required new keys.
+    event NAME and the ``type: done`` field — those are unchanged. Phase-1
+    additively attaches the SSE ``protocol_version`` (documented contract,
+    SSEEventType / SSE_PROTOCOL_VERSION); the additive field cannot break a
+    client that ignores unknown keys (R11 forward-compatible).
     """
+    from rag_chat.application.pipeline.sse_events import SSE_PROTOCOL_VERSION
+
     result = emitter.emit_done()
     assert result["event"] == "done"
     data = json.loads(result["data"])
-    assert data == {"type": "done"}
+    assert data == {"type": "done", "protocol_version": SSE_PROTOCOL_VERSION}
     assert "phase_timings_ms" not in data
 
 

@@ -16,6 +16,12 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.application.pipeline.sse_events import (
+    PROTOCOL_VERSION_KEY,
+    SSE_PROTOCOL_VERSION,
+    SSEEventType,
+)
+
 if TYPE_CHECKING:
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef
 
@@ -27,11 +33,20 @@ _log = structlog.get_logger(__name__)
 # Maps tool names (from capability_manifest.yaml) to human-readable UI labels.
 # WHY here: the SSEEmitter is the only layer that emits tool_call events, so
 # co-locating the label map avoids a separate lookup on every call site.
+#
+# Phase-1 split: each entry is a (verb_template) — a base label used when the
+# tool's input carries no useful identifier. When the input DOES carry one
+# (ticker / entity / symbol), ``_human_tool_label`` weaves it in to produce a
+# specific line ("Searching news for NVIDIA") instead of the generic one. This
+# is DETERMINISTIC string templating only — NO extra LLM call (respects the
+# DeepSeek-judge-budget cost rule).
 _TOOL_LABELS: dict[str, str] = {
     "search_documents": "Searching documents...",
+    "get_entity_news": "Searching news...",
     "get_entity_graph": "Building entity map...",
     "traverse_graph": "Traversing knowledge graph...",
     "search_entity_relations": "Mapping relationships...",
+    "get_relations": "Querying the knowledge graph...",
     "search_claims": "Checking analyst claims...",
     "search_events": "Looking up corporate events...",
     "get_contradictions": "Detecting contradictions...",
@@ -40,8 +55,12 @@ _TOOL_LABELS: dict[str, str] = {
     "get_fundamentals_history": "Fetching fundamentals...",
     "get_entity_narrative": "Loading narrative...",
     "get_entity_paths": "Tracing entity paths...",
+    "get_path_between": "Querying the knowledge graph...",
     "get_entity_health": "Computing health score...",
     "get_entity_intelligence": "Loading intelligence bundle...",
+    # Risk-metrics family — templated, no LLM.
+    "get_risk_metrics": "Computing risk metrics...",
+    "compute_risk_metrics": "Computing risk metrics...",
     # PLAN-0081 Wave A: catalog tools
     "get_morning_brief": "Loading morning brief...",
     "compare_entities": "Comparing entities...",
@@ -55,13 +74,144 @@ _TOOL_LABELS: dict[str, str] = {
     "create_alert": "Creating alert...",
 }
 
+# Per-tool template for the INPUT-AWARE label (Phase-1). When the tool's input
+# carries a recognised identifier, the matching template here produces a
+# specific line. ``{subject}`` is filled with the resolved identifier. Tools
+# absent from this map fall back to their static ``_TOOL_LABELS`` entry even
+# when an identifier is present (e.g. "Screening universe..." reads better
+# without a subject). Keep templates short and present-progressive to match the
+# rest of the chat chrome.
+_TOOL_LABEL_TEMPLATES: dict[str, str] = {
+    "get_entity_news": "Searching news for {subject}",
+    "search_documents": "Searching documents for {subject}",
+    "search_entity_relations": "Mapping relationships for {subject}",
+    "get_relations": "Querying the knowledge graph for {subject}",
+    "get_entity_graph": "Building entity map for {subject}",
+    "search_claims": "Checking analyst claims on {subject}",
+    "get_contradictions": "Detecting contradictions for {subject}",
+    "get_price_history": "Fetching price history for {subject}",
+    "get_fundamentals_history": "Fetching fundamentals for {subject}",
+    "get_entity_narrative": "Loading narrative for {subject}",
+    "get_entity_paths": "Tracing entity paths for {subject}",
+    "get_entity_health": "Computing health score for {subject}",
+    "get_entity_intelligence": "Loading intelligence for {subject}",
+    "get_risk_metrics": "Computing risk metrics for {subject}",
+    "compute_risk_metrics": "Computing risk metrics for {subject}",
+    "compare_entities": "Comparing {subject}",
+    "create_alert": "Creating alert for {subject}",
+}
+
+# Input keys probed (in order) to find the human "subject" of a tool call. The
+# FIRST present, non-empty, string-coercible value wins. These are the safe,
+# display-only identifier fields tool inputs carry — NEVER queries / free text
+# (those are excluded from the SSE input_summary upstream anyway).
+_SUBJECT_INPUT_KEYS: tuple[str, ...] = (
+    "ticker",
+    "symbol",
+    "entity_name",
+    "entity",
+    "entity_id",
+    "name",
+    "source_entity",
+)
+
+# Optional ticker→display-name map so common symbols render as the recognisable
+# company name ("NVDA" → "NVIDIA") rather than the bare ticker. Unknown tickers
+# fall through to the raw symbol — correct and never wrong, just less polished.
+# Intentionally small + deterministic (NO lookup service / LLM): this is pure
+# display sugar on the hot streaming path.
+_TICKER_DISPLAY_NAMES: dict[str, str] = {
+    "NVDA": "NVIDIA",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "GOOGL": "Alphabet",
+    "GOOG": "Alphabet",
+    "AMZN": "Amazon",
+    "META": "Meta",
+    "TSLA": "Tesla",
+    "MSTR": "MicroStrategy",
+    "AMD": "AMD",
+    "INTC": "Intel",
+    "NFLX": "Netflix",
+}
+
+
+def _resolve_subject(input_summary: dict[str, Any]) -> str | None:
+    """Extract a short, human display subject from a tool's input summary.
+
+    Deterministic + best-effort: probes :data:`_SUBJECT_INPUT_KEYS` in order,
+    str-coerces the first present non-empty value, maps known tickers to their
+    company name, and bounds the length. Returns ``None`` when no usable subject
+    is present (caller then uses the static base label). NEVER raises — an odd
+    input shape degrades to ``None`` rather than breaking the stream.
+    """
+    if not isinstance(input_summary, dict):
+        return None
+    for key in _SUBJECT_INPUT_KEYS:
+        raw = input_summary.get(key)
+        if raw is None:
+            continue
+        # Lists (e.g. compare_entities tickers=["NVDA","AMD"]) → join the first
+        # few so the label stays short.
+        if isinstance(raw, list | tuple):
+            parts = [str(p).strip() for p in raw if str(p).strip()]
+            if not parts:
+                continue
+            mapped = [_TICKER_DISPLAY_NAMES.get(p.upper(), p) for p in parts[:3]]
+            return ", ".join(mapped)[:48]
+        text = str(raw).strip()
+        if not text:
+            continue
+        # Ticker-shaped tokens (all caps, ≤5 chars) get the display-name map.
+        if text.upper() in _TICKER_DISPLAY_NAMES:
+            return _TICKER_DISPLAY_NAMES[text.upper()]
+        return text[:48]
+    return None
+
+
+def _human_tool_label(tool_name: str, input_summary: dict[str, Any]) -> str:
+    """Build the deterministic, input-aware human label for a tool_call.
+
+    Resolution order:
+      1. If the tool has an input-aware template AND a subject is present →
+         "Searching news for NVIDIA".
+      2. Else the static base label from :data:`_TOOL_LABELS`.
+      3. Else a final fallback of ``"{tool_name}..."`` so an unknown tool never
+         raises and still shows *something* legible.
+
+    Pure templating — NO LLM call, NO network. Safe to run on every tool_call.
+    """
+    subject = _resolve_subject(input_summary)
+    template = _TOOL_LABEL_TEMPLATES.get(tool_name)
+    if template and subject:
+        return template.format(subject=subject)
+    return _TOOL_LABELS.get(tool_name, f"{tool_name}...")
+
 
 class SSEEmitter:
     """Convert RAG pipeline events into SSE wire format dictionaries."""
 
+    @staticmethod
+    def human_tool_label(tool_name: str, input_summary: dict[str, Any]) -> str:
+        """Public accessor for the deterministic input-aware tool label.
+
+        WHY exposed: the orchestrator builds the SAME label for the matching
+        ``tool_result`` event (so the Research timeline's completion line keeps
+        the subject from the call line). Delegating to the module-level helper
+        keeps the label logic in ONE place — there is exactly one definition of
+        "Searching news for NVIDIA".
+        """
+        return _human_tool_label(tool_name, input_summary)
+
     def emit_status(self, step: str) -> dict[str, str]:
-        """Emit a pipeline step progress event."""
-        return {"event": "status", "data": json.dumps({"step": step})}
+        """Emit a pipeline step progress event.
+
+        ``step`` is a free-form token the frontend maps to a human label. Known
+        cross-cutting values are enumerated in
+        :class:`rag_chat.application.pipeline.sse_events.SSEStatusStep` (e.g.
+        ``"verifying"`` — the post-synthesis grounding-validation phase).
+        """
+        return {"event": SSEEventType.STATUS.value, "data": json.dumps({"step": step})}
 
     def emit_token(self, text: str) -> dict[str, str]:
         """Emit a single LLM token chunk."""
@@ -153,7 +303,7 @@ class SSEEmitter:
     ) -> dict[str, str]:
         """Emit final response metadata (thread/message IDs, latency, provider)."""
         return {
-            "event": "metadata",
+            "event": SSEEventType.METADATA.value,
             "data": json.dumps(
                 {
                     "thread_id": str(thread_id),
@@ -161,6 +311,10 @@ class SSEEmitter:
                     "intent": intent,
                     "provider": provider,
                     "latency_ms": latency_ms,
+                    # Phase-1: surface the SSE protocol version on metadata too
+                    # (additive). The frontend reads it from whichever of
+                    # metadata/done it sees first.
+                    PROTOCOL_VERSION_KEY: SSE_PROTOCOL_VERSION,
                 }
             ),
         }
@@ -185,10 +339,17 @@ class SSEEmitter:
         or None it is omitted to preserve byte-for-byte backwards
         compatibility for callers that did not opt in.
         """
-        payload: dict[str, Any] = {"type": "done"}
+        # Phase-1: surface the SSE protocol version on the terminal frame so the
+        # frontend can read the contract version it just consumed without an
+        # out-of-band negotiation. ``type`` and ``phase_timings_ms`` keep their
+        # exact prior shapes — this is purely additive.
+        payload: dict[str, Any] = {
+            "type": SSEEventType.DONE.value,
+            PROTOCOL_VERSION_KEY: SSE_PROTOCOL_VERSION,
+        }
         if phase_timings_ms:
             payload["phase_timings_ms"] = phase_timings_ms
-        return {"event": "done", "data": json.dumps(payload)}
+        return {"event": SSEEventType.DONE.value, "data": json.dumps(payload)}
 
     def emit_agent_iteration(
         self,
@@ -304,9 +465,11 @@ class SSEEmitter:
             fallback_of:   Name of the originally-failed tool when is_fallback=True;
                            ignored otherwise.
         """
-        label = _TOOL_LABELS.get(tool_name, f"{tool_name}...")
+        # Phase-1: build the input-aware human label deterministically (no LLM).
+        # ``get_entity_news({"ticker": "NVDA"})`` → "Searching news for NVIDIA".
+        label = _human_tool_label(tool_name, input_summary)
         payload: dict[str, Any] = {
-            "type": "tool_call",
+            "type": SSEEventType.TOOL_CALL.value,
             "tool": tool_name,
             "label": label,
             "input": input_summary,
@@ -664,6 +827,7 @@ class SSEEmitter:
         duration_ms: int | None = None,
         result_preview: list[dict[str, str | None]] | None = None,
         grounding_sample: dict[str, Any] | None = None,
+        label: str | None = None,
     ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
 
@@ -708,11 +872,18 @@ class SSEEmitter:
                          the chat-eval harness pattern-match unchanged (AD-4).
         """
         payload: dict[str, object] = {
-            "type": "tool_result",
+            "type": SSEEventType.TOOL_RESULT.value,
             "tool": tool_name,
             "status": status,
             "item_count": item_count,
         }
+        # Phase-1: carry the SAME human label as the matching tool_call so the
+        # Research timeline can render a completion line ("✓ Searching news for
+        # NVIDIA") without re-deriving the label client-side. Omitted when None
+        # so the legacy payload stays byte-identical for callers that don't pass
+        # it (forward-compatible, additive).
+        if label:
+            payload["label"] = label
         # Only attach the optional fields when populated so the legacy SSE
         # shape stays byte-identical for callers that did not opt in
         # (frontend snapshot tests and the chat-eval harness both
