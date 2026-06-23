@@ -10,7 +10,7 @@ WHY THIS MIGRATION EXISTS:
   planner cost) by turning a per-row Seq Scan into a BitmapOr of index scans.
   That was necessary but NOT sufficient: Worker 13B's density denominator was a
   *correlated* subquery evaluated once per candidate row, so the total cost was
-  still O(frontier_rows × per-eval).  On the live instance a single denominator
+  still O(frontier_rows x per-eval).  On the live instance a single denominator
   evaluation measured ~531 ms (BitmapOr + Bitmap Heap Scan over ~250 heap blocks
   + DISTINCT sort), and with ~612 candidate rows the full gate cost ~325 s —
   reliably exceeding the 60 s statement_timeout and crashing every 5-minute run
