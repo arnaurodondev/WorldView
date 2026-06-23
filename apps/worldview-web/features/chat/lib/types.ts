@@ -146,6 +146,22 @@ export interface ToolTraceEntry {
    * client-measured values with "~" and drops the qualifier for server ones.
    */
   latencySource: "server" | "client" | null;
+  /**
+   * Phase-1 Research timeline: the 0-indexed agent-loop iteration this tool was
+   * called in (the latest `agent_iteration.iteration` seen when the `tool_call`
+   * arrived). Lets the timeline group steps under "Step 1 / Step 2" headers.
+   * 0 when no agent_iteration event has been seen yet (single-iteration or
+   * classical answers) — they all fold into one implicit step.
+   */
+  iteration: number;
+  /**
+   * Phase-1 Research timeline: the input-aware human label from the
+   * `tool_result` SSE event (e.g. "Searching news for NVIDIA"). Falls back to
+   * the `tool_call` label when the result omits it (older backends). This is
+   * what the timeline renders; `label` (the call-time label) is kept for the
+   * debug drawer's verbatim record.
+   */
+  resultLabel: string | null;
 }
 
 /**

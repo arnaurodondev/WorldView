@@ -148,6 +148,11 @@ import { extractTickers } from "@/features/chat/lib/ticker-extract";
 // useDebugFlag gate means the drawer code path is completely inert (no
 // listeners, no render) unless ?debug=1 is in the URL.
 import { ToolTraceDrawer } from "@/features/chat/components/ToolTraceDrawer";
+// Phase-1 Part C: the always-visible, human-readable agent-step trace. Shown
+// in the StreamingBubble during the stream and as a collapsed one-line summary
+// after it settles. UNLIKE ToolTraceDrawer (above), this is NOT gated behind
+// ?debug=1 — it is a first-class part of the chat surface for every user.
+import { ResearchTimeline } from "@/features/chat/components/ResearchTimeline";
 import { useDebugFlag } from "@/features/chat/hooks/useDebugFlag";
 import { useToolTraceChord } from "@/features/chat/hooks/useToolTraceChord";
 
@@ -341,8 +346,13 @@ export default function ChatPage() {
     // perceived hang between tool batches on multi-iteration research queries.
     iterationEvent,
     // Round 1 Foundation: per-turn debug tool trace (args/result/latency)
-    // for the ?debug=1 ToolTraceDrawer below.
+    // for the ?debug=1 ToolTraceDrawer below. Phase-1 Part C ALSO feeds it to
+    // the always-visible ResearchTimeline inside the StreamingBubble + the
+    // collapsed "Researched N sources" summary after the answer settles.
     toolTrace,
+    // Phase-1 Part C: TRUE during the post-synthesis grounding-validation
+    // phase — drives the ResearchTimeline's "Verifying answer…" line.
+    verifying,
     // Wave 2 (frontend-rework sprint): server-generated follow-up
     // suggestions from the `suggestions` SSE event — PREFERRED over the
     // client-side generateFollowUps fallback (see followUpSuggestions memo).
@@ -1510,7 +1520,29 @@ export default function ChatPage() {
                      * stream completes — the strip handles its own visibility.
                      */
                     iterationEvent={iterationEvent}
+                    /*
+                     * Phase-1 Part C: feed the per-turn tool trace + verify
+                     * flag so the always-visible ResearchTimeline renders the
+                     * human-readable agent-step list (NOT behind ?debug=1) in
+                     * place of the bare iteration strip once tools start.
+                     */
+                    toolTrace={toolTrace}
+                    verifying={verifying}
                   />
+                ) : null}
+
+                {/*
+                 * Phase-1 Part C: collapse-to-summary. The instant the stream
+                 * settles, StreamingBubble unmounts (streaming → null) and the
+                 * final MessageBubble renders. We then show a ONE-LINE
+                 * "Researched N sources across M steps" summary derived from the
+                 * same toolTrace (which deliberately survives stream completion).
+                 * Clicking it re-expands the full step list. Rendered only when
+                 * the last turn actually used tools — plain Q&A shows nothing.
+                 * Hidden while ?debug=1 is on, because the ToolTraceDrawer
+                 * already gives the power-user the (richer) raw view there. */}
+                {!streaming && !isDebug && toolTrace.length > 0 ? (
+                  <ResearchTimeline trace={toolTrace} verifying={false} mode="done" />
                 ) : null}
 
                 {/* Round 3 transition polish: reserve the follow-up chips'
