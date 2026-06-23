@@ -208,6 +208,67 @@ async def test_bundle_per_leg_failure_degrades_to_none(authed_app, authed_mock_c
     assert body["paths"] is None
 
 
+@pytest.mark.asyncio
+async def test_bundle_graph_depth1_fallback_when_depth2_times_out(authed_app, authed_mock_clients) -> None:
+    """REGRESSION (2026-06-23 "intelligence graph empty" / BP-694):
+
+    On a DENSE HUB entity (e.g. AAPL) the depth=2 leg runs an AGE variable-length
+    traversal that exceeds the 15 s per-leg httpx timeout, so graph_t comes back
+    None.  The depth=1 leg (fast SQL) still succeeds.  The bundle MUST fall back
+    to the depth=1 graph rather than shipping graph_d2=null — otherwise the
+    Intelligence-tab canvas renders "No connections found" while the DOSSIER rail
+    populates (the exact reported symptom).
+
+    The two /graph calls share a path; they are distinguished by the ``depth``
+    query param (depth=2 leg sets depth=2; the depth=1 merge leg omits depth).
+    """
+
+    async def _kg_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
+        if path == f"/api/v1/entities/{_ENTITY_UUID}":
+            return _mock_response(200, _DETAIL_PAYLOAD)
+        if path == f"/api/v1/entities/{_ENTITY_UUID}/graph":
+            # depth=2 leg → simulate the AGE traversal timeout (httpx raises).
+            if params is not None and str(params.get("depth")) == "2":
+                raise httpx.TimeoutException("AGE depth=2 traversal exceeded timeout")
+            # depth=1 leg (no depth param) → returns the direct-edge graph fast.
+            return _mock_response(200, _GRAPH_RAW_PAYLOAD)
+        if path == f"/api/v1/entities/{_ENTITY_UUID}/paths":
+            return _mock_response(200, _PATHS_PAYLOAD)
+        if path == f"/api/v1/entities/{_ENTITY_UUID}/intelligence":
+            return _mock_response(200, _INTEL_PAYLOAD)
+        return _mock_response(404)
+
+    async def _rag_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
+        return _mock_response(200, _BRIEF_PAYLOAD)
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_get)
+    authed_mock_clients.rag_chat.get = AsyncMock(side_effect=_rag_get)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence-bundle",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The depth=1 fallback must yield a NON-null graph with real edges — the
+    # whole point of the fix.  Before the fix this was None.
+    graph = body["graph_d2"]
+    assert graph is not None, "depth=1 fallback must populate graph_d2 when depth=2 times out"
+    assert graph["entity_id"] == _ENTITY_UUID
+    assert len(graph["edges"]) >= 1, "depth=1 direct edges must survive the depth=2 timeout"
+    # The other legs are unaffected.
+    assert body["detail"] == _DETAIL_PAYLOAD
+    assert body["intelligence_summary"] == _INTEL_PAYLOAD
+
+
 # ── Valkey cache tests (perf fix) ─────────────────────────────────────────────
 
 

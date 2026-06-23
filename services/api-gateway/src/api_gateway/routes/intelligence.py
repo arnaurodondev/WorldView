@@ -1204,38 +1204,68 @@ async def get_entity_intelligence_bundle(
     #
     # B-2 fix: graph_d1_t (fetched concurrently above) is merged into the
     # depth=2 result here in-memory — zero extra network latency.
+    #
+    # BP-694 / 2026-06-23 "intelligence graph empty" fix: the depth=2 leg
+    # (graph_t) runs an AGE variable-length traversal ``-[r*1..2]-`` over the
+    # whole ``entity`` vertex table.  On a DENSE HUB like AAPL (28k vertices,
+    # 157 incident edges) the AGE planner builds a Nested-Loop that removes
+    # ~291M rows via ``age_match_vle_terminal_edge`` and takes ~26-30 s — far
+    # beyond the per-leg httpx timeout (15 s), so graph_t comes back None.
+    # Previously graph_d2 was built ONLY inside ``if graph_t is not None`` and
+    # the depth=1 merge happened INSIDE that block, so when the depth=2 leg
+    # timed out we threw away the perfectly good depth=1 result (graph_d1_t,
+    # ~500 ms SQL with all 131 direct edges) and shipped graph_d2=null.  The
+    # frontend then rendered "No connections found" even though the DOSSIER rail
+    # (detail / intelligence / paths legs) populated — the exact reported
+    # symptom.  Fix: build graph_d2 from whichever leg(s) succeeded, preferring
+    # depth=2 but FALLING BACK to depth=1 when depth=2 is missing.
     graph_d2: dict[str, Any] | None = None
-    if graph_t is not None:
-        try:
-            graph_d2 = _transform_graph_response(graph_t)
-            # Merge depth=1 result (already fetched concurrently) into depth=2.
-            if graph_d1_t is not None:
-                t1 = _transform_graph_response(graph_d1_t)
-                existing_node_ids = {n["id"] for n in graph_d2["nodes"]}
-                existing_edge_ids = {e["id"] for e in graph_d2["edges"]}
-                for n in t1["nodes"]:
-                    if n["id"] not in existing_node_ids:
-                        graph_d2["nodes"].append(n)
-                        existing_node_ids.add(n["id"])
-                for e in t1["edges"]:
-                    if e["id"] not in existing_edge_ids:
-                        graph_d2["edges"].append(e)
-                        existing_edge_ids.add(e["id"])
-                # Re-apply orphan filter after merge (new edges may validate
-                # previously-orphan nodes; new nodes may validate orphan edges).
-                node_id_set2 = {n["id"] for n in graph_d2["nodes"]}
-                graph_d2["edges"] = [
-                    e for e in graph_d2["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2
-                ]
-                edge_eps2: set[str] = set()
-                for e in graph_d2["edges"]:
-                    edge_eps2.add(e["source"])
-                    edge_eps2.add(e["target"])
-                graph_d2["nodes"] = [n for n in graph_d2["nodes"] if n["id"] == eid or n["id"] in edge_eps2]
-        except Exception:
-            # Defensive: malformed S7 payload should not poison the bundle.
-            logger.warning("entity_intelligence_bundle_graph_transform_failed", entity_id=eid)
-            graph_d2 = None
+    try:
+        # Transform whichever legs succeeded.  Either may be None (timeout /
+        # 5xx) — _transform_graph_response is only called on non-None payloads.
+        t2 = _transform_graph_response(graph_t) if graph_t is not None else None
+        t1 = _transform_graph_response(graph_d1_t) if graph_d1_t is not None else None
+
+        # Base = depth=2 when available, otherwise the depth=1 fallback.  This is
+        # the single line that prevents the "empty graph on dense hub" bug: a
+        # depth=2 timeout no longer discards the depth=1 edges.
+        graph_d2 = t2 if t2 is not None else t1
+
+        # Merge depth=1 INTO depth=2 (B-2) only when BOTH succeeded — this keeps
+        # depth-1 neighbours from being orphaned by the depth=2 orphan filter.
+        # When depth=2 timed out, graph_d2 already IS t1, so no merge is needed.
+        # WHY operate on the local ``t2`` (not graph_d2) here: mypy narrows
+        # ``t2`` to non-None inside this guard, whereas ``graph_d2`` is dict|None.
+        if t2 is not None and t1 is not None:
+            existing_node_ids = {n["id"] for n in t2["nodes"]}
+            existing_edge_ids = {e["id"] for e in t2["edges"]}
+            for n in t1["nodes"]:
+                if n["id"] not in existing_node_ids:
+                    t2["nodes"].append(n)
+                    existing_node_ids.add(n["id"])
+            for e in t1["edges"]:
+                if e["id"] not in existing_edge_ids:
+                    t2["edges"].append(e)
+                    existing_edge_ids.add(e["id"])
+            # Re-apply orphan filter after merge (new edges may validate
+            # previously-orphan nodes; new nodes may validate orphan edges).
+            node_id_set2 = {n["id"] for n in t2["nodes"]}
+            t2["edges"] = [e for e in t2["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2]
+            edge_eps2: set[str] = set()
+            for e in t2["edges"]:
+                edge_eps2.add(e["source"])
+                edge_eps2.add(e["target"])
+            t2["nodes"] = [n for n in t2["nodes"] if n["id"] == eid or n["id"] in edge_eps2]
+            graph_d2 = t2
+
+        if graph_t is None and graph_d1_t is not None:
+            # Observability: a depth=2 timeout that fell back to depth=1 is a
+            # silent degradation worth tracking (dense-hub AGE perf — BP-694).
+            logger.info("intelligence_bundle_graph_depth1_fallback", entity_id=eid)
+    except Exception:
+        # Defensive: malformed S7 payload should not poison the bundle.
+        logger.warning("entity_intelligence_bundle_graph_transform_failed", entity_id=eid)
+        graph_d2 = None
 
     bundle: dict[str, Any] = {
         "detail": detail_t,
