@@ -25,7 +25,13 @@ ENV GLINER_MODEL_PATH=${GLINER_MODEL_PATH}
 # rate limits. Pre-fetching to the image (as root, before USER switch) puts
 # the weights into ``/root/.cache/huggingface`` baked into the layer.
 # We then copy them into appuser's cache so the runtime load is a no-op fetch.
-RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('${GLINER_MODEL_PATH}')"
+# Retry the HF fetch (transient rate-limit/network flakes fail the E2E stack build on
+# CI runners). 4 attempts with backoff; HF_HUB_ENABLE_HF_TRANSFER off for stable retries.
+RUN for i in 1 2 3 4; do \
+      python -c "from gliner import GLiNER; GLiNER.from_pretrained('${GLINER_MODEL_PATH}')" && break; \
+      echo "gliner model fetch attempt $i failed; retrying in $((i*15))s"; sleep $((i*15)); \
+    done; \
+    python -c "from gliner import GLiNER; GLiNER.from_pretrained('${GLINER_MODEL_PATH}')"
 
 # Correctness gate: build FAILS if server-side batching (batch_predict_entities)
 # does not produce entities identical to the per-text predict_entities path.
