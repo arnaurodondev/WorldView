@@ -47,6 +47,19 @@ services:
     profiles: [portfolio-test, market-ingestion-test, content-ingestion-test, content-store-test, intelligence-test, alert-test, dev-tools, all]
     ports:
       - "55433:5432"
+    # The 2026-06-08 Postgres OLTP/OLAP workload split renamed the intelligence
+    # DB host to `postgres-intelligence` in docker-compose.yml AND in the
+    # nlp-pipeline / knowledge-graph docker.env.example files. CI bootstraps each
+    # service's gitignored docker.env from those .example files, so the migrate
+    # containers resolve the host `postgres-intelligence`. This single-instance
+    # test stack does not split the DBs, so we alias `postgres-intelligence` onto
+    # this one postgres service to keep the .example hostnames resolvable
+    # (otherwise nlp-pipeline-migrate fails with socket.gaierror / asyncpg
+    # TargetServerAttributeNotMatched, exiting the whole `up --wait`).
+    networks:
+      default:
+        aliases:
+          - postgres-intelligence
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -56,10 +69,19 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      # IMPORTANT: probe over TCP (-h 127.0.0.1), not the default Unix socket.
+      # The postgres entrypoint first starts a *temporary* server on the Unix
+      # socket to run /docker-entrypoint-initdb.d scripts, then SHUTS IT DOWN and
+      # restarts the real server listening on TCP. A plain `pg_isready -U postgres`
+      # (Unix socket) goes green during that init window — before TCP is up — so
+      # `depends_on: service_healthy` can be satisfied while clients connecting to
+      # `postgres:5432` still get "Connection refused". This intermittently killed
+      # intelligence-migrations during fresh test-stack bring-up. Probing TCP
+      # ensures the healthcheck only passes once the real server accepts TCP.
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1 -p 5432"]
+      interval: 3s
       timeout: 3s
-      retries: 12
+      retries: 20
       start_period: 10s
 
   # ── TimescaleDB for market-data (separate from plain postgres) ────────────────
