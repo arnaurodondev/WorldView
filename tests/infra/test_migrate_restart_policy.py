@@ -13,12 +13,9 @@ def test_all_migrate_services_have_restart_policy() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     services = compose.get("services", {})
     migrate_services = [name for name in services if name.endswith("-migrate")]
-    assert len(migrate_services) >= 5, (
-        f"Expected at least 5 migrate services, found {len(migrate_services)}"
-    )
+    assert len(migrate_services) >= 5, f"Expected at least 5 migrate services, found {len(migrate_services)}"
     for name in migrate_services:
         policy = services[name].get("restart")
         assert policy == "on-failure:5", (
-            f"Service {name}: expected restart='on-failure:5', got {policy!r}. "
-            f"See BP-591 / iter-13 follow-up."
+            f"Service {name}: expected restart='on-failure:5', got {policy!r}. " f"See BP-591 / iter-13 follow-up."
         )

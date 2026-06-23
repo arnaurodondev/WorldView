@@ -75,6 +75,11 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("content-store", "stored_article_dedup_consumer_main"): (
         "Add content-store stored-article dedup consumer container — follow-up plan"
     ),
+    # PLAN-0114: manual-holdings consumer ships in prod docker-compose.yml but not
+    # the test compose yet (runs as a dedicated worker in prod). Test container follow-up.
+    ("portfolio", "manual_holdings_consumer_main"): (
+        "Add portfolio manual-holdings consumer container to test compose — PLAN-0114 follow-up"
+    ),
 }
 
 

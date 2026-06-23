@@ -29,8 +29,7 @@ def test_dashboards_declare_valid_datasource_uids() -> None:
         check=False,
     )
     assert result.returncode == 0, (
-        f"check_dashboard_datasource_uids.py failed:\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        f"check_dashboard_datasource_uids.py failed:\n" f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
