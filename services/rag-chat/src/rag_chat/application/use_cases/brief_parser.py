@@ -891,8 +891,10 @@ class BriefParser:
                 # placeholder) is backed by the structured fundamentals citation
                 # rather than dropped — fundamentals are model-summarised
                 # structured data, not a citable news source.
-                if not bullet_citations and fundamentals_citation is not None and _is_fundamentals_section(
-                    current_title
+                if (
+                    not bullet_citations
+                    and fundamentals_citation is not None
+                    and _is_fundamentals_section(current_title)
                 ):
                     bullet_citations = [fundamentals_citation]
                 if display_text:

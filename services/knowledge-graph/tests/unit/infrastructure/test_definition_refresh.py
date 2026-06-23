@@ -254,9 +254,7 @@ class TestFinancialInstrumentSkipsDescriptionClient:
 class TestFinancialInstrumentNullSourceText:
     async def test_fi_null_source_generates_via_description_client(self) -> None:
         """FI + source_text IS NULL → description client generates text, row gets embedded."""
-        description_client = _make_description_client(
-            "Bitcoin (BTC.USD) is a decentralized digital currency."
-        )
+        description_client = _make_description_client("Bitcoin (BTC.USD) is a decentralized digital currency.")
         llm_client = AsyncMock()
         llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1, 0.2, 0.3])])
 

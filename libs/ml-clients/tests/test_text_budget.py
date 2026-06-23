@@ -43,7 +43,7 @@ class TestEstimateBertTokens:
         # Literal backslash-u escapes, exactly as the JSON envelope stores Hebrew
         # (ensure_ascii=True). Built from a backslash + "uXXXX" so the source file
         # contains the 6-char escape token, NOT a decoded Hebrew glyph.
-        escaped = ("\\u05e8" * 20)  # 120 chars, 20 escapes
+        escaped = "\\u05e8" * 20  # 120 chars, 20 escapes
         # Same character count, but plain ASCII letters (no escapes).
         plain = "x" * len(escaped)
         assert estimate_bert_tokens(escaped) > estimate_bert_tokens(plain)

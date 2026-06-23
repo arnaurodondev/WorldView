@@ -613,9 +613,7 @@ class BriefContextFormatter:
     # Staleness caveat carried INTO the narrative citation snippet so the
     # resolved chip in the UI also signals "not a recent catalyst" (mirrors the
     # in-prompt caveat the LLM sees).
-    _KG_NARRATIVE_STALENESS: str = (
-        "Background thematic context (may be up to ~1 week old; not a recent catalyst)"
-    )
+    _KG_NARRATIVE_STALENESS: str = "Background thematic context (may be up to ~1 week old; not a recent catalyst)"
     # Brief-quality eval BUG 3: narrative age (in days) beyond which the
     # formatter injects an EXPLICIT staleness caveat into the narrative context
     # line, deterministically — the prior prompt-only "add a caveat if >1 week"
@@ -894,10 +892,7 @@ class BriefContextFormatter:
         # appended by ``materialize_brief_citations`` after the KG items.
         cn = self.fundamentals_citation_index(ctx)
         if cn is not None:
-            header = (
-                f"(Cite the Price & Fundamentals bullets you write from this block "
-                f"with the marker [c{cn}].)"
-            )
+            header = f"(Cite the Price & Fundamentals bullets you write from this block " f"with the marker [c{cn}].)"
             return header + "\n" + "\n".join(lines)
         return "\n".join(lines)
 

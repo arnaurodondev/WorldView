@@ -74,9 +74,13 @@ class AlertRuleRepository(IAlertRuleRepository):
         enabled: bool | None = None,
         rule_type: RuleType | None = None,
     ) -> int:
-        stmt = select(func.count()).select_from(AlertRuleModel).where(
-            AlertRuleModel.tenant_id == tenant_id,
-            AlertRuleModel.user_id == user_id,
+        stmt = (
+            select(func.count())
+            .select_from(AlertRuleModel)
+            .where(
+                AlertRuleModel.tenant_id == tenant_id,
+                AlertRuleModel.user_id == user_id,
+            )
         )
         if enabled is not None:
             stmt = stmt.where(AlertRuleModel.enabled.is_(enabled))

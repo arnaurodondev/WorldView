@@ -48,9 +48,7 @@ depends_on = None
 
 def upgrade() -> None:
     """Align instruments.entity_id to id (M-017) for any mismatched rows."""
-    op.execute(
-        "UPDATE instruments SET entity_id = id WHERE entity_id IS DISTINCT FROM id"
-    )
+    op.execute("UPDATE instruments SET entity_id = id WHERE entity_id IS DISTINCT FROM id")
 
 
 def downgrade() -> None:

@@ -49,10 +49,12 @@ logger = get_logger(__name__)
 # consumer to be importable; the empty tuple makes the ``except`` clause a
 # no-op which is the correct fallback.
 try:
-    from asyncpg.exceptions import (  # type: ignore[import-not-found]
+    # Cover BOTH codes: import-not-found (asyncpg absent) AND import-untyped
+    # (asyncpg installed but ships no stubs — the case in CI's mypy env).
+    from asyncpg.exceptions import (  # type: ignore[import-not-found, import-untyped]
         ConnectionDoesNotExistError as _AsyncpgConnDoesNotExist,
     )
-    from asyncpg.exceptions import (
+    from asyncpg.exceptions import (  # type: ignore[import-not-found, import-untyped]
         InterfaceError as _AsyncpgInterfaceError,
     )
 

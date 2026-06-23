@@ -37,10 +37,10 @@ depends_on = None
 def upgrade() -> None:
     # IF EXISTS so the drop is idempotent across environments (e.g. one that
     # applied 0058 then this, vs a fresh DB that never materialised the column).
-    op.execute('ALTER TABLE llm_usage_log DROP COLUMN IF EXISTS fallback_reason')
+    op.execute("ALTER TABLE llm_usage_log DROP COLUMN IF EXISTS fallback_reason")
 
 
 def downgrade() -> None:
     # Restore 0058's column (nullable) so downgrading this revision returns the
     # schema to the post-0058 state.
-    op.execute('ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS fallback_reason TEXT')
+    op.execute("ALTER TABLE llm_usage_log ADD COLUMN IF NOT EXISTS fallback_reason TEXT")

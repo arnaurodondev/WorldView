@@ -307,7 +307,7 @@ class TestNarrativePersistence:
         assert call_kwargs["topic"] == "entity.narrative.generated.v1"
         assert call_kwargs["partition_key"] == str(_ENTITY_ID)
         # Regression for Final-QA-NEW: outbox.append requires keyword-only
-        # event_id (R6 idempotency). Worker crashed 73× per 15-min window
+        # event_id (R6 idempotency). Worker crashed 73x per 15-min window
         # before this kwarg was wired through.
         assert "event_id" in call_kwargs, "outbox.append must receive event_id kwarg"
         assert isinstance(call_kwargs["event_id"], UUID)

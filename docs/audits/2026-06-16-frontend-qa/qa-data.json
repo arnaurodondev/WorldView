@@ -1,0 +1,598 @@
+[
+  {
+    "page": "login/dev-login",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 GET http://localhost:3001/api/v1/auth/login",
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "post-login URL: http://localhost:3001/dashboard"
+    ]
+  },
+  {
+    "page": "dashboard",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/dashboard"
+    ],
+    "shot": "1920-dashboard.png"
+  },
+  {
+    "page": "portfolio",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/portfolio"
+    ],
+    "shot": "1920-portfolio.png"
+  },
+  {
+    "page": "chat",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/chat"
+    ],
+    "shot": "1920-chat.png"
+  },
+  {
+    "page": "watchlists",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/watchlists"
+    ],
+    "shot": "1920-watchlists.png"
+  },
+  {
+    "page": "alerts",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/alerts"
+    ],
+    "shot": "1920-alerts.png"
+  },
+  {
+    "page": "news",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/news"
+    ],
+    "shot": "1920-news.png"
+  },
+  {
+    "page": "search",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/search"
+    ],
+    "shot": "1920-search.png"
+  },
+  {
+    "page": "prediction-markets",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/prediction-markets"
+    ],
+    "shot": "1920-prediction-markets.png"
+  },
+  {
+    "page": "indices",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/indices"
+    ],
+    "shot": "1920-indices.png"
+  },
+  {
+    "page": "instrument-AAPL-quote",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: quote, current=page"
+    ],
+    "shot": "1920-instrument-AAPL-quote.png"
+  },
+  {
+    "page": "instrument-AAPL-financials",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: financials, current=page"
+    ],
+    "shot": "1920-instrument-AAPL-financials.png"
+  },
+  {
+    "page": "instrument-AAPL-intelligence",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: intelligence, current=page"
+    ],
+    "shot": "1920-instrument-AAPL-intelligence.png"
+  },
+  {
+    "page": "screener-default",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/screener",
+      "ag rows (default): 50"
+    ],
+    "shot": "1920-screener-01-default.png"
+  },
+  {
+    "page": "screener-column-settings",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "column toggles turned ON: 6",
+      "ag rows (after columns): 50"
+    ],
+    "shot": "1920-screener-02c-grid-with-new-columns.png"
+  },
+  {
+    "page": "screener-intelligence-filters",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "clicked FILTERS toggle",
+      "Backend Pending badges visible: 0",
+      "calendar rows — earnings:0 dividend:0"
+    ],
+    "shot": "1920-screener-03-intelligence-filters.png"
+  },
+  {
+    "page": "screener-live-catalysts-preset",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "Live Catalysts button count: 1",
+      "Live Catalysts applied. rows before=50 after=0",
+      "preset aria-current: null"
+    ],
+    "shot": "1920-screener-04-live-catalysts.png"
+  },
+  {
+    "page": "screener-nl-search",
+    "viewport": "1920",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "NL translate submitted. rows before=50 after=50",
+      "NL error visible: 1"
+    ],
+    "shot": "1920-screener-05b-nl-result.png"
+  },
+  {
+    "page": "login/dev-login",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 GET http://localhost:3001/api/v1/auth/login",
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "post-login URL: http://localhost:3001/dashboard"
+    ]
+  },
+  {
+    "page": "dashboard",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/dashboard"
+    ],
+    "shot": "1440-dashboard.png"
+  },
+  {
+    "page": "portfolio",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/portfolio"
+    ],
+    "shot": "1440-portfolio.png"
+  },
+  {
+    "page": "chat",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/chat"
+    ],
+    "shot": "1440-chat.png"
+  },
+  {
+    "page": "watchlists",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/watchlists"
+    ],
+    "shot": "1440-watchlists.png"
+  },
+  {
+    "page": "alerts",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/alerts"
+    ],
+    "shot": "1440-alerts.png"
+  },
+  {
+    "page": "news",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/news"
+    ],
+    "shot": "1440-news.png"
+  },
+  {
+    "page": "search",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/search"
+    ],
+    "shot": "1440-search.png"
+  },
+  {
+    "page": "prediction-markets",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/prediction-markets"
+    ],
+    "shot": "1440-prediction-markets.png"
+  },
+  {
+    "page": "indices",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "404 GET http://localhost:3001/indices",
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/indices"
+    ],
+    "shot": "1440-indices.png"
+  },
+  {
+    "page": "instrument-AAPL-quote",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: quote, current=page"
+    ],
+    "shot": "1440-instrument-AAPL-quote.png"
+  },
+  {
+    "page": "instrument-AAPL-financials",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: financials, current=page"
+    ],
+    "shot": "1440-instrument-AAPL-financials.png"
+  },
+  {
+    "page": "instrument-AAPL-intelligence",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab clicked: intelligence, current=page"
+    ],
+    "shot": "1440-instrument-AAPL-intelligence.png"
+  },
+  {
+    "page": "screener-default",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/screener",
+      "ag rows (default): 41"
+    ],
+    "shot": "1440-screener-01-default.png"
+  },
+  {
+    "page": "screener-column-settings",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "column toggles turned ON: 6",
+      "ag rows (after columns): 41"
+    ],
+    "shot": "1440-screener-02c-grid-with-new-columns.png"
+  },
+  {
+    "page": "screener-intelligence-filters",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "clicked FILTERS toggle",
+      "Backend Pending badges visible: 0",
+      "calendar rows — earnings:0 dividend:0"
+    ],
+    "shot": "1440-screener-03-intelligence-filters.png"
+  },
+  {
+    "page": "screener-live-catalysts-preset",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "Live Catalysts button count: 1",
+      "Live Catalysts applied. rows before=41 after=0",
+      "preset aria-current: null"
+    ],
+    "shot": "1440-screener-04-live-catalysts.png"
+  },
+  {
+    "page": "screener-nl-search",
+    "viewport": "1440",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "503 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "NL translate submitted. rows before=41 after=41",
+      "NL error visible: 1"
+    ],
+    "shot": "1440-screener-05b-nl-result.png"
+  }
+]

@@ -18,9 +18,10 @@ import structlog
 from alert.infrastructure.metrics.prometheus import s10_s1_lookup_failed_total
 
 if TYPE_CHECKING:
-    from redis.asyncio import Redis
-
+    # IG-MSG-002: use the messaging Valkey client, never raw redis. The injected
+    # object is a ValkeyClient (get/set(ex=)/delete-compatible); this is type-only.
     from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)
 
@@ -56,7 +57,7 @@ class WatchlistCache:
 
     def __init__(
         self,
-        valkey: Redis,  # type: ignore[type-arg]
+        valkey: ValkeyClient,
         s1_client: S1Client,
         ttl: int = 300,
         *,

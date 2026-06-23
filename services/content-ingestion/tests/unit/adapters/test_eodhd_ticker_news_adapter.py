@@ -32,18 +32,14 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _make_settings(
-    api_key: str = "test-api-key", *, page_limit: int = 1000, max_pages: int = 10
-) -> MagicMock:
+def _make_settings(api_key: str = "test-api-key", *, page_limit: int = 1000, max_pages: int = 10) -> MagicMock:
     from content_ingestion.config import EODHDProviderSettings
 
     s = MagicMock()
     s.eodhd_api_key = api_key
     # Real provider sub-model so the adapter reads numeric page/overlap config
     # (a bare MagicMock would yield MagicMock ints → TypeError in timedelta).
-    s.eodhd = EODHDProviderSettings(
-        news_page_limit=page_limit, news_watermark_overlap_days=1, news_max_pages=max_pages
-    )
+    s.eodhd = EODHDProviderSettings(news_page_limit=page_limit, news_watermark_overlap_days=1, news_max_pages=max_pages)
     # Bounded first-run backfill horizon (days).
     s.backfill_initial_days = 14
     return s

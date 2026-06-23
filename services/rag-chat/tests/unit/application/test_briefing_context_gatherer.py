@@ -477,9 +477,7 @@ async def test_gather_instrument_full() -> None:
 async def test_gather_instrument_includes_definition_and_narrative() -> None:
     """definition (center-node description) + narrative (S7 intelligence) populate ctx."""
     graph = _sample_graph()
-    s7_intel = _make_s7_intel(
-        narrative="Apple competes with Samsung and Google; expanding AI and services revenue."
-    )
+    s7_intel = _make_s7_intel(narrative="Apple competes with Samsung and Google; expanding AI and services revenue.")
     gatherer = BriefingContextGatherer(
         s1=_make_s1(),
         s3=_make_s3(instrument_id=_INSTRUMENT_ID),
@@ -1150,9 +1148,7 @@ async def test_fetch_per_holding_news_fans_out_and_maps_ids() -> None:
     }
     s6 = MagicMock()
     s6._get = AsyncMock(side_effect=[tsla_articles, googl_articles])
-    gatherer = BriefingContextGatherer(
-        s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock()
-    )
+    gatherer = BriefingContextGatherer(s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock())
     snapshot = _snapshot_for(
         [
             ("TSLA", "01900000-0000-7000-8000-000000001004"),
@@ -1176,9 +1172,7 @@ async def test_fetch_per_holding_news_degrades_on_failure() -> None:
     """A per-holding S6 failure is swallowed (R9) — that holding simply has no news."""
     s6 = MagicMock()
     s6._get = AsyncMock(side_effect=RuntimeError("S6 down"))
-    gatherer = BriefingContextGatherer(
-        s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock()
-    )
+    gatherer = BriefingContextGatherer(s1=MagicMock(), s3=MagicMock(), s5=MagicMock(), s6=s6, s7=MagicMock())
     snapshot = _snapshot_for([("TSLA", "01900000-0000-7000-8000-000000001004")])
     merged, news_by_holding = await gatherer._fetch_per_holding_news(snapshot)
     assert merged == []
@@ -1197,9 +1191,7 @@ async def test_fetch_sector_by_holding_joins_labels_and_returns() -> None:
     )
     s3 = MagicMock()
     s3.get_sector_returns = AsyncMock(return_value={"Financial Services": 0.0034})
-    gatherer = BriefingContextGatherer(
-        s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7
-    )
+    gatherer = BriefingContextGatherer(s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7)
     snapshot = _snapshot_for([("JPM", str(jpm_eid))])
 
     result = await gatherer._fetch_sector_by_holding(snapshot)
@@ -1213,14 +1205,10 @@ async def test_fetch_sector_by_holding_omits_when_return_unknown() -> None:
 
     eid = UUID("01900000-0000-7000-8000-000000001008")
     s7 = MagicMock()
-    s7.get_sectors_for_entities = AsyncMock(
-        return_value={eid: SectorLabel(entity_id=eid, sector="Financial Services")}
-    )
+    s7.get_sectors_for_entities = AsyncMock(return_value={eid: SectorLabel(entity_id=eid, sector="Financial Services")})
     s3 = MagicMock()
     s3.get_sector_returns = AsyncMock(return_value={"Technology": 0.01})  # no Financials key
-    gatherer = BriefingContextGatherer(
-        s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7
-    )
+    gatherer = BriefingContextGatherer(s1=MagicMock(), s3=s3, s5=MagicMock(), s6=MagicMock(), s7=s7)
     snapshot = _snapshot_for([("JPM", str(eid))])
     result = await gatherer._fetch_sector_by_holding(snapshot)
     assert result == {}

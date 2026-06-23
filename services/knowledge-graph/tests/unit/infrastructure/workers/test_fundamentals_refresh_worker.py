@@ -721,9 +721,7 @@ class TestInstrumentLookupMissLongDefer:
         next_at = call.kwargs.get("next_refresh_at")
         assert next_at is not None, "lookup miss must advance next_refresh_at (not leave it due)"
         delta = next_at - datetime.now(tz=UTC)
-        assert timedelta(days=29) < delta < timedelta(days=31), (
-            f"lookup miss should defer ~30 days, got {delta}"
-        )
+        assert timedelta(days=29) < delta < timedelta(days=31), f"lookup miss should defer ~30 days, got {delta}"
 
         # Critical RC1 assertion: the Valkey backoff was NOT escalated.
         assert valkey.set_calls == [], "lookup miss must NOT escalate the Valkey backoff (RC1 storm)"

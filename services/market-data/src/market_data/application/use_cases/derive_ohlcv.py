@@ -116,9 +116,7 @@ def derive_bars_in_memory(
     ``daily_bars`` need not be pre-sorted.  Returns bars ascending by ``bar_date``.
     """
     if target_timeframe not in _DERIVABLE:
-        raise ValueError(
-            f"target_timeframe must be one of {[t.value for t in _DERIVABLE]}, got {target_timeframe!r}"
-        )
+        raise ValueError(f"target_timeframe must be one of {[t.value for t in _DERIVABLE]}, got {target_timeframe!r}")
     if not daily_bars:
         return []
 

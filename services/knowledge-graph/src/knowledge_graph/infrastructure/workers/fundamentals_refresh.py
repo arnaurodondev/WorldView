@@ -440,9 +440,7 @@ class FundamentalsRefreshWorker:
                     # genuine miss triggers the 30-day long-defer; transient
                     # failures keep the existing escalate-and-retry-sooner path
                     # so a brief market-data outage does not defer everything.
-                    _instrument_id, _lookup_transient = await self._resolve_instrument_id_with_status(
-                        http, _ticker_str
-                    )
+                    _instrument_id, _lookup_transient = await self._resolve_instrument_id_with_status(http, _ticker_str)
                     if _instrument_id is None:
                         logger.debug(  # type: ignore[no-any-return]
                             "fundamentals_refresh_instrument_not_found",
@@ -688,8 +686,7 @@ class FundamentalsRefreshWorker:
                                 model_id=None,
                                 source_text=None,
                                 source_hash=None,
-                                next_refresh_at=utc_now()
-                                + timedelta(days=_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS),
+                                next_refresh_at=utc_now() + timedelta(days=_INSTRUMENT_LOOKUP_MISS_DEFER_DAYS),
                             )
                             logger.info(  # type: ignore[no-any-return]
                                 "fundamentals_refresh_instrument_lookup_long_defer",

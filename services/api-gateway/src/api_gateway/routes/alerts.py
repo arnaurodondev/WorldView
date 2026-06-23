@@ -272,9 +272,7 @@ async def list_rules(request: Request) -> Response:
     """Proxy GET /api/v1/alert-rules → S10 (list the caller's rules)."""
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
-    resp = await list_alert_rules(
-        _clients(request), params=dict(request.query_params), headers=_auth_headers(request)
-    )
+    resp = await list_alert_rules(_clients(request), params=dict(request.query_params), headers=_auth_headers(request))
     return Response(
         content=resp.content,
         status_code=resp.status_code,

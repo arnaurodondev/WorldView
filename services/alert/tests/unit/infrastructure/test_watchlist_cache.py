@@ -254,9 +254,9 @@ class TestS1FailureSignalling:
             with patch(_COUNTER_PATH):
                 await cache.get_watchers("entity-99")
 
-        assert any(e.get("event") == "watchlist_s1_unavailable" and e.get("entity_id") == "entity-99" for e in cap), (
-            f"Expected warning not found in: {cap}"
-        )
+        assert any(
+            e.get("event") == "watchlist_s1_unavailable" and e.get("entity_id") == "entity-99" for e in cap
+        ), f"Expected warning not found in: {cap}"
 
     @pytest.mark.unit
     async def test_s1_empty_ok_no_counter(self) -> None:

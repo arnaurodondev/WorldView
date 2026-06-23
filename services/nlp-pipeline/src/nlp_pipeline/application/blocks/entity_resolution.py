@@ -61,6 +61,7 @@ def _ticker_candidate(surface: str) -> str | None:
         return candidate
     return None
 
+
 # ── Resolution thresholds (PRD §6.7 Block 9) ─────────────────────────────────
 
 # PLAN-0052 QA-R6: Option C (threshold 0.72→0.62, multiplier 0.80→0.95).
