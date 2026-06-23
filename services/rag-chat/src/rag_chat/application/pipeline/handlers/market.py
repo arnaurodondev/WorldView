@@ -273,6 +273,162 @@ def _pick_period_row(periods_data: list[Any], common_period: str | None) -> Any:
     return periods_data[-1]
 
 
+# FIX-LIVE-DD (2026-05-25): Q6 ("AI semiconductors above $50B") graded USELESS
+# because the LLM fabricated market caps ($5.23T for NVDA, $742B for AMD,
+# $842B for MU). The screener output rendered ``market_cap`` as a raw
+# 13-digit integer (e.g. ``MCap: 5230000000000``). 8B-parameter models
+# struggle to read scientific-magnitude integers and tend to substitute
+# plausible-looking trillion/billion strings from pretraining. The
+# numeric-grounding validator then flags those as unsupported, the rewrite
+# prompt tells the LLM "you can't verify these", and the model collapses
+# into a flat refusal.
+#
+# Fix: render market caps in BOTH raw and human-friendly form. The raw
+# integer stays so the validator's tolerance-based matching (MARKET_CAP ±
+# 0.5%) still works against `$5.23T` (= 5.23e12) extractions; the
+# pre-formatted `$X.XXT` string gives the LLM a copy-paste-ready label so
+# it doesn't need to convert digits in its head.
+#
+# Why $X.XXT/B/M cutoffs (not just T): the screener returns mid-caps too
+# (e.g. ARM at $226B). A single trillion-only label would read as
+# "$0.23T" — fine numerically but ugly. Use T for >= 1e12, B for >= 1e9,
+# M for >= 1e6, otherwise plain dollars. Two decimals everywhere keeps
+# the format predictable for the LLM.
+def _format_market_cap_value(value: Any) -> str | None:
+    """Render a numeric market cap as ``$X.XXT/B/M``.
+
+    Returns ``None`` for non-numeric input so callers can decide whether to
+    fall back to ``str(value)`` (preserving legacy pre-formatted strings
+    like ``"3T"`` that some upstream APIs already return).
+    """
+    if value is None:
+        return None
+    # If upstream already gave us a string with a magnitude suffix
+    # (legacy/test path: ``"3T"``, ``"$2.8T"``), trust it verbatim.
+    if isinstance(value, str):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    abs_n = abs(num)
+    sign = "-" if num < 0 else ""
+    if abs_n >= 1e12:
+        return f"{sign}${abs_n / 1e12:.2f}T"
+    if abs_n >= 1e9:
+        return f"{sign}${abs_n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{sign}${abs_n / 1e6:.2f}M"
+    return f"{sign}${abs_n:,.0f}"
+
+
+# ── compare_entities period selection helpers (FQA-04 carry / PLAN-0103 W14) ──
+# WHY at module level: pure helpers, no MarketHandler state required, easier
+# to unit-test in isolation than instance methods.
+
+# Core metrics that MUST all be non-None for a period to count as
+# "fully populated" in the per-ticker pre-filter (PLAN-0103 W14). Chosen
+# to mirror the cells the LLM most often complains about being NULL in the
+# rendered comparison table: top-line, profitability, bottom-line.
+_COMPARE_CORE_METRICS: tuple[str, ...] = ("revenue", "eps", "gross_profit")
+
+
+def _period_is_fully_populated(period_row: Any) -> bool:
+    """Return True when the period row has revenue + EPS + gross_profit non-None.
+
+    Accepts either a pydantic ``FundamentalsHistoryPeriod`` (has
+    ``model_dump``) or the dict shape the adapter forwards. Returns False
+    on any unexpected shape so the caller can fall back gracefully — never
+    raises.
+    """
+    if period_row is None:
+        return False
+    if hasattr(period_row, "model_dump"):
+        row = period_row.model_dump()
+    elif isinstance(period_row, dict):
+        row = period_row
+    else:
+        return False
+    return all(row.get(metric) is not None for metric in _COMPARE_CORE_METRICS)
+
+
+def _select_latest_fully_populated_period(
+    tickers: list[str],
+    batch_results: dict[str, dict],
+) -> str | None:
+    """Pick the latest period present + fully-populated for ALL ``tickers``.
+
+    Algorithm:
+      1. For each ticker, build the set of period labels that are fully
+         populated (revenue + EPS + gross_profit all non-None).
+      2. Intersect those sets — these are the candidate common periods.
+      3. Return the LATEST candidate (lexicographic max works for the
+         ``YYYY-QN`` / ``YYYY-MM-DD`` shapes EODHD emits).
+      4. Return ``None`` when no common fully-populated period exists,
+         signalling the caller should fall back to per-ticker latest.
+
+    Why intersection (not "any ticker fully populated"): the comparison
+    table is read as a side-by-side grid; choosing different periods per
+    ticker hides the asymmetry behind a unified-looking row. The whole
+    fix is to make the comparison apples-to-apples.
+
+    Why "latest" lex max: EODHD period labels are ISO-ordered (``2026-Q1``,
+    ``2026-Q2``, ...; ``2026-03-31``, ``2026-06-30``, ...) so string max
+    matches date max without parsing.
+    """
+    # Defensive: batch endpoint failure may surface here as a non-dict
+    # (e.g. an unawaited coroutine from a partially-mocked test fixture).
+    # In all such cases the safe answer is "no common period" so the caller
+    # falls back to per-ticker latest.
+    if not tickers or not isinstance(batch_results, dict) or not batch_results:
+        return None
+
+    populated_sets: list[set[str]] = []
+    for ticker in tickers:
+        entry = batch_results.get(ticker) or {}
+        if not isinstance(entry, dict) or entry.get("status") != "ok":
+            return None  # one ticker missing → can't form a common period
+        periods_data = entry.get("periods") or []
+        populated: set[str] = set()
+        for row in periods_data:
+            label = (
+                row.model_dump().get("period")
+                if hasattr(row, "model_dump")
+                else (row.get("period") if isinstance(row, dict) else None)
+            )
+            if label and _period_is_fully_populated(row):
+                populated.add(label)
+        if not populated:
+            return None  # this ticker has no fully-populated period in window
+        populated_sets.append(populated)
+
+    common = set.intersection(*populated_sets) if populated_sets else set()
+    if not common:
+        return None
+    return max(common)
+
+
+def _pick_period_row(periods_data: list[Any], common_period: str | None) -> Any:
+    """Return the row matching ``common_period`` if present, else the latest row.
+
+    Accepts either pydantic-model rows or dicts. Caller is responsible for
+    coercing the result to a dict (this helper preserves the input shape so
+    the existing ``hasattr(chosen, "model_dump")`` path keeps working).
+    """
+    if common_period:
+        for row in periods_data:
+            label = (
+                row.model_dump().get("period")
+                if hasattr(row, "model_dump")
+                else (row.get("period") if isinstance(row, dict) else None)
+            )
+            if label == common_period:
+                return row
+    return periods_data[-1]
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 

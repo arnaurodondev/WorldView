@@ -3577,6 +3577,15 @@ class ChatOrchestratorUseCase:
         if prompt_items:
             answer, citations = _renumber_citations_dense(answer, citations)
 
+        # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
+        # point past the retrieved-item count. The LLM occasionally emits
+        # e.g. "[N7]" when only 3 items were retrieved — those markers must
+        # not surface to users (F-RAG-006).
+        if reranked:
+            answer, _orphans = _scrub_orphan_citations(answer, max_index=len(reranked))
+            if _orphans:
+                log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
+
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
         # modifying the ChatAuditLogger public interface with a mutable answer field.

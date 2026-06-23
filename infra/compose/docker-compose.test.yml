@@ -844,6 +844,13 @@ services:
       start_period: 30s
 
   # ── Ollama model init — pre-pulls qwen3:0.6b + bge-large for CI/test runs ──
+  # NOTE: This service pulls models, then writes a marker file and sleeps so
+  # that `docker compose up --wait` can observe a healthy state. Without a
+  # healthcheck, `--wait` treats a one-shot exit(0) as a failure (the failure
+  # message is literally "container ... exited (0)"), which then breaks the
+  # nlp-pipeline and knowledge-graph E2E jobs in CI even though everything
+  # downstream is fine. The healthcheck below only goes green after the
+  # required pulls have completed.
   ollama-init:
     image: ollama/ollama:0.6.7
     profiles: [intelligence-test, all]
@@ -854,12 +861,20 @@ services:
     entrypoint: >
       /bin/sh -c "
         ollama pull qwen3:0.6b &&
-        ollama pull bge-large
+        ollama pull bge-large &&
+        touch /tmp/ollama-init.done &&
+        sleep infinity
       "
     environment:
       OLLAMA_HOST: "http://ollama:11434"
     volumes:
       - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ollama-init.done"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
 
   # ── GLiNER server — NER inference ──────────────────────────────────────────
   gliner-server:

@@ -797,7 +797,7 @@ export function AlertRow({
 
   return (
     <li>
-      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules.
+      {/* WHY flex h-[20px]: terminal 22px row per §0 quality rules.
           dimmed=true (snoozed / acked) drops opacity to 60% so the row
           remains scannable but visibly de-emphasised.
 
