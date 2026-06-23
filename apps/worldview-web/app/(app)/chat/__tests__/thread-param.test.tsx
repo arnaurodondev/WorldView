@@ -275,8 +275,14 @@ describe("ChatPage message log live region (Round 4 a11y)", () => {
     // can't silently downgrade the announcement contract.
     const log = await screen.findByRole("log", { name: "Conversation messages" });
     expect(log.getAttribute("aria-live")).toBe("polite");
+    // Use findByText (not getByText): the role=log container mounts as soon as
+    // the page renders, but the settled history message text is appended a tick
+    // later once the thread fixture resolves. Under slow/parallel CI the
+    // synchronous getByText raced the async render and intermittently threw
+    // "unable to find element" at this line. findByText retries until the
+    // message lands inside the log, preserving the same assertion contract.
     expect(
-      within(log).getByText("NVDA rose on datacenter demand."),
+      await within(log).findByText("NVDA rose on datacenter demand."),
     ).toBeInTheDocument();
 
     // Start a stream (follow-up chip click → send). The in-flight bubble must
