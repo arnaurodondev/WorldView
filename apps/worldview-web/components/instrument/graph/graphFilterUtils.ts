@@ -53,3 +53,38 @@ export function matchesRelFilter(label: string, filter: RelationFilter): boolean
       return true;
   }
 }
+
+/**
+ * isEdgeVisible — SINGLE source of truth for "does this edge survive the current
+ * relation-pill + strength filters?".
+ *
+ * WHY EXTRACTED (KG filter bug, 2026-06-23): the visibility predicate used to be
+ * inlined in THREE places inside FilterController:
+ *   (1) the visible-edge-count effect (the "X of Y edges" badge), and
+ *   (2) the sigma edgeReducer (what the canvas actually hides), and now
+ *   (3) the new orphan-node computation that hides nodes left with zero visible
+ *       edges.
+ * If those copies drift (e.g. a weight-unit fix lands in one but not another),
+ * the badge count, the painted edges, and the hidden nodes silently disagree —
+ * exactly the class of bug that let the original "filter does nothing to nodes"
+ * issue ship. Centralising the predicate here guarantees all three agree.
+ *
+ * @param label   raw edge relation label (any case; we upper-case internally)
+ * @param weight  edge weight in graph units (0–1)
+ * @param filter  the active relation pill ("all" | "executive" | …)
+ * @param minWeight strength-slider value in PERCENT (0–100). The graph stores
+ *   weight in 0–1, so we compare against minWeight/100 — mirroring the original
+ *   edgeReducer's `weight < minWeight / 100` check exactly.
+ */
+export function isEdgeVisible(
+  label: string,
+  weight: number,
+  filter: RelationFilter,
+  minWeight: number,
+): boolean {
+  // WHY minWeight / 100: slider stores 0–100, graph stores 0–1 weight.
+  if (weight < minWeight / 100) return false;
+  // The "all" pill matches every relation type; only the strength floor applies.
+  if (filter !== "all" && !matchesRelFilter(label, filter)) return false;
+  return true;
+}
