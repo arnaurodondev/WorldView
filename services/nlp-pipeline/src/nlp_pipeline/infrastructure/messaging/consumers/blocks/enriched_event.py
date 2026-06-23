@@ -22,6 +22,9 @@ import common.time  # type: ignore[import-untyped]
 from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
 from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+from nlp_pipeline.infrastructure.messaging.consumers.blocks.endpoint_recovery import (
+    recover_missed_endpoints,
+)
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.helpers import (
     _BUILD_RAW_SUFFIX_RX,
     _resolve_ref,
@@ -57,6 +60,20 @@ async def _enqueue_enriched(
     correlation_id: str | None,
     extraction_model_id: str | None = None,
     schema_dir: Any = None,
+    # BUG-3 (2026-06-22 e2e-coverage audit): the BP-698 endpoint-recovery
+    # mitigation (M1 canonical-store fall-back + M2 provisional-mint) was added
+    # in commit 2295a4a15 but its production call site was NEVER wired in — the
+    # commit only added ``endpoint_recovery.py`` + tests + metrics and left
+    # ``recover_missed_endpoints`` as dead code, so every relation/event/claim
+    # endpoint whose surface was not a doc-local NER mention kept being
+    # silently dropped (the 100%-silent-drop the audit diagnosed). These two
+    # optional params let ``_run_pipeline`` inject the canonical-alias repo +
+    # the open intelligence session so recovery runs here, where the
+    # ``entity_id_by_ref`` lookup is built. They default to None so existing
+    # unit tests that call ``_enqueue_enriched`` directly (legacy doc-local
+    # path) keep working unchanged — recovery simply no-ops without them.
+    alias_repo: Any = None,
+    intelligence_session: Any = None,
 ) -> None:
     """Assemble and write the ``nlp.article.enriched.v1`` outbox event.
 
@@ -127,6 +144,30 @@ async def _enqueue_enriched(
                     entity_id_by_ref[variant] = value
                     provisional_refs.add(variant)
         # else: UNRESOLVED with no queue id — excluded from lookup
+
+    # ── BUG-3 / BP-698: layered endpoint recovery (M1 canonical fall-back + M2
+    # provisional mint) ─────────────────────────────────────────────────────
+    # The lookup above is DOCUMENT-LOCAL — built only from this doc's NER
+    # mentions. Any LLM endpoint ref whose surface is not one of those mentions
+    # (the "Jackery counterparty" case) would otherwise resolve to None and be
+    # ``continue``-dropped in the ``_build_raw_*`` helpers below, silently
+    # destroying real relations/events/claims. ``recover_missed_endpoints``
+    # closes that asymmetry IN PLACE, exactly where the audit
+    # (2026-06-14-entity-ref-matching-and-mitigation.md §"Recommended fix")
+    # specifies — AFTER ``entity_id_by_ref`` is built, BEFORE the ``_build_raw_*``
+    # calls. It mutates ``entity_id_by_ref`` + ``provisional_refs`` so the
+    # builders see the recovered bindings. It no-ops safely when ``alias_repo`` /
+    # ``intelligence_session`` are absent (legacy unit-test path).
+    # ``recover_missed_endpoints`` is imported at MODULE level (top of file) so
+    # the production call site is real and unit tests can patch it here.
+    await recover_missed_endpoints(
+        extraction_result=extraction_result,
+        entity_id_by_ref=entity_id_by_ref,
+        provisional_refs=provisional_refs,
+        alias_repo=alias_repo,
+        intelligence_session=intelligence_session,
+        doc_id=doc_id,
+    )
 
     # Hallucination detection: count entity_refs produced by the LLM that are NOT
     # in the known-entities lookup. A non-zero count indicates model drift.

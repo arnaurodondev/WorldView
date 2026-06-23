@@ -29,15 +29,54 @@ export default defineConfig({
     video: "off",
   },
   projects: [
-    // Desktop Chromium — primary test target (target user: Bloomberg terminal users)
+    // ── MOCKED projects (default, fast, per-PR) ─────────────────────────────
+    // These run the existing mock-driven specs. They install a catch-all S9 stub
+    // (shell-helpers.ts) and never touch the live backend, so they are
+    // deterministic and safe to run in parallel on every PR.
+    //
+    // WHY testIgnore /live\//: the live specs (e2e/live/*.spec.ts) MUST NOT run
+    // under the mocked projects — they expect a real backend + the live-auth
+    // seam. The dedicated `live` project below is the only place they run.
     {
       name: "chromium",
+      testIgnore: /live\//,
       use: { ...devices["Desktop Chrome"] },
     },
     // WebKit for Safari 17+ support (NFR)
     {
       name: "webkit",
+      testIgnore: /live\//,
       use: { ...devices["Desktop Safari"] },
+    },
+
+    // ── LIVE project (@live, serial, run against the dev stack) ─────────────
+    // WHY a SEPARATE project (2026-06-22 E2E-gaps audit, recommendation §5.3):
+    // the live specs hit the REAL S9 gateway with a real JWT (live-helpers.ts),
+    // so they verify real response shapes + data integration — but they are
+    // slower and depend on a running stack. Run them with `--project=live`
+    // nightly / pre-release, NOT on every PR.
+    //
+    // WHY fullyParallel:false + workers:1: the gateway aggressively 429s under
+    // rapid fan-out navigation (audit BUG-3). A single serial worker keeps
+    // request bursts below the limiter; live-helpers.gotoLive() adds 429 retry
+    // on top. retries:1 absorbs the occasional transient rate-limit flake.
+    {
+      name: "live",
+      testMatch: /live\/.*\.spec\.ts$/,
+      fullyParallel: false,
+      workers: 1,
+      retries: 1,
+      use: {
+        ...devices["Desktop Chrome"],
+        // WHY an overridable baseURL for the live project only: the live specs
+        // must run against a frontend serving THIS branch's code, talking to the
+        // live S9 stack. Locally that is a `next dev` you start yourself (the
+        // default :3001 may be occupied by a stale container). Point the run at
+        // it via E2E_BASE_URL, e.g.:
+        //   E2E_BASE_URL=http://localhost:3002 \
+        //     pnpm exec playwright test --project=live
+        baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3001",
+      },
     },
   ],
   // Start the Next.js dev server automatically before running tests

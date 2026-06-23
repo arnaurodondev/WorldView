@@ -479,3 +479,150 @@ class TestRecoveryThroughBuildRawRelations:
         rows = _build_raw_relations(relations, lookup, provisional_refs)
 
         assert rows == []  # genuine drop preserved for true junk
+
+
+# ── BUG-3 wiring regression ──────────────────────────────────────────────────
+#
+# The M1/M2 logic above is correct, but commit 2295a4a15 added it as DEAD CODE:
+# ``recover_missed_endpoints`` had ZERO production callers — the call site inside
+# ``_enqueue_enriched`` (the only place ``entity_id_by_ref`` exists) was never
+# wired in, so every non-mention endpoint kept being silently dropped despite the
+# mitigation existing. These tests lock in the wiring: ``_enqueue_enriched`` MUST
+# invoke recovery (with the injected alias_repo + intel session) AND a recovered
+# relation MUST flow into the serialized enriched payload.
+
+
+class TestEndpointRecoveryWiredIntoEnqueueEnriched:
+    @pytest.mark.asyncio
+    async def test_enqueue_enriched_invokes_recovery(self) -> None:
+        """``_enqueue_enriched`` calls ``recover_missed_endpoints`` (BUG-3 wiring)."""
+        from unittest.mock import patch
+
+        import nlp_pipeline.infrastructure.messaging.consumers.blocks.enriched_event as ee
+        from nlp_pipeline.domain.enums import RoutingTier
+        from nlp_pipeline.domain.models import RoutingDecision
+
+        outbox_repo = AsyncMock()
+        settings = MagicMock()
+        settings.topic_article_enriched = "nlp.article.enriched.v1"
+        doc_id = uuid.uuid4()
+        rd = RoutingDecision(
+            decision_id=uuid.uuid4(),
+            doc_id=doc_id,
+            routing_tier=RoutingTier.MEDIUM,
+            composite_score=0.5,
+            feature_scores={},
+        )
+        alias_repo = _alias_repo_mock(exact={})
+        intel_session = _intel_session_mint([])
+        extraction = {"relations": [{"subject_ref": "Oklo", "object_ref": "ARMEC"}], "events": [], "claims": []}
+
+        with patch.object(ee, "recover_missed_endpoints", new=AsyncMock()) as mock_recover:
+            await ee._enqueue_enriched(
+                outbox_repo=outbox_repo,
+                settings=settings,
+                doc_id=doc_id,
+                source_type="eodhd",
+                published_at=None,
+                is_backfill=False,
+                routing_decision=rd,
+                sections=[],
+                chunks=[],
+                mentions=[],
+                extraction_result=extraction,
+                correlation_id=None,
+                alias_repo=alias_repo,
+                intelligence_session=intel_session,
+            )
+
+        # The dead-code bug: recovery was NEVER called. Assert the wiring exists
+        # and forwards the injected dependencies + the doc-local lookup objects.
+        mock_recover.assert_awaited_once()
+        kwargs = mock_recover.await_args.kwargs
+        assert kwargs["alias_repo"] is alias_repo
+        assert kwargs["intelligence_session"] is intel_session
+        assert kwargs["doc_id"] == doc_id
+        assert kwargs["extraction_result"] is extraction
+
+    @pytest.mark.asyncio
+    async def test_m1_recovered_relation_reaches_payload(self) -> None:
+        """An M1-recoverable endpoint produces a relation in the enriched payload.
+
+        End-to-end through the REAL ``recover_missed_endpoints``: the object_ref
+        ("ARMEC") is NOT a doc-local mention, so without recovery the relation
+        would be ``continue``-dropped. With the wiring + an exact-alias hit, it
+        binds to the canonical and the row appears in ``raw_relations_json``.
+        """
+        import nlp_pipeline.infrastructure.messaging.consumers.blocks.enriched_event as ee
+        from nlp_pipeline.domain.enums import RoutingTier
+        from nlp_pipeline.domain.models import EntityMention, RoutingDecision
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        outbox_repo = AsyncMock()
+        settings = MagicMock()
+        settings.topic_article_enriched = "nlp.article.enriched.v1"
+        doc_id = uuid.uuid4()
+        subject_canonical = uuid.uuid4()
+        object_canonical = uuid.uuid4()
+
+        # Only "Oklo" is a doc-local resolved mention; "ARMEC" is the missing
+        # counterparty endpoint the LLM emitted (the silent-drop case).
+        oklo_mention = EntityMention(
+            mention_id=uuid.uuid4(),
+            doc_id=doc_id,
+            section_id=uuid.uuid4(),
+            mention_text="Oklo",
+            mention_class="ORGANIZATION",
+            char_start=0,
+            char_end=4,
+            confidence=0.9,
+            resolved_entity_id=subject_canonical,
+        )
+        rd = RoutingDecision(
+            decision_id=uuid.uuid4(),
+            doc_id=doc_id,
+            routing_tier=RoutingTier.MEDIUM,
+            composite_score=0.5,
+            feature_scores={},
+        )
+        alias_repo = _alias_repo_mock(exact={"armec": object_canonical})
+        extraction = {
+            "relations": [{"subject_ref": "Oklo", "object_ref": "ARMEC", "predicate": "partner_of"}],
+            "events": [],
+            "claims": [],
+        }
+
+        await ee._enqueue_enriched(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            doc_id=doc_id,
+            source_type="eodhd",
+            published_at=None,
+            is_backfill=False,
+            routing_decision=rd,
+            sections=[],
+            chunks=[],
+            mentions=[oklo_mention],
+            extraction_result=extraction,
+            correlation_id=None,
+            alias_repo=alias_repo,
+            intelligence_session=None,  # M1 hits → no M2 session needed
+        )
+
+        outbox_repo.add.assert_awaited_once()
+        wire_bytes = outbox_repo.add.await_args.kwargs["payload_avro"]
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
+
+        # Without the wiring this would be None (relation dropped). With it, the
+        # recovered relation is serialized with the real canonical endpoints.
+        import json
+
+        assert payload["raw_relations_json"] is not None
+        rows = json.loads(payload["raw_relations_json"])
+        assert len(rows) == 1
+        assert rows[0]["subject_entity_id"] == str(subject_canonical)
+        assert rows[0]["object_entity_id"] == str(object_canonical)
+        assert rows[0]["entity_provisional"] is False  # M1 = real canonical

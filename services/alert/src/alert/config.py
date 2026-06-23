@@ -85,6 +85,17 @@ class Settings(BaseSettings):
     # ── Outbox dispatcher ──────────────────────────────────────────────────
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50
+    # BUG-A2: a transiently-failed event is retried up to ``max_attempts`` times
+    # (resetting FAILED→PENDING with an exponential back-off window between
+    # attempts) before it is moved to the dead-letter queue. Mirrors the shared
+    # ``DispatcherConfig.max_attempts`` default so S10 matches portfolio/
+    # market-data behaviour (at-least-once delivery, no silent drops).
+    dispatcher_max_attempts: int = 5
+    # Back-off between retries grows as ``base * 2**(retry_count-1)`` capped at
+    # ``max``; a failed row is only re-fetched once ``failed_at + backoff`` has
+    # elapsed, so a wedged broker does not spin the dispatcher.
+    dispatcher_retry_backoff_base_s: float = 2.0
+    dispatcher_retry_backoff_max_s: float = 60.0
 
     # ── Email provider ─────────────────────────────────────────────────────
     email_provider: str = "resend"  # resend | sendgrid | smtp

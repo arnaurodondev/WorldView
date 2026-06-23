@@ -514,6 +514,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # Honour the opt-in backpressure pause exactly like the base loop.
                 self._maybe_apply_backpressure()
                 batch = await self._poll_batch(loop, concurrency)
+                # BUG-1 (2026-06-22 e2e-coverage audit): the base poll loop calls
+                # ``_record_progress()`` on EVERY healthy poll cycle (idle OR
+                # message) so the BP-704 liveness probe sees a fresh heartbeat.
+                # This overridden ``run()`` previously never recorded progress,
+                # so ``seconds_since_progress()`` stayed ``None`` forever; once
+                # the 90s startup grace elapsed the probe logged
+                # ``consumer_liveness_unhealthy_no_progress`` and ``/healthz``
+                # returned 503 PERMANENTLY — even while articles were being
+                # processed successfully. We mirror the base loop here: a
+                # completed poll cycle (whether or not it yielded a batch) is
+                # real liveness, so heartbeat right after the poll returns.
+                self._record_progress()
                 if not batch:
                     continue
                 await self._dispatch_batch(loop, batch, sem)
@@ -1294,6 +1306,16 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     extraction_model_id=(
                         self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
                     ),
+                    # BUG-3 / BP-698: wire the canonical-alias repo + open intel
+                    # session so _enqueue_enriched runs endpoint recovery (M1
+                    # canonical fall-back + M2 provisional mint) before the
+                    # _build_raw_* helpers drop non-mention endpoints. Both are
+                    # already constructed above for the ML phase; reusing the
+                    # SAME open intel_s keeps the provisional mints inside the
+                    # D-004 dual-DB transaction (they commit atomically with the
+                    # enriched event via the intel_s.commit() below).
+                    alias_repo=entity_alias_repo,
+                    intelligence_session=intel_s,
                 )
                 if ml.signals:
                     await _enqueue_signal_events(
