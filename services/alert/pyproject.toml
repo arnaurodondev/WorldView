@@ -34,6 +34,7 @@ dev = [
     "mypy>=1.10,<2",
     "fakeredis[aioredis]>=2.23,<3",
     "testcontainers[postgres]>=4.8,<5",
+    "aiosqlite>=0.19,<1",  # outbox requeue/repository tests use in-memory aiosqlite
 ]
 
 [tool.hatch.build.targets.wheel]

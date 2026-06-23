@@ -31,6 +31,7 @@ dev = [
     "pytest-httpx>=0.30,<1",
     "ruff>=0.4,<1",
     "mypy>=1.10,<2",
+    "aiosqlite>=0.19,<1",  # outbox requeue/repository tests use in-memory aiosqlite
 ]
 
 [tool.hatch.build.targets.wheel]

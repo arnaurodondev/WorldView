@@ -84,7 +84,11 @@ async def test_trigger_single_symbol_creates_task(e2e_client: AsyncClient, e2e_d
     result = await e2e_db_session.execute(select(IngestionTaskModel).where(IngestionTaskModel.symbol == symbol))
     row = result.scalars().first()
     assert row is not None, f"IngestionTask for {symbol} not found in DB"
-    assert row.status == "pending"
+    # The invariant is that triggering CREATED a task in an early lifecycle state.
+    # A live scheduler/worker in the E2E stack can claim it (pending->running) before
+    # this read, so assert membership in the early set rather than the exact transient
+    # 'pending' (which raced -> flaky 'running' != 'pending' in CI).
+    assert row.status in ("pending", "running"), f"unexpected early status {row.status!r}"
 
 
 async def test_trigger_multiple_symbols(e2e_client: AsyncClient) -> None:
