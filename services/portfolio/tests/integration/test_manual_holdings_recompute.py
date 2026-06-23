@@ -74,23 +74,43 @@ async def _create_brokerage_portfolio(db_session) -> str:
 
 
 async def _seed_instrument(db_session, symbol: str = "AAPL", exchange: str = "NASDAQ") -> str:
-    """Seed an instrument directly into the DB and return its string UUID."""
+    """Upsert an instrument into the test DB and return its string UUID.
+
+    Uses ON CONFLICT DO NOTHING on uq_instruments_symbol_exchange so repeated
+    (symbol, exchange) seeds across the session-scoped testcontainer (other
+    integration tests seed the same AAPL/MSFT NASDAQ rows) don't raise
+    UniqueViolationError. Mirrors the get-or-create pattern in the sibling
+    transaction integration tests.
+    """
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert
 
     inst_id = uuid.uuid4()
-    inst = InstrumentModel(
-        id=inst_id,
-        symbol=symbol,
-        exchange=exchange,
-        name=f"{symbol} Inc.",
-        currency="USD",
-        asset_class="equity",
-        source_event_id=uuid.uuid4(),
+    stmt = (
+        insert(InstrumentModel)
+        .values(
+            id=inst_id,
+            symbol=symbol,
+            exchange=exchange,
+            name=f"{symbol} Inc.",
+            currency="USD",
+            asset_class="equity",
+            source_event_id=uuid.uuid4(),
+        )
+        .on_conflict_do_nothing(constraint="uq_instruments_symbol_exchange")
     )
-    db_session.add(inst)
-    await db_session.flush()
+    await db_session.execute(stmt)
     await db_session.commit()
-    return str(inst_id)
+
+    # If the row already existed, fetch its actual ID.
+    result = await db_session.execute(
+        select(InstrumentModel.id).where(
+            InstrumentModel.symbol == symbol,
+            InstrumentModel.exchange == exchange,
+        ),
+    )
+    return str(result.scalar_one())
 
 
 async def _post_transaction(
@@ -123,7 +143,11 @@ async def _post_transaction(
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-async def test_manual_holdings_recompute_via_use_case(integration_client, db_session) -> None:
+async def test_manual_holdings_recompute_via_use_case(
+    integration_client,
+    db_session,
+    integration_session_factory,
+) -> None:
     """3 BUY + 1 partial SELL → ComputeManualHoldingsUseCase writes correct holdings row.
 
     WHY use case directly: the consumer (Kafka) and the API trigger are tested
@@ -136,7 +160,7 @@ async def test_manual_holdings_recompute_via_use_case(integration_client, db_ses
         - BUY 3 @ $300 → lot 3
         - SELL 5 (FIFO: consume all of lot 1, push back 5 @ $100)
         Remaining: 5@$100 + 5@$200 + 3@$300 = 13 units
-        Cost basis: (5*100 + 5*200 + 3*300) / 13 = 2000/13 ≈ $153.85
+        Cost basis: (5*100 + 5*200 + 3*300) / 13 = 2400/13 ≈ $184.62
     """
     from uuid import UUID
 
@@ -157,12 +181,16 @@ async def test_manual_holdings_recompute_via_use_case(integration_client, db_ses
     await _post_transaction(integration_client, portfolio_id, instrument_id, "BUY", "3", "300.00", _EXECUTED_AT_3)
     await _post_transaction(integration_client, portfolio_id, instrument_id, "SELL", "5", "250.00", _EXECUTED_AT_SELL)
 
-    # 3. Invoke ComputeManualHoldingsUseCase directly with real DB session
-    from portfolio.config import Settings
-    from portfolio.infrastructure.db.session import _build_factories
-
-    settings = Settings()  # type: ignore[call-arg]
-    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
+    # 3. Invoke ComputeManualHoldingsUseCase directly with real DB session.
+    #
+    # WHY use integration_session_factory (the testcontainer-bound factory) and
+    # NOT _build_factories(Settings()): Settings() reads PORTFOLIO_DATABASE_URL,
+    # which defaults to localhost:5432/portfolio_db — a *different* database than
+    # the testcontainer where the portfolio/transactions above were created. That
+    # made the use case read an empty DB and skip with portfolio_not_found (and
+    # fail outright in CI, where nothing listens on 5432). Binding the UoW to the
+    # same testcontainer factory the API writes to keeps the round-trip on one DB.
+    write_factory, _ = integration_session_factory
 
     async with SqlAlchemyUnitOfWork(write_factory) as uow:
         use_case = ComputeManualHoldingsUseCase()
@@ -186,13 +214,15 @@ async def test_manual_holdings_recompute_via_use_case(integration_client, db_ses
     assert holding is not None, "Holding row should exist after recomputation"
     assert holding.quantity == Decimal("13"), f"Expected qty=13, got {holding.quantity}"
 
-    # FIFO cost basis: 5*100 + 5*200 + 3*300 = 2000 / 13 ≈ 153.846...
-    expected_cost = Decimal("2000") / Decimal("13")
+    # FIFO cost basis: 5*100 + 5*200 + 3*300 = 2400 / 13 ≈ 184.615...
+    expected_cost = Decimal("2400") / Decimal("13")
     assert abs(holding.average_cost - expected_cost) < Decimal(
         "0.01"
     ), f"Expected cost_basis_per_unit≈{expected_cost:.4f}, got {holding.average_cost}"
 
-    await _engine.dispose()
+    # NOTE: do NOT dispose the engine here — it is owned by the
+    # integration_session_factory / db_session fixtures, which dispose it on
+    # teardown. Disposing it mid-test would close the pool db_session still uses.
 
 
 async def test_brokerage_portfolio_emits_no_recompute_event(integration_client, db_session) -> None:

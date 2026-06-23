@@ -23,6 +23,7 @@ Four scenarios:
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -104,18 +105,41 @@ async def test_quote_update_reflected_via_api(
     seeded_quote: dict,
     e2e_db_session: AsyncSession,
 ) -> None:
-    """Update a quote in DB, wait > cache TTL (5 s), then confirm API returns new value."""
+    """Update a quote in DB, invalidate the cache (as the live pipeline does), then
+    confirm the API re-resolves the new value from the DB.
+
+    Why we invalidate explicitly rather than sleeping for the TTL
+    ------------------------------------------------------------
+    In production a fresh quote arrives via Kafka → ``QuotesConsumer`` →
+    ``schedule_quote_cache_fanout`` which *invalidates* the per-quote cache
+    (``quote:v1:{id}``) so the next API read re-resolves from the DB — the
+    update is visible immediately, NOT after the TTL elapses.  This test seeds
+    the DB directly (it has no consumer), so it must reproduce that same
+    invalidation side effect to exercise the real read path.
+
+    Previously this test blind-slept ``6s`` and relied on the API cache TTL
+    (then 5s) to expire.  Commit ``e32d84454`` legitimately raised the API
+    quote-cache TTL to 60s for performance, which made the 6s sleep shorter
+    than the TTL → the stale value persisted → test failed.  Tying the test to
+    an exact TTL value is brittle; mirroring the production invalidation +
+    bounded polling makes it deterministic and TTL-independent (R19: we
+    strengthen, not weaken, the assertion).
+    """
     from market_data.domain.entities import Quote
+    from market_data.infrastructure.cache.quote_cache import QuoteCache
     from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
+
+    from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
 
     repo = PgQuoteRepository(e2e_db_session)
     instr_id = seeded_quote["instrument_id"]
 
-    # Warm the cache with the original quote
+    # Warm the cache with the original quote (bid=182.50 from the fixture).
     resp = await e2e_client.get(f"/api/v1/quotes/{instr_id}")
     assert resp.status_code == 200
+    assert float(resp.json()["bid"]) == pytest.approx(182.50)
 
-    # Update quote in DB
+    # Update quote in DB.
     updated = Quote(
         instrument_id=instr_id,
         bid=Decimal("195.00"),
@@ -127,15 +151,35 @@ async def test_quote_update_reflected_via_api(
     await repo.upsert(updated)
     await e2e_db_session.commit()
 
-    # Wait for the 5-second Valkey TTL to expire
-    await asyncio.sleep(6)
+    # Invalidate the live per-quote cache exactly as ``schedule_quote_cache_fanout``
+    # does in the real consumer path (key ``quote:v1:{id}``).  The Valkey instance
+    # is exposed to the test runner on localhost:6379 by docker-compose.test.yml.
+    valkey_url = os.getenv("MARKET_DATA_E2E_VALKEY_URL", "redis://localhost:6379/0")
+    valkey_client = create_valkey_client_from_url(valkey_url)
+    try:
+        await QuoteCache(valkey_client).invalidate(str(instr_id))
+    finally:
+        await valkey_client.close()
 
-    resp2 = await e2e_client.get(f"/api/v1/quotes/{instr_id}")
-    assert resp2.status_code == 200
-    body = resp2.json()
+    # Bounded poll: the next read should re-resolve the fresh DB row.  We poll
+    # (rather than asserting on a single read) to tolerate eventual-consistency
+    # of the invalidate→read race without depending on the TTL length.
+    deadline = 10.0  # generous bound; the invalidate makes this near-instant
+    interval = 0.25
+    elapsed = 0.0
+    body: dict = {}
+    while elapsed <= deadline:
+        resp2 = await e2e_client.get(f"/api/v1/quotes/{instr_id}")
+        assert resp2.status_code == 200
+        body = resp2.json()
+        if float(body["bid"]) == pytest.approx(195.00):
+            break
+        await asyncio.sleep(interval)
+        elapsed += interval
+
     assert float(body["bid"]) == pytest.approx(
         195.00
-    ), f"Expected updated bid=195.00 after TTL expiry, got {body['bid']}"
+    ), f"Expected updated bid=195.00 after cache invalidation, got {body['bid']}"
 
 
 # ── Scenario 3: Instrument flag promotion ─────────────────────────────────────

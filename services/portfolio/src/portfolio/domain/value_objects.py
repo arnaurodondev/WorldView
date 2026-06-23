@@ -153,11 +153,18 @@ class TransactionFilter:
         if self.ticker is not None:
             if len(self.ticker) > 20:
                 raise ValueError(f"ticker must be at most 20 characters, got {len(self.ticker)}")
-            if not re.fullmatch(r"[A-Z0-9.\^-]*", self.ticker):
+            # Accept lowercase input: ticker matching is case-insensitive (the
+            # repository upper-cases before an ILIKE), so a lowercase filter such
+            # as "aapl" is a valid, intended query. We still reject any character
+            # outside the ticker alphabet (rejects ILIKE wildcards/injection).
+            if not re.fullmatch(r"[A-Za-z0-9.\^-]*", self.ticker):
                 raise ValueError(
                     f"ticker '{self.ticker}' contains invalid characters. "
-                    "Only uppercase letters, digits, '.', '^', and '-' are allowed."
+                    "Only letters, digits, '.', '^', and '-' are allowed."
                 )
+            # Normalize to upper-case so the canonical VO value matches the
+            # symbol storage convention (frozen dataclass → use object.__setattr__).
+            object.__setattr__(self, "ticker", self.ticker.upper())
         if self.from_date is not None and self.to_date is not None:
             if self.to_date < self.from_date:
                 raise ValueError(f"to_date ({self.to_date}) must be >= from_date ({self.from_date})")

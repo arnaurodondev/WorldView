@@ -219,7 +219,7 @@ async def list_transactions(
     # max_length=20: tickers are rarely longer than 10 chars; caps ILIKE pattern size
     # to prevent expensive wildcard amplification on the transactions table.
     # pattern restricts to valid ticker characters — rejects injection attempts.
-    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     x_owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
@@ -248,7 +248,7 @@ async def export_transactions(
     transaction_type: list[str] | None = Query(default=None),
     # max_length=20 + pattern: especially important on the export path (limit=999_999)
     # where an expensive ILIKE pattern would scan the entire transactions table.
-    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
 ) -> StreamingResponse:
     """Stream all matching transactions as a CSV file.
 
@@ -340,7 +340,7 @@ async def list_transactions_nested(
     to_date: date | None = Query(default=None),
     transaction_type: list[str] | None = Query(default=None),
     # Same ticker guard as GET /transactions — caps ILIKE amplification risk.
-    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Z0-9.\^-]*$"),
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     """Nested alias for ``GET /transactions?portfolio_id=...``.
 
