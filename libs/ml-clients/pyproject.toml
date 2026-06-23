@@ -24,6 +24,13 @@ dev = [
     "pytest-asyncio>=0.23,<1",
     "ruff>=0.4,<1",
     "mypy>=1.10,<2",
+    # openai is a runtime dependency of the DeepSeek/ChatGPT extraction adapters
+    # (lazily imported in __init__), exposed as the optional ``openai`` extra so
+    # callers that don't use those adapters stay lean. The test suite
+    # (``test_deepseek_extraction_retry.py``) imports openai at module level to
+    # patch the client and assert the retry/classification loop, so [dev] must
+    # pull it in — otherwise CI's fresh install fails collection with exit 2.
+    "openai>=1.40,<2",
 ]
 
 [tool.hatch.build.targets.wheel]
