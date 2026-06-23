@@ -210,7 +210,13 @@ async def test_lag_record_is_throttled() -> None:
     ):
         # Long interval → only the first of many rapid calls reaches the base.
         consumer._LAG_RECORD_INTERVAL_SECONDS = 1000.0  # type: ignore[misc]
-        consumer._last_lag_record_monotonic = 0.0
+        # Seed relative to monotonic now (NOT literal 0.0): the throttle compares
+        # `time.monotonic() - last >= interval`; on a fresh CI runner monotonic() can
+        # be < 1000, leaving even the first call throttled → flaky 0 instead of 1.
+        # Subtracting 2× the interval guarantees the first call clears it on any host.
+        import time as _time
+
+        consumer._last_lag_record_monotonic = _time.monotonic() - 2000.0
         for _ in range(5):
             consumer._record_consumer_lag()
 
