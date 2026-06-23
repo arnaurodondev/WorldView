@@ -15,6 +15,8 @@ import pytest
 from alert.config import Settings
 from alert.infrastructure.clients.s6_client import S6NewsClient
 
+pytestmark = pytest.mark.unit
+
 
 def _settings() -> Settings:
     return Settings(

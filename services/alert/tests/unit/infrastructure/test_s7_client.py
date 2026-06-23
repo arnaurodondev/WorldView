@@ -17,6 +17,8 @@ import pytest
 from alert.config import Settings
 from alert.infrastructure.clients.s7_client import S7GraphClient
 
+pytestmark = pytest.mark.unit
+
 
 def _settings() -> Settings:
     return Settings(

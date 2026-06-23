@@ -16,6 +16,8 @@ from alert.domain.rule_conditions import (
 )
 from pydantic import ValidationError
 
+pytestmark = pytest.mark.unit
+
 
 def test_condition_discriminated_union_validation_each_type_valid() -> None:
     """Each rule type's canonical payload validates + round-trips."""

@@ -25,6 +25,8 @@ from alert.domain.errors import RuleLimitExceededError, RuleNotFoundError
 if TYPE_CHECKING:
     from alert.domain.entities import AlertRule
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeSession:
     def __init__(self) -> None:

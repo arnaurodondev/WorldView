@@ -11,6 +11,8 @@ from alert.domain.enums import AlertSeverity, RuleType
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 
 def _price_rule(operator: str = "above", value: float = 200.0, cooldown: int | None = None) -> AlertRule:
     return AlertRule.create(

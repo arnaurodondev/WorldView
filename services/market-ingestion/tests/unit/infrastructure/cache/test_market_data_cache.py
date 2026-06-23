@@ -28,6 +28,8 @@ from market_ingestion.infrastructure.cache.market_data_cache import (
     _build_key,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_valkey(*, get_return: Any = None, set_nx_return: bool = True) -> AsyncMock:
     """Return an ``AsyncMock`` that mimics the subset of ValkeyClient we touch."""

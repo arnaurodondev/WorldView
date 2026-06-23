@@ -32,6 +32,8 @@ from market_ingestion.domain.value_objects import DateRange, ObjectRef, Timefram
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

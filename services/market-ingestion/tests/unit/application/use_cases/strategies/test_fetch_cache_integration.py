@@ -39,6 +39,8 @@ from market_ingestion.infrastructure.cache.cache_policy import (
     DatasetType as CacheDatasetType,
 )
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Fakes & fixtures
 # ---------------------------------------------------------------------------

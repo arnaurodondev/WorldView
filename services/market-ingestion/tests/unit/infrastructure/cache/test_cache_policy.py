@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from market_ingestion.infrastructure.cache.cache_policy import (
     CACHE_TTL_SECONDS,
     DatasetType,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_every_dataset_type_has_ttl() -> None:

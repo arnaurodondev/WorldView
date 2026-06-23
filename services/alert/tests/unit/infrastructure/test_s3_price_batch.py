@@ -10,6 +10,8 @@ import pytest
 from alert.config import Settings
 from alert.infrastructure.clients.s3_client import S3MarketDataClient
 
+pytestmark = pytest.mark.unit
+
 
 def _settings() -> Settings:
     return Settings(

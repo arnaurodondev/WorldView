@@ -20,6 +20,8 @@ from alert.application.rules.registry import (
 )
 from alert.domain.enums import RuleType
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> Iterator[None]:

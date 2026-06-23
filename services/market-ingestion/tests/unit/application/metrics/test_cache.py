@@ -13,6 +13,8 @@ from market_ingestion.application.metrics.cache import (
     provider_cache_misses_total,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _sample_value(counter, labels: dict[str, str]) -> float:
     """Return the current value of ``counter`` for the given labels (or 0.0).

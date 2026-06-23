@@ -15,6 +15,8 @@ from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.supervisor import ConsumerExited, run_consumer_supervised
 
+pytestmark = pytest.mark.unit
+
 
 class _RaisingConsumer:
     """run() raises immediately — models the connection-setup-timeout crash."""

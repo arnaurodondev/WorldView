@@ -12,7 +12,10 @@ like `GET /api/v1/market/top-movers` will 404 again.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.unit
 
 
 def test_v1_and_api_v1_resolve_same_route(app) -> None:

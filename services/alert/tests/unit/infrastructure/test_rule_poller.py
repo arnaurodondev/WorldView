@@ -21,6 +21,8 @@ from alert.infrastructure.rules import poller_main
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 
 def _settings() -> Settings:
     return Settings(database_url="postgresql+asyncpg://x:x@localhost/x")

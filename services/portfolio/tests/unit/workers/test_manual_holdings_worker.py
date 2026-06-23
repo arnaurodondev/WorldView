@@ -16,9 +16,12 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
+import pytest
 from portfolio.domain.entities.portfolio import Portfolio
 from portfolio.domain.enums import PortfolioKind
 from portfolio.workers.manual_holdings_worker import CRON_EXPRESSION, ManualHoldingsWorker
+
+pytestmark = pytest.mark.unit
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 

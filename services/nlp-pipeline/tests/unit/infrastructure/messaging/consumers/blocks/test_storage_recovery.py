@@ -14,6 +14,8 @@ populated and the learned router is no longer blind.
 
 from __future__ import annotations
 
+pytestmark = pytest.mark.unit
+
 import json
 from typing import Any
 from unittest.mock import AsyncMock

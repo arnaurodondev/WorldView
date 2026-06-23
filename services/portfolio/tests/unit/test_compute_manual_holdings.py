@@ -14,6 +14,8 @@ Test matrix:
 
 from __future__ import annotations
 
+pytestmark = pytest.mark.unit
+
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal

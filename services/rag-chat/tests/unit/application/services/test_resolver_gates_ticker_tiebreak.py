@@ -14,6 +14,10 @@ name does NOT embed the ticker (phantom-shape filter).
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from rag_chat.application.services.resolver_gates import (
     ACCEPTED_QUERY_TICKER_MATCH,
     REASON_DELTA_BELOW_THRESHOLD,

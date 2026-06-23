@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 import structlog
 
 from observability.runtime_banner import log_runtime_banner
+
+pytestmark = pytest.mark.unit
 
 
 def test_masks_secret_keys() -> None:

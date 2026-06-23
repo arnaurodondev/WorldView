@@ -39,6 +39,8 @@ from market_data.infrastructure.messaging.consumers.quotes_consumer import Quote
 
 from messaging.kafka.consumer.base import FailureInfo
 
+pytestmark = pytest.mark.unit
+
 
 def _make_failure(event_id: str = "evt-1", attempt: int = 1) -> FailureInfo[dict]:
     return FailureInfo(
