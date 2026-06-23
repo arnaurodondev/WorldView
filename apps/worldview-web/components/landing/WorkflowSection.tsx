@@ -23,8 +23,8 @@ const STEPS = [
   {
     icon: BarChart3,
     title: "Analyze",
-    body: "Click any ticker to land in the instrument page: real-time chart, fundamentals snapshot, news with impact scores, the entity knowledge graph, and the AI assistant — all visible without opening tabs.",
-    surface: "Instrument · /instrument/{id}",
+    body: "Click any ticker to land in the 3-tab instrument page — Quote, Financials, Intelligence. Live quote and 52-week range, a dense fundamentals grid, and the entity knowledge graph (suppliers, executives, regulators, indirect paths) all in one place.",
+    surface: "Instrument · /instruments/{id}",
   },
   {
     icon: Bell,
@@ -35,7 +35,7 @@ const STEPS = [
   {
     icon: Workflow,
     title: "Act",
-    body: "Connect your brokerage (TastyTrade) to sync positions and transactions automatically. Track P&L, allocation drift, and risk metrics against the same intelligence layer that surfaced the trade.",
+    body: "Track the position in portfolio analytics — equity curve, realized P&L, sector allocation, and cash-vs-invested exposure against the same intelligence layer that surfaced the trade. Optionally connect a brokerage (TastyTrade) to sync positions read-only.",
     surface: "Portfolio · /portfolio",
   },
 ] as const;
