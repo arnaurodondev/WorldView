@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from market_ingestion.application.metrics.cache import provider_cache_invalidated_total
 
 if TYPE_CHECKING:
-    from market_ingestion.infrastructure.cache.cache_policy import DatasetType
+    from market_ingestion.domain.enums import CacheDatasetType as DatasetType
     from market_ingestion.infrastructure.cache.market_data_cache import MarketDataCache
 
 

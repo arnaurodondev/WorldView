@@ -35,6 +35,7 @@ import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.relation_validation import validate_relations
 from nlp_pipeline.application.blocks.suppression import should_run_deep_extraction
+from nlp_pipeline.application.ports.metrics import NOOP_METRICS, NlpMetricsPort
 from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
@@ -62,23 +63,6 @@ class EntailmentCheckConfig:
     min_drop_confidence: float = 0.7
     max_per_doc: int = 20
     model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
-
-
-def _record_window_timeout() -> None:
-    """Increment the deep-extraction window-timeout Prometheus counter.
-
-    Task #22 (BP-677): makes the per-window transient-failure (timeout) rate
-    observable in Prometheus, not just logs. Uses a lazy import (matching the
-    PrometheusNlpMetrics adapter style) so the application layer does not import
-    the infrastructure metrics singleton at module load, and so pure-function
-    callers/tests work even when prometheus_client is unavailable.
-    """
-    try:
-        from nlp_pipeline.infrastructure.metrics.prometheus import deep_extraction_window_timeout_total
-
-        deep_extraction_window_timeout_total.inc()
-    except Exception:  # metrics must never break extraction
-        logger.debug("deep_extraction.metric_inc_failed", metric="deep_extraction_window_timeout_total")
 
 
 # ── Window configuration (PRD §6.7 Block 10) ─────────────────────────────────
@@ -402,6 +386,7 @@ async def run_deep_extraction_block(
     usage_logger: LlmUsageLogProtocol | None = None,
     entailment_client: ExtractionClient | None = None,
     entailment_config: EntailmentCheckConfig | None = None,
+    metrics: NlpMetricsPort = NOOP_METRICS,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -487,7 +472,15 @@ async def run_deep_extraction_block(
             # can flag the doc as degraded, and so a timed-out doc is retried
             # rather than persisted as a clean zero.
             timed_out_windows += 1
-            _record_window_timeout()
+            # R25: record via the injected metrics port (NOOP_METRICS by
+            # default) so the application layer never imports infra metrics.
+            try:
+                metrics.record_deep_extraction_window_timeout()
+            except Exception:  # metrics must never break extraction
+                logger.debug(
+                    "deep_extraction.metric_inc_failed",
+                    metric="deep_extraction_window_timeout_total",
+                )
             logger.warning(
                 "deep_extraction.window_timeout",
                 doc_id=str(doc_id),

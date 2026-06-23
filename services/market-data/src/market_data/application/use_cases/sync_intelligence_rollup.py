@@ -46,11 +46,12 @@ import common.time  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from market_data.infrastructure.clients.intelligence_clients import (
-        S6NewsRollupClient,
-        S7IntelligenceClient,
-        S8BriefClient,
-        S10AlertClient,
+    # R25: depend on application-layer ports, not the concrete infra clients.
+    from market_data.application.ports.intelligence_clients import (
+        S6NewsRollupClientPort,
+        S7IntelligenceClientPort,
+        S8BriefClientPort,
+        S10AlertClientPort,
     )
 
 logger = structlog.get_logger(__name__)
@@ -123,10 +124,10 @@ class SyncIntelligenceRollupUseCase:
     def __init__(
         self,
         write_factory: async_sessionmaker,
-        s6_client: S6NewsRollupClient,
-        s7_client: S7IntelligenceClient,
-        s10_client: S10AlertClient,
-        s8_client: S8BriefClient,
+        s6_client: S6NewsRollupClientPort,
+        s7_client: S7IntelligenceClientPort,
+        s10_client: S10AlertClientPort,
+        s8_client: S8BriefClientPort,
     ) -> None:
         self._write_factory = write_factory
         self._s6 = s6_client
@@ -344,43 +345,3 @@ class SyncIntelligenceRollupUseCase:
         async with self._write_factory() as session:
             await session.execute(sql, params)
             await session.commit()
-
-
-# ── Standalone runner (called by app.py scheduler loop) ───────────────────────
-
-
-async def run_intelligence_rollup(
-    write_factory: async_sessionmaker,
-    s6_base_url: str,
-    s7_base_url: str,
-    s10_base_url: str,
-    s8_base_url: str,
-    private_key_pem: str = "",
-    options: SyncIntelligenceRollupOptions | None = None,
-) -> SyncIntelligenceRollupSummary:
-    """Convenience wrapper: construct clients, run the use case, close clients.
-
-    This is the entry point called by ``_intelligence_rollup_loop`` in
-    ``app.py``.  Clients are created fresh on each run so connection pools
-    don't accumulate open sockets across the 24-hour sleep window.
-    """
-    from market_data.infrastructure.clients.intelligence_clients import (
-        S6NewsRollupClient,
-        S7IntelligenceClient,
-        S8BriefClient,
-        S10AlertClient,
-    )
-
-    s6 = S6NewsRollupClient(s6_base_url, private_key_pem)
-    s7 = S7IntelligenceClient(s7_base_url, private_key_pem)
-    s10 = S10AlertClient(s10_base_url, private_key_pem)
-    s8 = S8BriefClient(s8_base_url, private_key_pem)
-
-    try:
-        uc = SyncIntelligenceRollupUseCase(write_factory, s6, s7, s10, s8)
-        return await uc.execute(options)
-    finally:
-        await s6.aclose()
-        await s7.aclose()
-        await s10.aclose()
-        await s8.aclose()

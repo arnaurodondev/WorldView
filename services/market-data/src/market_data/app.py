@@ -614,7 +614,13 @@ async def _intelligence_rollup_loop(
     from common.time import utc_now  # type: ignore[import-untyped]
     from market_data.application.use_cases.sync_intelligence_rollup import (
         SyncIntelligenceRollupOptions,
-        run_intelligence_rollup,
+        SyncIntelligenceRollupUseCase,
+    )
+    from market_data.infrastructure.clients.intelligence_clients import (
+        S6NewsRollupClient,
+        S7IntelligenceClient,
+        S8BriefClient,
+        S10AlertClient,
     )
 
     try:
@@ -669,15 +675,22 @@ async def _intelligence_rollup_loop(
             else:
                 private_key_pem = str(pk_raw or "")
 
-            summary = await run_intelligence_rollup(
-                write_factory=write_factory,
-                s6_base_url=s6_url,
-                s7_base_url=s7_url,
-                s10_base_url=s10_url,
-                s8_base_url=s8_url,
-                private_key_pem=private_key_pem,
-                options=SyncIntelligenceRollupOptions(),
-            )
+            # Composition root (R25): construct the concrete infra clients here
+            # and inject them into the application-layer use case via its ports.
+            # Clients are created fresh on each run so connection pools don't
+            # accumulate open sockets across the 24-hour sleep window.
+            s6 = S6NewsRollupClient(s6_url, private_key_pem)
+            s7 = S7IntelligenceClient(s7_url, private_key_pem)
+            s10 = S10AlertClient(s10_url, private_key_pem)
+            s8 = S8BriefClient(s8_url, private_key_pem)
+            try:
+                uc = SyncIntelligenceRollupUseCase(write_factory, s6, s7, s10, s8)
+                summary = await uc.execute(SyncIntelligenceRollupOptions())
+            finally:
+                await s6.aclose()
+                await s7.aclose()
+                await s10.aclose()
+                await s8.aclose()
             last_success_at = utc_now()
             log.info(  # type: ignore[attr-defined]
                 "intelligence_rollup_completed",

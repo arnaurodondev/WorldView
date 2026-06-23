@@ -29,24 +29,14 @@ keep the docstring rationale current when a value moves.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import StrEnum
 
-
-class DatasetType(StrEnum):
-    """Cache-layer dataset taxonomy.
-
-    Append-only / never-renamed -- see module docstring.
-    """
-
-    OHLCV_EOD = "ohlcv_eod"
-    OHLCV_INTRADAY = "ohlcv_intraday"
-    FUNDAMENTALS_SNAPSHOT = "fundamentals_snapshot"
-    EARNINGS_CALENDAR = "earnings_calendar"
-    DIVIDENDS = "dividends"
-    SPLITS = "splits"
-    EXCHANGES_LIST = "exchanges_list"
-    SYMBOL_SEARCH = "symbol_search"
-
+# R25: the cache dataset taxonomy now lives in the domain layer so the
+# application layer can reference it without importing infrastructure.  We
+# re-export it here under the historical name ``DatasetType`` so existing
+# infrastructure-side imports (and the TTL table below) keep working unchanged.
+from market_ingestion.domain.enums import (
+    CacheDatasetType as DatasetType,  # — public re-export
+)
 
 #: TTL in seconds for each :class:`DatasetType`. Rationale: see PLAN-0107
 #: section A.1 TTL policy table.

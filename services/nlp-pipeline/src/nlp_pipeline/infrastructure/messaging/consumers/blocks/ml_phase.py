@@ -35,6 +35,7 @@ from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_profile_emb
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.provisional import (
     synthesize_provisional_refs,
 )
+from nlp_pipeline.infrastructure.metrics.adapter import PrometheusNlpMetrics
 from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_entity_resolved,
     s6_claims_extracted_total,
@@ -53,6 +54,12 @@ if TYPE_CHECKING:
     from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
     from nlp_pipeline.config import Settings
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision
+
+
+# Concrete metrics adapter injected into the deep-extraction block (R25): the
+# application block records the window-timeout counter via this port instead of
+# importing the Prometheus singleton itself.
+_NLP_METRICS = PrometheusNlpMetrics()
 
 
 @dataclass
@@ -177,6 +184,7 @@ async def run_ml_phase(
             usage_logger=usage_logger,
             entailment_client=entailment_client,
             entailment_config=entailment_config,
+            metrics=_NLP_METRICS,
         )
         s6_claims_extracted_total.inc(len(list(extraction_result.get("claims", []))))
         await synthesize_provisional_refs(

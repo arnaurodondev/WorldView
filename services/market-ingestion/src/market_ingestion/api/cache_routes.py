@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from market_ingestion.application.use_cases.invalidate_cache import InvalidateCacheUseCase
-from market_ingestion.infrastructure.cache.cache_policy import DatasetType
+from market_ingestion.domain.enums import CacheDatasetType as DatasetType
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:

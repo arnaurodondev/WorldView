@@ -26,6 +26,15 @@ class NlpMetricsPort(Protocol):
         """
         ...
 
+    def record_deep_extraction_window_timeout(self) -> None:
+        """Increment the deep-extraction window-timeout counter.
+
+        Task #22 (BP-677): called when a single extraction window hits a
+        transient/timeout failure so the per-window failure rate is observable
+        in Prometheus, not just logs.
+        """
+        ...
+
 
 class _NoOpNlpMetrics:
     """No-op implementation used as a default when no metrics adapter is injected.
@@ -35,6 +44,9 @@ class _NoOpNlpMetrics:
     """
 
     def record_sectioning_fallback(self) -> None:
+        """No-op."""
+
+    def record_deep_extraction_window_timeout(self) -> None:
         """No-op."""
 
 

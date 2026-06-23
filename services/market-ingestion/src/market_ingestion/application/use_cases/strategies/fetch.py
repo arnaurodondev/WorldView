@@ -17,8 +17,11 @@ import base64
 from typing import TYPE_CHECKING, Any, cast
 
 from common.time import utc_now  # type: ignore[import-untyped]
-from market_ingestion.domain.enums import DatasetType, Provider
-from market_ingestion.infrastructure.cache.cache_policy import DatasetType as CacheDatasetType
+from market_ingestion.domain.enums import (
+    CacheDatasetType,
+    DatasetType,
+    Provider,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

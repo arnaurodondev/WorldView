@@ -18,7 +18,7 @@ from market_data.domain.entities import Instrument, OHLCVBar, Quote, Security
 from market_data.domain.enums import Provider, Timeframe
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
-from market_data.infrastructure.messaging.consumers.quote_cache_fanout import schedule_quote_cache_fanout
+from market_data.infrastructure.messaging.consumers._quote_cache_fanout import schedule_quote_cache_fanout
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     _ASYNCPG_CONN_ERRORS,

@@ -12,7 +12,7 @@ from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, Quote, Security
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
-from market_data.infrastructure.messaging.consumers.quote_cache_fanout import schedule_quote_cache_fanout
+from market_data.infrastructure.messaging.consumers._quote_cache_fanout import schedule_quote_cache_fanout
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]

@@ -31,45 +31,34 @@ dev HS256 fallback when the key is empty).  This mirrors the pattern used by
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 
 import httpx
 
+from market_data.application.ports.intelligence_clients import (
+    S6NewsRollupClientPort,
+    S7IntelligenceClientPort,
+    S8BriefClientPort,
+    S10AlertClientPort,
+)
+
+# Response value objects now live in the domain layer (R25).  Re-exported here
+# under their historical names so existing importers (tests, other infra) keep
+# working unchanged.
+from market_data.domain.intelligence_rollup import (
+    S6NewsRollup as S6NewsRollup,
+)
+from market_data.domain.intelligence_rollup import (
+    S7IntelligenceRollup as S7IntelligenceRollup,
+)
+from market_data.domain.intelligence_rollup import (
+    S8BriefFlag as S8BriefFlag,
+)
+from market_data.domain.intelligence_rollup import (
+    S10AlertFlag as S10AlertFlag,
+)
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
-
-# ── Response models (minimal — only the fields we materialise) ────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class S6NewsRollup:
-    """Parsed response from S6 ``GET /internal/v1/instruments/{id}/news-rollup-7d``."""
-
-    news_count_7d: int
-    llm_relevance_7d_max: float | None
-    display_relevance_7d_weighted: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class S7IntelligenceRollup:
-    """Parsed response from S7 ``GET /internal/v1/instruments/{id}/intelligence-rollup-7d``."""
-
-    recent_contradiction_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class S10AlertFlag:
-    """Parsed response from S10 ``GET /internal/v1/instruments/{id}/active-alert-flag``."""
-
-    has_active_alert: bool
-
-
-@dataclass(frozen=True, slots=True)
-class S8BriefFlag:
-    """Parsed response from S8 ``GET /internal/v1/instruments/{id}/ai-brief-flag``."""
-
-    has_ai_brief: bool
 
 
 # ── Internal-JWT helper (shared across all 4 clients) ────────────────────────
@@ -183,7 +172,7 @@ class _BaseIntelligenceClient:
 # ── S6: content-store news rollup ─────────────────────────────────────────────
 
 
-class S6NewsRollupClient(_BaseIntelligenceClient):
+class S6NewsRollupClient(_BaseIntelligenceClient, S6NewsRollupClientPort):
     """S6 client: ``GET /internal/v1/instruments/{id}/news-rollup-7d``.
 
     Returns ``S6NewsRollup`` on success, ``None`` on failure.
@@ -210,7 +199,7 @@ class S6NewsRollupClient(_BaseIntelligenceClient):
 # ── S7: knowledge-graph intelligence rollup ───────────────────────────────────
 
 
-class S7IntelligenceClient(_BaseIntelligenceClient):
+class S7IntelligenceClient(_BaseIntelligenceClient, S7IntelligenceClientPort):
     """S7 client: ``GET /internal/v1/instruments/{id}/intelligence-rollup-7d``.
 
     Returns ``S7IntelligenceRollup`` on success, ``None`` on failure.
@@ -235,7 +224,7 @@ class S7IntelligenceClient(_BaseIntelligenceClient):
 # ── S10: alert active-flag ────────────────────────────────────────────────────
 
 
-class S10AlertClient(_BaseIntelligenceClient):
+class S10AlertClient(_BaseIntelligenceClient, S10AlertClientPort):
     """S10 client: ``GET /internal/v1/instruments/{id}/active-alert-flag``.
 
     Returns ``S10AlertFlag`` on success, ``None`` on failure.
@@ -260,7 +249,7 @@ class S10AlertClient(_BaseIntelligenceClient):
 # ── S8: rag-chat AI-brief flag ────────────────────────────────────────────────
 
 
-class S8BriefClient(_BaseIntelligenceClient):
+class S8BriefClient(_BaseIntelligenceClient, S8BriefClientPort):
     """S8 client: ``GET /internal/v1/instruments/{id}/ai-brief-flag``.
 
     Returns ``S8BriefFlag`` on success, ``None`` on failure.

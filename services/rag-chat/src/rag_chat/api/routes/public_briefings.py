@@ -46,7 +46,6 @@ from rag_chat.domain.errors import (
     ProviderUnavailableError,
     RateLimitExceededError,
 )
-from rag_chat.infrastructure.clients.active_instruments_reader import ACTIVE_INSTRUMENTS_KEY as _ACTIVE_INSTRUMENTS_KEY
 
 router = APIRouter(prefix="/api/v1", tags=["briefings"])
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -557,6 +556,12 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     # a failure here must never affect the brief response.
     if valkey is not None:
         try:
+            # Lazy import (D-1 / IG-LAYER-002): keep this infrastructure constant
+            # off the module-import path so the API layer stays infra-free.
+            from rag_chat.infrastructure.clients.active_instruments_reader import (
+                ACTIVE_INSTRUMENTS_KEY as _ACTIVE_INSTRUMENTS_KEY,
+            )
+
             await valkey.zadd(_ACTIVE_INSTRUMENTS_KEY, {entity_id: int(time.time())})
         except Exception as e:  # pragma: no cover — defensive
             log.warning("active_instruments_mark_failed", error=str(e), entity_id=entity_id)  # type: ignore[no-any-return]
