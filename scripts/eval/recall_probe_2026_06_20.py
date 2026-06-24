@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "eval"))
 sys.path.insert(0, str(REPO / "libs" / "prompts" / "src"))
 
-import extraction_quality_eval as H  # noqa: E402
+import extraction_quality_eval as H  # noqa: E402, N812 — `H` (harness) alias used pervasively for brevity.
 
 GOLDEN = json.loads((REPO / "results" / "model_switch_ab" / "golden_set.json").read_text())
 BY_PREFIX = {g["doc_id"][:10]: g for g in GOLDEN}

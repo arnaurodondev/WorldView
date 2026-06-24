@@ -75,7 +75,7 @@ try:
     import torch as _torch
 
     _torch.set_num_threads(int(os.environ.get("TORCH_NUM_THREADS", "4")))
-except Exception:  # noqa: BLE001 — never let thread tuning break startup
+except Exception:  # noqa: S110 — best-effort thread tuning must never break startup
     pass
 
 _MODEL_PATH = os.environ.get("GLINER_MODEL_PATH", "urchade/gliner_large-v2.1")

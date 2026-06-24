@@ -39,7 +39,10 @@ def test_numeric_precision_revenue_exact(ask: Callable[..., ChatRunResult]) -> N
 
 # 2. Listing-with-limits — "top 5" should return exactly N entries, ranked.
 def test_listing_with_limit_top5_market_cap(ask: Callable[..., ChatRunResult]) -> None:
-    q = "List the top 5 US-listed technology companies by market capitalization, in descending order, with their market caps."
+    q = (
+        "List the top 5 US-listed technology companies by market capitalization, "
+        "in descending order, with their market caps."
+    )
     result = ask(q, slot="iter3_top5_market_cap")
     text = (result.answer_text or "").upper()
     # Expect at least 3 of the obvious mega-caps in the answer.
@@ -58,9 +61,10 @@ def test_listing_with_limit_top5_market_cap(ask: Callable[..., ChatRunResult]) -
         "AMAZON",
     }
     hits = sum(1 for e in expected if e in text)
-    assert (
-        hits >= 3
-    ), f"top-5 mega-cap listing only mentioned {hits} of expected names; first 400c: {(result.answer_text or '')[:400]!r}"
+    assert hits >= 3, (
+        f"top-5 mega-cap listing only mentioned {hits} of expected names; "
+        f"first 400c: {(result.answer_text or '')[:400]!r}"
+    )
 
 
 # 3. Date arithmetic — "since 2020" should resolve to a sensible window.
@@ -80,7 +84,10 @@ def test_date_arithmetic_since_year(ask: Callable[..., ChatRunResult]) -> None:
 
 # 4. Conditional reasoning — IF clause should be respected.
 def test_conditional_reasoning_if_pe_below(ask: Callable[..., ChatRunResult]) -> None:
-    q = "If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be considered expensive. Otherwise say it is not currently below 50 and skip the list."
+    q = (
+        "If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be "
+        "considered expensive. Otherwise say it is not currently below 50 and skip the list."
+    )
     result = ask(q, slot="iter3_conditional")
     text = (result.answer_text or "").lower()
     # Either path is acceptable; the agent must not list reasons WITHOUT also stating the current P/E.

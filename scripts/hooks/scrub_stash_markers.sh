@@ -24,26 +24,41 @@ if [[ "$#" -eq 0 ]]; then
   exit 0
 fi
 
-# Three patterns, anchored to start-of-line so an in-prose mention
-# (e.g. inside this file) does not trip the hook.
-PATTERNS=(
+# The OPENING / CLOSING markers are unambiguous: git always writes a label
+# after them (`<<<<<<< HEAD`, `>>>>>>> Stashed changes`), so the trailing
+# space + content never occurs in normal prose/code.
+UNAMBIGUOUS=(
   '^<<<<<<< '
-  '^=======$'
   '^>>>>>>> '
 )
+# A bare `^=======$` (exactly 7 equals on its own line) is ALSO a valid
+# RST/markdown section underline (e.g. a 7-char heading like "CAVEATS"), so
+# it is reported ONLY when an unambiguous marker co-occurs in the same file —
+# a real conflict always has all three together. This stops the docstring
+# false-positive that previously tripped scripts/refresh_fundamentals.py.
+SEPARATOR='^=======$'
 
 hits=0
 for f in "$@"; do
   # Skip anything that no longer exists on disk (e.g. staged delete).
   [[ -f "$f" ]] || continue
-  for pat in "${PATTERNS[@]}"; do
+  file_has_conflict=0
+  for pat in "${UNAMBIGUOUS[@]}"; do
     if grep -nE "$pat" "$f" >/dev/null 2>&1; then
+      file_has_conflict=1
       grep -nE "$pat" "$f" | while IFS= read -r line; do
         echo "stash-marker: $f:$line" >&2
       done
       hits=$((hits + 1))
     fi
   done
+  # Only treat a bare separator as a marker when this file also has a real
+  # opening/closing marker.
+  if [[ "$file_has_conflict" -eq 1 ]] && grep -nE "$SEPARATOR" "$f" >/dev/null 2>&1; then
+    grep -nE "$SEPARATOR" "$f" | while IFS= read -r line; do
+      echo "stash-marker: $f:$line" >&2
+    done
+  fi
 done
 
 if [[ "$hits" -gt 0 ]]; then

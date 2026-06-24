@@ -223,14 +223,38 @@ def wilson_ci(sup: int, n: int, z: float = 1.96) -> tuple[float, float]:
 # Full predicate frequencies in the `relations` table (SELECT canonical_type,count(*) ...),
 # captured 2026-06-20. Used for the VOLUME-WEIGHTED support rate.
 PREDICATE_FREQ: dict[str, int] = {
-    "operates_in_country": 1923, "listed_on": 1497, "competes_with": 1263, "partner_of": 1137,
-    "analyst_rating": 949, "has_executive": 801, "headquartered_in": 780, "is_in_sector": 683,
-    "regulates": 586, "produces": 496, "investment_in": 454, "price_target": 436,
-    "supplier_of": 263, "employs": 215, "acquired_by": 215, "sentiment_signal": 171,
-    "reported_revenue_of": 168, "owns_stake_in": 158, "board_member_of": 157, "subsidiary_of": 141,
-    "appointed_as": 132, "corporate_action": 129, "filed_lawsuit_against": 126, "revenue_from_country": 124,
-    "is_in_industry": 121, "divested_from": 108, "downgraded_by": 70, "earnings_released": 58,
-    "issues_debt": 42, "market_share_claim": 23, "earnings_guidance": 12, "credit_rating": 11,
+    "operates_in_country": 1923,
+    "listed_on": 1497,
+    "competes_with": 1263,
+    "partner_of": 1137,
+    "analyst_rating": 949,
+    "has_executive": 801,
+    "headquartered_in": 780,
+    "is_in_sector": 683,
+    "regulates": 586,
+    "produces": 496,
+    "investment_in": 454,
+    "price_target": 436,
+    "supplier_of": 263,
+    "employs": 215,
+    "acquired_by": 215,
+    "sentiment_signal": 171,
+    "reported_revenue_of": 168,
+    "owns_stake_in": 158,
+    "board_member_of": 157,
+    "subsidiary_of": 141,
+    "appointed_as": 132,
+    "corporate_action": 129,
+    "filed_lawsuit_against": 126,
+    "revenue_from_country": 124,
+    "is_in_industry": 121,
+    "divested_from": 108,
+    "downgraded_by": 70,
+    "earnings_released": 58,
+    "issues_debt": 42,
+    "market_share_claim": 23,
+    "earnings_guidance": 12,
+    "credit_rating": 11,
 }
 TOTAL_RELATIONS = sum(PREDICATE_FREQ.values())
 
@@ -333,7 +357,7 @@ def main() -> int:
     # Volume-weighted: weight each predicate's measured rate by its real frequency
     num = den = 0.0
     eff_sup = eff_n = 0.0
-    for pred, (s, npred, pp) in per_pred.items():
+    for pred, (_s, npred, pp) in per_pred.items():
         if npred == 0 or pred not in PREDICATE_FREQ:
             continue
         w = PREDICATE_FREQ[pred]
@@ -347,8 +371,10 @@ def main() -> int:
     # the raw judged n (conservative — we judged ~12/predicate, not thousands).
     _, n_total, _ = rate(results)
     lo_vw, hi_vw = wilson_ci(round(vw * n_total), n_total)
-    print(f"VOLUME-WEIGHTED support (weighted by relations-table frequency): {vw:.1%} "
-          f"(approx 95% CI {lo_vw:.1%}-{hi_vw:.1%}, n_eff={n_total})")
+    print(
+        f"VOLUME-WEIGHTED support (weighted by relations-table frequency): {vw:.1%} "
+        f"(approx 95% CI {lo_vw:.1%}-{hi_vw:.1%}, n_eff={n_total})"
+    )
 
     # Prior verdict cross-tab (where Flash and Qwen disagree)
     print("\n---- PRIOR (Flash, 1-snippet) vs NOW (Qwen, all-snippet) ----")

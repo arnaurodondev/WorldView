@@ -10,6 +10,7 @@ Prerequisites:
     pip install httpx
     Platform must be running (docker compose up)
 """
+
 import asyncio
 import json
 import statistics
@@ -52,13 +53,13 @@ class Result(NamedTuple):
 def get_token() -> str:
     import urllib.request
 
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 — fixed local dev-login endpoint (BASE), not user input.
         f"{BASE}/v1/auth/dev-login",
         data=json.dumps({"email": "dev@worldview.local"}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 — fixed local dev-login endpoint.
         return json.loads(resp.read())["access_token"]
 
 
@@ -67,26 +68,20 @@ async def timed_get(client: httpx.AsyncClient, endpoint: str, headers: dict) -> 
     try:
         r = await client.get(f"{BASE}{endpoint}", headers=headers, timeout=90)
         return Result(endpoint, time.monotonic() - t0, r.status_code)
-    except Exception as exc:
+    except Exception:
         return Result(endpoint, time.monotonic() - t0, -1)
 
 
-async def timed_post(
-    client: httpx.AsyncClient, endpoint: str, headers: dict, body: dict
-) -> Result:
+async def timed_post(client: httpx.AsyncClient, endpoint: str, headers: dict, body: dict) -> Result:
     t0 = time.monotonic()
     try:
-        r = await client.post(
-            f"{BASE}{endpoint}", headers=headers, json=body, timeout=90
-        )
+        r = await client.post(f"{BASE}{endpoint}", headers=headers, json=body, timeout=90)
         return Result(endpoint, time.monotonic() - t0, r.status_code)
-    except Exception as exc:
+    except Exception:
         return Result(endpoint, time.monotonic() - t0, -1)
 
 
-async def simulate_one_dashboard_load(
-    client: httpx.AsyncClient, headers: dict
-) -> list[Result]:
+async def simulate_one_dashboard_load(client: httpx.AsyncClient, headers: dict) -> list[Result]:
     """Fire all dashboard-page concurrent requests, mirroring real browser behavior."""
     tasks = [
         # Tier 1: fast reads served from Valkey cache
@@ -103,9 +98,7 @@ async def simulate_one_dashboard_load(
             {"instrument_ids": INSTRUMENT_IDS},
         ),
         # Tier 4: intelligence/KG per-entity (pick first entity)
-        timed_get(
-            client, f"/v1/entities/{ENTITY_IDS[0]}/intelligence-bundle", headers
-        ),
+        timed_get(client, f"/v1/entities/{ENTITY_IDS[0]}/intelligence-bundle", headers),
     ]
     return await asyncio.gather(*tasks)
 
@@ -215,9 +208,7 @@ async def run_stress_test() -> dict:
 
     results = {}
 
-    async with httpx.AsyncClient(
-        limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)
-    ) as client:
+    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)) as client:
         # ---- Cold run (single load, no concurrent pressure) ----
         print("Phase 1: Cold single load...")
         cold_results = await simulate_one_dashboard_load(client, headers)
@@ -227,7 +218,6 @@ async def run_stress_test() -> dict:
 
         print("  Cold latencies:")
         for ep, rlist in sorted(cold_by_ep.items()):
-
             lats = [r.latency for r in rlist]
             statuses = [r.status for r in rlist]
             print(f"    {ep}: {lats[0]:.3f}s  status={statuses[0]}")
@@ -375,9 +365,7 @@ def identify_bottleneck(results: dict) -> str:
         lines.append(f"PRIMARY BOTTLENECK: {tier}")
 
     if errors > 0:
-        lines.append(
-            f"ERRORS: {errors}/{total} requests returned 4xx/5xx/timeout on {worst_ep}"
-        )
+        lines.append(f"ERRORS: {errors}/{total} requests returned 4xx/5xx/timeout on {worst_ep}")
 
     return "\n".join(lines)
 
@@ -395,7 +383,8 @@ def format_report(results: dict) -> str:
         "# Dashboard Stress Test Report",
         "**Date**: 2026-06-08",
         f"**Concurrent users**: {n_users}",
-        f"**Instrument IDs tested**: {len(INSTRUMENT_IDS)} ({', '.join(['TSLA','AMZN','GOOGL','META','JPM','NFLX','AAPL'])})",
+        f"**Instrument IDs tested**: {len(INSTRUMENT_IDS)} "
+        f"({', '.join(['TSLA', 'AMZN', 'GOOGL', 'META', 'JPM', 'NFLX', 'AAPL'])})",
         "",
         "## 1. Baseline Latency (single user)",
         "",

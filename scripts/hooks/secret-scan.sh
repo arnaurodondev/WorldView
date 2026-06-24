@@ -67,7 +67,9 @@ while IFS= read -r m; do report "stripe-sk" "$m"; done < <(printf '%s\n' "$added
 # 2. Generic high-entropy values following common secret-name patterns.
 #    Catches the DeepInfra-style 32+ char alphanumerics that don't have a vendor prefix.
 #    We require the assignment LHS to look like a secret name to keep false-positives low.
-suspect_pattern='([A-Z][A-Z0-9_]*)?(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|AUTH_KEY)[[:space:]]*[=:][[:space:]]*["'\'']?([A-Za-z0-9_+/=-]{16,})'
+# Value class includes "." so dotted keys (e.g. EODHD "6a3b...dec9.8906...") are not
+# truncated below the 16-char threshold and slip through.
+suspect_pattern='([A-Z][A-Z0-9_]*)?(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|AUTH_KEY)[[:space:]]*[=:][[:space:]]*["'\'']?([A-Za-z0-9_+/=.-]{16,})'
 while IFS= read -r line; do
   # Skip placeholder / empty / example values.
   value=$(printf '%s\n' "$line" | sed -E "s/.*[=:][[:space:]]*[\"']?//" | sed -E 's/[\"'\'']?$//')

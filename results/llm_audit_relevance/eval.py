@@ -9,6 +9,8 @@ Usage:
   DEEPINFRA_API_KEY=... python eval.py relevance
   DEEPINFRA_API_KEY=... python eval.py resolution
 """
+# ruff: noqa: T201 — this is a standalone CLI eval script; stdout print is the intended UI.
+
 from __future__ import annotations
 
 import json
@@ -32,15 +34,17 @@ def call(model: str, system: str, user: str, reasoning: str | None, max_tokens: 
     if reasoning is not None:
         body["reasoning_effort"] = reasoning
     data = json.dumps(body).encode()
-    req = urllib.request.Request(URL, data=data, headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
+    req = urllib.request.Request(  # noqa: S310 — fixed https DeepInfra endpoint, not user input.
+        URL, data=data, headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
+    )
     t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 — fixed https DeepInfra endpoint.
             resp = json.load(r)
         dt = time.time() - t0
         content = resp["choices"][0]["message"].get("content") or ""
         return content.strip(), dt
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"__ERR__ {e}", time.time() - t0
 
 
@@ -53,18 +57,20 @@ def parse_json(txt: str) -> dict | None:
         return None
     try:
         return json.loads(txt[s : e + 1])
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
 RELEVANCE_SYSTEM = (
     "You are a financial news relevance assessor. Rate the market impact of this news article from 0.0 to 1.0.\n"
     "0.0 = completely irrelevant (celebrity news, sports, weather)\n0.3 = mildly relevant (broad economy, far sector)\n"
-    "0.6 = moderately relevant (sector news, indirect exposure)\n0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
+    "0.6 = moderately relevant (sector news, indirect exposure)\n"
+    "0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
     "1.0 = critical (halted trading, major earnings miss, bankruptcy)\n"
     "If the title is absent, vague, or ambiguous, return score 0.3 as a conservative default.\n"
     'Also classify the market sentiment: "positive","negative","neutral","mixed".\n'
-    'Respond with ONLY valid JSON: {"score": <float 0.0-1.0>, "reason": "<max 10 words>", "sentiment": "positive"|"negative"|"neutral"|"mixed"}'
+    'Respond with ONLY valid JSON: {"score": <float 0.0-1.0>, "reason": "<max 10 words>", '
+    '"sentiment": "positive"|"negative"|"neutral"|"mixed"}'
 )
 
 # (title, baseline_qwen3.5-9b_score, baseline_sentiment) — from live nlp_db
@@ -74,7 +80,7 @@ RELEVANCE_SAMPLE = [
     ("Palantir CEO Warns AI Could Supercharge Wealth Inequality", 0.6, "negative"),
     ("Why Uranium Energy Stock Is Plummeting Again Today", 0.9, "negative"),
     ("Airline profits forecast to halve in 2026 as Middle East conflict, fuel costs weigh", 0.6, "negative"),
-    ("Jim Cramer on Adobe: “I Don’t Want You in It”", 0.6, "negative"),
+    ('Jim Cramer on Adobe: "I Don\'t Want You in It"', 0.6, "negative"),
     ("12 Months From Now, Will You Wish You'd Bought This Industrial Stock?", 0.3, "neutral"),
     ("Alphabet (GOOGL): A Must-Buy Stock with the Strongest 1Q2026 Earnings Beats", 0.9, "positive"),
     ("The difference between on-prem AI vs. data centers", 0.3, "neutral"),
@@ -82,7 +88,7 @@ RELEVANCE_SAMPLE = [
     ("$ADMA Fraud Notice: ADMA Biologics Accused of Securities Fraud over Channel Stuffing", 0.9, "negative"),
     ("Visa plugs its payment network into ChatGPT, letting AI agents shop and pay for users", 0.6, "positive"),
     ("New Ownership of PostalAnnex in San Jose Brings Fresh Energy to the Business", 0.3, "neutral"),
-    ("Apple Inc. (AAPL) Is A Top Stock In Ken Griffin’s Portfolio", 0.6, "positive"),
+    ("Apple Inc. (AAPL) Is A Top Stock In Ken Griffin's Portfolio", 0.6, "positive"),
     ("Western Digital Stock Skyrockets 185% YTD: Is More Growth on the Horizon?", 0.6, "positive"),
     ("U.S. Bancorp Names Brian Mauney Head of Investor Relations", 0.6, "neutral"),
     ("Nvidia Says Anthropic, OpenAI Among Users of New Vera Chip", 0.6, "neutral"),
@@ -163,13 +169,21 @@ def run_relevance() -> None:
                 continue
             try:
                 sc = float(obj["score"])
-            except Exception:  # noqa: BLE001
+            except Exception:
                 empties += 1
                 continue
             score_err.append(abs(sc - base_score))
             if str(obj.get("sentiment", "")).lower() == base_sent:
                 sent_match += 1
-            rows.append({"title": title, "score": sc, "base": base_score, "sentiment": obj.get("sentiment"), "base_sent": base_sent})
+            rows.append(
+                {
+                    "title": title,
+                    "score": sc,
+                    "base": base_score,
+                    "sentiment": obj.get("sentiment"),
+                    "base_sent": base_sent,
+                }
+            )
         n = len(RELEVANCE_SAMPLE)
         out[label] = {
             "model": model,
@@ -182,8 +196,10 @@ def run_relevance() -> None:
             "lat_mean": round(sum(lats) / len(lats), 2),
             "rows": rows,
         }
-        print(f"[relevance] {label}: empties={empties} mae={out[label]['mae_vs_baseline_score']} "
-              f"sent_agree={out[label]['sentiment_agree_pct']}% p50={out[label]['lat_p50']}s")
+        print(
+            f"[relevance] {label}: empties={empties} mae={out[label]['mae_vs_baseline_score']} "
+            f"sent_agree={out[label]['sentiment_agree_pct']}% p50={out[label]['lat_p50']}s"
+        )
     with open(os.path.join(os.path.dirname(__file__), "relevance_results.json"), "w") as f:
         json.dump(out, f, indent=2)
 
@@ -214,15 +230,23 @@ def run_resolution() -> None:
         n = len(RES_SAMPLE)
         correct = tp + tn
         out[label] = {
-            "model": model, "reasoning": reff, "n": n, "empties": empties,
+            "model": model,
+            "reasoning": reff,
+            "n": n,
+            "empties": empties,
             "accuracy_vs_weaklabel": round(100 * correct / (n - empties), 1) if (n - empties) else None,
-            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
             "lat_p50": round(sorted(lats)[len(lats) // 2], 2),
             "lat_mean": round(sum(lats) / len(lats), 2),
             "rows": rows,
         }
-        print(f"[resolution] {label}: acc={out[label]['accuracy_vs_weaklabel']}% "
-              f"tp={tp} fp={fp} tn={tn} fn={fn} empties={empties} p50={out[label]['lat_p50']}s")
+        print(
+            f"[resolution] {label}: acc={out[label]['accuracy_vs_weaklabel']}% "
+            f"tp={tp} fp={fp} tn={tn} fn={fn} empties={empties} p50={out[label]['lat_p50']}s"
+        )
     with open(os.path.join(os.path.dirname(__file__), "resolution_results.json"), "w") as f:
         json.dump(out, f, indent=2)
 

@@ -6,6 +6,8 @@ unknown persons/orgs, which poisons the KG). Judge = DeepSeek-V4-Flash scores ea
 description for (a) hallucination risk and (b) overall quality on a 1-5 scale.
 READ-ONLY. Calls DeepInfra directly.
 """
+# ruff: noqa: T201 — this is a standalone CLI eval script; stdout print is the intended UI.
+
 from __future__ import annotations
 
 import json
@@ -31,16 +33,16 @@ Plain text only, exactly 2-3 sentences."""
 SAMPLE = [
     ("Qatar Investment Authority", "organization"),
     ("Megaspeed International", "organization"),  # obscure / likely unknown
-    ("Jordan Klein", "person"),                   # obscure person
-    ("Rafael Mattje", "person"),                  # obscure person
-    ("Derek Yan", "person"),                      # obscure person (prod said 'footballer')
-    ("Braidwell LP", "organization"),             # obscure fund
-    ("Andrew Spicehandler", "person"),            # obscure person
+    ("Jordan Klein", "person"),  # obscure person
+    ("Rafael Mattje", "person"),  # obscure person
+    ("Derek Yan", "person"),  # obscure person (prod said 'footballer')
+    ("Braidwell LP", "organization"),  # obscure fund
+    ("Andrew Spicehandler", "person"),  # obscure person
     ("Gurgaon", "place"),
-    ("American Industry", "unknown"),             # vague concept
-    ("Culper Research", "organization"),          # niche short-seller
-    ("EAA Partners", "organization"),             # obscure
-    ("Lewis Howes", "person"),                    # non-finance person
+    ("American Industry", "unknown"),  # vague concept
+    ("Culper Research", "organization"),  # niche short-seller
+    ("EAA Partners", "organization"),  # obscure
+    ("Lewis Howes", "person"),  # non-finance person
 ]
 
 ARMS = [
@@ -52,18 +54,25 @@ JUDGE = "deepseek-ai/DeepSeek-V4-Flash"
 
 
 def call(model, system, user, reasoning, max_tokens=400):
-    body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": 0.0, "max_tokens": max_tokens}
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+    }
     if reasoning is not None:
         body["reasoning_effort"] = reasoning
-    req = urllib.request.Request(URL, data=json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
+    req = urllib.request.Request(  # noqa: S310 — fixed https DeepInfra endpoint, not user input.
+        URL,
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+    )
     t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 — fixed https DeepInfra endpoint.
             resp = json.load(r)
         return (resp["choices"][0]["message"].get("content") or "").strip(), time.time() - t0
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"__ERR__ {e}", time.time() - t0
 
 
@@ -81,8 +90,8 @@ def judge(name, etype, desc):
     out, _ = call(JUDGE, JUDGE_SYS, user, None, 200)
     s, e = out.find("{"), out.rfind("}")
     try:
-        return json.loads(out[s:e + 1])
-    except Exception:  # noqa: BLE001
+        return json.loads(out[s : e + 1])
+    except Exception:
         return {"hallucination": None, "quality": None, "note": out[:60]}
 
 
@@ -108,16 +117,20 @@ def main():
                 qual.append(j["quality"])
             rows.append({"name": name, "desc": d[:160], "judge": j})
         results[label] = {
-            "model": model, "reasoning": reff, "n": len(SAMPLE),
+            "model": model,
+            "reasoning": reff,
+            "n": len(SAMPLE),
             "mean_hallucination": round(sum(hall) / len(hall), 2) if hall else None,
             "severe_hallucinations": sum(1 for h in hall if h == 2),
             "mean_quality": round(sum(qual) / len(qual), 2) if qual else None,
             "lat_p50": round(sorted(lats)[len(lats) // 2], 2),
             "rows": rows,
         }
-        print(f"[desc] {label}: hallu={results[label]['mean_hallucination']} "
-              f"severe={results[label]['severe_hallucinations']} qual={results[label]['mean_quality']} "
-              f"p50={results[label]['lat_p50']}s")
+        print(
+            f"[desc] {label}: hallu={results[label]['mean_hallucination']} "
+            f"severe={results[label]['severe_hallucinations']} qual={results[label]['mean_quality']} "
+            f"p50={results[label]['lat_p50']}s"
+        )
     with open(os.path.join(os.path.dirname(__file__), "desc_results.json"), "w") as f:
         json.dump(results, f, indent=2)
 

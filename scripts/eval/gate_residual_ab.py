@@ -41,7 +41,7 @@ from pathlib import Path
 
 # Import the sibling harness (same directory) for assembly / run / judge / clients.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import extraction_quality_eval as H  # noqa: E402
+import extraction_quality_eval as H  # noqa: N812 — `H` (harness) alias used pervasively below for brevity.
 
 # Import the EXACT production gate so we measure what the pipeline now does.
 _REPO = Path(__file__).resolve().parents[1]
