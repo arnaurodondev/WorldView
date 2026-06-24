@@ -25,6 +25,8 @@ def _make_config() -> ArticleConsumerConfig:
     config.bronze_bucket = "worldview-bronze"
     config.silver_bucket = _SILVER_BUCKET
     config.num_perm = 128
+    # PLAN-0113 FIX-2: static-membership identity (empty = dynamic default).
+    config.group_instance_id = ""
     return config  # type: ignore[return-value]
 
 

@@ -102,6 +102,8 @@ class TestLSHOrderingConsumer:
         config.bronze_bucket = "worldview-bronze"
         config.silver_bucket = "worldview-silver"
         config.num_perm = 128
+        # PLAN-0113 FIX-2: static-membership identity (empty = dynamic default).
+        config.group_instance_id = ""
 
         # Build session with proper async context manager
         session = AsyncMock()

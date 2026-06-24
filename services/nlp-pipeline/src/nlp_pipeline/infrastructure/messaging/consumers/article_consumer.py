@@ -402,6 +402,22 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     _dedup_prefix: str = "nlp:dedup:article_consumer"
     _dedup_ttl_seconds: ClassVar[int] = 86400
 
+    # ------------------------------------------------------------------
+    # Persistent-retry attempt counter (transient-failure resilience).
+    #
+    # With ``enable_persistent_retry=True`` the base retry path needs a DURABLE
+    # attempt count keyed by (group_id, event_id).  We reuse the Valkey dedup
+    # client (``_dedup_client``) as the durable store: an INCR per failure plus a
+    # TTL so the key self-expires once the doc recovers or dead-letters.  Without
+    # this, the count resets to 0 on every redelivery and a transiently-failing
+    # doc loops until ``dead_letter_cap`` crashes the consumer instead of
+    # dead-lettering cleanly at ``max_retries``.
+    # ------------------------------------------------------------------
+    _RETRY_ATTEMPT_PREFIX: ClassVar[str] = "nlp:retry:article_consumer"
+    # TTL long enough to outlive a redelivery backoff cycle but short enough that
+    # the counter does not linger forever after the doc succeeds / dead-letters.
+    _RETRY_ATTEMPT_TTL_SECONDS: ClassVar[int] = 86400
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -446,6 +462,76 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         return _NoOpUnitOfWork()  # type: ignore[return-value]
+
+    def _retry_attempt_key(self, event_id: str) -> str:
+        """Build the Valkey key for *event_id*'s persistent attempt counter.
+
+        Namespaced by the consumer group so two consumer groups replaying the
+        same event id never share (and corrupt) each other's count.
+        """
+        return f"{self._RETRY_ATTEMPT_PREFIX}:{self._config.group_id}:{event_id}"
+
+    async def _get_attempt_count(self, event_id: str) -> int:
+        """Return the number of FAILED attempts already recorded for *event_id*.
+
+        Reads the durable count from Valkey.  ``0`` means no prior failure.
+
+        Fail-closed semantics: if there is NO Valkey client, or the read raises
+        (Valkey down), we cannot trust the in-memory count — which would reset to
+        0 on every redelivery and loop the doc forever.  Returning
+        ``max_retries`` instead forces the base retry path to treat the doc as
+        exhausted and route it to the DLQ rather than retry indefinitely.
+        """
+        if self._dedup_client is None:
+            return self._config.max_retries
+        key = self._retry_attempt_key(event_id)
+        try:
+            raw = await self._dedup_client.get(key)
+        except Exception:
+            # Valkey unreachable: fail closed toward the DLQ (see docstring).
+            logger.warning(
+                "article_consumer.retry_count_read_failed",
+                event_id=event_id,
+                key=key,
+                exc_info=True,
+            )
+            return self._config.max_retries
+        if raw is None:
+            return 0
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            # Corrupt value — treat as exhausted rather than risk an infinite loop.
+            logger.warning(
+                "article_consumer.retry_count_corrupt",
+                event_id=event_id,
+                key=key,
+                raw=raw,
+            )
+            return self._config.max_retries
+
+    async def _record_attempt(self, event_id: str, attempt: int, error: BaseException) -> None:
+        """Persist the incremented attempt count for *event_id* (best-effort).
+
+        Uses an atomic INCR plus a refreshed TTL so the counter survives
+        redelivery but self-expires after recovery / DLQ.  Write failures are
+        swallowed (logged only): a crash here would take down the consumer, and
+        the base retry path already records the in-memory attempt number.
+        """
+        if self._dedup_client is None:
+            return
+        key = self._retry_attempt_key(event_id)
+        try:
+            await self._dedup_client.incr(key)
+            await self._dedup_client.expire(key, self._RETRY_ATTEMPT_TTL_SECONDS)
+        except Exception:
+            logger.warning(
+                "article_consumer.retry_count_write_failed",
+                event_id=event_id,
+                attempt=attempt,
+                key=key,
+                exc_info=True,
+            )
 
     # ── Task #14: bounded-concurrency poll loop ─────────────────────────────────
     #

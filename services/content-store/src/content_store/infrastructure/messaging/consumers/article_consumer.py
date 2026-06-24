@@ -126,6 +126,9 @@ class ArticleConsumerConfig:
         self.bronze_bucket = settings.minio_bronze_bucket
         self.silver_bucket = settings.minio_silver_bucket
         self.num_perm = settings.minhash_num_perm
+        # PLAN-0113 FIX-2: opt-in Kafka static-membership identity (KIP-345/BP-703).
+        # Empty string = dynamic membership (no-op default).
+        self.group_instance_id = settings.kafka_article_consumer_instance_id
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -174,6 +177,8 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             bootstrap_servers=config.bootstrap_servers,
             group_id=config.group_id,
             topics=[config.input_topic],
+            # PLAN-0113 FIX-2: static-membership identity (empty = dynamic, no-op).
+            group_instance_id=config.group_instance_id,
         )
         super().__init__(consumer_config)
         self._app_config = config

@@ -48,6 +48,16 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _RETRIEVAL_TIMEOUT = 5.0  # seconds per task
 _MAX_GRAPH_ENTITIES = 3  # cap for egocentric + contradiction fetches
 
+# Relation/graph legs use a unit (no-op) trust multiplier to avoid DOUBLE-COUNTING
+# source trust. A relation's `confidence` is the PLAN-0109 Beta posterior P(true),
+# which ALREADY folds in graded source_trust_weights, syndication corroboration and
+# extraction_confidence. Passing it through TrustScorer.score("relation") would
+# re-apply source authority (+ default corroboration/extraction priors) a SECOND
+# time, shrinking already-trust-folded relation scores. Holding trust_weight at 1.0
+# keeps trust entering exactly once — inside the confidence posterior — so a
+# relation's fusion_score reduces to confidence * recency * 1.0.
+_RELATION_TRUST_WEIGHT = 1.0
+
 # PLAN-0111 B-4: conservative cosine-similarity floor for the PURE-ANN chunk leg.
 # Universal chunk embedding (B-1/B-2) made the LIGHT tier — skewed to thin
 # ticker-news stubs — semantically retrievable. To stop near-orthogonal stub hits
@@ -346,7 +356,9 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.relation,
                     text=text,
                     score=r.confidence,
-                    trust_weight=self._trust_scorer.score(source_type="relation"),
+                    # Unit multiplier: trust already folded into r.confidence (Beta
+                    # posterior). See _RELATION_TRUST_WEIGHT — no second trust multiply.
+                    trust_weight=_RELATION_TRUST_WEIGHT,
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -382,7 +394,9 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.relation,
                     text=text,
                     score=float(edge.get("confidence", 0.5)),
-                    trust_weight=self._trust_scorer.score(source_type="relation"),
+                    # Unit multiplier: edge confidence is the same Beta posterior as a
+                    # relation. See _RELATION_TRUST_WEIGHT — no second trust multiply.
+                    trust_weight=_RELATION_TRUST_WEIGHT,
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
