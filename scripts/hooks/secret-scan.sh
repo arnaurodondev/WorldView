@@ -15,6 +15,25 @@
 
 set -euo pipefail
 
+# ── Filename guard ───────────────────────────────────────────────────────────
+# Block staged env/backup/key FILES by name, before scanning content. The
+# 2026-06 docker.env.bak incident slipped the *.env .gitignore (the .bak suffix)
+# and its DeepInfra keys are bare 32-char hex (no provider prefix), so a name
+# check is the reliable catch. Templates (*.env.example / *.env.template) pass.
+staged_names=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+if [ -n "$staged_names" ]; then
+  bad_files=$(printf '%s\n' "$staged_names" \
+    | grep -iE '(/docker\.env$|\.env\.bak$|\.env\.local$|/configs/.*\.env\.[^/]+$|\.bak$|\.orig$|\.pem$|\.p12$|\.pfx$|(^|/)id_rsa$|\.keytab$)' \
+    | grep -ivE '\.env\.example$|\.env\.template$|\.env\.sample$' || true)
+  if [ -n "$bad_files" ]; then
+    printf '\n\033[31mBLOCKED:\033[0m env/secret/backup file(s) staged for commit:\n' >&2
+    printf '  %s\n' $bad_files >&2
+    printf 'These must never be committed. Remove from the index (git rm --cached <f>),\n' >&2
+    printf 'add to .gitignore, and ROTATE any credentials they contained.\n\n' >&2
+    exit 1
+  fi
+fi
+
 # Staged additions only — diff format puts a "+" at the start of new lines.
 staged=$(git diff --cached -U0 --diff-filter=ACM 2>/dev/null || true)
 [ -z "$staged" ] && exit 0

@@ -24,6 +24,18 @@ env/
 # Template files (*.env.example) ARE committed and tracked.
 services/*/configs/*.env
 apps/*/configs/*.env
+# Backup/local env variants (docker.env.bak, docker.env.local, ...). The trailing
+# .bak/.local extension slips past the *.env patterns above — that is exactly how a
+# secret-laden docker.env.bak got committed once — so ban every *.env.<suffix> here.
+services/*/configs/*.env.*
+apps/*/configs/*.env.*
+infra/**/*.env.*
+# Editor/CLI backup copies anywhere (they usually clone a secret-laden source file).
+*.bak
+*.orig
+# Re-include the tracked templates (MUST come after the bans above).
+!*.env.example
+!*.env.template
 
 # IDE
 .idea/
