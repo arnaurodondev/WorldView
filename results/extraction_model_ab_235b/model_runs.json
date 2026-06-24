@@ -1,0 +1,1169 @@
+[
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 27.048,
+    "tokens_in": 4177,
+    "tokens_out": 509,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032, with an option for initial purchasers to buy up to an additional $41.25M of notes within 13 days of issuance.\",\n      \"entity_refs\": [\n        \"NeoGenomics\",\n        \"NEO\",\n        \"NEOGENOMICS\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"DEBT_CHANGE\",\n      \"polarity\": \"neutral\",\n      \"evidence_text\": \"The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028.\",\n      \"confidence\": 0.90\n    },\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"HEADCOUNT_CHANGE\",\n      \"polarity\": \"neutral\",\n      \"evidence_text\": \"Remaining proceeds will be used for general corporate purposes.\",\n      \"confidence\": 0.50\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"NeoGenomics\",\n      \"predicate\": \"issues_debt\",\n      \"object_ref\": \"NEOGENOMICS\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"NeoGenomics\",\n      \"predicate\": \"corporate_action\",\n      \"object_ref\": \"NEOGENOMICS\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032, with an option for initial purchasers to buy up to an additional $41.25M of notes within 13 days of issuance.",
+          "entity_refs": [
+            "NeoGenomics",
+            "NEO",
+            "NEOGENOMICS"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "neutral",
+          "evidence_text": "The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028.",
+          "confidence": 0.9
+        },
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "HEADCOUNT_CHANGE",
+          "polarity": "neutral",
+          "evidence_text": "Remaining proceeds will be used for general corporate purposes.",
+          "confidence": 0.5
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "NeoGenomics",
+          "predicate": "issues_debt",
+          "object_ref": "NEOGENOMICS",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "NeoGenomics",
+          "predicate": "corporate_action",
+          "object_ref": "NEOGENOMICS",
+          "confidence": 0.9,
+          "evidence_text": "NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 2,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 49.34,
+    "tokens_in": 4066,
+    "tokens_out": 740,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"FDA 510(k) clearance granted for MEDIFLY Maggots in wound debridement\",\n      \"entity_refs\": [\n        \"Cuprina Pte. Ltd.\",\n        \"U.S. Food and Drug Administration\",\n        \"FDA\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Cuprina Pte. Ltd.\",\n      \"claim_type\": \"PRODUCT_LAUNCH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Cuprina Pte. Ltd.\",\n      \"predicate\": \"subsidiary_of\",\n      \"object_ref\": \"U.S.\",\n      \"confidence\": 0.50,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"U.S. Food and Drug Administration\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Cuprina Pte. Ltd.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"FDA\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Cuprina Pte. Ltd.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "FDA 510(k) clearance granted for MEDIFLY Maggots in wound debridement",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration",
+            "FDA"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Cuprina Pte. Ltd.",
+          "claim_type": "PRODUCT_LAUNCH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Cuprina Pte. Ltd.",
+          "predicate": "subsidiary_of",
+          "object_ref": "U.S.",
+          "confidence": 0.5,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "U.S. Food and Drug Administration",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "FDA",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 3
+  },
+  {
+    "doc_id": "019ed083-d324-7f8c-b21a-5f17f0d2004e",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 92.127,
+    "tokens_in": 3638,
+    "tokens_out": 1283,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"Fox Corporation announced its acquisition of Roku, Inc. for $22 billion\",\n      \"entity_refs\": [\"Fox Corporation\", \"Roku, Inc.\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Exxon Mobil Corporation reported financial results affected by declining oil prices\",\n      \"entity_refs\": [\"Exxon Mobil Corporation\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Shares of Exxon Mobil Corporation (XOM) fell 4.1% as declining oil prices following the U.S.-Iran peace agreement weighed on the energy sector.\",\n      \"confidence\": 0.85\n    },\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Royal Caribbean reported financial performance influenced by lower oil prices\",\n      \"entity_refs\": [\"Royal Caribbean\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Royal Caribbean (RCL) rose 6.6% as lower oil prices following the U.S.-Iran peace deal boosted sentiment for cruise operators.\",\n      \"confidence\": 0.85\n    },\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Western Digital Corporation reported results amid a technology stock rally\",\n      \"entity_refs\": [\"Western Digital Corporation\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Western Digital Corporation (WDC) shares surged 16.1% amid a broad rally in technology stocks.\",\n      \"confidence\": 0.85\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Exxon Mobil Corporation\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.8,\n      \"evidence_text\": \"Shares of Exxon Mobil Corporation (XOM) fell 4.1% as declining oil prices following the U.S.-Iran peace agreement weighed on the energy sector.\"\n    },\n    {\n      \"entity_ref\": \"Fox Corporation\",\n      \"claim_type\": \"DEBT_CHANGE\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.75,\n      \"evidence_text\": \"Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.\"\n    },\n    {\n      \"entity_ref\": \"Royal Caribbean\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.8,\n      \"evidence_text\": \"Royal Caribbean (RCL) rose 6.6% as lower oil prices following the U.S.-Iran peace deal boosted sentiment for cruise operators.\"\n    },\n    {\n      \"entity_ref\": \"Western Digital Corporation\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.8,\n      \"evidence_text\": \"Western Digital Corporation (WDC) shares surged 16.1% amid a broad rally in technology stocks.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Fox Corporation\",\n      \"predicate\": \"acquired_by\",\n      \"object_ref\": \"Roku, Inc.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Zacks Investment Research\",\n      \"predicate\": \"analyst_rating\",\n      \"object_ref\": \"Exxon Mobil Corporation\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Exxon Mobil Corporation (XOM) : Free Stock Analysis Report\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Zacks Investment Research\",\n      \"predicate\": \"analyst_rating\",\n      \"object_ref\": \"Royal Caribbean\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Royal Caribbean Cruises Ltd. (RCL) : Free Stock Analysis Report\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Zacks Investment Research\",\n      \"predicate\": \"analyst_rating\",\n      \"object_ref\": \"Western Digital Corporation\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Western Digital Corporation (WDC) : Free Stock Analysis Report\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Zacks Investment Research\",\n      \"predicate\": \"analyst_rating\",\n      \"object_ref\": \"Fox Corporation\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Fox Corporation (FOX) : Free Stock Analysis Report\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Zacks Investment Research\",\n      \"predicate\": \"analyst_rating\",\n      \"object_ref\": \"Roku, Inc.\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Roku, Inc. (ROKU) : Free Stock Analysis Report\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "Fox Corporation announced its acquisition of Roku, Inc. for $22 billion",
+          "entity_refs": [
+            "Fox Corporation",
+            "Roku, Inc."
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Exxon Mobil Corporation reported financial results affected by declining oil prices",
+          "entity_refs": [
+            "Exxon Mobil Corporation"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Shares of Exxon Mobil Corporation (XOM) fell 4.1% as declining oil prices following the U.S.-Iran peace agreement weighed on the energy sector.",
+          "confidence": 0.85
+        },
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Royal Caribbean reported financial performance influenced by lower oil prices",
+          "entity_refs": [
+            "Royal Caribbean"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Royal Caribbean (RCL) rose 6.6% as lower oil prices following the U.S.-Iran peace deal boosted sentiment for cruise operators.",
+          "confidence": 0.85
+        },
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Western Digital Corporation reported results amid a technology stock rally",
+          "entity_refs": [
+            "Western Digital Corporation"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Western Digital Corporation (WDC) shares surged 16.1% amid a broad rally in technology stocks.",
+          "confidence": 0.85
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Exxon Mobil Corporation",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "negative",
+          "confidence": 0.8,
+          "evidence_text": "Shares of Exxon Mobil Corporation (XOM) fell 4.1% as declining oil prices following the U.S.-Iran peace agreement weighed on the energy sector."
+        },
+        {
+          "entity_ref": "Fox Corporation",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "negative",
+          "confidence": 0.75,
+          "evidence_text": "Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks."
+        },
+        {
+          "entity_ref": "Royal Caribbean",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.8,
+          "evidence_text": "Royal Caribbean (RCL) rose 6.6% as lower oil prices following the U.S.-Iran peace deal boosted sentiment for cruise operators."
+        },
+        {
+          "entity_ref": "Western Digital Corporation",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.8,
+          "evidence_text": "Western Digital Corporation (WDC) shares surged 16.1% amid a broad rally in technology stocks."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Fox Corporation",
+          "predicate": "acquired_by",
+          "object_ref": "Roku, Inc.",
+          "confidence": 0.95,
+          "evidence_text": "Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Zacks Investment Research",
+          "predicate": "analyst_rating",
+          "object_ref": "Exxon Mobil Corporation",
+          "confidence": 0.85,
+          "evidence_text": "Exxon Mobil Corporation (XOM) : Free Stock Analysis Report",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Zacks Investment Research",
+          "predicate": "analyst_rating",
+          "object_ref": "Royal Caribbean",
+          "confidence": 0.85,
+          "evidence_text": "Royal Caribbean Cruises Ltd. (RCL) : Free Stock Analysis Report",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Zacks Investment Research",
+          "predicate": "analyst_rating",
+          "object_ref": "Western Digital Corporation",
+          "confidence": 0.85,
+          "evidence_text": "Western Digital Corporation (WDC) : Free Stock Analysis Report",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Zacks Investment Research",
+          "predicate": "analyst_rating",
+          "object_ref": "Fox Corporation",
+          "confidence": 0.85,
+          "evidence_text": "Fox Corporation (FOX) : Free Stock Analysis Report",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Zacks Investment Research",
+          "predicate": "analyst_rating",
+          "object_ref": "Roku, Inc.",
+          "confidence": 0.85,
+          "evidence_text": "Roku, Inc. (ROKU) : Free Stock Analysis Report",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 4,
+    "n_claims": 4,
+    "n_relations": 6
+  },
+  {
+    "doc_id": "019ecfb5-61dc-704b-bc84-33e69b7db5c8",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 27.071,
+    "tokens_in": 4968,
+    "tokens_out": 1137,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Globus Medical launched the ANTHEM Elbow Fracture System, DuraPro with Navigation, Verzera, and COHERE ALIF Spacer.\",\n      \"entity_refs\": [\n        \"Globus Medical\"\n      ],\n      \"valid_from\": \"2025-01-01\",\n      \"valid_to\": null,\n      \"evidence_text\": \"In 2025, the company launched ANTHEM Elbow Fracture System, a fully comprehensive plating portfolio designed to address a wide spectrum of elbow fractures. The company also launched DuraPro with Navigation, a next-generation, oscillating system designed to safeguard delicate tissue. In addition to DuraPro, it launched Verzera, a navigated high-speed drill system integrated with the ExcelsiusGPS and ExcelsiusHub system. In addition, Globus Medical expanded the Advanced Materials Science (\\\"AMS\\\") implant portfolio with the COHERE ALIF Spacer.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Globus Medical received FDA 510(k) clearances for patient-specific lumbar spacers and rods in early second-quarter 2026.\",\n      \"entity_refs\": [\n        \"Globus Medical\",\n        \"FDA\"\n      ],\n      \"valid_from\": \"2026-04-01\",\n      \"valid_to\": null,\n      \"evidence_text\": \"The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow, which can deepen account relationships and increase procedure-level pull-through over time.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Globus Medical reported R&D expenses of 4.8% of sales in Q1 2026.\",\n      \"entity_refs\": [\n        \"Globus Medical\"\n      ],\n      \"valid_from\": \"2026-04-01\",\n      \"valid_to\": null,\n      \"evidence_text\": \"In the first quarter of 2026, R&D expenses were 4.8% of sales, with management expecting it to be 5-6% of net sales for the full year, with spend ramping methodically through the year as product efforts progress.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Zacks Investment Research assigned Globus Medical a Zacks Rank #1 (Strong Buy).\",\n      \"entity_refs\": [\n        \"Globus Medical\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"GMED currently sports a Zacks Rank #1 (Strong Buy).\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Globus Medical\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Over the past year, GMED shares have surged 34.2%, outperforming the industry's 3.6% decline.\"\n    },\n    {\n      \"entity_ref\": \"Globus Medical\",\n      \"claim_type\": \"EPS_BEAT\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"In the past 30 days, GMED's EPS estimate for 2026 has moved north to $4.74.\"\n    },\n    {\n      \"entity_ref\": \"Globus Medical\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"In the first quarter of 2026, R&D expenses were 4.8% of sales, with management expecting it to be 5-6% of net sales for the full year, with spend ramping methodically through the year as product efforts progress.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Globus Medical\",\n      \"predicate\": \"produces\",\n      \"object_ref\": \"Globus Medical\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Globus Medical expanded the Advanced Materials Science (\\\"AMS\\\") implant portfolio with the COHERE ALIF Spacer.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Globus Medical\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"FDA\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow, which can deepen account relationships and increase procedure-level pull-through over time.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Globus Medical launched the ANTHEM Elbow Fracture System, DuraPro with Navigation, Verzera, and COHERE ALIF Spacer.",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": "2025-01-01",
+          "valid_to": null,
+          "evidence_text": "In 2025, the company launched ANTHEM Elbow Fracture System, a fully comprehensive plating portfolio designed to address a wide spectrum of elbow fractures. The company also launched DuraPro with Navigation, a next-generation, oscillating system designed to safeguard delicate tissue. In addition to DuraPro, it launched Verzera, a navigated high-speed drill system integrated with the ExcelsiusGPS and ExcelsiusHub system. In addition, Globus Medical expanded the Advanced Materials Science (\"AMS\") implant portfolio with the COHERE ALIF Spacer.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Globus Medical received FDA 510(k) clearances for patient-specific lumbar spacers and rods in early second-quarter 2026.",
+          "entity_refs": [
+            "Globus Medical",
+            "FDA"
+          ],
+          "valid_from": "2026-04-01",
+          "valid_to": null,
+          "evidence_text": "The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow, which can deepen account relationships and increase procedure-level pull-through over time.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Globus Medical reported R&D expenses of 4.8% of sales in Q1 2026.",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": "2026-04-01",
+          "valid_to": null,
+          "evidence_text": "In the first quarter of 2026, R&D expenses were 4.8% of sales, with management expecting it to be 5-6% of net sales for the full year, with spend ramping methodically through the year as product efforts progress.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Zacks Investment Research assigned Globus Medical a Zacks Rank #1 (Strong Buy).",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "GMED currently sports a Zacks Rank #1 (Strong Buy).",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Globus Medical",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Over the past year, GMED shares have surged 34.2%, outperforming the industry's 3.6% decline."
+        },
+        {
+          "entity_ref": "Globus Medical",
+          "claim_type": "EPS_BEAT",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "In the past 30 days, GMED's EPS estimate for 2026 has moved north to $4.74."
+        },
+        {
+          "entity_ref": "Globus Medical",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "In the first quarter of 2026, R&D expenses were 4.8% of sales, with management expecting it to be 5-6% of net sales for the full year, with spend ramping methodically through the year as product efforts progress."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Globus Medical",
+          "predicate": "produces",
+          "object_ref": "Globus Medical",
+          "confidence": 0.95,
+          "evidence_text": "Globus Medical expanded the Advanced Materials Science (\"AMS\") implant portfolio with the COHERE ALIF Spacer.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Globus Medical",
+          "predicate": "regulates",
+          "object_ref": "FDA",
+          "confidence": 0.95,
+          "evidence_text": "The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow, which can deepen account relationships and increase procedure-level pull-through over time.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 4,
+    "n_claims": 3,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecf9d-6e31-7b98-b35c-99f67b571f3a",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 16.323,
+    "tokens_in": 4331,
+    "tokens_out": 712,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Gold prices surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears.\",\n      \"entity_refs\": [\"Gold\", \"U.S dollars\", \"DXY\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Elsewhere, gold prices (XAUUSD:CUR [https://seekingalpha.com/symbol/XAUUSD:CUR]) surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"The London Bullion Market Association is considering moving its morning gold auction to an earlier time to accommodate traders in Asia.\",\n      \"entity_refs\": [\"London Bullion Market Association\", \"Gold\", \"Singapore\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"The London Bullion Market Association is said to be considering moving its morning gold auction to an earlier time to accommodate traders in Asia.\",\n      \"confidence\": 0.90\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Gold\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Elsewhere, gold prices (XAUUSD:CUR [https://seekingalpha.com/symbol/XAUUSD:CUR]) surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"London Bullion Market Association\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"gold\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The London Bullion Market Association is said to be considering moving its morning gold auction to an earlier time to accommodate traders in Asia.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"London Bullion Market Association\",\n      \"predicate\": \"headquartered_in\",\n      \"object_ref\": \"Singapore\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"she told the Asia-Pacific Precious Metal Conference in Singapore.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"gold\",\n      \"predicate\": \"reported_revenue_of\",\n      \"object_ref\": \"U.S dollars\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The LBMA Gold Price is currently set twice daily, at 10:30 a.m. and 3:00 p.m London time, in U.S dollars (DXY [https://seekingalpha.com/symbol/DXY]) on an electronic platform.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Gold prices surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears.",
+          "entity_refs": [
+            "Gold",
+            "U.S dollars",
+            "DXY"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Elsewhere, gold prices (XAUUSD:CUR [https://seekingalpha.com/symbol/XAUUSD:CUR]) surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "The London Bullion Market Association is considering moving its morning gold auction to an earlier time to accommodate traders in Asia.",
+          "entity_refs": [
+            "London Bullion Market Association",
+            "Gold",
+            "Singapore"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "The London Bullion Market Association is said to be considering moving its morning gold auction to an earlier time to accommodate traders in Asia.",
+          "confidence": 0.9
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Gold",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Elsewhere, gold prices (XAUUSD:CUR [https://seekingalpha.com/symbol/XAUUSD:CUR]) surged nearly 3% to a one-week high of $4,334/oz on Monday as the U.S.-Iran peace deal cooled oil prices and eased Fed rate hike fears."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "London Bullion Market Association",
+          "predicate": "regulates",
+          "object_ref": "gold",
+          "confidence": 0.95,
+          "evidence_text": "The London Bullion Market Association is said to be considering moving its morning gold auction to an earlier time to accommodate traders in Asia.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "London Bullion Market Association",
+          "predicate": "headquartered_in",
+          "object_ref": "Singapore",
+          "confidence": 0.7,
+          "evidence_text": "she told the Asia-Pacific Precious Metal Conference in Singapore.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "gold",
+          "predicate": "reported_revenue_of",
+          "object_ref": "U.S dollars",
+          "confidence": 0.95,
+          "evidence_text": "The LBMA Gold Price is currently set twice daily, at 10:30 a.m. and 3:00 p.m London time, in U.S dollars (DXY [https://seekingalpha.com/symbol/DXY]) on an electronic platform.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 1,
+    "n_relations": 3
+  },
+  {
+    "doc_id": "019ecfc5-7e08-72f5-be6c-225e140eefa9",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 9.459,
+    "tokens_in": 3184,
+    "tokens_out": 218,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"STMicroelectronics launched a $1.5 billion offering of senior unsecured convertible bonds\",\n      \"entity_refs\": [\n        \"STMicroelectronics\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"STMicroelectronics\",\n      \"predicate\": \"issues_debt\",\n      \"object_ref\": \"STMicroelectronics\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "STMicroelectronics launched a $1.5 billion offering of senior unsecured convertible bonds",
+          "entity_refs": [
+            "STMicroelectronics"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "STMicroelectronics",
+          "predicate": "issues_debt",
+          "object_ref": "STMicroelectronics",
+          "confidence": 0.95,
+          "evidence_text": "STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ed0d2-359d-7ac1-b35c-1a3360f0f4a6",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 24.06,
+    "tokens_in": 4278,
+    "tokens_out": 697,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Texas Instruments Incorporated was added to the Zacks Rank #1 (Strong Buy) List.\",\n      \"entity_refs\": [\n        \"Texas Instruments Incorporated\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Here are five stocks added to the Zacks Rank #1 (Strong Buy) List today:\\n\\nTexas Instruments Incorporated TXN: This\\u00a0semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"ArcBest Corporation was added to the Zacks Rank #1 (Strong Buy) List.\",\n      \"entity_refs\": [\n        \"ArcBest Corporation\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"ArcBest Corporation ARCB: This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Etsy, Inc. was added to the Zacks Rank #1 (Strong Buy) List.\",\n      \"entity_refs\": [\n        \"Etsy, Inc.\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Etsy, Inc. ETSY: This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Texas Instruments Incorporated\",\n      \"claim_type\": \"EPS_BEAT\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"This\\u00a0semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days.\"\n    },\n    {\n      \"entity_ref\": \"ArcBest Corporation\",\n      \"claim_type\": \"EPS_BEAT\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days.\"\n    },\n    {\n      \"entity_ref\": \"Etsy, Inc.\",\n      \"claim_type\": \"EPS_BEAT\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Texas Instruments Incorporated was added to the Zacks Rank #1 (Strong Buy) List.",
+          "entity_refs": [
+            "Texas Instruments Incorporated"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Here are five stocks added to the Zacks Rank #1 (Strong Buy) List today:\n\nTexas Instruments Incorporated TXN: This semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "ArcBest Corporation was added to the Zacks Rank #1 (Strong Buy) List.",
+          "entity_refs": [
+            "ArcBest Corporation"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "ArcBest Corporation ARCB: This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Etsy, Inc. was added to the Zacks Rank #1 (Strong Buy) List.",
+          "entity_refs": [
+            "Etsy, Inc."
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Etsy, Inc. ETSY: This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Texas Instruments Incorporated",
+          "claim_type": "EPS_BEAT",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "This semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days."
+        },
+        {
+          "entity_ref": "ArcBest Corporation",
+          "claim_type": "EPS_BEAT",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days."
+        },
+        {
+          "entity_ref": "Etsy, Inc.",
+          "claim_type": "EPS_BEAT",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 3,
+    "n_claims": 3,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed080-5221-7727-813b-ac56d6d63d7b",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 22.198,
+    "tokens_in": 6138,
+    "tokens_out": 838,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Humana, CenterWell, and National Hispanic Medical Association announced the 2026 Resident Physician Scholarship Program recipients.\",\n      \"entity_refs\": [\n        \"Humana\",\n        \"CenterWell\",\n        \"National Hispanic Medical Association\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients. In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"CenterWell\",\n      \"predicate\": \"subsidiary_of\",\n      \"object_ref\": \"Humana\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Humana\",\n      \"predicate\": \"partner_of\",\n      \"object_ref\": \"National Hispanic Medical Association\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"CenterWell\",\n      \"predicate\": \"partner_of\",\n      \"object_ref\": \"National Hispanic Medical Association\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"CenterWell\",\n      \"predicate\": \"operates_in_country\",\n      \"object_ref\": \"Florida\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"National Hispanic Medical Association\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"CenterWell\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"National Hispanic Medical Association\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Humana\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"CenterWell\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Yeny Andrade\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"\\\"Investing in bilingual physicians is one of the most meaningful ways we can improve the health of the communities we serve,\\\" said Yeny Andrade, MD, Associate Medical Director, CenterWell Senior Primary Care.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Humana, CenterWell, and National Hispanic Medical Association announced the 2026 Resident Physician Scholarship Program recipients.",
+          "entity_refs": [
+            "Humana",
+            "CenterWell",
+            "National Hispanic Medical Association"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients. In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "CenterWell",
+          "predicate": "subsidiary_of",
+          "object_ref": "Humana",
+          "confidence": 0.95,
+          "evidence_text": "Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Humana",
+          "predicate": "partner_of",
+          "object_ref": "National Hispanic Medical Association",
+          "confidence": 0.95,
+          "evidence_text": "In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "CenterWell",
+          "predicate": "partner_of",
+          "object_ref": "National Hispanic Medical Association",
+          "confidence": 0.95,
+          "evidence_text": "In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "CenterWell",
+          "predicate": "operates_in_country",
+          "object_ref": "Florida",
+          "confidence": 0.9,
+          "evidence_text": "The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "National Hispanic Medical Association",
+          "predicate": "regulates",
+          "object_ref": "CenterWell",
+          "confidence": 0.7,
+          "evidence_text": "The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "National Hispanic Medical Association",
+          "predicate": "regulates",
+          "object_ref": "Humana",
+          "confidence": 0.7,
+          "evidence_text": "The program provides each winner with $10,000 for educational and professional development, a structured mentorship program from NHMA and CenterWell physician leaders, and experiential learning at CenterWell senior primary care centers.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "CenterWell",
+          "predicate": "has_executive",
+          "object_ref": "Yeny Andrade",
+          "confidence": 0.95,
+          "evidence_text": "\"Investing in bilingual physicians is one of the most meaningful ways we can improve the health of the communities we serve,\" said Yeny Andrade, MD, Associate Medical Director, CenterWell Senior Primary Care.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 7
+  },
+  {
+    "doc_id": "019ecfa4-3008-744f-903f-2f0ea4cac447",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 31.586,
+    "tokens_in": 6380,
+    "tokens_out": 985,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"IPO\",\n      \"description\": \"SpaceX raised a record-breaking $75 billion in its IPO, marking the largest IPO in history.\",\n      \"entity_refs\": [\"SpaceX\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"SpaceX raised a record-breaking $75 billion in its IPO. The stock opened at $150, above its IPO price of $135, and closed at $160.95, valuing the company at roughly $2.1 trillion.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"SpaceX reported financial performance and history ahead of its IPO.\",\n      \"entity_refs\": [\"SpaceX\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002.\",\n      \"confidence\": 0.90\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"The company generated roughly $19 billion in revenue\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.80,\n      \"evidence_text\": \"The company plans to deploy more than 100,000 satellites, expand its communications network, and build artificial intelligence data centers in space.\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"EPS_MISS\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"SpaceX faces solid financial risks from heavy cash burn, a huge $4.9 billion net loss in fiscal 2025\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"DEBT_CHANGE\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Elon Musk\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"SpaceX\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"The blockbuster debut officially made Elon Musk the world's first trillionaire. His SpaceX stake was valued at roughly $690 billion at the IPO price\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Elon Musk\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Tesla\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"His SpaceX stake was valued at roughly $690 billion at the IPO price, while his holdings in Tesla contributed another $279 billion to his net worth.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"competes_with\",\n      \"object_ref\": \"Facebook\",\n      \"confidence\": 0.75,\n      \"evidence_text\": \"More than 500 million shares changed hands during the session, approaching the record first-day trading volume seen in the IPO of Facebook in 2012, as quoted on CNBC.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"produces\",\n      \"object_ref\": \"Starlink\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"SpaceX's profitable engine remains its Starlink satellite internet business\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "IPO",
+          "description": "SpaceX raised a record-breaking $75 billion in its IPO, marking the largest IPO in history.",
+          "entity_refs": [
+            "SpaceX"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "SpaceX raised a record-breaking $75 billion in its IPO. The stock opened at $150, above its IPO price of $135, and closed at $160.95, valuing the company at roughly $2.1 trillion.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "SpaceX reported financial performance and history ahead of its IPO.",
+          "entity_refs": [
+            "SpaceX"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002.",
+          "confidence": 0.9
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "The company generated roughly $19 billion in revenue"
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.8,
+          "evidence_text": "The company plans to deploy more than 100,000 satellites, expand its communications network, and build artificial intelligence data centers in space."
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "EPS_MISS",
+          "polarity": "negative",
+          "confidence": 0.9,
+          "evidence_text": "SpaceX faces solid financial risks from heavy cash burn, a huge $4.9 billion net loss in fiscal 2025"
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "negative",
+          "confidence": 0.85,
+          "evidence_text": "Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.95,
+          "evidence_text": "SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Elon Musk",
+          "predicate": "has_executive",
+          "object_ref": "SpaceX",
+          "confidence": 0.9,
+          "evidence_text": "The blockbuster debut officially made Elon Musk the world's first trillionaire. His SpaceX stake was valued at roughly $690 billion at the IPO price",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Elon Musk",
+          "predicate": "has_executive",
+          "object_ref": "Tesla",
+          "confidence": 0.9,
+          "evidence_text": "His SpaceX stake was valued at roughly $690 billion at the IPO price, while his holdings in Tesla contributed another $279 billion to his net worth.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "competes_with",
+          "object_ref": "Facebook",
+          "confidence": 0.75,
+          "evidence_text": "More than 500 million shares changed hands during the session, approaching the record first-day trading volume seen in the IPO of Facebook in 2012, as quoted on CNBC.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "produces",
+          "object_ref": "Starlink",
+          "confidence": 0.95,
+          "evidence_text": "SpaceX's profitable engine remains its Starlink satellite internet business",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 4,
+    "n_relations": 5
+  },
+  {
+    "doc_id": "019ecfae-140f-7a44-bd27-9131b52df3b3",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 20.244,
+    "tokens_in": 4716,
+    "tokens_out": 887,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Bank of Japan raised its key interest rate to 1%\",\n      \"entity_refs\": [\"Bank of Japan\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday before trimming early gains after the Bank of Japan raised its key interest rate to 1%.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Bank of Japan raised benchmark rate by a quarter percentage point to highest level in three decades\",\n      \"entity_refs\": [\"Bank of Japan\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"The quarter percentage point hike took the benchmark rate to its highest level in three decades.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"United States and Iran reached a tentative deal to restore global crude oil flow\",\n      \"entity_refs\": [],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"On Monday, stock markets rallied worldwide and oil prices eased after the United States and Iran reached a tentative deal to get the global flow of crude going again.\",\n      \"confidence\": 0.90\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Nikkei 225\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday\",\n      \"confidence\": 0.95\n    },\n    {\n      \"entity_ref\": \"Kospi\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"South Korea's Kospi moved further into record territory, gaining 2.1% to 8,721.64.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"entity_ref\": \"Shanghai Composite\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"The Shanghai Composite gained less than 0.1% to 4,100.53.\",\n      \"confidence\": 0.90\n    },\n    {\n      \"entity_ref\": \"Hang Seng\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"evidence_text\": \"Hong Kong's Hang Seng slipped 1.3% to 24,533.35.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"entity_ref\": \"Taiex\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"In Taiwan, the Taiex was up 0.6%\",\n      \"confidence\": 0.90\n    },\n    {\n      \"entity_ref\": \"Sensex\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"India's Sensex picked up 0.5%.\",\n      \"confidence\": 0.90\n    },\n    {\n      \"entity_ref\": \"Dow\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"The Dow climbed 0.9% to a record.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"entity_ref\": \"Nasdaq composite\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"evidence_text\": \"The Nasdaq composite jumped 3.1%.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Bank of Japan raised its key interest rate to 1%",
+          "entity_refs": [
+            "Bank of Japan"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday before trimming early gains after the Bank of Japan raised its key interest rate to 1%.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Bank of Japan raised benchmark rate by a quarter percentage point to highest level in three decades",
+          "entity_refs": [
+            "Bank of Japan"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "The quarter percentage point hike took the benchmark rate to its highest level in three decades.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "United States and Iran reached a tentative deal to restore global crude oil flow",
+          "entity_refs": [],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "On Monday, stock markets rallied worldwide and oil prices eased after the United States and Iran reached a tentative deal to get the global flow of crude going again.",
+          "confidence": 0.9
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Nikkei 225",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday",
+          "confidence": 0.95
+        },
+        {
+          "entity_ref": "Kospi",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "South Korea's Kospi moved further into record territory, gaining 2.1% to 8,721.64.",
+          "confidence": 0.95
+        },
+        {
+          "entity_ref": "Shanghai Composite",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "The Shanghai Composite gained less than 0.1% to 4,100.53.",
+          "confidence": 0.9
+        },
+        {
+          "entity_ref": "Hang Seng",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "evidence_text": "Hong Kong's Hang Seng slipped 1.3% to 24,533.35.",
+          "confidence": 0.95
+        },
+        {
+          "entity_ref": "Taiex",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "In Taiwan, the Taiex was up 0.6%",
+          "confidence": 0.9
+        },
+        {
+          "entity_ref": "Sensex",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "India's Sensex picked up 0.5%.",
+          "confidence": 0.9
+        },
+        {
+          "entity_ref": "Dow",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "The Dow climbed 0.9% to a record.",
+          "confidence": 0.95
+        },
+        {
+          "entity_ref": "Nasdaq composite",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "evidence_text": "The Nasdaq composite jumped 3.1%.",
+          "confidence": 0.95
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 3,
+    "n_claims": 8,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfa8-295c-7a99-8cf8-1ad29c2a8f6e",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 22.738,
+    "tokens_in": 4233,
+    "tokens_out": 724,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CORPORATE_ACTION\",\n      \"description\": \"Peyto Exploration & Development Corp. confirms monthly dividend payment\",\n      \"entity_refs\": [\n        \"Peyto Exploration & Development Corp.\",\n        \"CALGARY, Alberta\",\n        \"TSX\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Peyto Exploration & Development Corp. (TSX: PEY) (\\\"Peyto\\\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Peyto Exploration & Development Corp.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Dividends paid by Peyto to Canadian residents are eligible dividends for Canadian income tax purposes.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Peyto Exploration & Development Corp.\",\n      \"predicate\": \"headquartered_in\",\n      \"object_ref\": \"CALGARY, Alberta\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"CALGARY, Alberta, June 15, 2026 (GLOBE NEWSWIRE) -- Peyto Exploration & Development Corp.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Peyto Exploration & Development Corp.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"TSX\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Peyto Exploration & Development Corp. (TSX: PEY) (\\\"Peyto\\\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Peyto Exploration & Development Corp.\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Jean-Paul Lachance\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"Jean-Paul Lachance\\r\\nPresident and Chief Executive Officer\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Peyto Exploration & Development Corp.\",\n      \"predicate\": \"corporate_action\",\n      \"object_ref\": \"Peyto Exploration & Development Corp.\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"Peyto Exploration & Development Corp. (TSX: PEY) (\\\"Peyto\\\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CORPORATE_ACTION",
+          "description": "Peyto Exploration & Development Corp. confirms monthly dividend payment",
+          "entity_refs": [
+            "Peyto Exploration & Development Corp.",
+            "CALGARY, Alberta",
+            "TSX"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Peyto Exploration & Development Corp. (TSX: PEY) (\"Peyto\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Peyto Exploration & Development Corp.",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "Dividends paid by Peyto to Canadian residents are eligible dividends for Canadian income tax purposes."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Peyto Exploration & Development Corp.",
+          "predicate": "headquartered_in",
+          "object_ref": "CALGARY, Alberta",
+          "confidence": 0.95,
+          "evidence_text": "CALGARY, Alberta, June 15, 2026 (GLOBE NEWSWIRE) -- Peyto Exploration & Development Corp.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Peyto Exploration & Development Corp.",
+          "predicate": "listed_on",
+          "object_ref": "TSX",
+          "confidence": 0.95,
+          "evidence_text": "Peyto Exploration & Development Corp. (TSX: PEY) (\"Peyto\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Peyto Exploration & Development Corp.",
+          "predicate": "has_executive",
+          "object_ref": "Jean-Paul Lachance",
+          "confidence": 0.97,
+          "evidence_text": "Jean-Paul Lachance\r\nPresident and Chief Executive Officer",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Peyto Exploration & Development Corp.",
+          "predicate": "corporate_action",
+          "object_ref": "Peyto Exploration & Development Corp.",
+          "confidence": 0.9,
+          "evidence_text": "Peyto Exploration & Development Corp. (TSX: PEY) (\"Peyto\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 4
+  },
+  {
+    "doc_id": "019ecfc0-b1d8-7ee1-a697-1d9d895a67dd",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 11.993,
+    "tokens_in": 3144,
+    "tokens_out": 283,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Private equity is seeking to enter the 401(k) market, but faces resistance from retirement savers.\",\n      \"entity_refs\": [\n        \"Private Equity\",\n        \"401(k)\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Private equity is knocking on the door of the 401(k) market. Many retirement savers say they want to keep it closed.\",\n      \"confidence\": 0.9\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Private Equity\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.8,\n      \"evidence_text\": \"Many retirement savers say they want to keep it closed.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Private Equity\",\n      \"predicate\": \"competes_with\",\n      \"object_ref\": \"401(k)\",\n      \"confidence\": 0.7,\n      \"evidence_text\": \"Private equity is knocking on the door of the 401(k) market.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Private equity is seeking to enter the 401(k) market, but faces resistance from retirement savers.",
+          "entity_refs": [
+            "Private Equity",
+            "401(k)"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Private equity is knocking on the door of the 401(k) market. Many retirement savers say they want to keep it closed.",
+          "confidence": 0.9
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Private Equity",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.8,
+          "evidence_text": "Many retirement savers say they want to keep it closed."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Private Equity",
+          "predicate": "competes_with",
+          "object_ref": "401(k)",
+          "confidence": 0.7,
+          "evidence_text": "Private equity is knocking on the door of the 401(k) market.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecff9-5c84-74d9-89df-3c4311f21565",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 11.868,
+    "tokens_in": 4983,
+    "tokens_out": 573,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Leidos upcoming earnings disclosure with projected EPS and revenue\",\n      \"entity_refs\": [\"Leidos\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Analysts and investors alike will be keeping a close eye on the performance of Leidos in its upcoming earnings disclosure. The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year. Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period.\",\n      \"confidence\": 0.85\n    },\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Leidos holds a Zacks Rank of #3 (Hold)\",\n      \"entity_refs\": [\"Leidos\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"As of now, Leidos holds a Zacks Rank of #3 (Hold).\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"EPS_MISS\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year.\"\n    },\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.85,\n      \"evidence_text\": \"Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period.\"\n    },\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.75,\n      \"evidence_text\": \"Regarding the entire year, the Zacks Consensus Estimates forecast earnings of $12.25 per share and revenue of $17.98 billion, indicating changes of +2.17% and +4.7%, respectively, compared to the previous year.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Leidos upcoming earnings disclosure with projected EPS and revenue",
+          "entity_refs": [
+            "Leidos"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Analysts and investors alike will be keeping a close eye on the performance of Leidos in its upcoming earnings disclosure. The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year. Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period.",
+          "confidence": 0.85
+        },
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Leidos holds a Zacks Rank of #3 (Hold)",
+          "entity_refs": [
+            "Leidos"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "As of now, Leidos holds a Zacks Rank of #3 (Hold).",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "EPS_MISS",
+          "polarity": "negative",
+          "confidence": 0.85,
+          "evidence_text": "The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year."
+        },
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.85,
+          "evidence_text": "Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period."
+        },
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.75,
+          "evidence_text": "Regarding the entire year, the Zacks Consensus Estimates forecast earnings of $12.25 per share and revenue of $17.98 billion, indicating changes of +2.17% and +4.7%, respectively, compared to the previous year."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 3,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0af-3b6a-7445-83cc-d719dc588ad4",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 6.19,
+    "tokens_in": 5447,
+    "tokens_out": 321,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"BlackRock, Inc. and its funds decreased their ownership in Orion Corporation shares below five percent on 15 June 2026\",\n      \"entity_refs\": [\n        \"BlackRock, Inc.\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds, and the total number of Orion shares owned directly, indirectly and through financial instruments by BlackRock, Inc. and its funds decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"BlackRock, Inc.\",\n      \"predicate\": \"owns_stake_in\",\n      \"object_ref\": \"Orion Corporation\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds, and the total number of Orion shares owned directly, indirectly and through financial instruments by BlackRock, Inc. and its funds decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "BlackRock, Inc. and its funds decreased their ownership in Orion Corporation shares below five percent on 15 June 2026",
+          "entity_refs": [
+            "BlackRock, Inc."
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds, and the total number of Orion shares owned directly, indirectly and through financial instruments by BlackRock, Inc. and its funds decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "BlackRock, Inc.",
+          "predicate": "owns_stake_in",
+          "object_ref": "Orion Corporation",
+          "confidence": 0.9,
+          "evidence_text": "the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds, and the total number of Orion shares owned directly, indirectly and through financial instruments by BlackRock, Inc. and its funds decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfc0-9a4a-73e9-84c9-b1111be45c05",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "status": "ok",
+    "latency_s": 13.49,
+    "tokens_in": 5630,
+    "tokens_out": 622,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"American Express agreed to acquire TheFork from Tripadvisor for US$700 million in cash.\",\n      \"entity_refs\": [\"American Express\", \"TheFork\", \"Tripadvisor\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"American Express\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"Once completed, the acquisition is expected to expand American Express's global dining ecosystem to around 75,000 bookable venues, reinforcing its position in premium travel and lifestyle services.\"\n    },\n    {\n      \"entity_ref\": \"American Express\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"The specific impact of owning a large European dining platform on American Express's reliance on the US market is not fully reflected in the narrative, yet it may contribute to the goal of more diversified international earnings.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"TheFork\",\n      \"predicate\": \"divested_from\",\n      \"object_ref\": \"Tripadvisor\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"TheFork\",\n      \"predicate\": \"acquired_by\",\n      \"object_ref\": \"American Express\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"American Express\",\n      \"predicate\": \"corporate_action\",\n      \"object_ref\": \"American Express\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"The all-cash price of US$700 million is meaningful but sits alongside a recent €750 million eurobond issue and an affirmed US$0.95 quarterly dividend, suggesting American Express is comfortable using the balance sheet for both shareholder returns and expansion.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "American Express agreed to acquire TheFork from Tripadvisor for US$700 million in cash.",
+          "entity_refs": [
+            "American Express",
+            "TheFork",
+            "Tripadvisor"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "American Express",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.7,
+          "evidence_text": "Once completed, the acquisition is expected to expand American Express's global dining ecosystem to around 75,000 bookable venues, reinforcing its position in premium travel and lifestyle services."
+        },
+        {
+          "entity_ref": "American Express",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.7,
+          "evidence_text": "The specific impact of owning a large European dining platform on American Express's reliance on the US market is not fully reflected in the narrative, yet it may contribute to the goal of more diversified international earnings."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "TheFork",
+          "predicate": "divested_from",
+          "object_ref": "Tripadvisor",
+          "confidence": 0.95,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "TheFork",
+          "predicate": "acquired_by",
+          "object_ref": "American Express",
+          "confidence": 0.95,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "American Express",
+          "predicate": "corporate_action",
+          "object_ref": "American Express",
+          "confidence": 0.9,
+          "evidence_text": "The all-cash price of US$700 million is meaningful but sits alongside a recent €750 million eurobond issue and an affirmed US$0.95 quarterly dividend, suggesting American Express is comfortable using the balance sheet for both shareholder returns and expansion.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 2,
+    "n_relations": 3
+  }
+]

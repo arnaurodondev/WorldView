@@ -1,0 +1,200 @@
+[
+  {
+    "doc_id": "019ede68-ad0a-7513-a211-740d3c19c983",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede68-a118-768b-8cb2-b8de685a2ca7",
+    "raw_relations": 3,
+    "gated_relations": 3,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede4a-e1c8-7683-a5c0-d8c92cf11444",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede68-9ac5-7625-8b1e-0811d7b4abeb",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede68-94ca-70b0-8e8c-41216972d94a",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede68-b531-77eb-9365-ee51985df1b3",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede63-9826-7982-a121-726c3f1b11be",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede68-8929-7869-abe7-a2ba9115ac98",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede3b-3bb8-79f0-9a37-353d021887bc",
+    "status": "api_error"
+  },
+  {
+    "doc_id": "019ede5e-bd19-7b83-b78d-bc20d5768423",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 4,
+    "prec_gated": 4,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede68-65be-7f2f-96ca-4cca279c0805",
+    "raw_relations": 3,
+    "gated_relations": 3,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede63-74b6-7f75-8990-cb68201d99f2",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede63-a48a-76f5-9b8f-15955840c2fb",
+    "raw_relations": 1,
+    "gated_relations": 1,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede68-a730-73b0-970b-09c4470f8358",
+    "raw_relations": 4,
+    "gated_relations": 4,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede3b-5d02-7a2b-bebf-be7f9be64569",
+    "raw_relations": 1,
+    "gated_relations": 1,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede55-4868-7086-8b13-a83b71221bfc",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede4a-e74e-7f6f-9953-488b7008cd9b",
+    "raw_relations": 4,
+    "gated_relations": 4,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede30-ce33-7abf-bdf7-6774f3a1d60f",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede63-9229-7f46-9942-2d4617b0c360",
+    "raw_relations": 4,
+    "gated_relations": 4,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede63-6f0f-7fe5-82e3-27e7d524709d",
+    "raw_relations": 4,
+    "gated_relations": 4,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede1a-c58c-7166-a543-ede1b1ec0925",
+    "raw_relations": 1,
+    "gated_relations": 1,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede50-7907-7a25-9c2d-a38c84e8142d",
+    "raw_relations": 0,
+    "gated_relations": 0,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede25-cf0d-74da-936a-7f18f8c53ef5",
+    "raw_relations": 3,
+    "gated_relations": 3,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  },
+  {
+    "doc_id": "019ede1a-b3c8-7d93-ad14-005982eaa646",
+    "raw_relations": 4,
+    "gated_relations": 4,
+    "drops": {},
+    "prec_raw": 5,
+    "prec_gated": 5,
+    "adh_raw": 5,
+    "adh_gated": 5
+  }
+]

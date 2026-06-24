@@ -1,0 +1,637 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "loki",
+      "name": "Loki",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "NLP extraction-pipeline health (S6) — relation precision-gate drops (Loki), model fallback engagement (Prometheus + Loki), and extraction API error/latency (Prometheus). NOTE: the Prometheus ml_api_* series (nlp_pipeline_*) only populate once the DeepSeekExtractionAdapter in article_consumer_main.py is constructed with metrics=create_ml_metrics(...). See dashboard text panel.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "grafana"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "## Extraction-Pipeline Health (S6 / nlp-pipeline)\n\n**Signal 1 — Precision-gate drops** (rows 1–2): sourced from the structured log event `deep_extraction.relations_filtered` via **Loki**. Emitted by the article-consumer when `relation_validation.validate_relations()` drops structurally-invalid relations.\n\n**Signals 2 & 3 — Fallback / error / latency** (rows 3–5): sourced from **Prometheus** `nlp_pipeline_ml_api_requests_total{operation=\"extract\"}` and `nlp_pipeline_ml_api_latency_seconds{operation=\"extract\"}`. ⚠️ These series are currently EMPTY: `DeepSeekExtractionAdapter` in `article_consumer_main.py` is built without `metrics=`, so `self._metrics is None` and no extract metric is ever emitted. The Loki fallback panel (row 3, right) works today.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.6.0",
+      "title": "",
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_self_loop [$__auto]))",
+          "legendFormat": "self_loop",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_oov_predicate [$__auto]))",
+          "legendFormat": "oov_predicate",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_common_noun_endpoint [$__auto]))",
+          "legendFormat": "common_noun_endpoint",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_invalid_listed_on [$__auto]))",
+          "legendFormat": "invalid_listed_on",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_empty_field [$__auto]))",
+          "legendFormat": "empty_field",
+          "refId": "E"
+        }
+      ],
+      "title": "Relations Dropped by Gate Reason (Loki)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_total [$__range])) / (sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_total [$__range])) + sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap kept [$__range])))",
+          "legendFormat": "drop rate",
+          "refId": "A"
+        }
+      ],
+      "title": "Relation Drop Rate (dropped / (dropped+kept), selected range)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap dropped_total [$__auto]))",
+          "legendFormat": "dropped_total",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(sum_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deep_extraction.relations_filtered` | unwrap kept [$__auto]))",
+          "legendFormat": "kept",
+          "refId": "B"
+        }
+      ],
+      "title": "Relations Kept vs Dropped over Time (Loki)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.05
+              },
+              {
+                "color": "red",
+                "value": 0.2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(nlp_pipeline_ml_api_requests_total{operation=\"extract\", model_id=~\".*gpt-oss-20b.*\"}[$__rate_interval])) / clamp_min(sum(rate(nlp_pipeline_ml_api_requests_total{operation=\"extract\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "fallback rate (20b / total)",
+          "refId": "A"
+        }
+      ],
+      "title": "Extraction Fallback Rate (gpt-oss-20b share) [Prometheus]",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (fallback_reason) (count_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deepseek_extraction_fallback_engaged` [$__auto]))",
+          "legendFormat": "engaged: {{fallback_reason}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deepseek_extraction_fallback_succeeded` [$__auto]))",
+          "legendFormat": "succeeded",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({service_name=~\"nlp-pipeline-article-consumer.*\"} | json | event=`deepseek_extraction_fallback_failed` [$__auto]))",
+          "legendFormat": "failed",
+          "refId": "C"
+        }
+      ],
+      "title": "Fallback Engagements by Reason (Loki)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(nlp_pipeline_ml_api_requests_total{operation=\"extract\", status=\"error\"}[$__rate_interval])) / clamp_min(sum(rate(nlp_pipeline_ml_api_requests_total{operation=\"extract\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "extract error rate",
+          "refId": "A"
+        }
+      ],
+      "title": "Extraction API Error Rate [Prometheus]",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (model_id, le) (rate(nlp_pipeline_ml_api_latency_seconds_bucket{operation=\"extract\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{model_id}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (model_id, le) (rate(nlp_pipeline_ml_api_latency_seconds_bucket{operation=\"extract\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{model_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Extraction API Latency p50/p95 by Model [Prometheus]",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (model_id, status) (rate(nlp_pipeline_ml_api_requests_total{operation=\"extract\"}[$__rate_interval]))",
+          "legendFormat": "{{model_id}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Extraction Requests by Serving Model & Status (primary 120b vs fallback 20b) [Prometheus]",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "worldview",
+    "service",
+    "nlp-pipeline",
+    "extraction"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Extraction Health — S6",
+  "uid": "extraction-health",
+  "version": 1,
+  "weekStart": ""
+}

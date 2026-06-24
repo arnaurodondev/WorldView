@@ -1,0 +1,40 @@
+[
+  {
+    "model_id": "openai/gpt-oss-120b@medium",
+    "n_articles": 20,
+    "mean_precision": 5.0,
+    "mean_recall": 3.8,
+    "mean_adherence": 5.0,
+    "mean_overall": 4.6,
+    "fabrication_rate": 0.0,
+    "allowlist_violation_rate": 0.0,
+    "json_parse_failure_rate": 0.0,
+    "api_error_rate": 0.0,
+    "mean_events": 1.1,
+    "mean_claims": 1.3,
+    "mean_relations": 2.3,
+    "p50_latency_s": 29.433,
+    "p95_latency_s": 69.616,
+    "total_tokens_in": 92144,
+    "total_tokens_out": 35564
+  },
+  {
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507@low",
+    "n_articles": 20,
+    "mean_precision": 4.4,
+    "mean_recall": 3.6,
+    "mean_adherence": 4.15,
+    "mean_overall": 4.05,
+    "fabrication_rate": 0.2,
+    "allowlist_violation_rate": 0.25,
+    "json_parse_failure_rate": 0.0,
+    "api_error_rate": 0.0,
+    "mean_events": 2.05,
+    "mean_claims": 1.8,
+    "mean_relations": 3.95,
+    "p50_latency_s": 30.641,
+    "p95_latency_s": 65.508,
+    "total_tokens_in": 96260,
+    "total_tokens_out": 17213
+  }
+]

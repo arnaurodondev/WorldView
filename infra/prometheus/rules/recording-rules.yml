@@ -81,14 +81,34 @@ groups:
             rate({__name__=~"[a-z][a-z0-9_]*_kafka_messages_produced_total"}[5m])
           )
 
+      # The outbox counters carry no labels of their own, so the only thing
+      # distinguishing series is __name__. rate() strips __name__, so a regex
+      # that folds several metric families (one per service namespace) into the
+      # same scrape target collapses them to an identical labelset, tripping
+      # "vector cannot contain metrics with the same labelset".
+      #
+      # Root cause: the shared OutboxDispatcher component registers its own
+      # outbox_dispatcher_outbox_dispatched_total metric, which is re-exported
+      # on the host service's scrape endpoint (e.g., portfolio:8000). That
+      # produces two matching __name__ values per (job, instance) pair — the
+      # service-prefixed metric AND outbox_dispatcher_outbox_dispatched_total.
+      # After rate() drops __name__, both series are identical, causing the
+      # collision error before sum() can aggregate them.
+      #
+      # Fix: exclude the outbox_dispatcher_* family from the regex. Those
+      # metrics are already captured by their own dedicated scrape targets
+      # (outbox-dispatcher-* jobs), so excluding them here avoids double-
+      # counting as well as the labelset collision.
       - record: job:outbox_dispatched:rate5m
         expr: >
-          sum by (job) (
-            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatched_total"}[5m])
+          sum by (job, instance) (
+            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatched_total",
+                  __name__!~"outbox_dispatcher_.*"}[5m])
           )
 
       - record: job:outbox_errors:rate5m
         expr: >
-          sum by (job) (
-            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatch_errors_total"}[5m])
+          sum by (job, instance) (
+            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatch_errors_total",
+                  __name__!~"outbox_dispatcher_.*"}[5m])
           )
