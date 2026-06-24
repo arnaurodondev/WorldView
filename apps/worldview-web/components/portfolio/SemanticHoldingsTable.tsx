@@ -86,6 +86,23 @@ export interface SemanticHoldingsTableProps {
   }>;
   /** GICS sector per instrument_id (loaded lazily from fundamentals) */
   sectors?: Record<string, string | null>;
+  /**
+   * Sector label → instrument_ids lookup, sourced from the SAME
+   * /sector-breakdown endpoint that powers the SECTOR EXPOSURE panel
+   * (sectorIdMapFromSegments). Optional, additive fallback for the SECTOR
+   * column (DESIGN-QA P-2 fix).
+   *
+   * WHY THIS EXISTS: the `sectors` prop above is keyed off the instrument
+   * *fundamentals* overview (holdingOverviews[id].sector), which is null for
+   * every holding in the current deployment — so the SECTOR column rendered
+   * "—" on every row even though the SECTOR EXPOSURE panel (fed by the
+   * breakdown segments) clearly knew each holding's sector. This prop lets the
+   * table reuse the breakdown source: we invert it to instrument_id → sector
+   * and use it whenever the fundamentals `sectors` entry is missing. When the
+   * prop is absent the column degrades to its previous behaviour (no
+   * regression for callers that don't pass it).
+   */
+  sectorIdMap?: Record<string, string[]>;
   /** Total portfolio market value — used to compute Weight column */
   totalValue: number;
   /**
@@ -146,6 +163,7 @@ export function SemanticHoldingsTable({
   holdings,
   quotes,
   sectors,
+  sectorIdMap,
   totalValue,
   series,
   assetClasses,
@@ -322,6 +340,21 @@ export function SemanticHoldingsTable({
     [],
   );
 
+  // ── Sector fallback map (DESIGN-QA P-2) ───────────────────────────────────
+  // Invert sectorIdMap (sector → instrument_ids[]) into instrument_id → sector
+  // so the row enrichment below can look a holding's sector up in O(1). This
+  // is the SAME data the SECTOR EXPOSURE panel uses, so the column and the
+  // panel can no longer disagree. Memoised on sectorIdMap identity — it only
+  // changes when the /sector-breakdown query refetches.
+  const sectorByInstrumentFromBreakdown = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!sectorIdMap) return map;
+    for (const [sector, ids] of Object.entries(sectorIdMap)) {
+      for (const id of ids) map[id] = sector;
+    }
+    return map;
+  }, [sectorIdMap]);
+
   // ── Enrich rows (R4: memoised) ────────────────────────────────────────────
   // R4 hardening: this block ran inline in the render body, producing a FRESH
   // enrichedRows array (and pinned-row object) on every render — including
@@ -360,7 +393,14 @@ export function SemanticHoldingsTable({
           ? ((livePrice - h.average_cost) / h.average_cost) * 100
           : 0;
       const weight = totalValue > 0 ? (value / totalValue) * 100 : 0;
-      const sector = sectors?.[h.instrument_id] ?? null;
+      // DESIGN-QA P-2: prefer the fundamentals sector, but fall back to the
+      // /sector-breakdown source (the one the SECTOR EXPOSURE panel uses) when
+      // fundamentals is null — which it currently is for every holding. null
+      // only when BOTH sources lack the instrument.
+      const sector =
+        sectors?.[h.instrument_id] ??
+        sectorByInstrumentFromBreakdown[h.instrument_id] ??
+        null;
       const dayChange = quote?.change ?? null;
       const dayChangePct = quote?.change_pct ?? null;
       const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
@@ -374,13 +414,12 @@ export function SemanticHoldingsTable({
       }
       totalWeight += weight;
 
-      // annualizedDividendYield: injected by S9's get_holdings fan-out to S3
-      // fundamentals (PLAN-0114 W6).  The Holding type carries this as an
-      // optional field; we surface it directly on EnrichedHoldingRow so the
-      // YIELD column renderer can access it without re-deriving from `h`.
-      const annualizedDividendYield = h.annualizedDividendYield ?? null;
-
-      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue, annualizedDividendYield };
+      // PLAN-0114 W6: DIV YLD column reads annualizedDividendYield. The S9
+      // get_holdings fan-out now populates Holding.annualizedDividendYield from
+      // S3 fundamentals (mapped in lib/api/portfolios.ts), so surface it directly
+      // on the row; it falls back to null (column renders "—") when the backend
+      // has no yield for the instrument.
+      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue, annualizedDividendYield: h.annualizedDividendYield ?? null };
     });
 
     const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
@@ -438,13 +477,12 @@ export function SemanticHoldingsTable({
       dayChange: null,
       dayChangePct: totalDayChangePct,
       dayChangeValue: dayChangeSeen ? totalDayChange : null,
-      // The TOTAL row has no meaningful dividend yield — the YIELD cell
-      // renderer checks node.rowPinned === 'bottom' and renders "—" instead.
+      // TOTAL row has no single-position yield → null (DIV YLD renders "—").
       annualizedDividendYield: null,
     };
 
     return { enrichedRows: rows, pinnedBottomRow: pinned };
-  }, [holdings, quotes, sectors, totalValue]);
+  }, [holdings, quotes, sectors, sectorByInstrumentFromBreakdown, totalValue]);
 
   // ── Empty state guards ────────────────────────────────────────────────────
 

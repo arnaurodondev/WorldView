@@ -64,8 +64,6 @@ function buildPinnedParams(
     dayChange: null,
     dayChangePct: null,
     dayChangeValue: null,
-    // PLAN-0114 W6: dividend yield is null for the synthetic totals row
-    // (the YIELD cell renderer checks node.rowPinned === 'bottom').
     annualizedDividendYield: null,
     ...rowOverrides,
   };
@@ -130,6 +128,66 @@ describe("DAY Δ% pinned TOTAL cell (R1 sprint)", () => {
   it("renders an em-dash when the percentage is unknown", () => {
     const DayChangePct = rendererFor("dayChangePct");
     const { container } = render(createElement(DayChangePct, buildPinnedParams()));
+    expect(container.textContent).toBe("—");
+  });
+});
+
+// ── SECTOR cell (DESIGN-QA P-2) ───────────────────────────────────────────────
+
+describe("SECTOR cell (DESIGN-QA P-2 — column must not render '—' when a sector is present)", () => {
+  // The audit found the SECTOR column showing "—" for EVERY holding even
+  // though the SECTOR EXPOSURE panel knew each sector. The data-wiring fix
+  // (SemanticHoldingsTable now falls back to the /sector-breakdown source) is
+  // exercised via the component; here we pin the RENDERER contract so it never
+  // regresses to a hardcoded dash: given a row with a sector, it must show it.
+  function buildDataParams(
+    rowOverrides: Partial<EnrichedHoldingRow> = {},
+  ): ICellRendererParams<EnrichedHoldingRow> {
+    const row: EnrichedHoldingRow = {
+      h: {
+        holding_id: "h-1",
+        portfolio_id: "p-1",
+        instrument_id: "iid-1",
+        entity_id: "e-1",
+        ticker: "MSFT",
+        name: "Microsoft Corporation",
+        quantity: 30,
+        average_cost: 412.75,
+      } as EnrichedHoldingRow["h"],
+      livePrice: 400,
+      freshness: undefined,
+      value: 12_000,
+      pnl: 0,
+      pnlPct: 0,
+      weight: 50,
+      sector: "Technology",
+      dayChange: null,
+      dayChangePct: null,
+      dayChangeValue: null,
+      annualizedDividendYield: null,
+      ...rowOverrides,
+    };
+    return {
+      data: row,
+      node: { rowPinned: null },
+    } as unknown as ICellRendererParams<EnrichedHoldingRow>;
+  }
+
+  it("renders the resolved sector name", () => {
+    const Sector = rendererFor("sector");
+    const { container } = render(createElement(Sector, buildDataParams()));
+    expect(container.textContent).toBe("Technology");
+    // Full label rides the tooltip (truncation convention).
+    expect(container.querySelector("span")?.getAttribute("title")).toBe(
+      "Technology",
+    );
+  });
+
+  it("falls back to '—' only when the row genuinely has no sector", () => {
+    const Sector = rendererFor("sector");
+    const { container } = render(
+      createElement(Sector, buildDataParams({ sector: null })),
+    );
     expect(container.textContent).toBe("—");
   });
 });
