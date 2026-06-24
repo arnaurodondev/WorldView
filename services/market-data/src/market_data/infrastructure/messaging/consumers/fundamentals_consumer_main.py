@@ -112,6 +112,8 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-fundamentals",
             topics=["market.dataset.fetched"],
+            # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+            group_instance_id=settings.kafka_fundamentals_consumer_instance_id,
             message_processing_timeout_s=timeout_s,
             session_timeout_ms=session_timeout_ms,
             heartbeat_interval_ms=heartbeat_interval_ms,

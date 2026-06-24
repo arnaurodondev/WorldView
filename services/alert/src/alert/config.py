@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     kafka_schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "alert-service-group"
     kafka_watchlist_consumer_group: str = "alert-service-watchlist-group"
+    # PLAN-0113 FIX-2: opt-in static-membership instance ids (KIP-345/BP-703).
+    # Empty default = dynamic membership (no-op); set per-replica to pin identity.
+    kafka_intelligence_consumer_instance_id: str = ""
+    kafka_watchlist_consumer_instance_id: str = ""
 
     # Consumed topics
     kafka_topic_signal: str = "nlp.signal.detected.v1"

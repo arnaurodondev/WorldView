@@ -71,6 +71,8 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="portfolio-manual-holdings-recompute",
         topics=["portfolio.holding.recompute_requested.v1"],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_manual_holdings_consumer_instance_id,
     )
     consumer = ManualHoldingsRecomputeConsumer(
         consumer_config,

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Set to a stable hostname (e.g. pod name) in prod to enable static membership
     # which reduces rebalance latency on rolling deploys.
     kafka_instrument_consumer_instance_id: str = ""
+    # PLAN-0113 FIX-2: same static-membership opt-in for the manual-holdings
+    # recompute consumer (empty = dynamic membership, no-op).
+    kafka_manual_holdings_consumer_instance_id: str = ""
 
     # Kafka topics (produced)
     topic_portfolio_events: str = "portfolio.events.v1"

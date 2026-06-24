@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     kafka_schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_outbox_topic: str = "content.article.raw.v1"
+    # PLAN-0113 FIX-2: opt-in static-membership instance id (KIP-345/BP-703).
+    # Empty default = dynamic membership (no-op); set per-replica to pin identity.
+    kafka_document_ready_consumer_instance_id: str = ""
 
     # ── MinIO (object storage) ────────────────────────────────────────────────
     minio_endpoint: str = "localhost:9000"

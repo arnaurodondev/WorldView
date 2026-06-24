@@ -14,6 +14,7 @@ make_jwt_headers().
 from __future__ import annotations
 
 import pytest
+
 from tests.integration.helpers import (
     INTEGRATION_TENANT2_ID,
     INTEGRATION_TENANT_ID,

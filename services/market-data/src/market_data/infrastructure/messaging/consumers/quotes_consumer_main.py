@@ -98,6 +98,8 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-quotes",
             topics=["market.dataset.fetched"],
+            # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+            group_instance_id=settings.kafka_quotes_consumer_instance_id,
         ),
     )
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.

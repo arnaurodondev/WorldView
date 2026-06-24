@@ -16,6 +16,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+
 from tests.integration.helpers import INTEGRATION_USER_ID
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]

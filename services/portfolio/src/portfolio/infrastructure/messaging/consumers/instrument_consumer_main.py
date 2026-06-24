@@ -76,6 +76,8 @@ async def main() -> None:
             settings.topic_instrument_created,
             settings.topic_instrument_updated,
         ],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_instrument_consumer_instance_id,
     )
     consumer = InstrumentEventConsumer(consumer_config, write_factory)
     # Bind the probe so /healthz reflects this consumer's poll-loop progress.

@@ -135,6 +135,9 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group_narrative_refresh,
         topics=[settings.kafka_topic_narrative_generated],
+        # PLAN-0113 FIX-2: opt-in Kafka static membership (KIP-345). Empty default
+        # = dynamic membership (no behaviour change); a stable id skips rebalances.
+        group_instance_id=settings.kafka_narrative_refresh_consumer_instance_id,
     )
     consumer = NarrativeRefreshKafkaConsumer(
         config=config,

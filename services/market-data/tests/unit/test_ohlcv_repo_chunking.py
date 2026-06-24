@@ -9,6 +9,9 @@ parameters, which exceeds asyncpg's hard ceiling of 32_767 and raises
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.unit
+
 from market_data.infrastructure.db.repositories.ohlcv_repo import (
     _MAX_PARAMS,
     _UPSERT_CHUNK_ROWS,

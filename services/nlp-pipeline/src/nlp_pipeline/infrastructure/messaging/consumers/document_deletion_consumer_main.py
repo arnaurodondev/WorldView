@@ -86,6 +86,8 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="s6-document-deletion",
         topics=["content.document.deleted.v1"],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_document_deletion_consumer_instance_id,
     )
 
     consumer = DocumentDeletionConsumer(

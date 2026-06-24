@@ -91,6 +91,8 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_watchlist_consumer_group,
         topics=[settings.kafka_topic_watchlist],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_watchlist_consumer_instance_id,
     )
     consumer = WatchlistConsumer(
         config=config,

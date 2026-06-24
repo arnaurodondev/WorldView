@@ -83,6 +83,8 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-prediction-markets",
             topics=["market.prediction.v1"],
+            # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+            group_instance_id=settings.kafka_prediction_market_consumer_instance_id,
             # WHY latest: Polymarket snapshots are upsert-keyed on (market_id,
             # snapshot_at). Replaying the full 60k+ history on restart doesn't
             # add durable state (duplicate events return is_new=False from

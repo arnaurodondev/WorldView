@@ -102,6 +102,8 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-intraday-resampling",
             topics=["market.dataset.fetched"],
+            # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+            group_instance_id=settings.kafka_intraday_resampling_consumer_instance_id,
         ),
         source_timeframe=settings.intraday_source_tf,
         dedup_client=valkey,

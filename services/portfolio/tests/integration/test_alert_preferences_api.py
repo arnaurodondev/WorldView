@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+
 from tests.integration.helpers import make_tenant, make_user
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]

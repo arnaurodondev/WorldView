@@ -9,6 +9,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from portfolio.app import create_app
 from portfolio.infrastructure.cache.watchlist_cache import ValkeyWatchlistCache
+
 from tests.integration.helpers import INTEGRATION_TENANT_ID, INTEGRATION_USER_ID
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ async def cache_client(postgres_container: str):  # type: ignore[no-untyped-def]
     )
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
+
     from tests.integration.helpers import _INTERNAL_HEADERS
 
     engine = create_async_engine(postgres_container, echo=False)

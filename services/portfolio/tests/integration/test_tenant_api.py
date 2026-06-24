@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from tests.integration.helpers import _INTERNAL_HEADERS, OutboxAssertions, make_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]

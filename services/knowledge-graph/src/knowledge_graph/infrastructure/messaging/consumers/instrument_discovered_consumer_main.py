@@ -85,6 +85,9 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=f"{settings.kafka_consumer_group}-instrument-discovered",
         topics=["market.instrument.discovered.v1"],
+        # PLAN-0113 FIX-2: opt-in Kafka static membership (KIP-345). Empty default
+        # = dynamic membership (no behaviour change); a stable id skips rebalances.
+        group_instance_id=settings.kafka_instrument_discovered_consumer_instance_id,
     )
     consumer = InstrumentDiscoveredConsumer(
         config=config,

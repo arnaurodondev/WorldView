@@ -84,6 +84,7 @@ services:
   # Credentials: postgres:postgres — matches all services' docker.env files.
   # Init script creates one database per service (portfolio_db, ingestion_db, …).
   postgres:
+    restart: unless-stopped
     build:
       context: ../postgres
       dockerfile: Dockerfile
@@ -167,6 +168,7 @@ services:
 
   # ── Kafka (KRaft mode) ──────────────────────────────────────────────────────
   kafka:
+    restart: unless-stopped
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
     ports:
@@ -266,6 +268,7 @@ services:
       start_period: 300s
 
   schema-registry:
+    restart: unless-stopped
     image: confluentinc/cp-schema-registry:7.6.0
     profiles: [infra, all]
     ports:
@@ -335,6 +338,7 @@ services:
 
   # ── Valkey (Redis-compatible cache) ─────────────────────────────────────────
   valkey:
+    restart: unless-stopped
     image: valkey/valkey:7.2-alpine
     profiles: [infra, all]
     ports:
@@ -1339,6 +1343,7 @@ services:
   #   Ollama is healthy. No manual `docker exec ollama ollama pull ...` needed.
   #   Models are cached in the ollama_data volume and persist across container restarts.
   ollama:
+    restart: unless-stopped
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
     ports:
@@ -1544,7 +1549,17 @@ services:
       retries: 3
       start_period: 30s
 
-  nlp-pipeline-article-consumer:
+  # ── Article-consumer fleet (PLAN-0113 Wave 3, AD-2 / KIP-345 static membership) ──
+  # The article topic has 3 dev partitions but a single serial consumer
+  # (~120 docs/h) cannot keep up with ingest (250-480 docs/h), so we run TWO
+  # members of the same consumer group. We model them as explicit *numbered*
+  # services (NOT `deploy.replicas: 2`) because each member needs a distinct,
+  # restart-stable `group.instance.id` (Kafka static membership): anonymous
+  # replicas share one rendered config and cannot carry distinct ids, and two
+  # members sharing one id triggers FencedInstanceIdException (a silent stall).
+  # The id is supplied via the NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID override
+  # on top of the shared env_file (whose default is empty).
+  nlp-pipeline-article-consumer-0:
     build:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
@@ -1568,15 +1583,47 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
+    # Distinct static-membership id for member 0 (overrides the empty env_file default).
+    environment:
+      NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID: nlp-pipeline-article-consumer-0
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
-    # 3 replicas: the article topic has 12 partitions but a single serial
-    # consumer (~120 docs/h) cannot keep up with ingest (250-480 docs/h), so
-    # lag grew unboundedly. Kafka rebalances the 12 partitions 4/4/4 across
-    # the 3 members of the same consumer group. Replicas require no
-    # container_name and no host port binding (both true here). Equivalent
-    # CLI form: docker compose up -d --scale nlp-pipeline-article-consumer=3
-    deploy:
-      replicas: 3
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nlp-pipeline-article-consumer-1:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      gliner-server:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    # Distinct static-membership id for member 1 (overrides the empty env_file default).
+    environment:
+      NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID: nlp-pipeline-article-consumer-1
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:

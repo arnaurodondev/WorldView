@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     schema_registry_url: str = "http://localhost:8081"
 
+    # PLAN-0113 FIX-2: static-membership instance ids (opt-in). Empty default =
+    # dynamic membership (no-op). Setting a stable, per-replica value enables Kafka
+    # static membership so a rolling restart does not trigger a full group rebalance.
+    kafka_ohlcv_consumer_instance_id: str = ""
+    kafka_quotes_consumer_instance_id: str = ""
+    kafka_fundamentals_consumer_instance_id: str = ""
+    kafka_insider_transactions_consumer_instance_id: str = ""
+    kafka_intraday_resampling_consumer_instance_id: str = ""
+    kafka_prediction_market_consumer_instance_id: str = ""
+
     # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
     # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
     # ``create_dispatcher``. Historically market-data built ``DispatcherConfig()``

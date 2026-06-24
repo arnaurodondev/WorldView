@@ -268,6 +268,8 @@ async def main() -> None:
             settings.kafka_topic_graph_state,
             settings.kafka_topic_contradiction,
         ],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_intelligence_consumer_instance_id,
     )
     consumer = IntelligenceConsumer(
         config=config,

@@ -393,8 +393,12 @@ class ConsumerConfig:
             "reconnect.backoff.max.ms": self.reconnect_backoff_max_ms,
         }
         # KIP-345 static group membership: only set if configured so consumers
-        # that omit it retain the original dynamic membership behaviour.
-        if self.group_instance_id is not None:
+        # that omit it retain the original dynamic membership behaviour. The
+        # settings-driven scopes default to an empty string ("") rather than
+        # None (pydantic ``str = ""`` fields), so a falsy guard — not ``is not
+        # None`` — is required for empty to stay a true no-op (PLAN-0113 NFR-3:
+        # the key must be ABSENT from the rdkafka payload for dynamic members).
+        if self.group_instance_id:
             cfg["group.instance.id"] = self.group_instance_id
         return apply_base_rdkafka_config(cfg)
 
