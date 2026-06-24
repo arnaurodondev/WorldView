@@ -1,0 +1,32 @@
+{
+  "accepted": false,
+  "agreement": 0.7949,
+  "computable": true,
+  "computed_at": "2026-06-12T20:31:09.980602+00:00",
+  "confusion_matrix": {
+    "false_fail": 2,
+    "false_pass": 6,
+    "false_pass_on_fabrication": [
+      "gold_fabrication_09"
+    ],
+    "true_fail": 15,
+    "true_pass": 16
+  },
+  "gate": {
+    "kappa_ok": false,
+    "no_fabrication_false_pass": false
+  },
+  "kappa": 0.5937,
+  "kappa_bar": 0.7,
+  "label_status": "39/39 labelled",
+  "loader_errors": [],
+  "n_compared": 39,
+  "n_labelled": 39,
+  "n_total": 39,
+  "per_dimension_mae": {
+    "coherence": 8.692,
+    "framing": 6.0,
+    "grounding": 5.923,
+    "tool_use": 7.872
+  }
+}

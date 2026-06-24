@@ -64,6 +64,9 @@ function buildPinnedParams(
     dayChange: null,
     dayChangePct: null,
     dayChangeValue: null,
+    // PLAN-0114 W6: dividend yield is null for the synthetic totals row
+    // (the YIELD cell renderer checks node.rowPinned === 'bottom').
+    annualizedDividendYield: null,
     ...rowOverrides,
   };
   return {

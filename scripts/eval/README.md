@@ -49,6 +49,31 @@ NLP_PIPELINE_EXTRACTION_API_KEY=... \
 
 ---
 
+## `validate_stored_relation_quality.py` — stored-graph relation quality audit
+
+Re-judges a stratified sample of **already-stored** `intelligence_db.relations` +
+`relation_evidence` rows (NOT fresh extraction output) with an independent budget judge
+(`deepseek-ai/DeepSeek-V4-Flash`), asking only: *does the stored evidence text actually
+ASSERT the stored triple?* Segments by extraction-model era
+(`relations.created_at >= 2026-06-16` = gpt-oss; earlier = Qwen) and classifies each into
+SUPPORTED / CO_MENTION / WRONG_DIRECTION / WRONG_PREDICATE / UNSUPPORTED. Reports
+SUPPORTED-rate overall / by era / by predicate and dumps non-SUPPORTED examples.
+
+Built to fact-check the `2026-06-18-relation-precision-gates.md` benchmark claim
+(gpt-oss precision 5.0/5) against reality. Result: stored support is **≈28%**, not 5/5;
+CO_MENTION (44%) is the dominant, gate-invisible defect. See
+`docs/audits/2026-06-20-stored-relation-quality-validation.md`. READ-ONLY DB; the SQL
+sample is produced separately and fed in as a TSV.
+
+```
+KEY=$(docker exec worldview-nlp-pipeline-article-consumer-0-1 \
+        printenv NLP_PIPELINE_EXTRACTION_API_KEY)
+python scripts/eval/validate_stored_relation_quality.py \
+    --key "$KEY" --tsv /tmp/wv_sample_clean.tsv --out /tmp/wv_verdicts.json --workers 8
+```
+
+---
+
 # Extraction-quality A/B harness (LLM-as-judge)
 
 `extraction_quality_eval.py` — an **offline** harness to decide whether a

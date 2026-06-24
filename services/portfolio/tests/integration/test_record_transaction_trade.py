@@ -13,7 +13,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from tests.integration.helpers import INTEGRATION_USER_ID
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]

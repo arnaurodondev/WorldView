@@ -12,7 +12,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from tests.integration.helpers import (
     INTEGRATION_TENANT2_ID,
     INTEGRATION_USER3_ID,

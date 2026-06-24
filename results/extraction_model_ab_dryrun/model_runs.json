@@ -1,0 +1,308 @@
+[
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "status": "ok",
+    "latency_s": 49.211,
+    "tokens_in": 4181,
+    "tokens_out": 482,
+    "raw_response": "{ \"events\": [ { \"event_type\": \"CAPITAL_RAISE\", \"description\": \"NeoGenomics launches $275M convertible notes offering due 2032\", \"entity_refs\": [ \"NeoGenomics\", \"NEO\", \"NEOGENOMICS\" ], \"valid_from\": \"2026-06-15\", \"valid_to\": null, \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\", \"confidence\": 0.95 }, { \"event_type\": \"CORPORATE_ACTION\", \"description\": \"NeoGenomics may repurchase up to $25M of its common stock\", \"entity_refs\": [ \"NeoGenomics\", \"NEO\", \"NEOGENOMICS\" ], \"valid_from\": \"2026-06-15\", \"valid_to\": null, \"evidence_text\": \"NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions.\", \"confidence\": 0.95 } ], \"claims\": [ { \"entity_ref\": \"NeoGenomics\", \"claim_type\": \"GUIDANCE_RAISE\", \"polarity\": \"positive\", \"confidence\": 0.95, \"evidence_text\": \"NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval\" }, { \"entity_ref\": \"NeoGenomics\", \"claim_type\": \"DEBT_CHANGE\", \"polarity\": \"neutral\", \"confidence\": 0.95, \"evidence_text\": \"The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028.\" } ], \"relations\": [ { \"subject_ref\": \"NeoGenomics\", \"predicate\": \"issues_debt\", \"object_ref\": \"NeoGenomics\", \"confidence\": 0.95, \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\", \"valid_to\": null } ] }",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "NeoGenomics launches $275M convertible notes offering due 2032",
+          "entity_refs": [
+            "NeoGenomics",
+            "NEO",
+            "NEOGENOMICS"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "CORPORATE_ACTION",
+          "description": "NeoGenomics may repurchase up to $25M of its common stock",
+          "entity_refs": [
+            "NeoGenomics",
+            "NEO",
+            "NEOGENOMICS"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval"
+        },
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "NeoGenomics",
+          "predicate": "issues_debt",
+          "object_ref": "NeoGenomics",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 2,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "status": "ok",
+    "latency_s": 96.479,
+    "tokens_in": 4070,
+    "tokens_out": 708,
+    "raw_response": "{ \"events\": [ { \"event_type\": \"REGULATORY_ACTION\", \"description\": \"Cuprina Pte. Ltd. received 510(k) clearance from the U.S. Food and Drug Administration for MEDIFLY Maggots in wound debridement\", \"entity_refs\": [ \"Cuprina Pte. Ltd.\", \"U.S. Food and Drug Administration\", \"FDA\" ], \"valid_from\": \"2026-06-16\", \"valid_to\": null, \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\", \"confidence\": 0.95 } ], \"claims\": [ { \"entity_ref\": \"Cuprina Pte. Ltd.\", \"claim_type\": \"OTHER\", \"polarity\": \"positive\", \"confidence\": 0.95, \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\" } ], \"relations\": [ { \"subject_ref\": \"Cuprina Pte. Ltd.\", \"predicate\": \"subsidiary_of\", \"object_ref\": \"Cuprina Holdings (Cayman) Limited\", \"confidence\": 0.95, \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\", \"valid_to\": null }, { \"subject_ref\": \"U.S. Food and Drug Administration\", \"predicate\": \"regulates\", \"object_ref\": \"Cuprina Pte. Ltd.\", \"confidence\": 0.95, \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\", \"valid_to\": null }, { \"subject_ref\": \"U.S. Food and Drug Administration\", \"predicate\": \"regulates\", \"object_ref\": \"FDA\", \"confidence\": 0.95, \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\", \"valid_to\": null } ] }",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Cuprina Pte. Ltd. received 510(k) clearance from the U.S. Food and Drug Administration for MEDIFLY Maggots in wound debridement",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration",
+            "FDA"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Cuprina Pte. Ltd.",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Cuprina Pte. Ltd.",
+          "predicate": "subsidiary_of",
+          "object_ref": "Cuprina Holdings (Cayman) Limited",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "U.S. Food and Drug Administration",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "U.S. Food and Drug Administration",
+          "predicate": "regulates",
+          "object_ref": "FDA",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 3
+  },
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "openai/gpt-oss-120b",
+    "status": "ok",
+    "latency_s": 22.602,
+    "tokens_in": 4009,
+    "tokens_out": 661,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"entity_refs\": [\"NeoGenomics\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.",
+          "entity_refs": [
+            "NeoGenomics"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "openai/gpt-oss-120b",
+    "status": "ok",
+    "latency_s": 15.507,
+    "tokens_in": 3997,
+    "tokens_out": 504,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)\",\n      \"entity_refs\": [\n        \"Cuprina Pte. Ltd.\",\n        \"U.S. Food and Drug Administration\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "meta-llama/Llama-3.3-70B-Instruct",
+    "status": "ok",
+    "latency_s": 14.746,
+    "tokens_in": 3969,
+    "tokens_out": 356,
+    "raw_response": "```\n{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"NeoGenomics launches $275M convertible notes offering due 2032\",\n      \"entity_refs\": [\"NeoGenomics\", \"NEO\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"DEBT_CHANGE\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.\"\n    },\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.70,\n      \"evidence_text\": \"NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"NeoGenomics\",\n      \"predicate\": \"issues_debt\",\n      \"object_ref\": \"convertible senior notes\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"valid_to\": null\n    }\n  ]\n}\n```",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "NeoGenomics launches $275M convertible notes offering due 2032",
+          "entity_refs": [
+            "NeoGenomics",
+            "NEO"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "NeoGenomics (NEO) announced a private offering of $275M in convertible senior notes due 2032.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032."
+        },
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.7,
+          "evidence_text": "NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval"
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "NeoGenomics",
+          "predicate": "issues_debt",
+          "object_ref": "convertible senior notes",
+          "confidence": 0.9,
+          "evidence_text": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 2,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "meta-llama/Llama-3.3-70B-Instruct",
+    "status": "ok",
+    "latency_s": 19.732,
+    "tokens_in": 3962,
+    "tokens_out": 338,
+    "raw_response": "```\n{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Cuprina Pte. Ltd. received FDA 510(k) clearance for MEDIFLY Maggots\",\n      \"entity_refs\": [\"Cuprina Pte. Ltd.\", \"U.S. Food and Drug Administration\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Cuprina Pte. Ltd.\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.80,\n      \"evidence_text\": \"shares rose over 110% in Monday's trade.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Cuprina Pte. Ltd.\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"U.S. Food and Drug Administration\",\n      \"confidence\": 0.90,\n      \"evidence_text\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"valid_to\": null\n    }\n  ]\n}\n```",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Cuprina Pte. Ltd. received FDA 510(k) clearance for MEDIFLY Maggots",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Cuprina Pte. Ltd.",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.8,
+          "evidence_text": "shares rose over 110% in Monday's trade."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Cuprina Pte. Ltd.",
+          "predicate": "regulates",
+          "object_ref": "U.S. Food and Drug Administration",
+          "confidence": 0.9,
+          "evidence_text": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 1
+  }
+]

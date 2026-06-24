@@ -1,0 +1,14 @@
+{
+  "model": "openai/gpt-oss-120b@medium",
+  "judge_model": "deepseek-ai/DeepSeek-V4-Flash",
+  "n_articles_judged": 17,
+  "relations_raw": 32,
+  "relations_gated": 32,
+  "relations_dropped": 0,
+  "drop_rate": 0.0,
+  "drops_by_reason": {},
+  "mean_precision_raw": 4.941,
+  "mean_precision_gated": 4.941,
+  "mean_adherence_raw": 5,
+  "mean_adherence_gated": 5
+}

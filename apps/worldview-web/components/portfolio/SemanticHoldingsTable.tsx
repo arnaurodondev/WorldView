@@ -374,7 +374,13 @@ export function SemanticHoldingsTable({
       }
       totalWeight += weight;
 
-      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
+      // annualizedDividendYield: injected by S9's get_holdings fan-out to S3
+      // fundamentals (PLAN-0114 W6).  The Holding type carries this as an
+      // optional field; we surface it directly on EnrichedHoldingRow so the
+      // YIELD column renderer can access it without re-deriving from `h`.
+      const annualizedDividendYield = h.annualizedDividendYield ?? null;
+
+      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue, annualizedDividendYield };
     });
 
     const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
@@ -432,6 +438,9 @@ export function SemanticHoldingsTable({
       dayChange: null,
       dayChangePct: totalDayChangePct,
       dayChangeValue: dayChangeSeen ? totalDayChange : null,
+      // The TOTAL row has no meaningful dividend yield — the YIELD cell
+      // renderer checks node.rowPinned === 'bottom' and renders "—" instead.
+      annualizedDividendYield: null,
     };
 
     return { enrichedRows: rows, pinnedBottomRow: pinned };
