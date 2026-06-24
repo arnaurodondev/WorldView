@@ -109,6 +109,32 @@ class Settings(BaseSettings):
     # env var: API_GATEWAY_DEEPINFRA_API_KEY (env_prefix + field name)
     deepinfra_api_key: SecretStr = SecretStr("")
 
+    # ── Bundle pre-warmer (PLAN-0099 R3) ────────────────────────────────────
+    # Background worker that periodically re-fetches the Intelligence-tab
+    # composite bundle for a configured set of hot entity IDs (typically the
+    # S&P 500). Keeps the downstream caches (S7 intel/paths) warm so the first
+    # real user request hits a populated cache (~88 ms vs 4-10 s cold).
+    #
+    # Default is OFF so the worker is opt-in only and never fires in unit
+    # tests, dev, or CI unless explicitly enabled via env var. Runtime
+    # container is wired in infra/compose/docker-compose.yml.
+    prewarm_enabled: bool = False
+    # Comma-separated list of entity UUIDs; pydantic-settings parses CSV→list[str]
+    # automatically for ``list[str]`` fields.
+    prewarm_entity_ids: list[str] = []
+    # Slightly below the bundle's underlying cache TTL (300 s) so we always
+    # repopulate before expiry, never serving a cold miss to real users.
+    prewarm_interval_seconds: int = 240
+    # Base URL the worker hits — defaults to localhost so the container can
+    # call its sibling api-gateway via the service network.
+    prewarm_api_base_url: str = "http://localhost:8000"
+    # Cap on concurrent in-flight prewarm requests (per cycle) — prevents the
+    # worker from saturating the api-gateway it depends on.
+    prewarm_concurrency: int = 3
+    # Per-request timeout. Bundle fan-out can take several seconds when the
+    # downstream caches are cold; allow generous headroom.
+    prewarm_request_timeout_seconds: float = 30.0
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"
     log_level: str = "INFO"

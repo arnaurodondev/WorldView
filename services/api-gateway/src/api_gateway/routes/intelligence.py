@@ -10,11 +10,14 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
 from api_gateway.schemas import (
@@ -1289,6 +1292,250 @@ async def get_entity_intelligence_bundle(
         content=json.dumps(bundle).encode(),
         status_code=200,
         media_type="application/json",
+    )
+
+
+# ── Intelligence-tab bundle SSE stream (PLAN-0099 W4 follow-up R2) ───────────
+#
+# WHY a streaming variant: even after R1 dropped graph_d2 from the non-streaming
+# bundle, paths + intelligence_summary still serialize against the slowest leg
+# in the gather. Above-the-fold widgets (detail / brief) resolve in well under
+# 200 ms but pay the worst-case latency of the rest. The streaming endpoint
+# fans out the same 5 legs (graph_d2 restored — analysts who want it can opt
+# into the stream variant) and yields each leg as it completes via
+# asyncio.wait/FIRST_COMPLETED, letting the frontend hydrate per-widget caches
+# the instant each leg is ready.
+#
+# SSE WIRE FORMAT (per spec § DELIVERABLES):
+#     event: leg
+#     data: {"leg": "<name>", "value": <json|null>, "error": "<msg>"?}
+#     <blank>
+#     ...
+#     event: done
+#     data: {"partial": <bool>}
+#     <blank>
+#
+# Per-leg semantics: failed legs surface as {value: null, error: <msg>} rather
+# than aborting the stream.
+#
+# Outer timeout: 20 s. On expiry we cancel pending legs and emit a final
+# event: done with partial: true so the frontend can decide whether to fall
+# back to the non-streaming bundle for the missing legs.
+#
+# WHY StreamingResponse (not EventSourceResponse): per task spec we use the
+# native FastAPI primitive. sse-starlette is not an api-gateway dependency.
+
+
+# Outer deadline applied to the whole fan-out. Tuned against the longest
+# observed cold-start of graph_d2 (~18 s on a freshly restarted KG container).
+_BUNDLE_STREAM_TIMEOUT_S = 20.0
+
+
+def _format_sse(event: str, payload: dict[str, Any]) -> str:
+    """Format one SSE block per RFC 8895.
+
+    Returns the full block including the terminating blank line.  Centralised
+    so the wire format is defined in exactly one place — any future change
+    (e.g. adding ``id:`` for resumability) lands here.
+
+    WHY ensure_ascii=False: JSON payloads carry user-facing entity names
+    which may contain non-ASCII characters. The SSE transport is UTF-8 by
+    default; ASCII escaping would inflate payloads and make debugging via
+    curl harder.
+    """
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+async def _leg_task(
+    name: str,
+    coro: Any,
+) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Wrap a leg coroutine so failures surface as a typed result tuple.
+
+    Returns ``(leg_name, value_or_None, error_or_None)``. Never raises —
+    callers iterate results without try/except.
+
+    WHY return tuple (not raise): ``asyncio.wait`` does not propagate
+    exceptions from awaited tasks; ``task.result()`` raises lazily. Catching
+    here gives a single uniform fail-soft shape per leg.
+    """
+    try:
+        value = await coro
+        return (name, value, None)
+    except Exception as exc:  # — fail-soft per leg by design
+        logger.warning(
+            "entity_intelligence_bundle_stream_leg_failed",
+            leg=name,
+            error=type(exc).__name__,
+        )
+        return (name, None, type(exc).__name__)
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence-bundle/stream",
+    summary="Entity Intelligence tab composite bundle (SSE streaming variant)",
+    # WHY response_class=StreamingResponse: with ``from __future__ import
+    # annotations`` the return-type hint is a ForwardRef string at import
+    # time — FastAPI tries to use it as a response model and pydantic blows
+    # up on the unresolved name. Declaring the response class here bypasses
+    # response-model generation and signals the SSE content type up-front.
+    response_class=StreamingResponse,
+)
+async def get_entity_intelligence_bundle_stream(
+    entity_id: UUID,
+    request: Request,
+) -> Any:
+    """Streaming variant of the Intelligence-tab bundle endpoint.
+
+    Same 5 legs as ``/intelligence-bundle`` (detail / brief / graph_d2 /
+    paths / intelligence_summary) but yields one SSE ``leg`` event per leg
+    as it resolves. Terminates with ``event: done``.
+
+    See module-level wire-format docstring for the exact framing.
+
+    Requires authentication (401 without a valid JWT). Per-leg failures
+    surface as ``{"leg": "<name>", "value": null, "error": "<msg>"}`` rather
+    than aborting the stream.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    eid = str(entity_id)
+
+    # ── Build the 5 leg coroutines ──────────────────────────────────────────
+    # ``_bundle_fetch_json`` already swallows non-2xx + exceptions and returns
+    # None; ``_leg_task`` additionally normalises any unexpected raise into
+    # ("name", None, "ExcType").
+    leg_specs: list[tuple[str, Any]] = [
+        (
+            "detail",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}",
+                headers=headers,
+                leg="detail",
+            ),
+        ),
+        (
+            "brief",
+            _bundle_fetch_json(
+                clients.rag_chat,
+                f"/api/v1/briefings/instrument/{eid}",
+                headers=headers,
+                leg="brief",
+            ),
+        ),
+        (
+            "graph_d2",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/graph",
+                headers=headers,
+                params={
+                    "limit": _BUNDLE_GRAPH_LIMIT,
+                    "depth": _BUNDLE_GRAPH_DEPTH,
+                    "min_confidence": 0.0,
+                    "confidence_breakdown": "true",
+                },
+                leg="graph_d2",
+            ),
+        ),
+        (
+            "paths",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/paths",
+                headers=headers,
+                params={
+                    "limit": _BUNDLE_PATHS_LIMIT,
+                    "min_score": _BUNDLE_PATHS_MIN_SCORE,
+                    "min_hops": _BUNDLE_PATHS_MIN_HOPS,
+                    "max_hops": _BUNDLE_PATHS_MAX_HOPS,
+                },
+                leg="paths",
+            ),
+        ),
+        (
+            "intelligence_summary",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/intelligence",
+                headers=headers,
+                leg="intelligence_summary",
+            ),
+        ),
+    ]
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        # WHY real Tasks: ``asyncio.wait`` requires Futures; wrapping in Task
+        # means we can cancel them deterministically on the outer timeout
+        # path (raw coroutines can't be cancelled until scheduled).
+        tasks = [asyncio.create_task(_leg_task(name, coro)) for name, coro in leg_specs]
+        partial = False
+        try:
+            pending: set[asyncio.Task[Any]] = set(tasks)
+            deadline = asyncio.get_event_loop().time() + _BUNDLE_STREAM_TIMEOUT_S
+            while pending:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    partial = True
+                    break
+                done, pending = await asyncio.wait(
+                    pending,
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    # Outer deadline hit with no new completions → partial.
+                    partial = True
+                    break
+                for task in done:
+                    name, value, error = task.result()
+                    # Apply the graph transform inline so the streamed payload
+                    # matches the per-widget cache shape (EntityGraph).
+                    if name == "graph_d2" and value is not None:
+                        try:
+                            value = _transform_graph_response(value)
+                        except Exception:
+                            logger.warning(
+                                "entity_intelligence_bundle_stream_graph_transform_failed",
+                                entity_id=eid,
+                            )
+                            value = None
+                            error = error or "transform_failed"
+                    payload: dict[str, Any] = {"leg": name, "value": value}
+                    if error is not None:
+                        payload["error"] = error
+                    yield _format_sse("leg", payload).encode("utf-8")
+        finally:
+            # Cancel any still-pending tasks so the underlying httpx calls
+            # don't outlive the response. Suppress CancelledError to keep
+            # the generator's exit clean.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                if not task.done():
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+        yield _format_sse("done", {"partial": partial}).encode("utf-8")
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        # WHY explicit no-buffer headers: many reverse proxies (nginx default)
+        # buffer text/event-stream responses unless told otherwise.
+        # X-Accel-Buffering=no is the nginx-specific opt-out; Cache-Control
+        # prevents intermediate caches from collapsing the stream.
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

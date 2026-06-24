@@ -2442,6 +2442,42 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ── Bundle pre-warmer (PLAN-0099 R3) ───────────────────────────────────────
+  # Periodically re-fetches /v1/entities/{id}/intelligence-bundle for a hot
+  # set of entity IDs (S&P 500 starter list) so the downstream S7 intel/paths
+  # caches stay populated. Default-OFF unless API_GATEWAY_PREWARM_ENABLED=true.
+  api-gateway-bundle-prewarmer:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    env_file:
+      - ../../services/api-gateway/configs/docker.env
+    environment:
+      # Opt-in toggle — override of docker.env so the worker actually runs.
+      API_GATEWAY_PREWARM_ENABLED: "true"
+      # Worker calls the sibling api-gateway via the docker service network.
+      API_GATEWAY_PREWARM_API_BASE_URL: "http://api-gateway:8000"
+      # Starter S&P 500 list — JSON array. Real entity IDs wired by deploy config.
+      # Seed value below is the Akamai entity from local dev seed data — replace
+      # for prod. Pydantic-settings rejects "" for list[str]; "[]" parses as empty.
+      API_GATEWAY_PREWARM_ENTITY_IDS: '["c72b76e9-62c9-421e-950e-6c210a5f662a"]'
+      API_GATEWAY_PREWARM_INTERVAL_SECONDS: "240"
+      API_GATEWAY_PREWARM_CONCURRENCY: "3"
+    command: ["python", "-m", "api_gateway.workers.bundle_prewarmer_main"]
+    expose: ["9100"]
+    restart: on-failure
+    healthcheck:
+      # Process-alive check (no HTTP server beyond /metrics on 9100).
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
   # /api/* rewrites. See docs/apps/worldview-web.md for architecture.
