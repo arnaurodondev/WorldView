@@ -4,7 +4,7 @@ DDL owner for `intelligence_db`. This is a one-shot init container — no applic
 
 ## What this container does
 
-1. **Alembic migrations** — Creates all 21 tables, 100+ indexes, 108 pre-seeded partitions via `alembic upgrade head`
+1. **Alembic migrations** — Creates ~44 tables, 100+ indexes, and pre-seeded monthly partitions via `alembic upgrade head` (chain currently at revision `0062`)
 2. **Seed scripts** — Runs idempotent SQL scripts in `seeds/` for `model_registry` and `prompt_templates`
 3. **Embedding population** — Embeds `relation_type_registry` canonical types via Ollama (non-blocking on failure)
 4. Exits with code 0 on success

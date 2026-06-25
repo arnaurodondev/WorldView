@@ -36,10 +36,10 @@ router.include_router(dashboard_router)
 router.include_router(content_router)
 router.include_router(instruments_router)
 router.include_router(intelligence_router)
-# signals_router MUST come before market_router: both register GET
-# /v1/signals/ai and FastAPI resolves in registration order. signals.py is the
-# enriched 2026-06-10 replacement (dedup + entity-name + polarity-aware labels);
-# the legacy handler in market.py is dead code pending removal by its owner.
+# signals_router owns GET /v1/signals/ai (the enriched 2026-06-10 handler: dedup +
+# entity-name + polarity-aware labels). The legacy duplicate in market.py was removed
+# (2026-06-25 docs-audit follow-up), so registration order no longer matters here, but
+# keeping signals_router first preserves the intended precedence if a clash ever recurs.
 router.include_router(signals_router)
 router.include_router(market_router)
 router.include_router(portfolio_router)

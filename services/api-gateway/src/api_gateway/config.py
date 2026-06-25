@@ -66,10 +66,11 @@ class Settings(BaseSettings):
     alert_ws_url: str = "ws://localhost:8010"  # env: API_GATEWAY_ALERT_WS_URL
 
     # Rate limiting
-    # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
-    # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
-    # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
-    # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
+    # WHY 2000/60s: authenticated users on the instrument detail page fire 4+ simultaneous
+    # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news, and
+    # rapid cross-page navigation bursts well past the old 300 ceiling (tripped 429s under
+    # live multi-panel workspace + dashboard usage). Unauthenticated tier stays at 20 req/60s
+    # (enforced in RateLimitMiddleware).
     rate_limit_requests: int = 2000
     rate_limit_window_seconds: int = 60
     # PLAN-0094 W1: per-tier limits read by RateLimitMiddleware.

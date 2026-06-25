@@ -1,8 +1,9 @@
 """Market data routes for the API Gateway.
 
 Handles /v1/ohlcv/*, /v1/quotes/*, /v1/market/*, /v1/fundamentals/* (screener + timeseries
-+ section endpoints), /v1/signals/ai — proxies to S3 Market Data and S7 KG.
-Split from proxy.py (PLAN-0089 B-3).
++ section endpoints) — proxies to S3 Market Data and S7 KG.
+Split from proxy.py (PLAN-0089 B-3). (The legacy /v1/signals/ai handler lived here too;
+it was removed once routes/signals.py superseded it — see routes/__init__.py.)
 """
 
 from __future__ import annotations
@@ -1775,155 +1776,6 @@ async def top_movers(
         )
     except DownstreamError as e:
         raise downstream_to_http(e) from e
-
-
-# ── AI Signals (PRD-0028 Wave S9-3 → real proxy to S6) ────────────────────
-
-# Maps S6 claim_type values to frontend AiSignal label.
-# Positive events: mergers, beats, upgrades, capital allocation, strategic growth.
-# Negative events: misses, downgrades, regulatory/legal risk, distress.
-_POSITIVE_SIGNAL_TYPES = frozenset(
-    {
-        # Legacy broker-event labels (kept for backward compatibility)
-        "M_AND_A",
-        "EARNINGS_BEAT",
-        "UPGRADE",
-        "BUYBACK",
-        "ACQUISITION",
-        "DIVIDEND",
-        "EXPANSION",
-        "PARTNERSHIP",
-        "JOINT_VENTURE",
-        "IPO",
-        "REVENUE_BEAT",
-        "GUIDANCE_RAISE",
-        "CONTRACT_WIN",
-        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
-        "PRODUCT_LAUNCH",
-        "CAPITAL_RAISE",
-    },
-)
-_NEGATIVE_SIGNAL_TYPES = frozenset(
-    {
-        # Legacy broker-event labels (kept for backward compatibility)
-        "EARNINGS_MISS",
-        "DOWNGRADE",
-        "REGULATORY_ACTION",
-        "LAWSUIT",
-        "BANKRUPTCY",
-        "RESTRUCTURING",
-        "GUIDANCE_CUT",
-        "REVENUE_MISS",
-        "INVESTIGATION",
-        "FINE",
-        "RECALL",
-        "LAYOFF",
-        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
-        "LEGAL",
-        "NATURAL_DISASTER",
-        "GEOPOLITICAL",
-        "SANCTIONS",
-    },
-)
-
-
-def _signal_type_to_label(signal_type: str) -> str:
-    st = signal_type.upper()
-    if st in _POSITIVE_SIGNAL_TYPES:
-        return "POSITIVE"
-    if st in _NEGATIVE_SIGNAL_TYPES:
-        return "NEGATIVE"
-    return "NEUTRAL"
-
-
-@router.get("/signals/ai")
-async def ai_signals(request: Request) -> Any:
-    """Proxy GET /api/v1/signals → S6 NLP Pipeline, transforming to frontend shape.
-
-    S6 returns {items: [...], total, limit, offset} with signal_type/confidence/detected_at.
-    The frontend expects {signals: [...]} with label/score/article_title/created_at.
-    This transform bridges the two without changing the S6 contract.
-    """
-    if not getattr(request.state, "user", None):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    headers = _auth_headers(request)
-    clients = _clients(request)
-    resp = await clients.nlp_pipeline.get(
-        "/api/v1/signals",
-        params=dict(request.query_params),
-        headers=headers,
-    )
-    if resp.status_code != 200:
-        return proxy_json_response(request, resp)
-
-    try:
-        body = json.loads(resp.content)
-        items = body.get("items", [])
-
-        # Batch-resolve entity_ids → tickers from KG to show "AAPL" instead of entity_id prefix.
-        ticker_map: dict[str, str | None] = {}
-        entity_ids = list({str(item.get("entity_id", "")) for item in items if item.get("entity_id")})
-        if entity_ids:
-            try:
-                kg_batch_resp = await clients.knowledge_graph.post(
-                    "/api/v1/entities/batch",
-                    json={"entity_ids": entity_ids},
-                    headers=headers,
-                )
-                if kg_batch_resp.status_code == 200:
-                    kg_body = json.loads(kg_batch_resp.content)
-                    for ent in kg_body.get("entities", []):
-                        ticker_map[str(ent["entity_id"])] = ent.get("ticker")
-            except Exception:
-                logger.warning("ai_signals_ticker_enrichment_failed", exc_info=True)
-
-        # Batch-resolve doc_ids → article titles via content-store.
-        # S6 includes doc_id in every signal; content-store /documents/batch returns
-        # title, url, published_at, source_name per doc_id in a single query.
-        article_map: dict[str, dict[str, str | None]] = {}
-        doc_ids = list({str(item.get("doc_id", "")) for item in items if item.get("doc_id")})
-        if doc_ids:
-            try:
-                cs_resp = await clients.content_store.post(
-                    "/api/v1/documents/batch",
-                    json={"doc_ids": doc_ids},
-                    headers=headers,
-                )
-                if cs_resp.status_code == 200:
-                    cs_body = json.loads(cs_resp.content)
-                    for doc in cs_body.get("documents", []):
-                        article_map[str(doc["doc_id"])] = {
-                            "title": doc.get("title"),
-                            "url": doc.get("url"),
-                            "source_name": doc.get("source_name"),
-                            "published_at": doc.get("published_at"),
-                        }
-            except Exception:
-                logger.warning("ai_signals_article_enrichment_failed", exc_info=True)
-
-        signals = [
-            {
-                "signal_id": str(item.get("signal_id", "")),
-                "entity_id": str(item.get("entity_id", "")),
-                "ticker": ticker_map.get(str(item.get("entity_id", ""))),
-                # Map signal_type (LLM event_type enum: PRODUCT_LAUNCH, LEGAL, etc.)
-                # to POSITIVE/NEGATIVE/NEUTRAL via _signal_type_to_label which covers
-                # both the legacy broker-event types and the NLP deep-extraction enum.
-                # This works for both existing and new outbox rows, unlike the polarity
-                # field which was hardcoded to "neutral" in earlier outbox writers.
-                "label": _signal_type_to_label(str(item.get("signal_type", ""))),
-                "score": float(item.get("confidence", 0.0)),
-                "article_title": article_map.get(str(item.get("doc_id", "")), {}).get("title"),
-                "article_url": article_map.get(str(item.get("doc_id", "")), {}).get("url"),
-                "source_name": article_map.get(str(item.get("doc_id", "")), {}).get("source_name"),
-                "created_at": str(item.get("detected_at", "")),
-            }
-            for item in items
-        ]
-        return {"signals": signals}
-    except Exception:
-        logger.warning("ai_signals_transform_failed", exc_info=True)
-        return proxy_json_response(request, resp)
 
 
 # ── Yield Curve (PLAN-0091 Wave A-2, T-A-2-04 / Wave E-2, T-E-2-02) ─────────

@@ -420,7 +420,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # These cover write operations on transaction and brokerage resources — actions
 # that can have real financial consequences (creating/deleting transactions,
 # syncing brokerage accounts). We intentionally omit GET paths from this set
-# so read-heavy dashboard loads stay within the generous 300/min default bucket.
+# so read-heavy dashboard loads stay within the generous 2000/min default bucket.
 _FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
     "/v1/transactions",  # POST / PUT / DELETE transactions
     "/v1/brokerage",  # POST brokerage connections, trigger sync
@@ -443,7 +443,7 @@ _EXPORT_RATE_LIMIT = 10  # requests per window
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding-window rate limiter backed by Valkey.
 
-    Authenticated requests are keyed by user_id (300/min default).
+    Authenticated requests are keyed by user_id (2000/min default).
     Financial mutation endpoints (POST/PUT/DELETE on /v1/transactions,
     /v1/brokerage, /v1/portfolios) use a tighter 20/min sub-tier keyed
     separately so payment-adjacent writes are strictly controlled while
@@ -566,7 +566,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # Separate Valkey key so the financial-mutation counter does
                 # not eat the general dashboard budget. A user can perform
                 # up to 20 transaction writes per minute while simultaneously
-                # firing 300 read requests for charts / screener / KG data.
+                # firing thousands of read requests for charts / screener / KG data.
                 key = f"rl:v1:fin:{user['user_id']}"
                 limit = self.financial_mutation_limit
             else:
