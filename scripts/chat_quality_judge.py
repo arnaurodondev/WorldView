@@ -291,6 +291,53 @@ class GroundingCheck:
 
 
 @dataclass(frozen=True)
+class SubstantiationCheck:
+    """Outcome of the deterministic substantiation cross-check (W1 / MUST-1).
+
+    A STRICTER sibling of :class:`GroundingCheck`. Where ``GroundingCheck`` only
+    flags a number a sample DISPROVES (``contradicted``), this check additionally
+    flags a number the agent asserts FOR A SAMPLED FIELD that the tool never
+    actually returned a matching value for (``unsupported``) — the agent claimed a
+    number the tool's own (value-less) field could not have produced.
+
+    Each numeric claim is classified against the captured grounding samples:
+      * ``substantiated`` — claim is associated (by name/alias) to a sampled field
+        and is within tolerance of a sampled value (== ``GroundingCheck.matched``).
+      * ``contradicted``  — claim is associated to a sampled field and is OUTSIDE
+        tolerance of every sampled value (== ``GroundingCheck.contradicted``).
+      * ``unsupported``   — claim is associated to a sampled field that is PRESENT
+        in the sample set but has NO parseable value to match against AND nothing
+        to contradict. The agent asserted a number for a field the tool returned
+        only as a (value-less) name → unsupported assertion.
+      * ``unmatched``     — claim has no associated sampled field (neutral; never a
+        failure — there is no evidence either way).
+
+    Coverage:
+      * ``"verified"`` — at least one grounding sample was present (the check had
+        real field names to bite on).
+      * ``"presumed"`` — NO grounding sample at all (legacy fallback). In this mode
+        the check NEVER fires: by INVARIANT every count is 0 (asserted by tests).
+    """
+
+    substantiated: int = 0  # claim matched a sampled value within tolerance
+    unsupported: int = 0  # claim names a sampled field that returned no value → unsupported
+    contradicted: int = 0  # claim outside tolerance of every sampled value (disproved)
+    unmatched: int = 0  # claim with no associated sampled field (neutral)
+    coverage: str = "presumed"  # "verified" (samples present) | "presumed" (legacy / no samples)
+    examples: list[dict[str, Any]] = field(default_factory=list)  # {claim, field, kind, ...}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "substantiated": self.substantiated,
+            "unsupported": self.unsupported,
+            "contradicted": self.contradicted,
+            "unmatched": self.unmatched,
+            "coverage": self.coverage,
+            "examples": list(self.examples),
+        }
+
+
+@dataclass(frozen=True)
 class VerdictDecision:
     """The composed, tiered verdict (PRD-0091 §6.5) — the W1 output object.
 
@@ -1557,6 +1604,161 @@ def cross_check_grounding(
         contradicted=contradicted,
         examples=examples,
         evidence_mode="verified",
+    )
+
+
+# --------------------------------------------------------------------------
+# Substantiation cross-check (PLAN-0110 W1 / MUST-1)
+# --------------------------------------------------------------------------
+#
+# THE PROBLEM cross_check_grounding does NOT catch. ``cross_check_grounding``
+# only HARD-FAILs a number a sample DISPROVES. But the tool may return a field
+# NAME with no usable value (e.g. the handler emitted ``revenue`` as a non-numeric
+# string the sample parser dropped). If the agent then states a revenue number,
+# the grounding check sees no parseable sample for that field → ``unmatched`` →
+# neutral. That is too lenient: the agent asserted a figure for a field the tool
+# never actually quantified. The substantiation check classifies that case as
+# ``unsupported``.
+#
+# DETERMINISTIC + LLM-FREE. We REUSE the exact same claim regex
+# (``_CLAIM_NUMBER_RE``), code-span strip, field-association (``_nearest_field``),
+# and tolerance (``_values_within_tolerance``) as the grounding check — one claim
+# parser, one source of truth (feedback_prompt_input_mismatch). We do NOT add a
+# second claim regex. The ONLY new input is the SET of field NAMES present in the
+# samples (incl. value-less ones), so a claim can be associated to a field that
+# returned no parseable value.
+#
+# INVARIANT (asserted by tests): coverage=="presumed" ⟹ all four counts are 0.
+# With NO sample to bite on we never invent a finding — absence is not failure.
+# This keeps a flag-off / no-sample run byte-identical to the pre-W1 baseline.
+
+
+def _collect_grounding_field_names(tool_results: list[dict[str, Any]] | None) -> set[str]:
+    """Return the SET of field names present in any captured grounding_sample.
+
+    Unlike :func:`_collect_grounding_fields` (which keeps only fields with a
+    PARSEABLE numeric value), this includes EVERY field name the sample carried —
+    even ones whose value could not be parsed to a float. The difference between
+    the two sets is exactly the "named-but-value-less" fields that drive the
+    ``unsupported`` class. Suffixed multi-row keys (``revenue_2``) are normalised
+    back to their base field name so a claim associates to the canonical field.
+    """
+    names: set[str] = set()
+    for tr in tool_results or []:
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        raw_fields = sample.get("fields")
+        if not isinstance(raw_fields, dict):
+            continue
+        for fname in raw_fields:
+            # ``build_grounding_sample`` suffixes repeated fields per row
+            # (``revenue``, ``revenue_2``). Strip a trailing ``_<digits>`` so the
+            # claim associates to the same canonical field name the value map uses.
+            base = re.sub(r"_\d+$", "", str(fname))
+            names.add(base)
+    return names
+
+
+def evaluate_substantiation(
+    answer_text: str,
+    tool_results: list[dict[str, Any]] | None,
+) -> SubstantiationCheck:
+    """Deterministically classify each numeric claim's substantiation (W1 / MUST-1).
+
+    Returns a populated :class:`SubstantiationCheck`. ``unsupported > 0`` (when
+    coverage=="verified") is what trips the ``SUBSTANTIATION_UNSUPPORTED``
+    invariant in :func:`evaluate_invariants`.
+
+    Algorithm (LLM-free, deterministic — REUSES the grounding-check helpers):
+      1. Collect the parseable ``{field: [sample_floats]}`` map AND the full set of
+         sampled field NAMES (incl. value-less ones). No samples at all → return a
+         zeroed ``presumed`` check (NEVER fails; all counts 0 — the W1 invariant).
+      2. Strip fenced/inline code so identifier numbers aren't treated as claims.
+      3. For every numeric claim in the prose, associate it to the nearest SAMPLED
+         field (over the FULL name set, so a value-less field still associates):
+           * no associated field            → ``unmatched`` (neutral);
+           * associated field HAS values:
+               - within tolerance of any    → ``substantiated``;
+               - outside tolerance of all   → ``contradicted`` (record example);
+           * associated field has NO value  → ``unsupported`` (record example):
+             the tool named the field but never quantified it.
+    """
+    value_fields = _collect_grounding_fields(tool_results)
+    all_field_names = _collect_grounding_field_names(tool_results)
+    # No evidence at all → legacy "presumed" mode. By INVARIANT we return all-zero
+    # counts and never scan the answer: with no field names to associate against,
+    # every number would be neutral noise and nothing could ever be a failure.
+    if not all_field_names:
+        return SubstantiationCheck(coverage="presumed")
+
+    cleaned = _strip_code_spans(answer_text or "")
+    cleaned_lower = cleaned.lower()
+    # ``_nearest_field`` associates a claim to one of THESE names. We pass the FULL
+    # set (value-less fields included) so a claim can attach to a named-but-empty
+    # field and be classed ``unsupported`` rather than silently ``unmatched``.
+    field_names = list(all_field_names)
+    substantiated = 0
+    unsupported = 0
+    contradicted = 0
+    unmatched = 0
+    examples: list[dict[str, Any]] = []
+
+    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
+        raw_num = m.group("num")
+        suffix = m.group("suffix") or ""
+        if _is_yearlike(raw_num, suffix):
+            continue
+        claim_val = _coerce_number(raw_num, suffix)
+        if claim_val is None:
+            continue
+        span = m.span()
+
+        field_name = _nearest_field(cleaned_lower, span, field_names)
+        if field_name is None:
+            unmatched += 1
+            continue
+
+        samples = value_fields.get(field_name, [])
+        if not samples:
+            # Field NAMED in the sample but no parseable value → the agent stated a
+            # number for a field the tool never actually quantified. Unsupported.
+            unsupported += 1
+            examples.append(
+                {
+                    "field": field_name,
+                    "claim": claim_val,
+                    "claim_text": m.group(0).strip(),
+                    "kind": "unsupported",
+                }
+            )
+            continue
+
+        if any(_values_within_tolerance(claim_val, s) for s in samples):
+            substantiated += 1
+            continue
+
+        # Outside tolerance of EVERY sampled value for this field → contradiction.
+        nearest_sample = min(samples, key=lambda s: abs(claim_val - s))
+        contradicted += 1
+        examples.append(
+            {
+                "field": field_name,
+                "claim": claim_val,
+                "claim_text": m.group(0).strip(),
+                "nearest_sample": nearest_sample,
+                "delta": abs(claim_val - nearest_sample),
+                "kind": "contradicted",
+            }
+        )
+
+    return SubstantiationCheck(
+        substantiated=substantiated,
+        unsupported=unsupported,
+        contradicted=contradicted,
+        unmatched=unmatched,
+        coverage="verified",
+        examples=examples,
     )
 
 
