@@ -31,11 +31,20 @@
  *   - bg-muted/40 → faint chip backdrop for the elapsed seconds
  * NO off-palette colors (blue-500, green-400, etc.) — see DESIGN_SYSTEM.md.
  *
- * ANIMATION:
- * `animate-pulse` on the icon is the ONLY motion. We deliberately do NOT use
+ * ANIMATION (Round 4 sweep — DESIGN_SYSTEM.md §6.2):
+ * `animate-skeleton-pulse` on the icon is the ONLY motion. Tailwind's raw
+ * `animate-pulse` is BANNED platform-wide (fast consumer-app pulse that
+ * bypasses our reduced-motion semantics); §6.2 sanctions exactly one opt-in
+ * tier — `animate-skeleton-pulse` (slow 2s opacity fade, tailwind.config.ts)
+ * for long loads (>2s expected, e.g. AI generation) where "still working"
+ * feedback matters. This strip exists PRECISELY for that case: it covers the
+ * multi-second silent reasoning gaps of agentic answers, and it is chrome
+ * (an icon next to a status label), not a data surface — no numbers ever
+ * pulse. We pair it with motion-reduce:animate-none so users with
+ * prefers-reduced-motion get a static icon (the text label alone still
+ * communicates the live stage). We still deliberately do NOT use
  * animate-spin (Bloomberg mandate forbids spinners on prose surfaces) and
- * NOT animate-bounce (too playful for a finance tool). Pulse is subtle and
- * reads as "alive, not frozen" — exactly the signal we need to send.
+ * NOT animate-bounce (too playful for a finance tool).
  */
 
 "use client";
@@ -159,12 +168,17 @@ export function AgentIterationProgress({ event }: AgentIterationProgressProps) {
        * - h-3.5 w-3.5 to balance the 11px text without towering over it.
        * - text-primary so the icon picks up the Midnight Pro accent — the
        *   primary signal that "this is the live status, not a passive label".
-       * - animate-pulse (NOT spin/bounce) — see file-level comment for why.
+       * - animate-skeleton-pulse (NOT raw animate-pulse, which §6.2 bans;
+       *   NOT spin/bounce) — the sanctioned slow 2s "still working" fade for
+       *   AI-generation waits; see the file-level ANIMATION comment for the
+       *   full justification.
+       * - motion-reduce:animate-none — prefers-reduced-motion users get a
+       *   static icon; the live text label carries the signal on its own.
        * - aria-hidden because the surrounding role="status" already announces
        *   the state textually; the icon is decorative.
        */}
       <Icon
-        className="h-3.5 w-3.5 shrink-0 text-primary animate-pulse"
+        className="h-3.5 w-3.5 shrink-0 text-primary animate-skeleton-pulse motion-reduce:animate-none"
         aria-hidden="true"
         strokeWidth={1.5}
       />

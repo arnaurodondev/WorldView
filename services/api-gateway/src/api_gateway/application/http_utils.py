@@ -24,9 +24,14 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import structlog
 from fastapi import HTTPException
 
 from api_gateway.clients import DownstreamError, _checked_get, _checked_post
+
+# structlog only (CLAUDE.md Rule 10). Used to record sanitized upstream 5xx
+# detail server-side so the client-facing generic error stays leak-free (BUG-7).
+logger = structlog.get_logger()
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
@@ -156,11 +161,18 @@ def map_upstream_error(exc: httpx.HTTPStatusError) -> HTTPException:
         A ``fastapi.HTTPException`` with an appropriate status code and detail.
     """
     status = exc.response.status_code
-    # 5xx from upstream → 502 (gateway received a bad response from upstream)
+    # 5xx from upstream → 502 (gateway received a bad response from upstream).
+    # BUG-7: keep the client-facing detail generic; log the raw upstream body
+    # server-side only so stack traces / SQL never reach the browser.
     if status >= 500:
+        logger.warning(
+            "downstream_5xx_sanitized",
+            upstream_status=status,
+            upstream_detail=exc.response.text[:500],
+        )
         return HTTPException(
             status_code=502,
-            detail=f"Upstream service error (HTTP {status})",
+            detail="upstream service error",
         )
     # 4xx → mirror the status code so the client gets the correct semantics
     return HTTPException(
@@ -199,18 +211,53 @@ def _downstream_to_http(exc: DownstreamError) -> HTTPException:
     into the appropriate ``HTTPException``.
 
     Mapping:
-        - 4xx → forward the same status code (client error).
-        - 5xx → 502 Bad Gateway (upstream is broken; gateway itself is fine).
-
-    The detail string is truncated by ``_checked_get``/``_checked_post`` to 200
-    chars (F-005) before the exception is raised, so we don't truncate again.
+        - 4xx → forward the same status code (client error). The detail here is
+          the upstream body (truncated to 200 chars by the client helper); for
+          client errors this is caller-safe, actionable detail (e.g.
+          "Instrument not found").
+        - 5xx → 502 Bad Gateway with a GENERIC detail. BUG-7: the upstream 5xx
+          body (``exc.detail`` = raw ``resp.text``) may contain stack traces /
+          SQL / internal hostnames and MUST NOT reach the client. The real
+          detail is logged server-side instead; the gateway invariant
+          (docs/services/api-gateway.md "5xx → never leak internals") requires a
+          generic envelope here.
     """
     if exc.status >= 500:
-        return HTTPException(status_code=502, detail=exc.detail)
+        # Log the real upstream detail server-side only — never echo to client.
+        logger.warning(
+            "downstream_5xx_sanitized",
+            service=exc.service,
+            upstream_status=exc.status,
+            upstream_detail=exc.detail,
+        )
+        # Preserve gateway-semantic 5xx (503 Service Unavailable, 504 Gateway
+        # Timeout) so clients keep correct retry/backoff behaviour — these are
+        # statuses the *gateway* deliberately raises (e.g. the timeout wrapper
+        # re-raises DownstreamError(504)), not raw upstream-app errors. Every
+        # other 5xx (500/501/...) becomes a generic 502. In all cases the detail
+        # is replaced with a generic string so no upstream body leaks.
+        client_status = exc.status if exc.status in (503, 504) else 502
+        detail = "upstream service timeout" if exc.status == 504 else "upstream service error"
+        return HTTPException(status_code=client_status, detail=detail)
     return HTTPException(status_code=exc.status, detail=exc.detail)
 
 
+# Public alias so route modules that catch ``DownstreamError`` directly can
+# reuse the sanitizing 5xx → 502-generic mapping instead of forwarding the raw
+# upstream detail by hand (BUG-7 — was `raise HTTPException(status_code=e.status,
+# detail=e.detail)` at ~6 call sites in market/instruments/portfolio routes).
+def downstream_to_http(exc: DownstreamError) -> HTTPException:
+    """Public, sanitizing ``DownstreamError`` → ``HTTPException`` mapping.
+
+    Thin wrapper over the internal ``_downstream_to_http`` so route files can
+    import a stable public name. 5xx upstream bodies are replaced with a generic
+    detail and logged server-side; 4xx detail is forwarded as caller-safe.
+    """
+    return _downstream_to_http(exc)
+
+
 __all__: list[str] = [
+    "downstream_to_http",
     "map_network_error",
     "map_upstream_error",
     "proxy_get",

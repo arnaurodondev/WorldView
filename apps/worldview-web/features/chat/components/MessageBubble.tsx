@@ -40,14 +40,13 @@ import { LazyMarkdownContent } from "./LazyMarkdownContent";
 import { CitationBar } from "@/components/chat/CitationBar";
 import type { Message } from "@/types/api";
 import { CitationList } from "./CitationList";
-import type { StreamingMessage } from "../lib/types";
-// POLISH PASS 2026-05-09: shared "Invalid Date"-safe wall-clock formatter.
-// WHY: a `new Date(undefined).toLocaleTimeString(...)` previously rendered the
-// literal string "Invalid Date" inside the timestamp footer of optimistic
-// messages (where `created_at` hasn't been server-stamped yet) and inside
-// pre-PRD-0028 cached messages whose `created_at` was empty. The helper
-// centralizes the NaN guard so we don't leak that string anywhere.
-import { safeFormatClockTime } from "@/lib/utils";
+import type { MessageWithMeta, StreamingMessage } from "../lib/types";
+// Wave 2 (frontend-rework sprint): per-message terminal meta strip — a 24px
+// row under every bubble carrying timestamp + (assistant) intent/provider/
+// latency/citation count. Replaces the old timestamp <p> INSIDE the bubble:
+// metadata belongs in chrome, not in the reading measure, and the strip
+// finally surfaces the latency_ms/provider fields S8 persists per message.
+import { MessageMetaStrip } from "./MessageMetaStrip";
 // PLAN-0067 W11-5: ToolCallIndicator shows per-tool progress spinners during
 // the tool-use phase (before token chunks arrive). Imported here because
 // StreamingBubble owns the "in-flight assistant response" visual region.
@@ -58,7 +57,22 @@ import { ToolCallIndicator, type ToolCallState } from "./ToolCallIndicator";
 // tells the user what the AGENT is doing right now; the indicators tell them
 // what TOOLS have run. Both can be visible simultaneously.
 import { AgentIterationProgress } from "./AgentIterationProgress";
-import type { AgentIterationEvent } from "@/features/chat/lib/types";
+// Phase-1 Part C: ResearchTimeline is the FIRST-CLASS, always-visible (NOT
+// debug-gated) human-readable agent-step trace. It supersedes the bare
+// AgentIterationProgress strip the moment real tool activity exists — showing
+// the concrete per-tool lines ("✓ 12 articles") grouped by loop step, plus a
+// "Verifying answer…" line during grounding validation. We keep the bare strip
+// only for the brief PLANNING gap (before the first tool_call), so the user is
+// never staring at a silent bubble.
+import { ResearchTimeline } from "./ResearchTimeline";
+// Round 4 Hardening (perf 4a): ThrottledMarkdown caps the markdown re-parse
+// rate at ~30fps for the IN-FLIGHT stream only. react-markdown re-parses the
+// full accumulated text on every prop change — at SSE token cadence
+// (20-50ms) that meant a complete parse per token, with cost growing as the
+// answer lengthens. Settled messages (MessageBubble below) keep the direct
+// LazyMarkdownContent — they parse once, so throttling them is pure loss.
+import { ThrottledMarkdown } from "./ThrottledMarkdown";
+import type { AgentIterationEvent, ToolTraceEntry } from "@/features/chat/lib/types";
 
 /**
  * TypingIndicator — animated three-dot bubble shown while SSE stream is
@@ -93,6 +107,12 @@ export function MessageBubble({ message }: { message: Message }) {
   // we inject into the rendered message via `id` attributes. Use the
   // message_id to namespace anchors per message.
   const anchorPrefix = `cite-${message.message_id}`;
+  // Wave 2: the server's thread responses (and the optimistic message built
+  // by useChatStream from the `metadata` SSE event) carry intent/provider/
+  // model/latency_ms — fields the canonical Message type never declared.
+  // MessageWithMeta is the chat-owned optional extension; the cast is safe
+  // because every field is read defensively (undefined → fragment absent).
+  const meta = message as MessageWithMeta;
 
   return (
     <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
@@ -146,18 +166,48 @@ export function MessageBubble({ message }: { message: Message }) {
                * matching the AskAiPanel pattern and letting analysts verify claims
                * without leaving the thread.
                */}
-              <LazyMarkdownContent size="compact" withCitationSups>{message.content}</LazyMarkdownContent>
+              {/*
+               * Wave 3 (dead-marker hardening): citationCount tells the
+               * renderer how many citations actually exist for this message,
+               * so an inline [N] marker beyond the list (backend bug —
+               * observed live: [5][6][8] over a 4-item list) renders as a
+               * muted "Source not available" badge instead of a live chip.
+               */}
+              <LazyMarkdownContent
+                size="compact"
+                withCitationSups
+                citationCount={message.citations?.length ?? 0}
+              >
+                {message.content}
+              </LazyMarkdownContent>
             </div>
           )}
 
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-            {/* POLISH PASS 2026-05-09: route through safeFormatClockTime to
-                avoid leaking "Invalid Date" when message.created_at is null
-                (optimistic stream not yet stamped) or a non-ISO string
-                (legacy cached threads). Falls through to "—". */}
-            {safeFormatClockTime(message.created_at)}
-          </p>
         </div>
+      </div>
+
+      {/* Wave 2: 24px terminal meta strip per message — timestamp for user
+          turns; timestamp + intent/provider/model/latency/citation count for
+          assistant turns (fields persisted per message by S8; attached to
+          optimistic messages from the `metadata` SSE event).
+          WHY h-6 + items-center: the spec fixes the strip at a 24px row so
+          the conversation's vertical rhythm is uniform regardless of which
+          fragments a given turn has.
+          WHY ml-9 on assistant strips: aligns under the bubble text (28px
+          avatar + 8px gap), reading as "metadata OF this answer"; user
+          strips right-align under their right-aligned bubble. */}
+      <div
+        className={`flex h-6 items-center ${isUser ? "justify-end" : "ml-9"}`}
+      >
+        <MessageMetaStrip
+          role={message.role}
+          intent={meta.intent}
+          provider={meta.provider}
+          model={meta.model}
+          latencyMs={meta.latency_ms}
+          createdAt={message.created_at}
+          citationCount={message.citations?.length ?? 0}
+        />
       </div>
 
       {/* Citation bar + pill list — assistant messages only */}
@@ -207,12 +257,26 @@ interface StreamingBubbleProps {
    * never emits agent_iteration) shows no strip at all.
    */
   iterationEvent?: AgentIterationEvent | null;
+  /**
+   * Phase-1 Part C: the per-turn tool trace from useChatStream.toolTrace. When
+   * it has entries the ResearchTimeline renders the human-readable agent-step
+   * list (always visible — NOT behind ?debug=1) in place of the bare
+   * AgentIterationProgress strip. Empty array (default) on plain answers.
+   */
+  toolTrace?: ToolTraceEntry[];
+  /**
+   * Phase-1 Part C: useChatStream.verifying — TRUE during post-synthesis
+   * grounding validation. Drives the timeline's "Verifying answer…" line.
+   */
+  verifying?: boolean;
 }
 
 export function StreamingBubble({
   streaming,
   activeTools = [],
   iterationEvent = null,
+  toolTrace = [],
+  verifying = false,
 }: StreamingBubbleProps) {
   return (
     <div className="flex flex-col items-start gap-1">
@@ -244,12 +308,68 @@ export function StreamingBubble({
            * be empty (between tool batches while the LLM reasons over results),
            * so it is the ONLY always-on signal in those windows.
            */}
-          <AgentIterationProgress event={iterationEvent} />
+          {/*
+           * Phase-1 Part C: the ResearchTimeline is the primary, always-visible
+           * agent-step narrative. It takes over the moment ANY real signal
+           * exists (a tool has been called OR the verify phase is running) and
+           * renders the concrete human lines grouped by loop step. Before that
+           * — the brief "planning" gap after Send, when the agent has decided to
+           * use tools but none has fired yet — we fall back to the bare
+           * AgentIterationProgress strip so the bubble is never silent. Once the
+           * first tool_call lands, the richer timeline subsumes the strip (we
+           * render exactly one of the two, never both, to avoid a doubled cue).
+           */}
+          {toolTrace.length > 0 || verifying ? (
+            <ResearchTimeline trace={toolTrace} verifying={verifying} mode="live" />
+          ) : (
+            <AgentIterationProgress event={iterationEvent} />
+          )}
           <ToolCallIndicator tools={activeTools} />
-          <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
-          {streaming.active && (
-            // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
-            <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />
+          {/*
+           * Round 1 Foundation (no-empty-bubble fix): before the first token
+           * arrives `streaming.text` is "" and the old render emitted an empty
+           * MarkdownContent + a bare cursor — a flash of blank assistant
+           * bubble between "Send" and the first chunk. We now branch:
+           *   - no text yet AND no tool/iteration chrome → three-dot typing
+           *     indicator INSIDE the bubble (the user sees "working" feedback
+           *     from the very first frame, never an empty box);
+           *   - no text yet BUT tools/iteration strip visible → render nothing
+           *     extra (the tool spinners already communicate progress; dots
+           *     would duplicate the signal);
+           *   - text present → markdown + cursor as before.
+           */}
+          {streaming.text === "" ? (
+            // Phase-1 Part C: also suppress the dots when the ResearchTimeline
+            // is showing (tool activity or verifying) — the timeline already
+            // communicates "working", so dots would be a redundant second cue.
+            activeTools.length === 0 &&
+            !iterationEvent &&
+            toolTrace.length === 0 &&
+            !verifying ? (
+              <div
+                className="flex gap-1 py-0.5"
+                // WHY aria-label (not visible text): screen readers announce
+                // "generating" while sighted users get the conventional dots.
+                aria-label="AI is generating a response"
+              >
+                {/* WHY static dots (no animate-bounce): Bloomberg-terminal
+                    mandate — no bounce/pulse animations on data surfaces. */}
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+              </div>
+            ) : null
+          ) : (
+            <>
+              {/* Round 4 perf: ThrottledMarkdown (not LazyMarkdownContent
+                  directly) — coalesces per-token re-parses into ~33ms frames.
+                  See ThrottledMarkdown.tsx for the full hot-spot analysis. */}
+              <ThrottledMarkdown>{streaming.text}</ThrottledMarkdown>
+              {streaming.active && (
+                // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
+                <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />
+              )}
+            </>
           )}
         </div>
       </div>

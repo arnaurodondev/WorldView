@@ -10,10 +10,12 @@ from api_gateway.routes.alerts import router as alerts_router
 from api_gateway.routes.auth import router as auth_router
 from api_gateway.routes.chat import router as chat_router
 from api_gateway.routes.content import router as content_router
+from api_gateway.routes.dashboard import router as dashboard_router
 from api_gateway.routes.instruments import router as instruments_router
 from api_gateway.routes.intelligence import router as intelligence_router
 from api_gateway.routes.market import router as market_router
 from api_gateway.routes.portfolio import router as portfolio_router
+from api_gateway.routes.signals import router as signals_router
 
 # Combined router — all domain routers merged in registration order.
 # WHY order matters: FastAPI evaluates routes in registration order.
@@ -26,9 +28,19 @@ from api_gateway.routes.portfolio import router as portfolio_router
 router = APIRouter()
 router.include_router(alerts_router)
 router.include_router(chat_router)
+# F-2: dashboard bundle endpoint — registered BEFORE portfolio_router (which
+# owns /v1/dashboard/snapshot) so route resolution is purely by path; no
+# ordering conflict (different paths) but keeping dashboard.* together helps
+# discovery.
+router.include_router(dashboard_router)
 router.include_router(content_router)
 router.include_router(instruments_router)
 router.include_router(intelligence_router)
+# signals_router owns GET /v1/signals/ai (the enriched 2026-06-10 handler: dedup +
+# entity-name + polarity-aware labels). The legacy duplicate in market.py was removed
+# (2026-06-25 docs-audit follow-up), so registration order no longer matters here, but
+# keeping signals_router first preserves the intended precedence if a clash ever recurs.
+router.include_router(signals_router)
 router.include_router(market_router)
 router.include_router(portfolio_router)
 

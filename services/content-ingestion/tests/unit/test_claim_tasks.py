@@ -79,10 +79,10 @@ class TestClaimCommits:
 class TestClaimBatchReclaims:
     async def test_claim_batch_reclaims_expired_running_tasks(self) -> None:
         """Verify that a task stuck in RUNNING with an expired lease can be
-        reclaimed by claim_batch() after recover_expired_leases() transitions
+        reclaimed by claim_batch() after recover_stale_tasks() (Pass 1) transitions
         it back to RETRY.
 
-        The actual DB logic is in TaskRepository.recover_expired_leases() and
+        The actual DB logic is in TaskRepository.recover_stale_tasks() and
         claim_batch().  This test validates the domain-level contract: a task
         with status=RUNNING and lease_expires in the past should transition
         through RETRY → CLAIMED when the scheduler reclaims it.
@@ -100,7 +100,7 @@ class TestClaimBatchReclaims:
         )
         assert expired_task.is_lease_expired(common.time.utc_now())
 
-        # 2. Simulate what recover_expired_leases does at the domain level:
+        # 2. Simulate what recover_stale_tasks (Pass 1) does at the domain level:
         #    reset the task status to RETRY so it becomes claimable again.
         expired_task.status = IngestionTaskStatus.RETRY
         expired_task.worker_id = None
@@ -123,13 +123,14 @@ class TestClaimBatchReclaims:
         assert reclaimed_task.worker_id == "w-new"
         assert reclaimed_task.lease_expires is not None
 
-    async def test_recover_expired_leases_called_in_uow(self) -> None:
-        """Verify the UoW's task repo recover_expired_leases is callable
-        and returns a count of recovered tasks."""
+    async def test_recover_stale_tasks_called_in_uow(self) -> None:
+        """Verify the UoW's task repo recover_stale_tasks is callable
+        and returns the 3-pass result dict."""
         uow = _make_uow()
-        uow.tasks.recover_expired_leases = AsyncMock(return_value=2)
+        expected = {"leases_recovered": 2, "orphans_reset": 0, "dlq_moved": 0}
+        uow.tasks.recover_stale_tasks = AsyncMock(return_value=expected)
 
         now = common.time.utc_now()
-        recovered = await uow.tasks.recover_expired_leases(now=now, lease_timeout_seconds=0)
-        assert recovered == 2
-        uow.tasks.recover_expired_leases.assert_awaited_once_with(now=now, lease_timeout_seconds=0)
+        result = await uow.tasks.recover_stale_tasks(now=now, lease_timeout_seconds=0)
+        assert result == expected
+        uow.tasks.recover_stale_tasks.assert_awaited_once_with(now=now, lease_timeout_seconds=0)

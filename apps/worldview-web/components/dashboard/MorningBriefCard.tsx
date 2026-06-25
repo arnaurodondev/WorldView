@@ -56,6 +56,13 @@ import remarkGfm from "remark-gfm";
 // needs to decide WHEN to show the structured view (sections non-empty) vs the
 // markdown fallback (sections empty or absent).
 import { StructuredBrief } from "@/components/brief/StructuredBrief";
+// Roadmap 2026-06-19 Top-8 #8 / C3 ("Cited, structured Morning Briefing"):
+// promote the COLLAPSED view from a prose blob to a scannable, cited catalyst
+// preview when the backend parsed the brief into `sections`. The preview shows
+// the top sections' catalyst bullets each with inline source chips + a
+// best-effort affected-ticker pill. When `sections` is empty (the live v4.x
+// reality) the card keeps the prose summary fallback below.
+import { BriefCatalystPreview } from "@/components/dashboard/BriefCatalystPreview";
 // PLAN-0066 Wave F: diff badge (amber pill), "Discuss in Chat" button (hook),
 // and brief-level rating widget all added to the card.
 import { BriefDiffBadge } from "@/features/dashboard/components/BriefDiffBadge";
@@ -97,10 +104,19 @@ const ReactMarkdown = dynamic(() => import("react-markdown"), {
   ssr: false,
   loading: () => <BriefMarkdownSkeleton />,
 });
-import { ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { ChevronRight, ChevronUp, FileText, RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): the no-brief named empty state migrates onto the shared
+// EmptyState primitive (§15.12) — icon + action props landed in Round 2, so
+// the bespoke icon/headline/CTA block here became a duplicate of it.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// DESIGN-QA D-1 "Skeletons that never resolve": cap how long this card may
+// show its loading skeleton. After the budget the skeleton yields to the
+// designed empty/unavailable state so the dashboard hero never spins forever
+// when S8's briefing endpoint hangs (rather than 503-ing cleanly).
+import { useSkeletonTimeout } from "@/components/dashboard/useSkeletonTimeout";
 // WHY import BriefingResponse (not MorningBrief): PLAN-0034 unified the briefing
 // response type — both morning and instrument briefs now return BriefingResponse
 // which includes citations, risk_summary, and cached flag.
@@ -113,6 +129,18 @@ import type { BriefingResponse, BriefCitation, BriefingCitation } from "@/types/
 
 /** Brief older than 12h shows a stale badge in the header */
 const STALE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Freshness thresholds for the header status dot (roadmap #8: "a subtle
+ * freshness indicator"). The dot encodes how recently the brief was generated:
+ *   - FRESH (< 4h)   → positive/green: today's brief, current.
+ *   - AGING (4h-12h) → warning/amber: still today's but several hours old.
+ *   - STALE (> 12h)  → negative/red: matches the existing STALE_MS "stale"
+ *     badge so the dot and the badge agree.
+ * WHY a static dot (no animation): DESIGN_SYSTEM.md §15.11 — status dots never
+ * pulse (Bloomberg convention); color alone encodes freshness.
+ */
+const FRESH_MS = 4 * 60 * 60 * 1000;
 
 /**
  * Maximum number of "Top Stories" chips rendered below the summary.
@@ -153,6 +181,12 @@ export function MorningBriefCard() {
     error,
     refetch,
     isFetching,
+    // Round 1 foundation: the named empty state shows a "last attempt"
+    // timestamp. TanStack exposes both — dataUpdatedAt is the last SUCCESSFUL
+    // fetch (which may still carry an empty brief body), errorUpdatedAt the
+    // last FAILED one. The max of the two is "when we last heard from S8".
+    dataUpdatedAt,
+    errorUpdatedAt,
   } = useQuery<BriefingResponse>({
     queryKey: ["morning-brief"],
     queryFn: () => createGateway(accessToken).getMorningBrief(),
@@ -191,14 +225,26 @@ export function MorningBriefCard() {
     return () => clearTimeout(timer);
   }, [queryClient]);
 
+  // DESIGN-QA D-1: once the loading skeleton has shown for longer than the
+  // max-wait budget we stop trusting `isLoading` and let the render fall
+  // through to the settled branches below (error if the query errored, else
+  // the "AI brief unavailable" empty state). If the brief still arrives later,
+  // TanStack flips isLoading→false, this resets, and the real brief renders.
+  const skeletonTimedOut = useSkeletonTimeout(isLoading);
+
   // ── Loading state ──────────────────────────────────────────────────────────
-  if (isLoading) {
+  if (isLoading && !skeletonTimedOut) {
     return (
       // WHY flex flex-col h-full: component must fill its grid cell height so
       // Row 1 height is driven by the cell, not by the brief content length.
-      <div className="flex h-full flex-col">
-        {/* Placeholder header so height matches the loaded state */}
-        <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
+      // Round 4 (item 2): role="region" + aria-label on every return branch —
+      // the landmark must exist from first paint for SR panel navigation.
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
+        {/* Placeholder header so height matches the loaded state.
+            Round 3 (item 3): h-6 — the LOADED header grew to 24px in the
+            2026-05-09 density bundle but this placeholder stayed at 20px,
+            so the whole Row-1 card shifted 4px when the brief arrived. */}
+        <div className="flex h-6 shrink-0 items-center border-b border-border/40 px-1">
           <Skeleton className="h-2.5 w-[160px]" />
         </div>
         {/* 5-line skeleton matching typical brief length in the text area */}
@@ -224,7 +270,7 @@ export function MorningBriefCard() {
       (error.message.includes("503") || error.message.includes("unavailable"));
 
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
         <MetaHeader />
         <div className="flex flex-1 items-center gap-2 px-1">
           <p className="text-[10px] text-muted-foreground">
@@ -235,7 +281,7 @@ export function MorningBriefCard() {
           <button
             onClick={() => void refetch()}
             disabled={isFetching}
-            className="ml-auto text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+            className="ml-auto text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
             title="Retry"
             aria-label="Retry loading brief"
           >
@@ -280,16 +326,193 @@ export function MorningBriefCard() {
       .trim();
   }
 
-  const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
-  const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
-  if (!brief || (!safeNarrative && !safeSummary)) {
+  // User report 2026-06-14: the live v4.x morning brief leaks cryptic inline
+  // citation markers — uppercase ``[N2]``, ``[N10]``, ``[N12]`` — into the
+  // narrative/summary text (e.g. "…unwind $2B Manus deal after Beijing's
+  // demand [N2]"). Users have no idea what "[N2]" means, and unlike the chat
+  // surface there is NO inline footnote index on the dashboard that maps N→
+  // article (provenance is served instead by the "Top Stories" chip strip and
+  // the StructuredBrief per-bullet citation chips). So these markers are pure
+  // visual noise here — STRIP them.
+  //
+  // WHY this also lives in MorningBriefCard (not only StructuredBrief): the
+  // live v4.x morning brief returns its whole body in ``narrative`` with an
+  // EMPTY ``sections[]``, so the card renders the raw markdown via ReactMarkdown
+  // (collapsed + narrative-fallback paths) and NEVER goes through StructuredBrief
+  // — which is the only place that previously stripped ``[N#]``. That left the
+  // markers leaking on the dashboard. Mirror the same strip the LeadProse /
+  // BriefBulletItem renderers in StructuredBrief.tsx already apply.
+  //
+  // WHY ``\[c?\d+\]`` (digits only): real content-bearing brackets the brief
+  // legitimately emits — date ranges like ``[2026-06-30]`` (contains ``-``) and
+  // freshness tags like ``[Q stale]`` (contains a space) — do NOT match
+  // ``[<optional c/N><digits>]`` and are therefore preserved untouched.
+  function stripCitationMarkers(text: string): string {
+    return text
+      // ``[cN]`` (v3.0 marker form) and ``[N#]`` (v4.0+ marker form). The
+      // leading ``\s*`` eats the space before the marker so "demand [N2]"
+      // collapses cleanly to "demand".
+      .replace(/\s*\[(?:c|N)\d+\]/g, "")
+      // Collapse any double-spaces left between two now-removed markers.
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+  }
+
+  // W4 fix (user report 2026-06-12): the live v4.2 morning brief returns its
+  // whole body in `narrative` as markdown — `summary`/`summary_paragraph` and
+  // the structured `sections[]` are all empty (the backend's citation-aware
+  // parser only structures briefs that carry a `---` divider + [cN] markers,
+  // which the v4.2 prompt no longer emits). So the card was falling back to the
+  // raw narrative and showing literal "## Details" / "**Market Snapshot**"
+  // chrome. We strip the redundant top-level "## Details" wrapper heading here
+  // (the card already labels itself "Morning Briefing"; the wrapper just adds a
+  // noisy "Details" line) BEFORE any rendering. The inner "**Market Snapshot**"
+  // etc. section headings are KEPT — they render as clean uppercase sub-heads
+  // via the prose overrides below, which is exactly the structured look we want.
+  function stripDetailsWrapper(text: string): string {
+    // Remove a standalone "## Details" / "# Details" / "### Details" heading
+    // line (case-insensitive, optional trailing colon) anywhere in the first
+    // few lines — it's the v4.2 prompt's wrapper around the 6 real sections.
+    return text
+      .replace(/^\s*#{1,3}\s*details\s*:?\s*$/gim, "")
+      // Collapse the blank line the removal leaves at the top so the first real
+      // section heading sits flush.
+      .replace(/^\s*\n/, "")
+      .trim();
+  }
+
+  // Strip order: citation markers FIRST (so "demand [N2] ." → "demand ."),
+  // then the stale-metadata / details-wrapper cleanups, which already collapse
+  // residual double-spaces. Applied to all three text sources because any of
+  // them can carry the leaked [N#] markers depending on the brief format.
+  const safeNarrative = stripDetailsWrapper(
+    stripStaleMetadata(stripCitationMarkers(brief?.narrative?.trim() ?? "")),
+  );
+  const safeSummary = stripStaleMetadata(
+    stripCitationMarkers(brief?.summary?.trim() ?? ""),
+  );
+  const safeSummaryParagraph = stripStaleMetadata(
+    stripCitationMarkers(brief?.summary_paragraph?.trim() ?? ""),
+  );
+  // ── Empty-guard: zero-context / all-placeholder brief (2026-06-19) ──────────
+  // BACKGROUND (empty-AI-brief investigation): when the backend cannot reach any
+  // upstream data source (e.g. a transient gateway/auth blip), it still returns a
+  // 200 with a non-empty `narrative` made entirely of the literal placeholder
+  // "No specific items today." under each section heading, and `confidence: 0`.
+  // The old guard below only checked for EMPTY strings, so such a brief slipped
+  // through and rendered six dead lines that look broken to the user.
+  //
+  // This helper recognises that degenerate shape so we can fall through to the
+  // named EmptyState (with a Regenerate affordance) instead. We treat a brief as
+  // "all-placeholder" only when it has NO real signal at all:
+  //   - confidence is exactly 0 (the backend's "I had no data" marker — a real
+  //     brief carries a positive confidence), AND
+  //   - it has no usable structured sections (no section carries a real bullet),
+  //     AND
+  //   - every remaining line of the narrative is the placeholder sentence (or a
+  //     bare "## Heading"). If even one narrative line is real prose, we keep
+  //     rendering the brief — we never want to hide a genuine, if sparse, brief.
+  const PLACEHOLDER_LINE = "No specific items today";
+
+  function isAllPlaceholderBrief(): boolean {
+    // Only engage when the backend explicitly signalled zero confidence. A brief
+    // with confidence === undefined (older cache) or > 0 is treated as real.
+    if (brief?.confidence !== 0) return false;
+
+    // Any section with at least one real bullet means there IS content → not empty.
+    const hasRealSection = (brief.sections ?? []).some((section) =>
+      (section.bullets ?? []).some(
+        (bullet) =>
+          bullet.text.trim().length > 0 &&
+          !bullet.text.includes(PLACEHOLDER_LINE),
+      ),
+    );
+    if (hasRealSection) return false;
+
+    // Scan the cleaned narrative line-by-line. Anything that is not a markdown
+    // heading ("## ...") and not the placeholder sentence counts as real prose.
+    const realNarrativeLine = safeNarrative
+      .split("\n")
+      .map((line) => line.trim())
+      .some(
+        (line) =>
+          line.length > 0 &&
+          !line.startsWith("#") &&
+          !line.includes(PLACEHOLDER_LINE),
+      );
+    // If no real narrative line exists, the whole brief is placeholder → empty.
+    return !realNarrativeLine;
+  }
+
+  if (
+    !brief ||
+    (!safeNarrative && !safeSummary && !safeSummaryParagraph) ||
+    isAllPlaceholderBrief()
+  ) {
+    // Round 1 foundation: NAMED empty state — icon + headline + last-attempt
+    // timestamp + Regenerate action — replaces the bare one-liner.
+    //
+    // WHY "last attempt" from query timestamps (not brief.generated_at): in
+    // this branch there IS no usable brief — the only truthful timestamps we
+    // have are when the frontend last asked S8 for one. dataUpdatedAt covers
+    // "S8 answered but the brief body was empty"; errorUpdatedAt covers
+    // "the request failed". 0 means "never attempted in this session".
+    const lastAttemptMs = Math.max(dataUpdatedAt ?? 0, errorUpdatedAt ?? 0);
+    // Same compact "YYYY-MM-DD HH:MM" format as the loaded-state header so
+    // timestamps read consistently across card states.
+    const lastAttempt =
+      lastAttemptMs > 0
+        ? new Date(lastAttemptMs).toISOString().slice(0, 16).replace("T", " ")
+        : null;
+
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
         <MetaHeader />
-        <div className="flex flex-1 items-center px-1">
-          <p className="text-[10px] text-muted-foreground">
-            AI brief unavailable — system initializing
-          </p>
+        {/* Round 3 (item 4): shared EmptyState primitive — it owns the icon
+            treatment, role="status" announcement and title/body layout that
+            this card previously hand-rolled. Copy key dashboard.brief-
+            unavailable keeps the exact "AI brief unavailable" headline the
+            regression tests pin (R19). The action slot carries BOTH the
+            last-attempt timestamp and the Regenerate button (it accepts any
+            ReactNode — position below the body is all the primitive owns). */}
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.brief-unavailable"
+            icon={FileText}
+            action={
+              <div className="flex flex-col items-center gap-1">
+                {/* Last-attempt timestamp — only when we actually attempted.
+                    9px is allowed here: it is a timestamp, not a data value
+                    (§15.9 exception list). */}
+                {lastAttempt && (
+                  <p className="font-mono text-[9px] tabular-nums text-muted-foreground-dim">
+                    Last attempt {lastAttempt} UTC
+                  </p>
+                )}
+                {/* Regenerate — WHY refetch() (GET /v1/briefings/morning) and
+                    not a dedicated POST: S9/S8 expose no explicit morning-brief
+                    regenerate endpoint (backend gap — only instrument briefs
+                    have POST /briefings/instrument/{id}/generate). The morning
+                    GET itself triggers S8's background regeneration when the
+                    cached brief is stale/absent, so a refetch IS the closest
+                    available "regenerate" action today.
+                    Round 3 (item 5): hover bg + keyboard focus ring added. */}
+                <button
+                  onClick={() => void refetch()}
+                  disabled={isFetching}
+                  className="mt-0.5 inline-flex items-center gap-1 px-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-muted hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
+                  aria-label="Regenerate morning brief"
+                >
+                  <RefreshCw
+                    className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
+                    strokeWidth={1.5}
+                  />
+                  {isFetching ? "Regenerating…" : "Regenerate"}
+                </button>
+              </div>
+            }
+          />
         </div>
       </div>
     );
@@ -297,7 +520,22 @@ export function MorningBriefCard() {
 
   // ── Content rendering ──────────────────────────────────────────────────────
   const generatedAt = new Date(brief.generated_at);
-  const isStale = Date.now() - generatedAt.getTime() > STALE_MS;
+  const ageMs = Date.now() - generatedAt.getTime();
+  const isStale = ageMs > STALE_MS;
+
+  // Roadmap #8 freshness indicator: a single static dot whose color encodes
+  // how old the brief is. The three tiers agree with the existing "stale"
+  // badge (>12h) so the dot and badge never contradict each other.
+  // WHY Tailwind token classes (text-positive / text-warning / text-negative)
+  // and NOT inline `hsl(var(--positive))`: globals.css defines the semantic
+  // colors only as Tailwind utilities; an inline `var()` compiles but paints
+  // nothing (DESIGN_SYSTEM.md §F-VISUAL-001 / the "no-paint" bug class).
+  const freshness: { dotClass: string; label: string } =
+    ageMs <= FRESH_MS
+      ? { dotClass: "text-positive", label: "Fresh — generated within 4h" }
+      : ageMs <= STALE_MS
+        ? { dotClass: "text-warning", label: "Aging — generated 4-12h ago" }
+        : { dotClass: "text-negative", label: "Stale — generated over 12h ago" };
   // WHY date-only format: the header is one compact line; "2026-04-28 07:14 UTC"
   // gives the trader both the date and generation time at a glance.
   const ts = generatedAt.toISOString().slice(0, 16).replace("T", " ");
@@ -324,17 +562,21 @@ export function MorningBriefCard() {
   // narrative is the expanded-view source. Both must be linkified separately
   // so each view has working entity links. We compute both eagerly because
   // the work is cheap (string replace) and React rerenders on expand.
+  const summaryParagraphWithLinks = linkifyEntities(safeSummaryParagraph);
   const summaryWithLinks = linkifyEntities(safeSummary);
   const narrativeWithLinks = linkifyEntities(safeNarrative);
 
-  // WHY fallback for collapsed view: when the v2.2 prompt's two-tier output
-  // wasn't honored (legacy cached briefs, instrument briefs, or LLM ignored
-  // the format directive), summary is null. We fall back to the narrative so
-  // the collapsed card still shows *something*. The line-clamp-3 only applies
-  // in this fallback branch — when summary IS present it's already short
-  // enough (1-2 sentences) and clamping is unnecessary.
-  const collapsedSource = summaryWithLinks || narrativeWithLinks;
-  const usingSummaryFallback = !summaryWithLinks;
+  // WHY 3-tier fallback for collapsed view (PLAN-0103 W3 / BP-624 recovery):
+  // The v4.2 backend emits a landscape `summary_paragraph` that is the
+  // preferred collapsed-view source. When absent (legacy cached briefs,
+  // instrument briefs, or v2.2-format briefs), fall back to `summary`, then
+  // to `narrative` so the card always renders *something*. The clamp-3 only
+  // applies in the narrative-fallback branch — when summary_paragraph or
+  // summary is present it's already short enough.
+  const collapsedSource =
+    summaryParagraphWithLinks || summaryWithLinks || narrativeWithLinks;
+  const usingSummaryFallback =
+    !summaryParagraphWithLinks && !summaryWithLinks;
 
   // WHY isLong on narrative (not summary): the "Read more" affordance only
   // makes sense if there's substantially more content to reveal when expanded.
@@ -355,10 +597,27 @@ export function MorningBriefCard() {
     .filter((c) => c.source_type === "article" && c.url)
     .slice(0, TOP_STORIES_LIMIT);
 
+  // ── Structured collapsed preview gating (roadmap #8 / C3) ──────────────────
+  // WHY: the collapsed view defaulted to a prose blob (summary_paragraph). When
+  // the backend parsed the brief into `sections` we instead render a scannable,
+  // CITED catalyst preview (BriefCatalystPreview) so the structure + sources
+  // are visible WITHOUT clicking "Read more". When `sections` is empty (the
+  // live v4.x reality, where the whole body arrives as `narrative`) we keep the
+  // prose fallback. Filter REMOVED placeholder sections the LLM occasionally
+  // emits — same guard the expanded StructuredBrief path uses.
+  const previewSections =
+    brief.sections?.filter((s) => !s.title?.toUpperCase().includes("REMOVED")) ?? [];
+  // Render the structured preview only when at least one section carries a
+  // bullet — otherwise BriefCatalystPreview would return null and we'd show an
+  // empty card body. The lead/summary line still renders above the preview.
+  const useStructuredCollapsed = previewSections.some(
+    (s) => (s.bullets?.length ?? 0) > 0,
+  );
+
   return (
     // WHY flex flex-col h-full: fills Row 1 grid cell; header is fixed h-5,
     // text area fills the rest with overflow-auto for long briefs.
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
 
       {/* ── Header row: date (left) | "Morning Briefing" (center) | CTA (right) ── */}
       {/* WHY single-line header with all three elements: the user wants the brief
@@ -381,12 +640,24 @@ export function MorningBriefCard() {
             (R19 forbids deleting/weakening tests). The label also
             disambiguates the timestamp from "current UTC time" so users
             don't confuse the brief's mtime with wall-clock time. */}
-        <span className="min-w-[120px] max-w-[140px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground/60">
+        <span className="flex min-w-[120px] max-w-[148px] shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground-dim">
+          {/* Roadmap #8 freshness dot — static (never pulses); color encodes
+              how recently the brief was generated. title= gives the human
+              tier label on hover; aria-label exposes it to assistive tech. */}
+          <span
+            className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current ${freshness.dotClass}`}
+            title={freshness.label}
+            aria-label={freshness.label}
+            role="img"
+            data-testid="brief-freshness-dot"
+          />
           Generated {ts} UTC
         </span>
 
         {/* "Morning Briefing" title — centered in the remaining space */}
-        <span className="flex-1 text-center text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        {/* Round 3 (item 1): 9px → 10px — aligns the card title with the
+            dashboard-wide widget-header treatment (10px tracked uppercase). */}
+        <span className="flex-1 text-center text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Morning Briefing
         </span>
 
@@ -414,7 +685,7 @@ export function MorningBriefCard() {
             disabled={discussLoading}
             title={discussError ?? "Open a chat thread seeded with this brief"}
             aria-label="Discuss this brief in chat"
-            className="whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))]"
+            className="whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
           >
             {discussLoading ? "Opening…" : "Discuss"}
           </button>
@@ -428,7 +699,7 @@ export function MorningBriefCard() {
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}
-                className="inline-flex items-center text-muted-foreground transition-colors hover:text-foreground disabled:text-[hsl(var(--disabled-foreground))]"
+                className="inline-flex items-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
                 title="Refresh morning brief"
                 aria-label="Refresh morning brief"
               >
@@ -446,7 +717,7 @@ export function MorningBriefCard() {
           {isLong && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label="Expand morning brief"
             >
               Read more <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -455,7 +726,7 @@ export function MorningBriefCard() {
           {isLong && expanded && (
             <button
               onClick={() => setExpanded(false)}
-              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label="Collapse morning brief"
             >
               show less <ChevronUp className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -474,37 +745,79 @@ export function MorningBriefCard() {
             line-height, and tight paragraph margins matching Bloomberg briefing panels. */}
         <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mb-0.5 [&_h3]:text-[10px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-[0.06em] [&_h3]:text-muted-foreground [&_li]:leading-[1.4] [&_li]:text-[11px] [&_p]:mb-1 [&_p]:leading-[1.4] [&_strong]:font-semibold [&_ul]:mb-1 [&_ul]:pl-3">
           {!expanded ? (
-            // ── Collapsed view: brief.summary rendered at full readability ──
-            // WHY no line-clamp when summary is present: the v2.2 prompt
-            // already constrains the summary to 1-2 sentences, so clamping is
-            // redundant and risks hiding the second sentence. We only apply
-            // line-clamp-3 in the legacy fallback branch (no summary field).
-            <div
-              className={
-                usingSummaryFallback
-                  ? "line-clamp-3 [&>*:first-child]:mt-0"
-                  : "[&>*:first-child]:mt-0"
-              }
-            >
-              <ReactMarkdown
-                remarkPlugins={REMARK_PLUGINS}
-                components={{
-                  a: ({ href, children }) => (
-                    <Link href={href ?? "#"} className="text-primary">
-                      {children}
-                    </Link>
-                  ),
-                  // WHY render headers inline in the collapsed view: any
-                  // residual ## / ### headings the LLM emits would otherwise
-                  // create awkward block breaks in a 1-2 sentence summary.
-                  h1: ({ children }) => <span className="font-semibold">{children} </span>,
-                  h2: ({ children }) => <span className="font-semibold">{children} </span>,
-                  h3: ({ children }) => <span className="font-medium">{children} </span>,
-                }}
+            // ── Collapsed view ─────────────────────────────────────────────
+            // Roadmap #8 / C3: when the backend parsed the brief into
+            // `sections`, render a STRUCTURED, CITED catalyst preview — the top
+            // sections' bullets each with inline source chips + a best-effort
+            // affected-ticker pill — instead of the prose blob. The 1-2
+            // sentence lead/summary still renders above it for the 10-second
+            // synthesis. When sections are empty (the live v4.x reality, whole
+            // body in `narrative`) we keep the original prose-markdown path.
+            useStructuredCollapsed ? (
+              <div className="flex flex-col gap-1.5 [&>*:first-child]:mt-0">
+                {/* Lead / summary synthesis line above the catalysts. WHY
+                    ReactMarkdown: collapsedSource carries entity deep-links
+                    produced by linkifyEntities() (markdown anchors). */}
+                {collapsedSource && (
+                  <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                    <ReactMarkdown
+                      remarkPlugins={REMARK_PLUGINS}
+                      components={{
+                        a: ({ href, children }) => (
+                          <Link href={href ?? "#"} className="text-primary">
+                            {children}
+                          </Link>
+                        ),
+                        // Collapse residual headings to inline emphasis so a
+                        // stray ## doesn't break the 1-2 sentence synthesis.
+                        h1: ({ children }) => <span className="font-semibold">{children} </span>,
+                        h2: ({ children }) => <span className="font-semibold">{children} </span>,
+                        h3: ({ children }) => <span className="font-medium">{children} </span>,
+                      }}
+                    >
+                      {collapsedSource}
+                    </ReactMarkdown>
+                  </div>
+                )}
+                {/* The structured, cited catalyst preview. */}
+                <BriefCatalystPreview
+                  sections={previewSections}
+                  mentions={brief.entity_mentions ?? []}
+                />
+              </div>
+            ) : (
+              // ── Collapsed prose fallback (sections empty) ────────────────
+              // WHY no line-clamp when summary is present: the v2.2 prompt
+              // already constrains the summary to 1-2 sentences, so clamping is
+              // redundant and risks hiding the second sentence. We only apply
+              // line-clamp-3 in the legacy fallback branch (no summary field).
+              <div
+                className={
+                  usingSummaryFallback
+                    ? "line-clamp-3 [&>*:first-child]:mt-0"
+                    : "[&>*:first-child]:mt-0"
+                }
               >
-                {collapsedSource}
-              </ReactMarkdown>
-            </div>
+                <ReactMarkdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  components={{
+                    a: ({ href, children }) => (
+                      <Link href={href ?? "#"} className="text-primary">
+                        {children}
+                      </Link>
+                    ),
+                    // WHY render headers inline in the collapsed view: any
+                    // residual ## / ### headings the LLM emits would otherwise
+                    // create awkward block breaks in a 1-2 sentence summary.
+                    h1: ({ children }) => <span className="font-semibold">{children} </span>,
+                    h2: ({ children }) => <span className="font-semibold">{children} </span>,
+                    h3: ({ children }) => <span className="font-medium">{children} </span>,
+                  }}
+                >
+                  {collapsedSource}
+                </ReactMarkdown>
+              </div>
+            )
           ) : brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
             // WHY render the summary above the structured view: the v4.2+
@@ -630,13 +943,13 @@ export function MorningBriefCard() {
                   // visible while the trader reads the full story.
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                  className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   title={story.title}
                 >
                   {/* Source domain — small uppercase label so the user can
                       tell at a glance whether the chip points to e.g.
                       Bloomberg vs. Reuters before they click. */}
-                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground/70">
+                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
                     {extractDomain(story.url ?? "")}
                   </span>
                   {/* Title truncated by a JS slice (CSS ellipsis on flex
@@ -662,8 +975,13 @@ export function MorningBriefCard() {
  */
 function MetaHeader() {
   return (
-    <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
-      <span className="text-[9px] uppercase tracking-[0.08em] text-muted-foreground/40">
+    // Round 3 (items 1+3): h-6 — must match the loaded-state header height
+    // (24px since the 2026-05-09 density bundle) so the card never shifts
+    // 4px when transitioning loading/error/empty → loaded. Label bumped
+    // 9px → 10px to match the dominant widget-header treatment
+    // (text-[10px] uppercase tracking-[0.08em]) used by every other panel.
+    <div className="flex h-6 shrink-0 items-center border-b border-border/40 px-1">
+      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/40">
         MORNING BRIEF
       </span>
     </div>

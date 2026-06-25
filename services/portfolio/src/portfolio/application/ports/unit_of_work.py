@@ -194,3 +194,19 @@ class UnitOfWork(ReadOnlyUnitOfWork):
 
     @abstractmethod
     async def flush(self) -> None: ...
+
+    async def try_advisory_lock(self, portfolio_id: object) -> bool:
+        """Attempt a non-blocking PostgreSQL advisory lock for *portfolio_id*.
+
+        WHY on the port (not abstract method):
+        - The domain/application layer must not import infrastructure. Defining a
+          concrete default here (always-acquired) means FakeUnitOfWork in unit tests
+          works without overriding.
+        - Override in SqlAlchemyUnitOfWork with the real pg_try_advisory_xact_lock.
+
+        Returns:
+        -------
+            True  — lock acquired; caller should proceed with recompute.
+            False — lock already held by another session; caller should skip.
+        """
+        return True

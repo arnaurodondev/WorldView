@@ -57,6 +57,14 @@ class NlpUsageLogRepository:
 
             doc_id = context.get("doc_id")
             tenant_id = context.get("tenant_id")
+            # Task #36: optional resilience-audit tag. ``model_id`` above already
+            # carries the ACTUAL serving model (the caller passes ExtractionOutput
+            # .model_used). ``fallback_reason`` records WHY a fallback fired:
+            # none | rate_limit | timeout | server_error. NULL for non-extraction
+            # callers that don't pass it (the column is nullable). We coerce to a
+            # str|None so a stray non-string in **context never breaks the INSERT.
+            fallback_reason = context.get("fallback_reason")
+            fallback_reason_str = str(fallback_reason) if fallback_reason is not None else None
 
             await self._session.execute(
                 text(
@@ -66,13 +74,15 @@ class NlpUsageLogRepository:
                         model_id, provider, capability,
                         service_name, tenant_id,
                         tokens_in, tokens_out, estimated_cost_usd,
-                        latency_ms, success, error_code, doc_id
+                        latency_ms, success, error_code, doc_id,
+                        fallback_reason
                     ) VALUES (
                         :log_id,
                         :model_id, :provider, :capability,
                         'nlp-pipeline', :tenant_id,
                         :tokens_in, :tokens_out, :estimated_cost_usd,
-                        :latency_ms, :success, :error_code, :doc_id
+                        :latency_ms, :success, :error_code, :doc_id,
+                        :fallback_reason
                     )
                     """,
                 ),
@@ -89,6 +99,7 @@ class NlpUsageLogRepository:
                     "success": success,
                     "error_code": error_code,
                     "doc_id": str(doc_id) if doc_id is not None else None,
+                    "fallback_reason": fallback_reason_str,
                 },
             )
         except Exception as exc:

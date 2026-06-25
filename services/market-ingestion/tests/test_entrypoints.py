@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
+
+# Force METRICS_PORT=0 so the real start_metrics_server picks an ephemeral
+# port and never collides with the Docker stack's worldview-prometheus on 9100.
+# PLAN-0107 FU — see audit 2026-05-29.
+os.environ["METRICS_PORT"] = "0"
 
 pytestmark = pytest.mark.unit
 
@@ -273,6 +279,39 @@ async def test_worker_execute_error_does_not_crash():
         fake_task = MagicMock()
         # Should not raise
         await worker._execute_task(fake_task)
+
+
+# ---------------------------------------------------------------------------
+# ReclaimWorker main (F-005 / BP-704)
+# ---------------------------------------------------------------------------
+
+
+def test_reclaim_worker_main_starts_metrics_server():
+    """reclaim_worker_main.main() must call start_metrics_server so /healthz exists.
+
+    F-005 / BP-704: without start_metrics_server the metrics port (9100) refuses
+    connections and the Docker /healthz healthcheck marks the container UNHEALTHY.
+    """
+    from market_ingestion.infrastructure.workers import reclaim_worker_main
+
+    settings = _make_settings(log_level="INFO", log_json=True)
+
+    with (
+        patch.object(reclaim_worker_main, "Settings", return_value=settings),
+        patch.object(
+            reclaim_worker_main,
+            "_create_reclaim_worker",
+        ) as mock_create,
+        patch.object(reclaim_worker_main, "start_metrics_server") as mock_start,
+    ):
+        # Worker.run() returns immediately so main() completes without blocking.
+        mock_worker = MagicMock()
+        mock_worker.run = AsyncMock()
+        mock_create.return_value = mock_worker
+
+        reclaim_worker_main.main()
+
+        assert mock_start.called
 
 
 # ---------------------------------------------------------------------------

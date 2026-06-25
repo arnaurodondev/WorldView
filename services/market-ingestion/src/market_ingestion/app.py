@@ -129,8 +129,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     add_otel_middleware(app)
     app.state.metrics = metrics
 
+    from market_ingestion.api.cache_routes import cache_router
     from market_ingestion.api.routes import router
 
     app.include_router(router)
+    # PLAN-0108 Wave E: /internal/v1/cache/{dataset_type}/{symbol} admin endpoint.
+    app.include_router(cache_router)
 
     return app

@@ -328,6 +328,32 @@ class QueryFundamentalsUseCase:
             # next calendar quarter). Mirrors the matching fix in
             # ``get_fundamentals_history.execute``.
             label = _period_label(period_key, fiscal_year_end_month=fye, ticker=ticker)
+
+            # BugFix B (2026-06-06): defense-in-depth invariant — every row
+            # served by this use case MUST carry a non-empty period_label.
+            # The schema (FundamentalsQueryPeriodRow) declares
+            # ``period_label: str`` (non-Optional) so a None would 500 via
+            # Pydantic; an empty string would silently produce the rag-chat
+            # "Period →  Period" rendering bug. Synthesise a calendar-quarter
+            # fallback if the helper ever returns a falsy value. period_key is
+            # the strftime("%Y-%m-%d") of a NOT-NULL DB timestamp so this is
+            # safe — the guard exists purely to make a future regression in
+            # _period_label loud and visible instead of silent.
+            if not label or not str(label).strip():
+                log.warning(
+                    "period_label_empty_fallback_synthesised",
+                    ticker=ticker,
+                    period_end=period_key,
+                )
+                try:
+                    from datetime import date as _date_fb
+
+                    _dt_fb = _date_fb.fromisoformat(period_key)
+                    _q_fb = (_dt_fb.month - 1) // 3 + 1
+                    label = f"Q{_q_fb} {_dt_fb.year}"
+                except (ValueError, TypeError):
+                    label = "Unknown Period"
+
             row: dict[str, Any] = {
                 "period_end": period_key,
                 "period_label": label,

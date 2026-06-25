@@ -17,7 +17,7 @@ or articles, perform NLP processing, manage portfolios.
 
 ---
 
-## API Surface (38 routes)
+## API Surface (60 routes: 3 ops + 50 public `/api/v1` + 7 internal `/internal/v1`)
 
 | Method | Path | Description | Cache Tier |
 |--------|------|-------------|------------|
@@ -27,6 +27,11 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/instruments` | List instruments — query params: `query`, `has_ohlcv`, `has_quotes`, `has_fundamentals`, `exchange`, `limit`, `offset` (all DB-side) | — |
 | GET | `/api/v1/instruments/lookup` | Unified instrument lookup — query params: `symbol` (icase), `isin`, `id` (UUID), `extra_info` (bool, default false). Priority: id > isin > symbol. `extra_info=true` also returns `name`, `description`, `sector`, `industry`, `country`, `currency_code`. Requires `X-Internal-JWT`. | — |
 | GET | `/api/v1/instruments/on-demand-profile` | On-demand instrument profile — query param: `ticker` or `isin`. DB-first (returns `source="db"` if description populated); falls back to EODHD, persists result (`source="eodhd_persisted"`). Raises 429 if EODHD rate-limited. Requires `X-Internal-JWT`. | — |
+| GET | `/api/v1/instruments/{instrument_id}/peers` | Top-N market-cap peers in the same GICS industry (PLAN-0100 W5). Query param: `limit`. | — |
+| GET | `/api/v1/instruments/{instrument_id}/intraday-stats` | Intraday session stats (B-Q-2) | — |
+| GET | `/api/v1/instruments/{instrument_id}/returns` | Multi-period returns (B-Q-3) | — |
+| GET | `/api/v1/instruments/{instrument_id}/price-levels` | 52w high/low + distance-from levels (B-Q-4) | — |
+| GET | `/api/v1/ohlcv/bars` | OHLCV bars (flexible: query params `instrument_id` or `symbol`, `timeframe`, `start`, `end`) | — |
 | GET | `/api/v1/ohlcv/bulk` | Bulk OHLCV for multiple instruments | — |
 | GET | `/api/v1/ohlcv/{instrument_id}` | OHLCV bars (query: `timeframe`, `start`, `end`) | — |
 | GET | `/api/v1/ohlcv/{instrument_id}/timeframes` | Available timeframes for instrument | — |
@@ -35,9 +40,9 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/quotes/{instrument_id}` | Latest quote — cache-aside | Valkey 5 s |
 | POST | `/api/v1/quotes/batch` | Batch quotes via POST body | Valkey 5 s |
 | GET | `/api/v1/fundamentals/{instrument_id}` | Full fundamentals (all 18 sections) — `{instrument_id}` is instrument UUID | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/income-statement` | Income statement | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/balance-sheet` | Balance sheet | — |
-| GET | `/api/v1/fundamentals/{instrument_id}/cash-flow` | Cash flow | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/income-statement` | Income statement. `?period_type=quarterly\|annual` selects one periodicity (2026-06-11); omitted = all rows mixed (back-compat) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/balance-sheet` | Balance sheet. `?period_type=quarterly\|annual` (2026-06-11); omitted = QUARTERLY (BP-546 repo default) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/cash-flow` | Cash flow. `?period_type=quarterly\|annual` (2026-06-11); omitted = QUARTERLY (BP-546 repo default) | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/highlights` | Highlights (TTM metrics) | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/valuation` | Valuation ratios | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/analyst-consensus` | Analyst estimates | — |
@@ -47,9 +52,19 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/institutional-holders` | Institutional holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/technicals-snapshot` | Technicals snapshot (52w high/low, beta, etc.) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/share-statistics` | Share statistics (shares outstanding, float) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/splits-dividends` | Splits & dividends section | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/earnings-trend` | Earnings trend (quarterly estimates) | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/earnings-annual-trend` | Earnings annual trend | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot — returns one flat row from `instrument_fundamentals_snapshot` table (eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex, free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda, credit_rating, updated_at). Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | — |
+| GET | `/api/v1/fundamentals/history` | Multi-period fundamentals history across sections (PLAN-0095 W1) — query params: `instrument_id`/`ticker`, `periods`, `period_type`. | — |
+| POST | `/api/v1/fundamentals/batch` | Batch fundamentals fan-out — body `{tickers: list[str] (cap 25), periods: int}`. Per-ticker two-phase `asyncio.gather` (resolve → fetch); partial failures isolate. Typed `reason` codes only (`invalid_ticker`/`upstream_timeout`/`upstream_404`/`upstream_error`). For rag-chat screener→fundamentals fan-out (BP-582/592). | — |
+| POST | `/api/v1/fundamentals/query` | Generic fundamentals query (section + filters) — `FundamentalsQueryResponse`. | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
-| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
+| GET | `/api/v1/fundamentals/screen` | Convenience GET screen — single metric filter via query params; inherits the default ORDER BY (primary filter metric desc, else `market_capitalization` desc). | — |
+| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response rows enriched with `_KEY_METRICS` display set (mkt cap, P/E, daily_return, revenue_ttm, dist_from_52w_*) + `volume`/`high_52w`/`low_52w` + `total` (COUNT(*) OVER()). | — |
+| GET | `/api/v1/fundamentals/screen/fields` | Screenable field metadata (label, type, unit, observed min/max) — Valkey-fallback to `screen_field_metadata`. | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
@@ -60,8 +75,13 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
 | POST | `/internal/v1/price/batch` | Price snapshots for up to 50 instruments. Instruments with no data are silently omitted (partial results valid). **Internal endpoint — S9 only.** | Valkey |
+| GET | `/internal/v1/instruments` | Internal instrument list (JWT-guarded). | — |
+| GET | `/internal/v1/instruments/top-by-market-cap` | Top-N instruments by market cap — consumed by market-ingestion's `FundamentalsRefreshWorker` (PLAN-0100 T-W5-01). **Internal — JWT required.** | — |
+| GET | `/internal/v1/instruments/ohlcv-covered` | Every `has_ohlcv=TRUE` instrument, paginated by symbol ASC — consumed by market-ingestion's `InsiderUniverseLoader` (Wave L-4b). **Internal — JWT required.** | — |
+| GET | `/internal/v1/market/tape` | Futures/pre-market tape snapshot for the rag-chat morning brief (PLAN-0102 W3). `session` ∈ `pre-mkt`/`open`/`after-hours`/`closed`/`unavailable`. Symbol list capped at 20; never 500s (per-symbol failures degrade to `unavailable`). **Internal — JWT required.** | — |
+| GET | `/internal/v1/calendar/earnings` | Forward-looking earnings calendar from `earnings_calendar` table (PLAN-0102 W3). `when` = BMO/AMC/DMH; range cap 90 days; fail-open (empty `events: []`, never 500). **Internal — JWT required.** | — |
 
-> **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
+> **Note on path ordering**: Literal-segment routes (`/ohlcv/bars`, `/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
 > (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`)
 > to avoid FastAPI matching the literal as a path param. The `fundamental_metrics` router
@@ -86,7 +106,9 @@ or articles, perform NLP processing, manage portfolios.
 |-------|---------------|---------|-------------|
 | `market.dataset.fetched` | `market-data-ohlcv` | Materialize OHLCV bars | `event_id` in `ingestion_events` |
 | `market.dataset.fetched` | `market-data-quotes` | Materialize quotes | `event_id` |
-| `market.dataset.fetched` | `market-data-fundamentals` | Materialize fundamentals | `event_id` |
+| `market.dataset.fetched` | `market-data-fundamentals` | Materialize fundamentals (filters `dataset_type=fundamentals`) | `event_id` |
+| `market.dataset.fetched` | `market-data-intraday-resampling` | Derive 5m/15m/30m/1h/4h/1d bars from `dataset_type=ohlcv, timeframe=1m` events | `event_id` |
+| `market.dataset.fetched` | `market-data-insider-transactions` | Materialize per-transaction insider feed (`dataset_type=insider_transactions`) | `event_id` |
 | `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
 
 ### Produced
@@ -267,7 +289,7 @@ SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_ex
 
 ---
 
-## Runtime Processes (7)
+## Runtime Processes (8)
 
 | Process | Purpose |
 |---------|---------|
@@ -278,6 +300,7 @@ SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_ex
 | Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
 | Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
+| Insider Transactions Consumer | Materialize per-transaction insider feed (`dataset_type == "insider_transactions"`) into `insider_transactions` — feeds the 6-hourly `insider_net_buy_90d` rollup. Existed in code since PLAN-0089 L-4b but only added to docker-compose on 2026-06-11 (backend-gaps wave 3) — the table was empty until then |
 
 ---
 
@@ -386,11 +409,19 @@ calling `process_message(event_dict)`.
 | Module | Prefix | Tags |
 |---|---|---|
 | `api/routers/instruments.py` | `/api/v1` | `instruments` |
+| `api/routers/market.py` | `/api/v1` | `market` |
 | `api/routers/ohlcv.py` | `/api/v1` | `ohlcv` |
 | `api/routers/quotes.py` | `/api/v1` | `quotes` |
+| `api/routers/fundamental_metrics.py` | `/api/v1` | `fundamental-metrics` (registered **before** `fundamentals` to avoid path-param shadowing) |
 | `api/routers/fundamentals.py` | `/api/v1` | `fundamentals` |
-| `api/routers/fundamental_metrics.py` | `/api/v1` | `fundamental-metrics` |
 | `api/routers/securities.py` | `/api/v1` | `securities` |
+| `api/routers/peers.py` | `/api/v1` | `peers` |
+| `api/routers/quote_stats.py` | `/api/v1` | `quote-stats` |
+| `api/routers/prediction_markets.py` | `/api/v1` | `prediction-markets` |
+| `api/routers/price_snapshot.py` | `/internal/v1` | `price-snapshot` |
+| `api/routers/internal_instruments.py` | `/internal/v1` | `internal-instruments` |
+| `api/routers/internal_market_tape.py` | `/internal/v1` | `internal-market-tape` |
+| `api/routers/internal_earnings_calendar.py` | `/internal/v1` | `internal-earnings-calendar` |
 
 The `ohlcv` router validates `start_date < end_date` and returns HTTP 422 on
 reversed ranges. The `quotes` router uses the cache-aside pattern described above.
@@ -401,11 +432,14 @@ reversed ranges. The `quotes` router uses the cache-aside pattern described abov
 2. Connect to Valkey, create `QuoteCache`.
 3. Build `S3ObjectStorage` from `StorageSettings` (degrades gracefully if misconfigured).
 4. Start Prometheus metrics + optional OTel tracing middleware.
-5. Start 3 consumer background tasks (`asyncio.create_task`).
-6. Start the outbox dispatcher background task.
+5. Start 4 periodic background loops via `asyncio.create_task`: `_screen_fields_refresh_loop` (6 h), `_computed_metrics_refresh_loop`, `insider_rollup_loop` (daily at `MARKET_DATA_INSIDER_ROLLUP_HOUR_UTC`), `_intelligence_rollup_loop` (daily at `MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC`).
 
-On shutdown: consumers and dispatcher are signalled to stop; each task is waited
-with a 5-second timeout before cancellation; both DB engines are disposed.
+> **Note**: The Kafka **consumers** and the **outbox dispatcher** do NOT run inside
+> the API lifespan. Each runs as its own standalone process via a dedicated
+> `*_consumer_main.py` / `dispatcher_main.py` entry point (see Runtime Processes),
+> wired as separate `command:` entries in docker-compose.
+
+On shutdown: the periodic background loops are cancelled; both DB engines are disposed.
 
 ### Read vs Write Session Routing
 
@@ -441,6 +475,17 @@ All variables are prefixed with `MARKET_DATA_`.
 | `MARKET_DATA_EODHD_BASE_URL` | `https://eodhd.com` | No | EODHD base URL (overridable for staging). |
 | `MARKET_DATA_OHLCV_MAX_DAYS` | `365` | No | Maximum date range for OHLCV queries. Requests exceeding this receive HTTP 422. |
 | `MARKET_DATA_INTRADAY_SOURCE_TF` | `1m` | No | Source timeframe for intraday resampling (`IntradayResamplingWorker`). Valid: `1m`, `5m`, `15m`, `1h`. |
+| `MARKET_DATA_HOST` / `MARKET_DATA_PORT` / `MARKET_DATA_DEBUG` | `0.0.0.0` / `8003` / `false` | No | Uvicorn bind + debug flag |
+| `MARKET_DATA_FUNDAMENTALS_TIMEOUT_S` | `90` | No | Per-message watchdog for `FundamentalsConsumer` (BP-617). `consumer_main` co-scales `session_timeout_ms`/`heartbeat_interval_ms`. |
+| `MARKET_DATA_INSIDER_ROLLUP_HOUR_UTC` | `3` | No | UTC hour for the daily `insider_net_buy_90d` rollup loop. |
+| `MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC` | `4` | No | UTC hour for the daily intelligence-rollup sync loop. |
+| `MARKET_DATA_DISPATCHER_POLL_INTERVAL_SECONDS` | `5.0` | No | Outbox dispatcher poll interval. |
+| `MARKET_DATA_DISPATCHER_LEASE_SECONDS` | `30` | No | Outbox row lease duration. |
+| `MARKET_DATA_DISPATCHER_BATCH_SIZE` | `100` | No | Outbox dispatch batch size. |
+| `MARKET_DATA_DISPATCHER_MAX_ATTEMPTS` | `20` | No | Max outbox publish attempts before dead-letter. |
+| `MARKET_DATA_KAFKA_*_CONSUMER_INSTANCE_ID` | `""` | No | Static group-instance IDs for the 6 consumers (ohlcv/quotes/fundamentals/insider_transactions/intraday_resampling/prediction_market) — enables Kafka static membership. |
+| `MARKET_DATA_NLP_PIPELINE_URL` / `MARKET_DATA_CONTENT_STORE_URL` / `MARKET_DATA_KNOWLEDGE_GRAPH_URL` / `MARKET_DATA_ALERT_SERVICE_URL` / `MARKET_DATA_RAG_CHAT_URL` | service DNS defaults | No | Intelligence-rollup client targets (`application/ports/intelligence_clients.py`). |
+| `MARKET_DATA_INTERNAL_JWT_PRIVATE_KEY` | `""` | No | RS256 private key for signing internal service-to-service JWTs (intelligence-rollup outbound calls). |
 | `MARKET_DATA_LOG_LEVEL` | `INFO` | No | Log level |
 | `MARKET_DATA_LOG_JSON` | `true` | No | Structured JSON logs |
 | `MARKET_DATA_OTLP_ENDPOINT` | `""` | No | OpenTelemetry OTLP endpoint |
@@ -768,8 +813,8 @@ Each table stores one period-specific snapshot of one fundamentals section:
 
 | Table | PK | Key columns | Notes |
 |---|---|---|---|
-| `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries. |
-| `screen_field_metadata` | `field_name TEXT` | `label TEXT`, `field_type TEXT` (CHECK IN `'numeric','text'`), `unit TEXT`, `description TEXT`, `observed_min NUMERIC`, `observed_max NUMERIC`, `null_fraction NUMERIC` (CHECK 0–1), `last_computed_at TIMESTAMPTZ` | Metadata for screenable metric fields (PRD-0017 §6.4). ~50 rows; populated by Wave B-2 background job. Used as Valkey fallback for `GET /screen/fields`. |
+| `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries, and `(metric, instrument_id, as_of_date DESC) INCLUDE (value_numeric)` (`ix_fundamental_metrics_metric_instr_date_val`, migration 038) backing the screener default-sort `DISTINCT ON` latest-per-instrument page selection. |
+| `screen_field_metadata` | `field_name TEXT` | `label TEXT`, `field_type TEXT` (CHECK IN `'numeric','text','date'` — `'date'` added by migration 031), `unit TEXT`, `description TEXT`, `observed_min NUMERIC`, `observed_max NUMERIC`, `null_fraction NUMERIC` (CHECK 0–1), `last_computed_at TIMESTAMPTZ` | Metadata for screenable metric fields (PRD-0017 §6.4). ~50 rows; populated by Wave B-2 background job. Used as Valkey fallback for `GET /screen/fields`. |
 
 **Metric catalog** (expanded set extracted from section JSONB data on write):
 
@@ -890,6 +935,23 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
 
+**Current head: `041`** (`alembic/versions/041_seed_volatility_30d_field.py`, down-revision `040`). The
+linear chain `001 → … → 041` is the source of truth — the consolidated table above only documents
+the early schema. Notable recent migrations:
+
+| Revision | Description |
+|---|---|
+| `021` | `instruments.last_fundamentals_ingest_at` freshness column (BP-545) |
+| `022`, `037` | `ANALYZE`/autovacuum tuning on fundamentals tables (paired with composite indexes, BP-581) |
+| `023`, `038` | Composite/covering fundamentals indexes (incl. `ix_fundamental_metrics_metric_instr_date_val` for the screener default-sort dedup scan) |
+| `024`/`025`/`029`/`035`/`041` | Seed L2/L4a/L3/L5b/volatility-30d screen fields (lock-step with `app.py::_get_static_screen_fields`) |
+| `028` | L5c earnings-calendar columns (`earnings_calendar` table) |
+| `030`, `032` | `insider_transactions` per-row table (introduced, then schema replaced) |
+| `031` | Extend `screen_field_metadata.field_type` CHECK to include `'date'` |
+| `033` | `ix_ohlcv_bars_instr_bar_date_daily` |
+| `036` | Merge duplicate crypto-USD instruments |
+| `040` | `worker_runs` durable last-success tracking |
+
 **Alembic env** (`alembic/env.py`) imports `market_data.infrastructure.db.models` (which registers all models in `Base.metadata`) before calling `autogenerate`.
 
 Run cycle:
@@ -976,8 +1038,16 @@ All functions use parameterized bind parameters — no f-strings or string inter
 
 | Event type | Kafka topic |
 |---|---|
-| `market.instrument.created` | `market.events.v1` |
-| `market.instrument.updated` | `market.events.v1` |
+| `market.instrument.created` | `market.instrument.created` |
+| `market.instrument.updated` | `market.instrument.updated` |
+| `market.instrument.discovered` | `market.instrument.discovered.v1` |
+
+> **QA-016 fix**: each event type publishes to its own dedicated topic. Both
+> instrument events were previously routed to a single `market.events.v1` topic,
+> which meant Portfolio (S1) never received instrument sync events. The
+> `market.instrument.discovered` event (PLAN-0057 Wave D-2) is emitted by the
+> OHLCV/quotes consumers. See `infrastructure/messaging/outbox/dispatcher.py`
+> (`EVENT_TOPIC_MAP`).
 
 ### Avro schemas
 
@@ -985,6 +1055,7 @@ All functions use parameterized bind parameters — no f-strings or string inter
 |---|---|
 | `market.instrument.created` | `src/market_data/infrastructure/messaging/schemas/instrument.created.v1.avsc` |
 | `market.instrument.updated` | `src/market_data/infrastructure/messaging/schemas/instrument.updated.v1.avsc` |
+| `market.instrument.discovered` | `infra/kafka/schemas/market.instrument.discovered.v1.avsc` (registry-managed) |
 
 Schema namespace: `market_data.events`.
 

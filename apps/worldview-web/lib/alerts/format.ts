@@ -73,3 +73,82 @@ export function formatAlertTitle(alert: AlertTitleLikeAlert): string {
   if (human) return `${human} alert`;
   return "Alert";
 }
+
+// ── ruleToNaturalLanguage (PLAN-0113 W4 T-4-03) ────────────────────────────────
+
+import {
+  type AlertRule,
+  type FundamentalCrossCondition,
+  type KgConnectionCondition,
+  type NewsCountCondition,
+  type NewsMomentumCondition,
+  type PriceCrossCondition,
+  type RuleType,
+} from "@/lib/api/alertRules";
+
+/**
+ * RuleNlInput — the minimal slice of a rule the NL formatter needs.
+ *
+ * WHY a partial (not the full `AlertRule`): the AlertWizard renders a LIVE
+ * summary while the user is still filling in fields — there is no persisted rule
+ * yet, just a `rule_type` + an in-progress `condition` (possibly null). Accepting
+ * a partial lets the same function drive both the live wizard summary AND the
+ * saved-rule list label.
+ *
+ * WHY display-name maps: a condition only carries ids (instrument_id /
+ * entity_id). The wizard knows the chosen entities' display names (from the
+ * pickers) and passes them via `names` so the summary reads "Apple", not a UUID.
+ */
+export interface RuleNlInput {
+  rule_type: RuleType;
+  /** The in-progress or stored condition; null while the editor is incomplete. */
+  condition: AlertRule["condition"] | null;
+  /** Optional id→display-name map so the summary can show tickers / names. */
+  names?: Record<string, string>;
+}
+
+/** Resolve an id to its display name, falling back to a short id stub. */
+function nameFor(id: string | undefined, names?: Record<string, string>): string {
+  if (!id) return "—";
+  return names?.[id] ?? id;
+}
+
+/**
+ * ruleToNaturalLanguage — render a human "Alert me when …" sentence for a rule.
+ *
+ * Returns a generic prompt when the condition is incomplete (null / missing
+ * fields) so the wizard always has something to show. Pure + side-effect-free,
+ * so it is trivial to unit-test per type.
+ */
+export function ruleToNaturalLanguage(input: RuleNlInput): string {
+  const { rule_type, condition, names } = input;
+  if (!condition) return "Complete the fields to preview this alert.";
+
+  switch (rule_type) {
+    case "PRICE_CROSS": {
+      const c = condition as PriceCrossCondition;
+      return `Alert me when ${nameFor(c.instrument_id, names)} price crosses ${c.operator} ${c.value}.`;
+    }
+    case "FUNDAMENTAL_CROSS": {
+      const c = condition as FundamentalCrossCondition;
+      return `Alert me when ${nameFor(c.instrument_id, names)} ${c.metric_key} crosses ${c.operator} ${c.value}.`;
+    }
+    case "NEWS_COUNT": {
+      const c = condition as NewsCountCondition;
+      const kw = c.keyword ? ` mentioning "${c.keyword}"` : "";
+      return `Alert me when ≥ ${c.threshold} articles${kw} mention ${nameFor(c.entity_id, names)} in ${c.window}.`;
+    }
+    case "NEWS_MOMENTUM": {
+      const c = condition as NewsMomentumCondition;
+      return `Alert me when news momentum on ${nameFor(c.entity_id, names)} jumps ≥ ${c.delta_pct}% over ${c.window_hours}h (≥ ${c.min_count} articles).`;
+    }
+    case "KG_CONNECTION": {
+      const c = condition as KgConnectionCondition;
+      const rel = c.relation_type ? ` via a ${c.relation_type} link` : "";
+      return `Alert me when ${nameFor(c.source_entity_id, names)} connects to ${nameFor(c.target_entity_id, names)} within ${c.max_hops} hop${c.max_hops !== 1 ? "s" : ""}${rel}.`;
+    }
+    default:
+      // Exhaustiveness guard — a new RuleType without a case is a compile error.
+      return "Alert rule.";
+  }
+}

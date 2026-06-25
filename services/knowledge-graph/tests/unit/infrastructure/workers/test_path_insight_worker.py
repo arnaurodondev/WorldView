@@ -65,7 +65,7 @@ def _make_session_factory() -> tuple[MagicMock, AsyncMock]:
 
 def _make_worker(
     session_factory: MagicMock | None = None,
-    path_discovery: MagicMock | None = None,
+    path_engine: MagicMock | None = None,
     scorer: MagicMock | None = None,
     template_matcher: MagicMock | None = None,
     instance_uuid: UUID | None = None,
@@ -75,9 +75,9 @@ def _make_worker(
 
     if session_factory is None:
         session_factory, _ = _make_session_factory()
-    if path_discovery is None:
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=[])
+    if path_engine is None:
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
     if scorer is None:
         scorer = MagicMock()
     if template_matcher is None:
@@ -86,7 +86,7 @@ def _make_worker(
 
     return PathInsightWorker(
         session_factory=session_factory,
-        path_discovery=path_discovery,
+        path_engine=path_engine,
         scorer=scorer,
         template_matcher=template_matcher,
         instance_uuid=instance_uuid or uuid4(),
@@ -95,30 +95,108 @@ def _make_worker(
 
 
 class TestPathInsightWorker:
-    def test_worker_claims_and_processes_job(self) -> None:
-        """Worker claims jobs and calls path_discovery for each job entity_id."""
+    def test_worker_uses_graph_path_engine(self) -> None:
+        """Worker claims jobs and calls the GraphPathEngine for each job entity_id."""
         from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
         job = _make_job()
         entity_id = job.entity_id  # type: ignore[attr-defined]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=[])
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
         scorer = MagicMock()
         template_matcher = AsyncMock()
         template_matcher.match = AsyncMock(return_value=None)
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
         )
 
         asyncio.run(worker._process_job(job))
-        path_discovery.find_paths_for_anchor.assert_awaited_once_with(entity_id)
+        # Engine is called with the anchor entity_id (PLAN-0112 T-2-04).
+        path_engine.find_paths_from_anchor.assert_awaited_once()
+        call = path_engine.find_paths_from_anchor.await_args
+        assert call.args[0] == entity_id
+
+    def test_worker_passes_prune_membership(self) -> None:
+        """Worker requests membership-pruned discovery at the configured hop cap."""
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        job = _make_job()
+
+        session_factory, _session = _make_session_factory()
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[])
+
+        worker = PathInsightWorker(
+            session_factory=session_factory,
+            path_engine=path_engine,
+            scorer=MagicMock(),
+            template_matcher=AsyncMock(),
+            instance_uuid=uuid4(),
+            path_max_hops=4,
+        )
+
+        asyncio.run(worker._process_job(job))
+        call = path_engine.find_paths_from_anchor.await_args
+        assert call.kwargs["prune_membership"] is True
+        assert call.kwargs["max_hops"] == 4
+
+    def test_worker_filters_self_loops(self) -> None:
+        """Paths whose endpoints are the same entity are dropped before scoring."""
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.services.path_scorer import PathScorer
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        job = _make_job()
+        same_id = str(uuid4())
+        # A self-loop path: first and last node ids identical.
+        self_loop = RawPath(
+            node_ids=(same_id, str(uuid4()), same_id),
+            node_names=("A", "B", "A"),
+            node_types=("company", "company", "company"),
+            rel_types=("SUPPLIER_OF", "SUPPLIER_OF"),
+            edge_confs=(0.8, 0.8),
+        )
+        good = _make_raw_path(2)
+
+        session_factory, _session = _make_session_factory()
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=[self_loop, good])
+
+        worker = PathInsightWorker(
+            session_factory=session_factory,
+            path_engine=path_engine,
+            scorer=PathScorer(),
+            template_matcher=AsyncMock(),
+            instance_uuid=uuid4(),
+        )
+
+        captured: list = []
+
+        class _FakeInsightRepo:
+            async def replace_for_anchor(self, anchor_id: UUID, insights: list) -> None:
+                captured.extend(insights)
+
+        class _FakeJobRepo:
+            async def mark_done(self, job_id: UUID, paths_found: int) -> None:
+                pass
+
+            async def mark_failed(self, job_id: UUID, error_text: str) -> None:
+                pass
+
+        worker._template_matcher.match = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        worker._insight_repo = lambda session: _FakeInsightRepo()  # type: ignore[method-assign]
+        worker._job_repo = lambda session: _FakeJobRepo()  # type: ignore[method-assign]
+
+        asyncio.run(worker._process_job(job))
+        # Only the non-self-loop path is scored/persisted.
+        assert len(captured) == 1
 
     def test_worker_failure_increments_retry(self) -> None:
         """When path_discovery raises, mark_failed is called (BP-113)."""
@@ -129,12 +207,12 @@ class TestPathInsightWorker:
         job = _make_job()
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(side_effect=RuntimeError("AGE error"))
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(side_effect=RuntimeError("AGE error"))
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
@@ -168,8 +246,8 @@ class TestPathInsightWorker:
         raw_paths = [_make_raw_path(2)]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=raw_paths)
 
         scorer = PathScorer()
         template_matcher = AsyncMock()
@@ -177,7 +255,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
@@ -214,15 +292,15 @@ class TestPathInsightWorker:
         raw_paths = [_make_raw_path(2) for _ in range(60)]
 
         session_factory, _session = _make_session_factory()
-        path_discovery = AsyncMock()
-        path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
+        path_engine = AsyncMock()
+        path_engine.find_paths_from_anchor = AsyncMock(return_value=raw_paths)
         scorer = PathScorer()
         template_matcher = AsyncMock()
         template_matcher.match = AsyncMock(return_value=None)
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=path_discovery,
+            path_engine=path_engine,
             scorer=scorer,
             template_matcher=template_matcher,
             instance_uuid=uuid4(),
@@ -270,7 +348,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
@@ -315,14 +393,14 @@ class TestPathInsightWorker:
         sf_b, _ = _make_session_factory()
         worker_a = PathInsightWorker(
             session_factory=sf_a,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=worker_a_uuid,
         )
         worker_b = PathInsightWorker(
             session_factory=sf_b,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=worker_b_uuid,
@@ -354,7 +432,7 @@ class TestPathInsightWorker:
 
         worker = PathInsightWorker(
             session_factory=session_factory,
-            path_discovery=AsyncMock(),
+            path_engine=AsyncMock(),
             scorer=MagicMock(),
             template_matcher=AsyncMock(),
             instance_uuid=uuid4(),
@@ -391,3 +469,186 @@ class TestPathInsightWorker:
         repo = PathInsightJobRepository(session)
         count = asyncio.run(repo.reclaim_stuck(timeout_seconds=600))
         assert count == 5
+
+
+# ── PLAN-0112 W3 live-QA fixes: novelty first_seen fallback + dst FK guard ──────
+
+
+class _Result:
+    """Minimal fake SQLAlchemy result for mocked sessions."""
+
+    def __init__(self, rows: list | None = None) -> None:
+        self._rows = rows or []
+
+    def fetchall(self) -> list:
+        return self._rows
+
+
+class TestFetchFirstSeenFallback:
+    """BUG 1: novelty was 0 for every path because the AGE edge ``relation_id``
+    is often absent from ``relations`` (sync gap) — first_seen must COALESCE in
+    ``relation_evidence.MIN(evidence_date)``.
+    """
+
+    def test_first_seen_query_coalesces_relation_evidence(self) -> None:
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        rid = uuid4()
+        captured: dict[str, str] = {}
+
+        async def _execute(stmt, params=None):
+            captured["sql"] = str(getattr(stmt, "text", stmt))
+            return _Result([(str(rid), _NOW)])
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+
+        out = asyncio.run(PathInsightWorker._fetch_first_seen(session, {rid}))
+        # The fallback source MUST be queried.
+        assert "relation_evidence" in captured["sql"]
+        assert "COALESCE" in captured["sql"].upper()
+        assert out[rid] == _NOW
+
+    def test_empty_rel_ids_returns_empty(self) -> None:
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        session = AsyncMock()
+        session.execute = AsyncMock()
+        out = asyncio.run(PathInsightWorker._fetch_first_seen(session, set()))
+        assert out == {}
+        session.execute.assert_not_called()
+
+
+class TestScoreWithWeirdnessDstGuard:
+    """BUG 2: a path ending on a non-canonical entity_id must persist with
+    dst_entity_id=NULL (no FK violation), and rel_ids must flow into novelty.
+    """
+
+    def _make_settings(self):
+        from knowledge_graph.config import Settings
+
+        return Settings(
+            database_url="postgresql://u:p@localhost/db",
+            storage_access_key="k",
+            storage_secret_key="s",
+        )
+
+    def _routed_session(
+        self,
+        *,
+        canonical_ids: set,
+        first_seen_rows: list,
+    ):
+        """Session whose execute routes each prefetch query to canned rows."""
+
+        async def _execute(stmt, params=None):
+            sql = str(getattr(stmt, "text", stmt))
+            if "FROM node_degree" in sql:
+                return _Result([])  # degree map empty → fail-open degree 1
+            if "FROM graph_stats" in sql:
+                return _Result()  # get_graph_stats → fetchone None handled below
+            if "entity_embedding_state" in sql:
+                return _Result([])
+            if "relation_evidence" in sql or "first_evidence_at" in sql:
+                return _Result(first_seen_rows)
+            if "FROM canonical_entities" in sql:
+                return _Result([(str(e),) for e in canonical_ids])
+            return _Result([])
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=None)
+        return session
+
+    def test_non_canonical_endpoint_nulls_dst(self) -> None:
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.ports.node_degree_repository import GraphStats
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        src = uuid4()
+        mid = uuid4()
+        non_canonical_dst = uuid4()
+        rid1, rid2 = uuid4(), uuid4()
+        raw = RawPath(
+            node_ids=(str(src), str(mid), str(non_canonical_dst)),
+            node_names=("Src", "Mid", "Dst"),
+            node_types=("company", "company", "person"),
+            rel_types=("REGULATES", "REGULATES"),
+            edge_confs=(1.0, 1.0),
+            rel_ids=(rid1, rid2),
+        )
+
+        session = self._routed_session(
+            canonical_ids={src, mid},  # dst is NOT canonical
+            first_seen_rows=[(str(rid1), _NOW)],
+        )
+        factory = MagicMock(return_value=session)
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+            NodeDegreeRepository,
+        )
+
+        with patch.object(NodeDegreeRepository, "get_graph_stats", AsyncMock(return_value=GraphStats(10, 8, 5))):
+            worker = PathInsightWorker(
+                session_factory=factory,
+                path_engine=AsyncMock(),
+                scorer=MagicMock(),
+                template_matcher=AsyncMock(),
+                instance_uuid=uuid4(),
+                node_degree_repo_factory=NodeDegreeRepository,
+                settings=self._make_settings(),
+            )
+            insights = asyncio.run(worker._score_with_weirdness([raw]))
+
+        assert len(insights) == 1
+        # dst is non-canonical → must be NULLed to avoid the FK violation.
+        assert insights[0].dst_entity_id is None
+
+    def test_canonical_endpoint_keeps_dst_and_novelty_nonzero(self) -> None:
+        from knowledge_graph.application.ports.graph_path_engine import RawPath
+        from knowledge_graph.application.ports.node_degree_repository import GraphStats
+        from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+        src = uuid4()
+        mid = uuid4()
+        dst = uuid4()
+        rid1, rid2 = uuid4(), uuid4()
+        # Use a first_seen well within the 7-day window so novelty > 0.
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        recent = utc_now()
+        raw = RawPath(
+            node_ids=(str(src), str(mid), str(dst)),
+            node_names=("Src", "Mid", "Dst"),
+            node_types=("company", "company", "person"),
+            rel_types=("REGULATES", "REGULATES"),
+            edge_confs=(1.0, 1.0),
+            rel_ids=(rid1, rid2),
+        )
+
+        session = self._routed_session(
+            canonical_ids={src, mid, dst},  # all canonical
+            first_seen_rows=[(str(rid1), recent), (str(rid2), recent)],
+        )
+        factory = MagicMock(return_value=session)
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+            NodeDegreeRepository,
+        )
+
+        with patch.object(NodeDegreeRepository, "get_graph_stats", AsyncMock(return_value=GraphStats(10, 8, 5))):
+            worker = PathInsightWorker(
+                session_factory=factory,
+                path_engine=AsyncMock(),
+                scorer=MagicMock(),
+                template_matcher=AsyncMock(),
+                instance_uuid=uuid4(),
+                node_degree_repo_factory=NodeDegreeRepository,
+                settings=self._make_settings(),
+            )
+            insights = asyncio.run(worker._score_with_weirdness([raw]))
+
+        assert insights[0].dst_entity_id == dst
+        # rel_id flowed into the novelty term (recent edge → novelty == 1.0).
+        assert insights[0].novelty == pytest.approx(1.0)

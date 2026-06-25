@@ -160,3 +160,23 @@ async def test_route_rejects_invalid_uuid() -> None:
             headers=_INTERNAL_HEADERS,
         )
     assert resp.status_code == 422
+
+
+def test_router_is_registered_in_create_app() -> None:
+    """Regression: news-rollup router must be wired into the production app.
+
+    The router existed since L-5a but was never imported by ``app.py``,
+    causing the L-5b nightly sync worker to 404 on all 664 instruments and
+    silently leave news_count_7d / llm_relevance_7d_max /
+    display_relevance_7d_weighted columns NULL forever.
+    """
+    from nlp_pipeline.app import create_app
+    from nlp_pipeline.config import Settings
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://x/y",  # - test placeholder
+        intelligence_database_url="postgresql+asyncpg://x/y",
+    )
+    app = create_app(settings=settings)
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert "/internal/v1/instruments/{instrument_id}/news-rollup-7d" in paths

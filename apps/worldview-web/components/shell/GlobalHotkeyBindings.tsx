@@ -22,10 +22,12 @@
  *     mod+\ →  toggle StatusBar / full-width (placeholder — Wave 5)
  *
  *   Search / palette:
- *     mod+k  →  intentionally NOT registered here — cmdk's Dialog handles ⌘K via
- *               its own keydown listener. Registering it would call e.stopPropagation()
- *               (via useChordHotkeys on match) and silently break the command palette.
- *               The `?` overlay lists all real shortcuts; ⌘K is discoverable there.
+ *     mod+k  →  registered by CommandPalette itself (id shell.command.palette,
+ *               Round-3 2026-06-10) — the palette owns its open state, so it
+ *               co-locates the registration like HotkeyCheatSheet does for `?`.
+ *               Modifier-bearing chords pass through the input-suspension rule,
+ *               so ⌘K fires even mid-typing (chat composer). Being in the
+ *               registry means the `?` overlay lists it automatically.
  *     /      →  focus GlobalSearch input
  *
  *   Help:

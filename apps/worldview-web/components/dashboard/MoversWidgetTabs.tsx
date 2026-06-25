@@ -29,7 +29,12 @@
 import { useState } from "react";
 import { HoldingsMoversWidget } from "./HoldingsMoversWidget";
 import { WatchlistMoversWidget } from "./WatchlistMoversWidget";
-import { PreMarketMoversWidget } from "./PreMarketMoversWidget";
+// Round 1 foundation (2026-06-10): the MARKET tab now hosts the redesigned
+// TopMovers (Gainers/Losers shadcn Tabs, rows with ticker · name · 5-day
+// sparkline · price · %chg) instead of PreMarketMoversWidget. TopMovers reads
+// qk.dashboard.topMovers(...) which DashboardBundleHydrator seeds from the
+// F-2 bundle — so the MARKET tab renders on cold start without its own fetch.
+import { TopMovers } from "./TopMovers";
 import { cn } from "@/lib/utils";
 
 // Tab identifier — kept as a literal union so the tabswitch is type-safe.
@@ -42,11 +47,22 @@ export function MoversWidgetTabs() {
   return (
     // WHY h-full + flex-col: the parent grid cell already manages the
     // height — we fill it and stack the tab strip above the active widget.
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label — ONE landmark for the
+    // whole tabbed movers panel (the child widgets are alternates inside it,
+    // so nesting a region per tab pane would be landmark noise).
+    <div className="flex h-full min-h-0 flex-col bg-background" role="region" aria-label="Movers">
       {/* Tab strip — same h-6 / 10px text rhythm as other widget headers.
           Three equal-width tabs using flex-1 on each button so the strip
           fills the full header row without leaving gaps. */}
-      <div className="flex h-6 shrink-0 border-b border-border bg-card">
+      {/* Round 4 (item 2): role="tablist" — the children carry role="tab" +
+          aria-selected, and WAI-ARIA requires tabs to be owned by a tablist
+          (a bare tab is an orphaned role and axe flags it). aria-label names
+          the control for SR users ("Movers source, tab list"). */}
+      <div
+        className="flex h-6 shrink-0 border-b border-border bg-card"
+        role="tablist"
+        aria-label="Movers source"
+      >
         <TabButton
           active={tab === "market"}
           onClick={() => setTab("market")}
@@ -68,25 +84,16 @@ export function MoversWidgetTabs() {
           each widget has internal queries we don't want firing when the tab
           is not visible. Mounting only the active widget keeps the network
           footprint scoped to what the user is looking at.
-          WHY PreMarketMoversWidget for MARKET tab: it already has the correct
-          universe-wide gainers + losers layout with sector filter pills —
-          re-using it avoids duplicating the fetching + rendering logic.
-          WHY suppressHeader on PreMarketMoversWidget: PreMarketMoversWidget
-          renders its own "TOP MOVERS" section header. In the tab context, the
-          tab strip itself provides the navigation chrome, so the inner header
-          would be redundant. We suppress it by wrapping in a div that hides
-          the first child (the header). See inline comment below. */}
+          WHY TopMovers for MARKET tab (Round 1, replaces PreMarketMoversWidget):
+          the redesigned TopMovers renders rows with ticker · name · 5-day
+          sparkline · price · %chg behind Gainers/Losers shadcn Tabs — the
+          Round 1 foundation spec shape. Its tab strip doubles as the panel
+          chrome, so the previous hide-first-child CSS hack (which suppressed
+          PreMarketMoversWidget's redundant "TOP MOVERS" header) is gone — it
+          would now wrongly hide the new Gainers/Losers tab strip. */}
       <div className="flex min-h-0 flex-1 flex-col">
         {tab === "market" ? (
-          // WHY [&>div>:first-child]:hidden: the PreMarketMoversWidget renders
-          // a section header div as its first child. In the tab context, the
-          // tab strip provides the chrome — hiding the inner header removes
-          // double-labelling ("TOP MOVERS" header below "MARKET" tab label).
-          // We use a narrow Tailwind selector rather than forking the widget,
-          // which would require maintaining two versions of the same logic.
-          <div className="flex min-h-0 flex-1 flex-col [&>div>div:first-child]:hidden">
-            <PreMarketMoversWidget />
-          </div>
+          <TopMovers />
         ) : tab === "holdings" ? (
           <HoldingsMoversWidget />
         ) : (
@@ -114,11 +121,15 @@ function TabButton({ active, onClick, label }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      // Round 3 (item 5): bg-muted hover convention + keyboard focus ring
+      // (inset — the tab strip is flush against the panel border, an outset
+      // ring would be clipped). Tier-1 transition-colors stays ≤150ms.
       className={cn(
         "flex-1 px-2 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         active
           ? "border-b-2 border-primary text-primary"
-          : "text-muted-foreground hover:text-foreground",
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       // role=tab uses aria-selected (not aria-pressed) per WAI-ARIA. This
       // matches the rest of the codebase's tab-button pattern.

@@ -46,6 +46,26 @@ class TestS3ObjectStorageInit:
             assert store is not None
             mock_client.assert_called_once()
 
+    def test_client_built_with_configured_pool_size(self) -> None:
+        """The boto3 client must receive a botocore Config carrying the
+        configured ``max_pool_connections`` so the urllib3 pool is sized to the
+        concurrent workload (fixes "Connection pool is full" log flood)."""
+        settings = StorageSettings(
+            endpoint="http://localhost:9000",
+            access_key="test",
+            secret_key="test",
+            region="us-east-1",
+            use_ssl=False,
+            max_pool_connections=64,
+        )
+        with patch("boto3.client") as mock_client:
+            mock_client.return_value = MagicMock()
+            S3ObjectStorage(settings)
+
+            _, kwargs = mock_client.call_args
+            config = kwargs["config"]
+            assert config.max_pool_connections == 64
+
 
 class TestPutBytes:
     @pytest.mark.asyncio

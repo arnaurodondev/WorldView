@@ -32,6 +32,32 @@ class DatasetType(StrEnum):
     MARKET_CAP = "market_cap"  # EXT-08
 
 
+class CacheDatasetType(StrEnum):
+    """Cache-layer dataset taxonomy (finer-grained than :class:`DatasetType`).
+
+    This enum lives in the domain layer (R25) so the application layer can
+    reference it without importing infrastructure.  It is intentionally
+    **distinct** from :class:`DatasetType` (which uses provider-call
+    granularity such as ``ohlcv``/``fundamentals``): the cache needs **finer
+    grain** (``ohlcv_eod`` vs ``ohlcv_intraday``) because their TTLs differ by
+    more than two orders of magnitude.
+
+    Schema-drift mitigation (PLAN-0107 section A.5): the values are part of the
+    on-disk Valkey cache key, so they are **append-only** and **never
+    renamed**.  The TTL policy table keyed on this enum lives in
+    ``infrastructure.cache.cache_policy`` (``CACHE_TTL_SECONDS``).
+    """
+
+    OHLCV_EOD = "ohlcv_eod"
+    OHLCV_INTRADAY = "ohlcv_intraday"
+    FUNDAMENTALS_SNAPSHOT = "fundamentals_snapshot"
+    EARNINGS_CALENDAR = "earnings_calendar"
+    DIVIDENDS = "dividends"
+    SPLITS = "splits"
+    EXCHANGES_LIST = "exchanges_list"
+    SYMBOL_SEARCH = "symbol_search"
+
+
 class FundamentalsVariant(StrEnum):
     ANNUAL = "annual"
     QUARTERLY = "quarterly"

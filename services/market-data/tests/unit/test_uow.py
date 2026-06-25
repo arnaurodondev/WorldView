@@ -216,3 +216,54 @@ class TestUoWPostCommitHooks:
 
         after = s3_post_commit_hook_failures_total._value.get()
         assert after == before, "Counter must not change when hook succeeds"
+
+
+class TestUoWLazyReadSession:
+    """2026-06-16 session-optimization #1: the read session is created lazily.
+
+    Write-only consumers (the OHLCV materializer) must NOT open a second Postgres
+    connection just by entering the UoW — it doubled the per-UoW connection count
+    and capped consumer replica scaling.  The read session is built on first
+    ``_read()``/``get_read_session()`` use only.
+    """
+
+    async def test_read_session_not_created_on_enter(self):
+        """Entering the UoW must NOT call the read factory (write-only path)."""
+        write_session = AsyncMock()
+        read_session = AsyncMock()
+        write_factory = _make_session_factory(write_session)
+        read_factory = _make_session_factory(read_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=write_factory, read_factory=read_factory)
+
+        async with uow:
+            # No read accessor touched → read factory never called.
+            read_factory.assert_not_called()
+            write_factory.assert_called_once()
+        # Never created → never closed.
+        read_session.close.assert_not_called()
+
+    async def test_read_session_created_lazily_on_first_access(self):
+        """First get_read_session() builds the read session once and reuses it."""
+        write_session = AsyncMock()
+        read_session = AsyncMock()
+        write_factory = _make_session_factory(write_session)
+        read_factory = _make_session_factory(read_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=write_factory, read_factory=read_factory)
+
+        async with uow:
+            s1 = uow.get_read_session()
+            s2 = uow.get_read_session()
+            assert s1 is read_session
+            assert s2 is read_session  # reused, not rebuilt
+            read_factory.assert_called_once()
+        # Created → closed exactly once on exit.
+        read_session.close.assert_called_once()
+
+    async def test_read_accessor_raises_when_not_entered(self):
+        """_read() outside the context manager must raise (write session absent)."""
+        write_factory = _make_session_factory(AsyncMock())
+        read_factory = _make_session_factory(AsyncMock())
+        uow = SqlAlchemyUnitOfWork(write_factory=write_factory, read_factory=read_factory)
+
+        with pytest.raises(RuntimeError, match="not entered"):
+            uow.get_read_session()

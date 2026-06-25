@@ -77,13 +77,20 @@ export function BeatMissHistoryPanel({ instrumentId }: BeatMissHistoryPanelProps
 
   return (
     <div className="flex flex-col gap-1 px-2 py-2 border-b border-border">
-      <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+      {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
+          marker (label-level because padded sidebar
+          panels have no dedicated header row to tint). */}
+      <span className="border-l-2 border-l-primary pl-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
         EPS BEAT / MISS
       </span>
 
+      {/* Round-3 item 4: shape-matched skeleton — a sparkline-height bar
+          (was a lone "—", which reads as the FINAL "no data" state while
+          the fetch is still in flight).
+          Round-4 item 4: static per DS §6.2 — raw animate-pulse is banned. */}
       {isLoading && (
-        <div className="h-[20px] flex items-center">
-          <span className="text-[10px] text-muted-foreground/30">—</span>
+        <div role="status" aria-label="Loading EPS history" className="h-[20px] flex items-center">
+          <span aria-hidden className="h-3 w-full rounded-[1px] bg-muted/30" />
         </div>
       )}
 

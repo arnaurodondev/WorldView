@@ -13,22 +13,31 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+
+if TYPE_CHECKING:
+    from alert.domain.enums import RuleType
 
 from alert.api.dependencies import (
     AckAlertUseCaseDep,
     AckUseCaseDep,
     CreateAlertUseCaseDep,
+    CreateRuleUseCaseDep,
     CurrentUserIdDep,
     DbSessionDep,
+    DeleteRuleUseCaseDep,
     GetPendingAlertsUseCaseDep,
+    GetRuleUseCaseDep,
     HistoryUseCaseDep,
+    ListRulesUseCaseDep,
     ReadDbSessionDep,
     SnoozeUseCaseDep,
     TenantUserDep,
+    UpdateRuleUseCaseDep,
 )
 from alert.api.schemas import (
     AcknowledgeAlertRequest,
@@ -36,6 +45,10 @@ from alert.api.schemas import (
     AlertCreatedResponse,
     AlertHistoryResponse,
     AlertResponse,
+    AlertRuleCreateRequest,
+    AlertRuleListResponse,
+    AlertRuleResponse,
+    AlertRuleUpdateRequest,
     CreateAlertRequest,
     PendingAlertResponse,
     PendingAlertsResponse,
@@ -43,7 +56,7 @@ from alert.api.schemas import (
 )
 from alert.application.use_cases.active_alert_flag import GetActiveAlertFlagUseCase
 from alert.application.use_cases.create_alert import CreateAlertRequest as CreateAlertInput
-from alert.domain.entities import Alert
+from alert.domain.entities import Alert, PendingAlert
 from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -55,6 +68,20 @@ router = APIRouter(prefix="/api/v1", tags=["alerts"])
 # service-caller endpoint lives outside the public /api/v1 namespace. Both
 # routers are included in app.py and share the same InternalJWTMiddleware.
 internal_router = APIRouter(prefix="/internal/v1", tags=["alerts-internal"])
+
+# PLAN-0094 follow-up: allow-list of service-token callers that may read ANY
+# user's pending alerts via the internal route below. Each entry corresponds to
+# a ``service_name`` minted by S9's POST /internal/v1/service-token (and present
+# in S9's ``_ALLOWED_SERVICE_NAMES``). Defence-in-depth: a service token alone
+# is not enough — the calling ``service_name`` must also be on this list, so an
+# attacker who somehow obtains a service token still cannot read user alerts
+# unless they are this exact identity. Mirrors the portfolio service's
+# ``_SERVICE_BRIEF_ALLOWED`` (services/portfolio/src/portfolio/api/internal.py).
+_SERVICE_BRIEF_ALLOWED: frozenset[str] = frozenset(
+    {
+        "rag-chat-brief-scheduler",
+    },
+)
 
 
 # ── REST: GET /internal/v1/instruments/{instrument_id}/active-alert-flag ──────
@@ -114,7 +141,78 @@ async def get_pending_alerts(
             ) from None
 
     pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
+    return _build_pending_alerts_response(pairs, limit=limit, offset=offset)
 
+
+# ── REST: GET /internal/v1/users/{user_id}/alerts/pending ─────────────────────
+# PLAN-0094 follow-up: service-caller variant of the route above. The rag-chat
+# morning-brief scheduler holds a single service-account JWT (sub="service:...",
+# role="system") whose subject does NOT map to a real user, so it cannot use the
+# JWT-sub scoping of /api/v1/alerts/pending. This route takes ``user_id`` in the
+# path and authorises the caller by ``service_name`` (allow-list) instead.
+
+
+@internal_router.get(
+    "/users/{user_id}/alerts/pending",
+    response_model=PendingAlertsResponse,
+)
+async def get_pending_alerts_for_user(
+    user_id: UUID,
+    request: Request,
+    uc: GetPendingAlertsUseCaseDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    min_severity: str | None = Query(default=None, description="Minimum severity: low|medium|high|critical"),
+) -> PendingAlertsResponse:
+    """Return paginated unacknowledged alerts for ``user_id`` (service callers only).
+
+    Auth: InternalJWTMiddleware (RS256) sets request.state.role / service_name.
+    Only an allow-listed system caller (``role == "system"`` AND ``service_name``
+    in :data:`_SERVICE_BRIEF_ALLOWED`) may read another user's alerts here. Any
+    other token — including a normal user token — is rejected with 403 so this
+    route can never become a cross-user data leak via the public namespace.
+    """
+    jwt_role = getattr(request.state, "role", "") or ""
+    jwt_service_name = getattr(request.state, "service_name", "") or ""
+
+    if not (jwt_role == "system" and jwt_service_name in _SERVICE_BRIEF_ALLOWED):
+        # 403, not 401: the token is valid but this caller is not authorised to
+        # read arbitrary users' alerts. Don't leak which check failed.
+        raise HTTPException(status_code=403, detail="Service caller not authorised for this route")
+
+    severity_filter: AlertSeverity | None = None
+    if min_severity is not None:
+        try:
+            severity_filter = AlertSeverity(min_severity)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid min_severity: must be low|medium|high|critical",
+            ) from None
+
+    # Audit log so ops can spot unexpected service-caller access (mirrors the
+    # portfolio service's ``portfolio_context_service_caller`` log line).
+    logger.info(
+        "alerts_pending_service_caller",
+        service_name=jwt_service_name,
+        path_user_id=str(user_id),
+    )
+
+    pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
+    return _build_pending_alerts_response(pairs, limit=limit, offset=offset)
+
+
+def _build_pending_alerts_response(
+    pairs: list[tuple[PendingAlert, Alert]],
+    *,
+    limit: int,
+    offset: int,
+) -> PendingAlertsResponse:
+    """Map (pending, alert) pairs to the shared PendingAlertsResponse shape.
+
+    Extracted so the public JWT-sub route and the internal service-caller route
+    return byte-identical payloads (the s5_client expects ``{"alerts": [...]}``).
+    """
     alert_responses = [
         PendingAlertResponse(
             pending_id=p.pending_id,
@@ -415,6 +513,281 @@ async def list_alert_history(
         offset=offset,
         has_more=offset + len(alerts) < total,
     )
+
+
+# ── Alert Rules CRUD (PLAN-0113) ─────────────────────────────────────────────
+#
+# Routes call only use cases (R25). The discriminated ``condition`` is validated
+# here at the boundary so we can return a precise 400/422; keying fields
+# (entity_id / node_a / node_b) are derived from the validated condition.
+
+
+def _rule_to_response(rule: object) -> AlertRuleResponse:
+    """Map a domain AlertRule to the wire schema."""
+    from alert.domain.entities import AlertRule
+
+    assert isinstance(rule, AlertRule)
+    return AlertRuleResponse(
+        rule_id=rule.rule_id,
+        tenant_id=rule.tenant_id,
+        user_id=rule.user_id,
+        rule_type=str(rule.rule_type),
+        name=rule.name,
+        entity_id=rule.entity_id,
+        node_a_entity_id=rule.node_a_entity_id,
+        node_b_entity_id=rule.node_b_entity_id,
+        condition=rule.condition,
+        severity=str(rule.severity),
+        enabled=rule.enabled,
+        cooldown_seconds=rule.cooldown_seconds,
+        notify_in_app=rule.notify_in_app,
+        notify_email=rule.notify_email,
+        last_state=rule.last_state,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
+def _parse_rule_type(raw: str) -> RuleType:
+    from alert.domain.enums import RuleType
+
+    try:
+        return RuleType(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="rule_type must be one of PRICE_CROSS|NEWS_COUNT|NEWS_MOMENTUM|KG_CONNECTION|FUNDAMENTAL_CROSS",
+        ) from None
+
+
+def _validate_condition_and_keys(rule_type_raw: str, condition_raw: dict) -> tuple[RuleType, dict, dict]:  # type: ignore[type-arg]
+    """Validate the discriminated condition; derive keying fields.
+
+    Returns ``(rule_type, validated_condition_dict, keying_kwargs)`` where
+    keying_kwargs is one of ``{entity_id=...}`` or
+    ``{node_a_entity_id=..., node_b_entity_id=...}``. Raises HTTPException 400
+    on a bad shape, 422 on the node_a==node_b semantic violation.
+    """
+    from pydantic import ValidationError
+
+    from alert.domain.enums import RuleType
+    from alert.domain.rule_conditions import parse_condition
+
+    rule_type = _parse_rule_type(rule_type_raw)
+    try:
+        condition = parse_condition(rule_type, condition_raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid condition: {exc.errors()}") from None
+
+    cond_dict = condition.model_dump(mode="json")
+    if rule_type is RuleType.KG_CONNECTION:
+        if cond_dict["source_entity_id"] == cond_dict["target_entity_id"]:
+            raise HTTPException(status_code=422, detail="source_entity_id must differ from target_entity_id")
+        keys = {
+            "node_a_entity_id": UUID(cond_dict["source_entity_id"]),
+            "node_b_entity_id": UUID(cond_dict["target_entity_id"]),
+        }
+    else:
+        key_field = "instrument_id" if "instrument_id" in cond_dict else "entity_id"
+        keys = {"entity_id": UUID(cond_dict[key_field])}
+    return rule_type, cond_dict, keys
+
+
+async def _validate_metric_key(request: Request, rule_type: RuleType, cond_dict: dict) -> None:  # type: ignore[type-arg]
+    """Allow-list ``FUNDAMENTAL_CROSS.metric_key`` against the S3 vocabulary.
+
+    PRD-0113 §6.5.3/§9: the only semantic check that cannot live in the domain
+    condition model (it needs the live S3 ``screen/fields`` catalogue). Without
+    it, a typo'd ``metric_key`` is accepted and the rule then silently never
+    fires (the evaluator's ``get_fundamental_metric`` returns None for an unknown
+    metric) — exactly the silent-drop class this PRD set out to kill.
+
+    Fail policy: reject (400) only when the catalogue is reachable AND the metric
+    is definitively absent. If S3 is unreachable (vocab is ``None``), we
+    fail-open (allow + log) so a transient S3 outage cannot block rule creation.
+    """
+    from alert.domain.enums import RuleType
+    from alert.infrastructure.clients.s3_client import S3MarketDataClient
+
+    if rule_type is not RuleType.FUNDAMENTAL_CROSS:
+        return
+    metric_key = cond_dict.get("metric_key")
+    if not isinstance(metric_key, str):
+        return  # shape already validated by the Pydantic condition model.
+
+    s3_client = S3MarketDataClient(request.app.state.settings)
+    try:
+        vocab = await s3_client.get_fundamental_metric_keys()
+    finally:
+        await s3_client.close()
+
+    if vocab is None:
+        # Catalogue unreachable — allow but record the unverified creation.
+        logger.warning("metric_key_unverified_s3_unreachable", metric_key=metric_key)  # type: ignore[no-any-return]
+        return
+    if metric_key not in vocab:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown metric_key '{metric_key}'. Must be one of the S3 fundamentals fields.",
+        )
+
+
+@router.post("/alert-rules", response_model=AlertRuleResponse, status_code=201)
+async def create_alert_rule(
+    body: AlertRuleCreateRequest,
+    uc: CreateRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+    request: Request,
+) -> AlertRuleResponse:
+    """Create a standing alert rule (PLAN-0113).
+
+    Validates the discriminated ``condition`` at the boundary, derives keying
+    fields, and persists owner-scoped. Returns 400 (bad condition), 409
+    (duplicate identical rule), 422 (node_a==node_b), 429 (per-user cap).
+    """
+    from alert.application.use_cases.manage_rules import CreateRuleInput
+    from alert.domain.enums import AlertSeverity
+    from alert.domain.errors import RuleLimitExceededError
+
+    tenant_id, user_id = tenant_user
+    rule_type, cond_dict, keys = _validate_condition_and_keys(body.rule_type, body.condition)
+    # Semantic allow-list for FUNDAMENTAL_CROSS metric_key (S3 vocabulary).
+    await _validate_metric_key(request, rule_type, cond_dict)
+
+    try:
+        severity = AlertSeverity(body.severity)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="severity must be low|medium|high|critical") from None
+
+    name = body.name or f"{rule_type.value} rule"
+    try:
+        rule = await uc.execute(
+            CreateRuleInput(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                rule_type=rule_type,
+                name=name,
+                condition=cond_dict,
+                severity=severity,
+                enabled=body.enabled,
+                cooldown_seconds=body.cooldown_seconds,
+                notify_in_app=body.notify_in_app,
+                notify_email=body.notify_email,
+                **keys,
+            )
+        )
+    except RuleLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from None
+
+    logger.info("alert_rule_created", rule_id=str(rule.rule_id), rule_type=rule_type.value)  # type: ignore[no-any-return]
+    return _rule_to_response(rule)
+
+
+@router.get("/alert-rules", response_model=AlertRuleListResponse)
+async def list_alert_rules(
+    uc: ListRulesUseCaseDep,
+    tenant_user: TenantUserDep,
+    enabled: bool | None = Query(default=None),
+    rule_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AlertRuleListResponse:
+    """List the caller's alert rules (read replica, R27)."""
+    tenant_id, user_id = tenant_user
+    rt = _parse_rule_type(rule_type) if rule_type is not None else None
+    rules, total = await uc.execute(tenant_id, user_id, enabled=enabled, rule_type=rt, limit=limit, offset=offset)
+    return AlertRuleListResponse(items=[_rule_to_response(r) for r in rules], total=total)
+
+
+@router.get("/alert-rules/{rule_id}", response_model=AlertRuleResponse)
+async def get_alert_rule(
+    rule_id: UUID,
+    uc: GetRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertRuleResponse:
+    """Get a single owned rule (404 if missing or cross-owner)."""
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+    try:
+        rule = await uc.execute(rule_id, tenant_id, user_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return _rule_to_response(rule)
+
+
+@router.patch("/alert-rules/{rule_id}", response_model=AlertRuleResponse)
+async def update_alert_rule(
+    rule_id: UUID,
+    body: AlertRuleUpdateRequest,
+    get_uc: GetRuleUseCaseDep,
+    uc: UpdateRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+    request: Request,
+) -> AlertRuleResponse:
+    """Partial-update an owned rule. Changing ``condition`` re-arms (last_state=null).
+
+    ``rule_type`` is immutable; a ``condition`` change is validated against the
+    rule's existing type.
+    """
+    from alert.application.use_cases.manage_rules import UpdateRuleInput
+    from alert.domain.enums import AlertSeverity
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+
+    severity: AlertSeverity | None = None
+    if body.severity is not None:
+        try:
+            severity = AlertSeverity(body.severity)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="severity must be low|medium|high|critical") from None
+
+    patch = UpdateRuleInput(
+        name=body.name,
+        severity=severity,
+        enabled=body.enabled,
+        cooldown_seconds=body.cooldown_seconds,
+        notify_in_app=body.notify_in_app,
+        notify_email=body.notify_email,
+    )
+
+    if body.condition is not None:
+        # Resolve the rule's immutable type, then validate the new condition.
+        try:
+            existing = await get_uc.execute(rule_id, tenant_id, user_id)
+        except RuleNotFoundError:
+            raise HTTPException(status_code=404, detail="Rule not found") from None
+        rt, cond_dict, keys = _validate_condition_and_keys(str(existing.rule_type), body.condition)
+        # Re-validate metric_key when the condition changes (same allow-list as create).
+        await _validate_metric_key(request, rt, cond_dict)
+        patch.condition = cond_dict
+        patch.entity_id = keys.get("entity_id")
+        patch.node_a_entity_id = keys.get("node_a_entity_id")
+        patch.node_b_entity_id = keys.get("node_b_entity_id")
+
+    try:
+        rule = await uc.execute(rule_id, tenant_id, user_id, patch)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return _rule_to_response(rule)
+
+
+@router.delete("/alert-rules/{rule_id}", status_code=204)
+async def delete_alert_rule(
+    rule_id: UUID,
+    uc: DeleteRuleUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> Response:
+    """Delete an owned rule (204; 404 if missing or cross-owner)."""
+    from alert.domain.errors import RuleNotFoundError
+
+    tenant_id, user_id = tenant_user
+    try:
+        await uc.execute(rule_id, tenant_id, user_id)
+    except RuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Rule not found") from None
+    return Response(status_code=204)
 
 
 # ── WebSocket: /api/v1/alerts/stream ─────────────────────────────────────────

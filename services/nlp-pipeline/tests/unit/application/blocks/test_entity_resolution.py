@@ -18,12 +18,39 @@ from nlp_pipeline.application.blocks.entity_resolution import (
     _stage1_exact,
     _stage2_ticker_isin,
     _stage3_fuzzy,
+    _ticker_candidate,
     run_entity_resolution_block,
 )
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from nlp_pipeline.domain.models import EntityMention, MentionResolution
 
 pytestmark = pytest.mark.unit
+
+
+class TestTickerCandidate:
+    """Regression guard for the case-sensitive Stage-2 ticker gate.
+
+    The 2026-06-20 stored-relation audit surfaced a class of mis-resolutions where
+    a mixed-case company acronym (xAI, Citi) was treated as a ticker and collided
+    with an unrelated security that owns that symbol (xAI -> "XAI Octagon ... Trust"
+    closed-end fund). The case-sensitive ``isupper()`` gate already prevents this;
+    these tests LOCK that behaviour so it cannot silently regress.
+    """
+
+    @pytest.mark.parametrize("mixed_case", ["xAI", "Citi", "eBay", "iRobot", "PayPal", "Tesla"])
+    def test_mixed_case_acronyms_are_not_tickers(self, mixed_case: str) -> None:
+        assert _ticker_candidate(mixed_case) is None
+
+    @pytest.mark.parametrize("real_ticker", ["AAPL", "XAI", "F", "COST", "BRK"])
+    def test_all_caps_short_symbols_are_tickers(self, real_ticker: str) -> None:
+        assert _ticker_candidate(real_ticker) == real_ticker
+
+    def test_exchange_qualifier_stripped_before_gate(self) -> None:
+        # "AAPL.MX" is length 7 (past the <=6 cap) until the venue suffix is stripped.
+        assert _ticker_candidate("AAPL.MX") == "AAPL"
+
+    def test_long_all_caps_is_not_a_ticker(self) -> None:
+        assert _ticker_candidate("MORGANSTANLEY") is None
 
 
 def _make_mention(text: str, mention_class: MentionClass = MentionClass.ORGANIZATION) -> EntityMention:
@@ -286,8 +313,11 @@ class TestRunEntityResolutionBlock:
         _count_result = MagicMock()
         _count_result.scalar_one = MagicMock(return_value=0)
         _insert_result = MagicMock()
-        _insert_result.scalar_one = MagicMock(return_value=str(uuid.uuid4()))
-        intelligence_session.execute = AsyncMock(side_effect=[_count_result, _insert_result])
+        _insert_result.scalar_one_or_none = MagicMock(return_value=str(uuid.uuid4()))
+        # BP-707: run_entity_resolution_block now issues a leading `SET LOCAL
+        # lock_timeout` execute before the churn-COUNT + provisional INSERT.
+        _lock_result = MagicMock()
+        intelligence_session.execute = AsyncMock(side_effect=[_lock_result, _count_result, _insert_result])
         # begin_nested() is used as an async context manager for the savepoint.
         _savepoint = AsyncMock()
         _savepoint.__aenter__ = AsyncMock(return_value=_savepoint)
@@ -491,7 +521,9 @@ def _intelligence_session_mock(*, hourly_count: int = 0, queue_id: uuid.UUID | N
     count_result = MagicMock()
     count_result.scalar_one = MagicMock(return_value=hourly_count)
     insert_result = MagicMock()
-    insert_result.scalar_one = MagicMock(return_value=str(queue_id) if queue_id else None)
+    # BP-707: the insert now uses ON CONFLICT DO NOTHING + scalar_one_or_none
+    # (None on conflict → lock-free fallback SELECT). queue_id is the RETURNING row.
+    insert_result.scalar_one_or_none = MagicMock(return_value=str(queue_id) if queue_id else None)
     session.execute = AsyncMock(side_effect=[count_result, insert_result])
 
     # begin_nested() returns an async context manager. When queue_id is None we
@@ -600,6 +632,70 @@ class TestEnsureProvisionalForMention:
         assert mention.provisional_queue_id is None
         # Outcome stays UNRESOLVED so the next cycle re-attempts.
         assert mention.resolution_outcome == ResolutionOutcome.UNRESOLVED
+
+
+# ── ensure_provisional_for_ref (2026-06-14 M2 endpoint-recovery) ─────────────
+
+
+@pytest.mark.unit
+class TestEnsureProvisionalForRef:
+    """ensure_provisional_for_ref mints a queue row for a bare LLM endpoint
+    surface that has NO backing mention — the M2 fix for the dominant
+    relation-drop miss-reason (the non-mention counterparty endpoint).
+    """
+
+    @pytest.mark.asyncio
+    async def test_mints_queue_row_for_bare_surface(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_ref
+
+        queue_id = uuid.uuid4()
+        session = _intelligence_session_mock(hourly_count=0, queue_id=queue_id)
+
+        result = await ensure_provisional_for_ref(
+            surface="ARMEC",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result == queue_id
+        # Both the churn-COUNT and the INSERT ran (no backing mention required).
+        assert session.execute.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_churn_guard_blocks_mint(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import (
+            MAX_PROVISIONAL_PER_HOUR,
+            ensure_provisional_for_ref,
+        )
+
+        session = _intelligence_session_mock(hourly_count=MAX_PROVISIONAL_PER_HOUR, queue_id=uuid.uuid4())
+
+        result = await ensure_provisional_for_ref(
+            surface="Mystery Co",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result is None
+        # Only the COUNT ran — no INSERT attempted (begin_nested never entered).
+        session.begin_nested.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_savepoint_failure_returns_none(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_ref
+
+        session = _intelligence_session_mock(hourly_count=0, queue_id=None)
+
+        result = await ensure_provisional_for_ref(
+            surface="Some Org",
+            mention_class=MentionClass.ORGANIZATION,
+            doc_id=uuid.uuid4(),
+            intelligence_session=session,
+        )
+
+        assert result is None
 
 
 # ── PLAN-0087 F-LLM-001: Stage 2.5 class-aware canonical_name resolution ─────
@@ -768,3 +864,70 @@ class TestStage25ClassAwareCanonical:
         # 0.85 (fuzzy sim) * 0.90 (multiplier) = 0.765 → AUTO_RESOLVED
         assert resolved[0].resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
         assert resolved[0].resolved_entity_id == fuzzy_id
+
+
+class TestStage2ExchangeQualifierStrip:
+    """2026-06-15 fix: exchange-suffixed tickers resolve via the bare symbol.
+
+    Before the fix, "AAPL.MX" (length 7) failed the ``len <= 6`` ticker gate and
+    never reached the Stage-2 lookup, so it fell through to fuzzy/ANN or was
+    dropped — minting a duplicate tickerless canonical downstream.
+    """
+
+    @pytest.mark.asyncio
+    async def test_exchange_suffixed_ticker_resolves_via_bare_symbol(self) -> None:
+        entity_id = uuid.uuid4()
+        mention = _make_mention("AAPL.MX")
+        # The repo is keyed by the BARE ticker the block must query after stripping.
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ticker_isin_map={"AAPL": entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # Resolved to the existing AAPL canonical (no duplicate minted)...
+        assert resolved[0].resolved_entity_id == entity_id
+        # ...and the lookup was issued for the STRIPPED bare ticker, not "AAPL.MX".
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert "AAPL" in called_tickers
+        assert "AAPL.MX" not in called_tickers
+
+    @pytest.mark.asyncio
+    async def test_share_class_ticker_is_not_stripped(self) -> None:
+        """BRK.B is a distinct security — it must be queried as-is, not as 'BRK'."""
+        entity_id = uuid.uuid4()
+        mention = _make_mention("BRK.B")
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ticker_isin_map={"BRK.B": entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert resolved[0].resolved_entity_id == entity_id
+        called_tickers = alias_repo.batch_ticker_isin_match.call_args.args[0]
+        assert "BRK.B" in called_tickers
+        assert "BRK" not in called_tickers

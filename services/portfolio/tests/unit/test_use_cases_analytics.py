@@ -287,6 +287,7 @@ class TestGetExposureUseCase:
             leverage=Decimal(0),
             prices_stale=False,
             prices_as_of=None,
+            buying_power=Decimal(0),
         )
 
     async def test_full_price_coverage(self) -> None:
@@ -301,7 +302,7 @@ class TestGetExposureUseCase:
         await uow.holdings.save(h2)
 
         prices = _FakeCurrentPriceClient(
-            {h1.instrument_id: Decimal("150"), h2.instrument_id: Decimal("220")},
+            {h1.instrument_id: Decimal(150), h2.instrument_id: Decimal(220)},
         )
         uc = GetExposureUseCase(prices)
         result = await uc.execute(
@@ -309,13 +310,17 @@ class TestGetExposureUseCase:
             uow,
         )
         # invested = 10*150 + 5*220 = 1500 + 1100 = 2600
-        assert result.invested == Decimal("2600")
+        assert result.invested == Decimal(2600)
         assert result.cash == Decimal(0)
         # cash=0 ⇒ gross/net both 1.0
         assert result.gross_exposure_pct == Decimal(1)
         assert result.net_exposure_pct == Decimal(1)
         # leverage = invested / total_cost = 2600 / (10*100 + 5*200) = 2600 / 2000 = 1.3
         assert result.leverage == Decimal("1.3")
+        # 2026-06-10 gap #5: buying_power v1 semantics — always equals cash
+        # (margin not modelled). The field exists so the frontend renders a
+        # server-stated value instead of inferring it.
+        assert result.buying_power == result.cash == Decimal(0)
 
         # Single batch round-trip — never N+1.
         assert len(prices.calls) == 1
@@ -337,7 +342,7 @@ class TestGetExposureUseCase:
             GetExposureQuery(portfolio_id=p.id, owner_id=owner, tenant_id=tenant),
             uow,
         )
-        assert result.invested == Decimal("1000")
+        assert result.invested == Decimal(1000)
         # leverage = 1000 / 1000 = 1.0 (cost basis exposure equals cost basis itself)
         assert result.leverage == Decimal(1)
         # F-016 (QA 2026-04-28): missing price → prices_stale must be True so
@@ -360,7 +365,7 @@ class TestGetExposureUseCase:
 
         # Both instruments quoted — fully covered → not stale.
         prices = _FakeCurrentPriceClient(
-            {h1.instrument_id: Decimal("150"), h2.instrument_id: Decimal("220")},
+            {h1.instrument_id: Decimal(150), h2.instrument_id: Decimal(220)},
         )
         uc = GetExposureUseCase(prices)
         result = await uc.execute(
@@ -385,7 +390,7 @@ class TestGetExposureUseCase:
         await uow.holdings.save(h2)
 
         prices = _FakeCurrentPriceClient(
-            {h1.instrument_id: Decimal("110"), h2.instrument_id: Decimal("60")},
+            {h1.instrument_id: Decimal(110), h2.instrument_id: Decimal(60)},
         )
         uc = GetExposureUseCase(prices)
         result = await uc.execute(
@@ -393,7 +398,7 @@ class TestGetExposureUseCase:
             uow,
         )
         # invested = 10*110 + 20*60 = 1100 + 1200 = 2300
-        assert result.invested == Decimal("2300")
+        assert result.invested == Decimal(2300)
 
     async def test_zero_quantity_holdings_treated_as_empty(self) -> None:
         """F-203 (QA iter-2): all-zero quantity → empty-portfolio branch.
@@ -429,6 +434,7 @@ class TestGetExposureUseCase:
             leverage=Decimal(0),
             prices_stale=False,
             prices_as_of=None,
+            buying_power=Decimal(0),
         )
         # Crucially: we did NOT call the price client — the early return
         # short-circuited the loop, avoiding wasted quote round-trips.

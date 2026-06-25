@@ -1,0 +1,2113 @@
+[
+  {
+    "doc_id": "019ecfc0-b1d8-7ee1-a697-1d9d895a67dd",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 30.042,
+    "tokens_in": 3094,
+    "tokens_out": 846,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Private equity\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Private equity is knocking on the door of the 401(k) market. Many retirement savers say they want to keep it closed.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Private equity",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "Private equity is knocking on the door of the 401(k) market. Many retirement savers say they want to keep it closed."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0af-3b6a-7445-83cc-d719dc588ad4",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 43.991,
+    "tokens_in": 5289,
+    "tokens_out": 1225,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Orion Corporation received a disclosure under Chapter 9, Section 5 of the Securities Market Act regarding BlackRock, Inc.'s shareholding falling below 5% of Orion's total shares.\",\n      \"entity_refs\": [\"BlackRock, Inc.\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Orion Corporation has received a disclosure under Chapter 9, Section 5 of the Securities Market Act, according to which the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"BlackRock, Inc.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Orion Corporation has received a disclosure ... the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Orion Corporation received a disclosure under Chapter 9, Section 5 of the Securities Market Act regarding BlackRock, Inc.'s shareholding falling below 5% of Orion's total shares.",
+          "entity_refs": [
+            "BlackRock, Inc."
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Orion Corporation has received a disclosure under Chapter 9, Section 5 of the Securities Market Act, according to which the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "BlackRock, Inc.",
+          "claim_type": "OTHER",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "Orion Corporation has received a disclosure ... the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfac-fafd-773b-9ce4-99a5a7d36ca3",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 59.938,
+    "tokens_in": 4964,
+    "tokens_out": 2419,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Oil steadied after the biggest drop in more than two weeks\",\n      \"entity_refs\": [\"Oil\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"(Bloomberg) -- Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"West Texas Intermediate was near $81\",\n      \"entity_refs\": [\"West Texas Intermediate\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Brent traded above $83 a barrel after sinking almost 5% on Monday, while West Texas Intermediate was near $81.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Federal Reserve assess interest rates\",\n      \"entity_refs\": [\"Federal Reserve\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Oil's drop to the lowest since early March\",\n      \"entity_refs\": [\"Oil\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Planned full reopening of the Strait of Hormuz\",\n      \"entity_refs\": [\"Strait of Hormuz\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.\",\n      \"confidence\": 0.94\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Nearly 300 vessels waiting to exit the Persian Gulf\",\n      \"entity_refs\": [\"Persian Gulf\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"At present, nearly 300 vessels loaded with cargo are waiting to exit the Persian Gulf, and there's about the same number of empty ships waiting to head into the region, according to data from intelligence firm Kpler.\",\n      \"confidence\": 0.94\n    },\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Interim agreement due to be signed in Switzerland\",\n      \"entity_refs\": [\"Switzerland\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The interim agreement is due to be signed by both sides in Switzerland on Friday, although Washington and Tehran have yet to release the text of the memorandum of understanding.\",\n      \"confidence\": 0.90\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Oil steadied after the biggest drop in more than two weeks",
+          "entity_refs": [
+            "Oil"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "(Bloomberg) -- Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "MACRO",
+          "description": "West Texas Intermediate was near $81",
+          "entity_refs": [
+            "West Texas Intermediate"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Brent traded above $83 a barrel after sinking almost 5% on Monday, while West Texas Intermediate was near $81.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Federal Reserve assess interest rates",
+          "entity_refs": [
+            "Federal Reserve"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Oil's drop to the lowest since early March",
+          "entity_refs": [
+            "Oil"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Planned full reopening of the Strait of Hormuz",
+          "entity_refs": [
+            "Strait of Hormuz"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.",
+          "confidence": 0.94
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Nearly 300 vessels waiting to exit the Persian Gulf",
+          "entity_refs": [
+            "Persian Gulf"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "At present, nearly 300 vessels loaded with cargo are waiting to exit the Persian Gulf, and there's about the same number of empty ships waiting to head into the region, according to data from intelligence firm Kpler.",
+          "confidence": 0.94
+        },
+        {
+          "event_type": "OTHER",
+          "description": "Interim agreement due to be signed in Switzerland",
+          "entity_refs": [
+            "Switzerland"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The interim agreement is due to be signed by both sides in Switzerland on Friday, although Washington and Tehran have yet to release the text of the memorandum of understanding.",
+          "confidence": 0.9
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 7,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfec-a4e8-7da3-aadc-29e7af547f3f",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 14.488,
+    "tokens_in": 4167,
+    "tokens_out": 667,
+    "raw_response": "{\"events\":[],\"claims\":[],\"relations\":[]}",
+    "parsed": {
+      "events": [],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf97-d54e-7454-a5b0-706d94031382",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 36.06,
+    "tokens_in": 4853,
+    "tokens_out": 1463,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"analysts expect Tenet Healthcare to post earnings of $4.08 per share. This would mark year-over-year growth of 1.49%.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"our most recent consensus estimate is anticipating revenue of $5.39 billion, indicating a 2.27% upward movement from the same quarter last year.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"analysts are expecting earnings of $17.61 per share ... these totals would mark changes of +4.95% ... from last year.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"analysts are expecting revenue of $22.02 billion ... changes of +3.32% ... from last year.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "analysts expect Tenet Healthcare to post earnings of $4.08 per share. This would mark year-over-year growth of 1.49%."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "our most recent consensus estimate is anticipating revenue of $5.39 billion, indicating a 2.27% upward movement from the same quarter last year."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "analysts are expecting earnings of $17.61 per share ... these totals would mark changes of +4.95% ... from last year."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "analysts are expecting revenue of $22.02 billion ... changes of +3.32% ... from last year."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 4,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9d-864f-7747-ae96-ea1b40061244",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 27.398,
+    "tokens_in": 3146,
+    "tokens_out": 1275,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"RBC says Welltower is \\\"well positioned\\\" to capitalize on seniors housing demand\",\n      \"entity_refs\": [\"RBC\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "RBC says Welltower is \"well positioned\" to capitalize on seniors housing demand",
+          "entity_refs": [
+            "RBC"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9c-e0a0-7776-b8cf-4030e2ca9ac9",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 33.803,
+    "tokens_in": 4326,
+    "tokens_out": 1508,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Zacks Rank #2 (Buy)\",\n      \"entity_refs\": [\"Archer Daniels Midland\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Archer Daniels Midland is currently sporting a Zacks Rank of #2 (Buy).\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Archer Daniels Midland\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Archer Daniels Midland is currently sporting a Zacks Rank of #2 (Buy).\"\n    },\n    {\n      \"entity_ref\": \"Archer Daniels Midland\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"This means that Archer Daniels Midland is outperforming the sector as a whole this year.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Zacks Rank #2 (Buy)",
+          "entity_refs": [
+            "Archer Daniels Midland"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Archer Daniels Midland is currently sporting a Zacks Rank of #2 (Buy).",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Archer Daniels Midland",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "Archer Daniels Midland is currently sporting a Zacks Rank of #2 (Buy)."
+        },
+        {
+          "entity_ref": "Archer Daniels Midland",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "This means that Archer Daniels Midland is outperforming the sector as a whole this year."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 2,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9a-2645-7dd4-a54d-0204db1a1976",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 28.475,
+    "tokens_in": 5250,
+    "tokens_out": 1297,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Intuitive Surgical\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Leasing revenues also grew 28%\"\n    },\n    {\n      \"entity_ref\": \"Intuitive Surgical\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"higher recurring revenues now representing 86% of total sales\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Intuitive Surgical",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Leasing revenues also grew 28%"
+        },
+        {
+          "entity_ref": "Intuitive Surgical",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "higher recurring revenues now representing 86% of total sales"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 2,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf93-d8f8-7b88-a218-39ba0794bdf8",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 90.721,
+    "tokens_in": 3324,
+    "tokens_out": 259,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfba-5cb7-71e5-8044-35280a2ee484",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 19.384,
+    "tokens_in": 3640,
+    "tokens_out": 798,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"peace deal between the U.S. and Iran\",\n      \"entity_refs\": [\"U.S.\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"peace deal between the U.S. and Iran\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "peace deal between the U.S. and Iran",
+          "entity_refs": [
+            "U.S."
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "peace deal between the U.S. and Iran",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfaa-4547-7a21-8b87-958723d5c9cf",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 7.385,
+    "tokens_in": 3323,
+    "tokens_out": 341,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfb8-8366-789f-8961-464b33d3d1ff",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 24.175,
+    "tokens_in": 5032,
+    "tokens_out": 1365,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Blackstone Inc.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Blackstone remains the world's largest alternative asset manager, with more than $1.3 trillion in assets under management, and the largest real estate manager globally.\"\n    },\n    {\n      \"entity_ref\": \"Blackstone Inc.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.94,\n      \"evidence_text\": \"Blackstone remains a high-priority company for the Fund as we gain greater clarity on the magnitude of these risks, particularly given what we view as a compelling valuation at current levels.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Blackstone Inc.\",\n      \"predicate\": \"headquartered_in\",\n      \"object_ref\": \"New York\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Based in New York, Blackstone Inc. (NYSE:BX) is a leading alternative asset management company specializing in private equity, venture capital, real estate, hedge fund solutions, credit, secondary funds of funds, public debt, and equity and multi-asset class strategies.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Blackstone Inc.",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "Blackstone remains the world's largest alternative asset manager, with more than $1.3 trillion in assets under management, and the largest real estate manager globally."
+        },
+        {
+          "entity_ref": "Blackstone Inc.",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.94,
+          "evidence_text": "Blackstone remains a high-priority company for the Fund as we gain greater clarity on the magnitude of these risks, particularly given what we view as a compelling valuation at current levels."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Blackstone Inc.",
+          "predicate": "headquartered_in",
+          "object_ref": "New York",
+          "confidence": 0.95,
+          "evidence_text": "Based in New York, Blackstone Inc. (NYSE:BX) is a leading alternative asset management company specializing in private equity, venture capital, real estate, hedge fund solutions, credit, secondary funds of funds, public debt, and equity and multi-asset class strategies.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 2,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecf9a-49fd-74c8-8688-c4f9c0dedb39",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 24.909,
+    "tokens_in": 3766,
+    "tokens_out": 1473,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Johnson Controls\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"It is important to highlight that the stock has gained 28.5% since the above comment was made.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Johnson Controls\",\n      \"predicate\": \"produces\",\n      \"object_ref\": \"data center\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"It makes a host of things for the data center.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Johnson Controls",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "It is important to highlight that the stock has gained 28.5% since the above comment was made."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Johnson Controls",
+          "predicate": "produces",
+          "object_ref": "data center",
+          "confidence": 0.95,
+          "evidence_text": "It makes a host of things for the data center.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 1,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 19.595,
+    "tokens_in": 4009,
+    "tokens_out": 1743,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"entity_refs\": [\"NeoGenomics\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval\"\n    },\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"DEBT_CHANGE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.80,\n      \"evidence_text\": \"The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028.\"\n    },\n    {\n      \"entity_ref\": \"NeoGenomics\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.75,\n      \"evidence_text\": \"NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.",
+          "entity_refs": [
+            "NeoGenomics"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "NeoGenomics announced a private offering of $275M in convertible senior notes due 2032.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "NeoGenomics signals $797M-$803M 2026 revenue outlook following PanTracer Liquid MolDX approval"
+        },
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "DEBT_CHANGE",
+          "polarity": "positive",
+          "confidence": 0.8,
+          "evidence_text": "The company expects to use part of the proceeds to repurchase a portion of its existing 0.25% convertible notes due 2028."
+        },
+        {
+          "entity_ref": "NeoGenomics",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.75,
+          "evidence_text": "NeoGenomics may also use proceeds and cash on hand to repurchase up to $25M of its common stock in privately negotiated transactions."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 3,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 14.608,
+    "tokens_in": 3997,
+    "tokens_out": 1116,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"entity_refs\": [\n        \"Cuprina Pte. Ltd.\",\n        \"U.S. Food and Drug Administration\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"U.S. Food and Drug Administration\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Cuprina Pte. Ltd.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "U.S. Food and Drug Administration",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ed083-d324-7f8c-b21a-5f17f0d2004e",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 11.101,
+    "tokens_in": 3578,
+    "tokens_out": 1117,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"Fox Corporation announced its $22 billion acquisition of Roku, Inc.\",\n      \"entity_refs\": [\"Fox Corporation\", \"Roku, Inc.\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Roku, Inc.\",\n      \"predicate\": \"acquired_by\",\n      \"object_ref\": \"Fox Corporation\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "Fox Corporation announced its $22 billion acquisition of Roku, Inc.",
+          "entity_refs": [
+            "Fox Corporation",
+            "Roku, Inc."
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Roku, Inc.",
+          "predicate": "acquired_by",
+          "object_ref": "Fox Corporation",
+          "confidence": 0.96,
+          "evidence_text": "Fox Corporation (FOX) shares plunged 15.2% after announcing its $22 billion acquisition of Roku, Inc. (ROKU), as investors worried about the deal's cost and integration risks.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfb5-61dc-704b-bc84-33e69b7db5c8",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 17.656,
+    "tokens_in": 4850,
+    "tokens_out": 1777,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Launched ANTHEM Elbow Fracture System\",\n      \"entity_refs\": [\"Globus Medical\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"In 2025, the company launched ANTHEM Elbow Fracture System, a fully comprehensive plating portfolio designed to address a wide spectrum of elbow fractures.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Launched DuraPro with Navigation\",\n      \"entity_refs\": [\"Globus Medical\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The company also launched DuraPro with Navigation, a next-generation, oscillating system designed to safeguard delicate tissue.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Launched Verzera\",\n      \"entity_refs\": [\"Globus Medical\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"In addition to DuraPro, it launched Verzera, a navigated high-speed drill system integrated with the ExcelsiusGPS and ExcelsiusHub system.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Expanded AMS implant portfolio with the COHERE ALIF Spacer\",\n      \"entity_refs\": [\"Globus Medical\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"In addition, Globus Medical expanded the Advanced Materials Science (\\\"AMS\\\") implant portfolio with the COHERE ALIF Spacer.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods\",\n      \"entity_refs\": [\"Globus Medical\", \"FDA\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Globus Medical\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Over the past year, GMED shares have surged 34.2%, outperforming the industry's 3.6% decline.\"\n    },\n    {\n      \"entity_ref\": \"Globus Medical\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"In the past 30 days, GMED's EPS estimate for 2026 has moved north to $4.74.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Launched ANTHEM Elbow Fracture System",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "In 2025, the company launched ANTHEM Elbow Fracture System, a fully comprehensive plating portfolio designed to address a wide spectrum of elbow fractures.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Launched DuraPro with Navigation",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The company also launched DuraPro with Navigation, a next-generation, oscillating system designed to safeguard delicate tissue.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Launched Verzera",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "In addition to DuraPro, it launched Verzera, a navigated high-speed drill system integrated with the ExcelsiusGPS and ExcelsiusHub system.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Expanded AMS implant portfolio with the COHERE ALIF Spacer",
+          "entity_refs": [
+            "Globus Medical"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "In addition, Globus Medical expanded the Advanced Materials Science (\"AMS\") implant portfolio with the COHERE ALIF Spacer.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods",
+          "entity_refs": [
+            "Globus Medical",
+            "FDA"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The company's early second-quarter FDA 510(k) clearances for patient-specific lumbar spacers and rods also reinforce its roadmap to link planning software, enabling technologies, and implants into a single workflow.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Globus Medical",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Over the past year, GMED shares have surged 34.2%, outperforming the industry's 3.6% decline."
+        },
+        {
+          "entity_ref": "Globus Medical",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "In the past 30 days, GMED's EPS estimate for 2026 has moved north to $4.74."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 5,
+    "n_claims": 2,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9d-6e31-7b98-b35c-99f67b571f3a",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 12.187,
+    "tokens_in": 4243,
+    "tokens_out": 1130,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Gold jumps 3%\",\n      \"entity_refs\": [\"Gold\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Gold jumps 3%;\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"London Bullion Market Association\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Ruth Crowell\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"LBMA CEO Ruth Crowell said on Monday\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Gold jumps 3%",
+          "entity_refs": [
+            "Gold"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Gold jumps 3%;",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "London Bullion Market Association",
+          "predicate": "has_executive",
+          "object_ref": "Ruth Crowell",
+          "confidence": 0.97,
+          "evidence_text": "LBMA CEO Ruth Crowell said on Monday",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfc5-7e08-72f5-be6c-225e140eefa9",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 6.329,
+    "tokens_in": 3150,
+    "tokens_out": 464,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"STMicroelectronics launched a $1.5 billion offering of senior unsecured convertible bond\",\n      \"entity_refs\": [\"STMicroelectronics\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "STMicroelectronics launched a $1.5 billion offering of senior unsecured convertible bond",
+          "entity_refs": [
+            "STMicroelectronics"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0d2-359d-7ac1-b35c-1a3360f0f4a6",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 10.366,
+    "tokens_in": 4180,
+    "tokens_out": 1134,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Texas Instruments Incorporated\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Texas Instruments Incorporated TXN: This semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days.\"\n    },\n    {\n      \"entity_ref\": \"ArcBest Corporation\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"ArcBest Corporation ARCB: This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days.\"\n    },\n    {\n      \"entity_ref\": \"Etsy, Inc.\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Etsy, Inc. ETSY: This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Texas Instruments Incorporated",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Texas Instruments Incorporated TXN: This semiconductor company has seen the Zacks Consensus Estimate for its current year earnings increasing 20.6% over the last 60 days."
+        },
+        {
+          "entity_ref": "ArcBest Corporation",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "ArcBest Corporation ARCB: This logistics company has seen the Zacks Consensus Estimate for its current year earnings increasing 23.8% over the last 60 days."
+        },
+        {
+          "entity_ref": "Etsy, Inc.",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Etsy, Inc. ETSY: This e-commerce company has seen the Zacks Consensus Estimate for its current year earnings increasing 11.6% over the last 60 days."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 3,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed080-5221-7727-813b-ac56d6d63d7b",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 18.001,
+    "tokens_in": 5955,
+    "tokens_out": 1784,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Humana and CenterWell announce the inaugural Resident Physician Scholarship Program recipients\",\n      \"entity_refs\": [\n        \"Humana\",\n        \"CenterWell\",\n        \"National Hispanic Medical Association\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients. In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"CenterWell\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Yeny Andrade\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"\\\"Investing in bilingual physicians is one of the most meaningful ways we can improve the health of the communities we serve,\\\" said Yeny Andrade, MD, Associate Medical Director, CenterWell Senior Primary Care.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Humana and CenterWell announce the inaugural Resident Physician Scholarship Program recipients",
+          "entity_refs": [
+            "Humana",
+            "CenterWell",
+            "National Hispanic Medical Association"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Humana and its health care services business, CenterWell, announce the inaugural Resident Physician Scholarship Program recipients. In partnership with the National Hispanic Medical Association, the scholarship is designed to support seven bilingual (English/Spanish) internal medicine and family medicine residents in Florida.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "CenterWell",
+          "predicate": "has_executive",
+          "object_ref": "Yeny Andrade",
+          "confidence": 0.97,
+          "evidence_text": "\"Investing in bilingual physicians is one of the most meaningful ways we can improve the health of the communities we serve,\" said Yeny Andrade, MD, Associate Medical Director, CenterWell Senior Primary Care.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfa4-3008-744f-903f-2f0ea4cac447",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 31.117,
+    "tokens_in": 6168,
+    "tokens_out": 3019,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"SpaceX IPO\",\n      \"entity_refs\": [\"SpaceX\"],\n      \"valid_from\": \"2026-06-12\",\n      \"valid_to\": null,\n      \"evidence_text\": \"SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"SpaceX raised a record-breaking $75 billion in its IPO.\"\n    },\n    {\n      \"entity_ref\": \"Elon Musk\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The blockbuster debut officially made Elon Musk the world's first trillionaire.\"\n    },\n    {\n      \"entity_ref\": \"Elon Musk\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"His SpaceX stake was valued at roughly $690 billion at the IPO price, while his holdings in Tesla contributed another $279 billion to his net worth.\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Ahead of the IPO, Musk said SpaceX had been cash-flow positive since around 2015 and was entering a major growth phase, per the same CNBC article.\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002.\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The company generated roughly $19 billion in revenue, but its market capitalization now exceeds $2 trillion, placing it among the most valuable publicly traded companies in the United States.\"\n    },\n    {\n      \"entity_ref\": \"SpaceX\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"SpaceX faces solid financial risks from heavy cash burn, a huge $4.9 billion net loss in fiscal 2025, and heavy reliance on the Starlink and capital-intensive aerospace investments, per an article published on vipwealthadvisors.\"\n    },\n    {\n      \"entity_ref\": \"Nasdaq\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The Nasdaq-100 has already reduced its waiting period for inclusion from three months to just 15 trading days.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "SpaceX IPO",
+          "entity_refs": [
+            "SpaceX"
+          ],
+          "valid_from": "2026-06-12",
+          "valid_to": null,
+          "evidence_text": "SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "SpaceX raised a record-breaking $75 billion in its IPO."
+        },
+        {
+          "entity_ref": "Elon Musk",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "The blockbuster debut officially made Elon Musk the world's first trillionaire."
+        },
+        {
+          "entity_ref": "Elon Musk",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "His SpaceX stake was valued at roughly $690 billion at the IPO price, while his holdings in Tesla contributed another $279 billion to his net worth."
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Ahead of the IPO, Musk said SpaceX had been cash-flow positive since around 2015 and was entering a major growth phase, per the same CNBC article."
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "Despite its rapid growth, the prospectus revealed that SpaceX has accumulated losses of $41.3 billion since its founding in 2002."
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "OTHER",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "The company generated roughly $19 billion in revenue, but its market capitalization now exceeds $2 trillion, placing it among the most valuable publicly traded companies in the United States."
+        },
+        {
+          "entity_ref": "SpaceX",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "SpaceX faces solid financial risks from heavy cash burn, a huge $4.9 billion net loss in fiscal 2025, and heavy reliance on the Starlink and capital-intensive aerospace investments, per an article published on vipwealthadvisors."
+        },
+        {
+          "entity_ref": "Nasdaq",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "The Nasdaq-100 has already reduced its waiting period for inclusion from three months to just 15 trading days."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.96,
+          "evidence_text": "SpaceX SPCX shares surged 19% in their Nasdaq debut on Friday, marking the largest IPO in history.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 8,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfae-140f-7a44-bd27-9131b52df3b3",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 9.984,
+    "tokens_in": 4545,
+    "tokens_out": 858,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Bank of Japan raised its key interest rate to 1%\",\n      \"entity_refs\": [\"Bank of Japan\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Asian shares mostly gained and Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday before trimming early gains after the Bank of Japan raised its key interest rate to 1%.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Bank of Japan raised its key interest rate to 1%",
+          "entity_refs": [
+            "Bank of Japan"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Asian shares mostly gained and Japan's benchmark Nikkei 225 briefly topped 70,000 for the first time Tuesday before trimming early gains after the Bank of Japan raised its key interest rate to 1%.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfa8-295c-7a99-8cf8-1ad29c2a8f6e",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 9.741,
+    "tokens_in": 4121,
+    "tokens_out": 927,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Peyto Exploration & Development Corp. confirms monthly dividend of $0.12 per common share to be paid on July 15, 2026\",\n      \"entity_refs\": [\n        \"Peyto Exploration & Development Corp.\"\n      ],\n      \"valid_from\": \"2026-07-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Peyto Exploration & Development Corp. (TSX: PEY) (\\\"Peyto\\\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Peyto Exploration & Development Corp.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"TSX\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"(TSX: PEY)\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Peyto Exploration & Development Corp. confirms monthly dividend of $0.12 per common share to be paid on July 15, 2026",
+          "entity_refs": [
+            "Peyto Exploration & Development Corp."
+          ],
+          "valid_from": "2026-07-15",
+          "valid_to": null,
+          "evidence_text": "Peyto Exploration & Development Corp. (TSX: PEY) (\"Peyto\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Peyto Exploration & Development Corp.",
+          "predicate": "listed_on",
+          "object_ref": "TSX",
+          "confidence": 0.97,
+          "evidence_text": "(TSX: PEY)",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecf9b-7f1f-761d-a826-341ad9e19e67",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 11.489,
+    "tokens_in": 3248,
+    "tokens_out": 1011,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Oil prices plunged after the U.S. and Iran agreed Sunday on a framework to end the war.\",\n      \"entity_refs\": [\"Oil prices\", \"U.S.\", \"Iran\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Oil prices plunged after the U.S. and Iran agreed Sunday on a framework to end the war.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Oil prices plunged after the U.S. and Iran agreed Sunday on a framework to end the war.",
+          "entity_refs": [
+            "Oil prices",
+            "U.S.",
+            "Iran"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Oil prices plunged after the U.S. and Iran agreed Sunday on a framework to end the war.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecff9-5c84-74d9-89df-3c4311f21565",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 26.473,
+    "tokens_in": 4842,
+    "tokens_out": 2248,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"GUIDANCE_CUT\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year.\"\n    },\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period.\"\n    },\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Regarding the entire year, the Zacks Consensus Estimates forecast ... revenue of $17.98 billion, indicating ... +4.7% ... compared to the previous year.\"\n    },\n    {\n      \"entity_ref\": \"Leidos\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Regarding the entire year, the Zacks Consensus Estimates forecast earnings of $12.25 per share ... indicating changes of +2.17% ... compared to the previous year.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "GUIDANCE_CUT",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "The company's earnings per share (EPS) are projected to be $2.94, reflecting a 8.41% decrease from the same quarter last year."
+        },
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Meanwhile, the Zacks Consensus Estimate for revenue is projecting net sales of $4.36 billion, up 2.62% from the year-ago period."
+        },
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Regarding the entire year, the Zacks Consensus Estimates forecast ... revenue of $17.98 billion, indicating ... +4.7% ... compared to the previous year."
+        },
+        {
+          "entity_ref": "Leidos",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Regarding the entire year, the Zacks Consensus Estimates forecast earnings of $12.25 per share ... indicating changes of +2.17% ... compared to the previous year."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 4,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfb7-de69-759b-b8dc-5bbb425a024c",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 19.328,
+    "tokens_in": 12910,
+    "tokens_out": 1379,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Neurocrine Biosciences presented clinical findings at the Endocrine Society's annual meeting ENDO 2026 in Chicago.\",\n      \"entity_refs\": [\n        \"Neurocrine Biosciences, Inc.\",\n        \"Chicago\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"SAN DIEGO, June 15, 2026 /PRNewswire/ -- Neurocrine Biosciences, Inc. (Nasdaq: NBIX) ... the findings were presented at the Endocrine Society's annual meeting, ENDO 2026, in Chicago.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"FDA approval of CRENESSITY (crinecerfont).\",\n      \"entity_refs\": [\n        \"Neurocrine Biosciences, Inc.\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Data from the CAHtalyst Phase 3 studies supported approval of CRENESSITY by the U.S. Food and Drug Administration in December 2024.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Neurocrine Biosciences, Inc.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced ...\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Neurocrine Biosciences presented clinical findings at the Endocrine Society's annual meeting ENDO 2026 in Chicago.",
+          "entity_refs": [
+            "Neurocrine Biosciences, Inc.",
+            "Chicago"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "SAN DIEGO, June 15, 2026 /PRNewswire/ -- Neurocrine Biosciences, Inc. (Nasdaq: NBIX) ... the findings were presented at the Endocrine Society's annual meeting, ENDO 2026, in Chicago.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "FDA approval of CRENESSITY (crinecerfont).",
+          "entity_refs": [
+            "Neurocrine Biosciences, Inc."
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Data from the CAHtalyst Phase 3 studies supported approval of CRENESSITY by the U.S. Food and Drug Administration in December 2024.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Neurocrine Biosciences, Inc.",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.97,
+          "evidence_text": "Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced ...",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfc0-9a4a-73e9-84c9-b1111be45c05",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 25.185,
+    "tokens_in": 5480,
+    "tokens_out": 1459,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"American Express agreed to acquire TheFork from Tripadvisor\",\n      \"entity_refs\": [\n        \"American Express\",\n        \"TheFork\",\n        \"Tripadvisor\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"American Express\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Once completed, the acquisition is expected to expand American Express's global dining ecosystem to around 75,000 bookable venues.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"TheFork\",\n      \"predicate\": \"acquired_by\",\n      \"object_ref\": \"American Express\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"TheFork\",\n      \"predicate\": \"subsidiary_of\",\n      \"object_ref\": \"Tripadvisor\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "American Express agreed to acquire TheFork from Tripadvisor",
+          "entity_refs": [
+            "American Express",
+            "TheFork",
+            "Tripadvisor"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "American Express",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Once completed, the acquisition is expected to expand American Express's global dining ecosystem to around 75,000 bookable venues."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "TheFork",
+          "predicate": "acquired_by",
+          "object_ref": "American Express",
+          "confidence": 0.96,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "TheFork",
+          "predicate": "subsidiary_of",
+          "object_ref": "Tripadvisor",
+          "confidence": 0.95,
+          "evidence_text": "American Express (NYSE:AXP) agreed to acquire TheFork, Tripadvisor's European restaurant reservation platform, for US$700 million in cash.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecfbb-a5c5-7e26-ba36-f6d9d60ca6fb",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 40.763,
+    "tokens_in": 4858,
+    "tokens_out": 2213,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Watercare Services\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"This deployment ... will give Watercare Services greater visibility into its network to accelerate leak detection and improve billing accuracy.\"\n    },\n    {\n      \"entity_ref\": \"Watercare Services\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Itron’s solution positions Watercare to meet the evolving needs of its customers while improving resiliency.\"\n    },\n    {\n      \"entity_ref\": \"Itron, Inc.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Itron’s Intelis wSource meters use an NB-IoT network to deliver frequent and highly accurate consumption data.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Itron, Inc.\",\n      \"predicate\": \"partner_of\",\n      \"object_ref\": \"Watercare Services\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Itron, Inc. ... is working together with Watercare Services\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Itron, Inc.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"NASDAQ\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"(NASDAQ: ITRI)\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Itron, Inc.\",\n      \"predicate\": \"supplier_of\",\n      \"object_ref\": \"Watercare Services\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"upgrading its existing mechanical meters with 100,000 Itron Intelis wSource digital water meters\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Watercare Services",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "This deployment ... will give Watercare Services greater visibility into its network to accelerate leak detection and improve billing accuracy."
+        },
+        {
+          "entity_ref": "Watercare Services",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Itron’s solution positions Watercare to meet the evolving needs of its customers while improving resiliency."
+        },
+        {
+          "entity_ref": "Itron, Inc.",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Itron’s Intelis wSource meters use an NB-IoT network to deliver frequent and highly accurate consumption data."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Itron, Inc.",
+          "predicate": "partner_of",
+          "object_ref": "Watercare Services",
+          "confidence": 0.96,
+          "evidence_text": "Itron, Inc. ... is working together with Watercare Services",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Itron, Inc.",
+          "predicate": "listed_on",
+          "object_ref": "NASDAQ",
+          "confidence": 0.96,
+          "evidence_text": "(NASDAQ: ITRI)",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Itron, Inc.",
+          "predicate": "supplier_of",
+          "object_ref": "Watercare Services",
+          "confidence": 0.95,
+          "evidence_text": "upgrading its existing mechanical meters with 100,000 Itron Intelis wSource digital water meters",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 3,
+    "n_relations": 3
+  },
+  {
+    "doc_id": "019ecfbd-7c9b-71f7-97ee-32421f6aeda9",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 36.999,
+    "tokens_in": 3638,
+    "tokens_out": 2112,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"appointed_as\",\n      \"object_ref\": \"Brian Tabolt\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Gold miner Newmont Corp. (NEM, NEM.AX) announced that it has appointed Brian Tabolt as chief financial officer and Mark Rodgers as chief operating officer.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"appointed_as\",\n      \"object_ref\": \"Mark Rodgers\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Gold miner Newmont Corp. (NEM, NEM.AX) announced that it has appointed Brian Tabolt as chief financial officer and Mark Rodgers as chief operating officer.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"appointed_as\",\n      \"object_ref\": \"David Thornton\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"The company also named David Thornton chief technical officer, and promoted David Fry, currently Newmont's Group Head, Global Projects, to executive vice president for project development.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"appointed_as\",\n      \"object_ref\": \"David Fry\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"The company also named David Thornton chief technical officer, and promoted David Fry, currently Newmont's Group Head, Global Projects, to executive vice president for project development.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Brian Tabolt\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Tabolt joined Newmont in 2021 and previously held senior finance roles at Molson Coors Beverage Co.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Molson Coors Beverage Co.\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Brian Tabolt\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Tabolt joined Newmont in 2021 and previously held senior finance roles at Molson Coors Beverage Co.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"BHP\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Mark Rodgers\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"He has more than 30 years of resources industry experience, including at BHP and Rio Tinto.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Rio Tinto\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Mark Rodgers\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"He has more than 30 years of resources industry experience, including at BHP and Rio Tinto.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"David Thornton\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Thornton currently serves as Managing Director, Americas at Newmont.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Newmont Corp.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"NYSE\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"In overnight trading on NYSE, shares of Newmont were up 0.38 percent, changing hands at $106.20, after closing Monday's regular session 5.56 percent higher.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "appointed_as",
+          "object_ref": "Brian Tabolt",
+          "confidence": 0.96,
+          "evidence_text": "Gold miner Newmont Corp. (NEM, NEM.AX) announced that it has appointed Brian Tabolt as chief financial officer and Mark Rodgers as chief operating officer.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "appointed_as",
+          "object_ref": "Mark Rodgers",
+          "confidence": 0.96,
+          "evidence_text": "Gold miner Newmont Corp. (NEM, NEM.AX) announced that it has appointed Brian Tabolt as chief financial officer and Mark Rodgers as chief operating officer.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "appointed_as",
+          "object_ref": "David Thornton",
+          "confidence": 0.96,
+          "evidence_text": "The company also named David Thornton chief technical officer, and promoted David Fry, currently Newmont's Group Head, Global Projects, to executive vice president for project development.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "appointed_as",
+          "object_ref": "David Fry",
+          "confidence": 0.96,
+          "evidence_text": "The company also named David Thornton chief technical officer, and promoted David Fry, currently Newmont's Group Head, Global Projects, to executive vice president for project development.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "employs",
+          "object_ref": "Brian Tabolt",
+          "confidence": 0.96,
+          "evidence_text": "Tabolt joined Newmont in 2021 and previously held senior finance roles at Molson Coors Beverage Co.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Molson Coors Beverage Co.",
+          "predicate": "employs",
+          "object_ref": "Brian Tabolt",
+          "confidence": 0.96,
+          "evidence_text": "Tabolt joined Newmont in 2021 and previously held senior finance roles at Molson Coors Beverage Co.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "BHP",
+          "predicate": "employs",
+          "object_ref": "Mark Rodgers",
+          "confidence": 0.96,
+          "evidence_text": "He has more than 30 years of resources industry experience, including at BHP and Rio Tinto.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Rio Tinto",
+          "predicate": "employs",
+          "object_ref": "Mark Rodgers",
+          "confidence": 0.96,
+          "evidence_text": "He has more than 30 years of resources industry experience, including at BHP and Rio Tinto.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "employs",
+          "object_ref": "David Thornton",
+          "confidence": 0.96,
+          "evidence_text": "Thornton currently serves as Managing Director, Americas at Newmont.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Newmont Corp.",
+          "predicate": "listed_on",
+          "object_ref": "NYSE",
+          "confidence": 0.96,
+          "evidence_text": "In overnight trading on NYSE, shares of Newmont were up 0.38 percent, changing hands at $106.20, after closing Monday's regular session 5.56 percent higher.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 0,
+    "n_relations": 10
+  },
+  {
+    "doc_id": "019ecfb7-510f-7874-b84f-1bf64940b4cc",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 13.322,
+    "tokens_in": 3112,
+    "tokens_out": 761,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"Fox announced a deal to buy Roku in a cash-and-stock transaction worth $22 billion.\",\n      \"entity_refs\": [\"Fox\", \"Roku\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Television broadcaster Fox announced a deal to buy streaming video platform Roku in a cash-and-stock transaction worth $22 billion.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Roku\",\n      \"predicate\": \"acquired_by\",\n      \"object_ref\": \"Fox\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Television broadcaster Fox announced a deal to buy streaming video platform Roku in a cash-and-stock transaction worth $22 billion.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "Fox announced a deal to buy Roku in a cash-and-stock transaction worth $22 billion.",
+          "entity_refs": [
+            "Fox",
+            "Roku"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Television broadcaster Fox announced a deal to buy streaming video platform Roku in a cash-and-stock transaction worth $22 billion.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Roku",
+          "predicate": "acquired_by",
+          "object_ref": "Fox",
+          "confidence": 0.96,
+          "evidence_text": "Television broadcaster Fox announced a deal to buy streaming video platform Roku in a cash-and-stock transaction worth $22 billion.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfc0-82a4-788e-bfc9-34768caf5943",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 21.553,
+    "tokens_in": 4330,
+    "tokens_out": 1158,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Uxin reported Q1 Non-GAAP EPS of $0.00 and revenue of $155.65M (+112.9% Y/Y).\",\n      \"entity_refs\": [\"Uxin\"],\n      \"valid_from\": \"2026-03-31\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Q1 Non-GAAP EPS of $0.00. Revenue of $155.65M (+112.9% Y/Y).\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Uxin\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Revenue of $155.65M (+112.9% Y/Y).\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Uxin reported Q1 Non-GAAP EPS of $0.00 and revenue of $155.65M (+112.9% Y/Y).",
+          "entity_refs": [
+            "Uxin"
+          ],
+          "valid_from": "2026-03-31",
+          "valid_to": null,
+          "evidence_text": "Q1 Non-GAAP EPS of $0.00. Revenue of $155.65M (+112.9% Y/Y).",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Uxin",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Revenue of $155.65M (+112.9% Y/Y)."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfc1-feeb-716e-9575-9b520d9635ba",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 27.617,
+    "tokens_in": 4093,
+    "tokens_out": 1532,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Temporary suspension of trading for all departments of Værdipapirfonden Sparinvest\",\n      \"entity_refs\": [\n        \"Sparinvest\",\n        \"ID-Sparinvest\",\n        \"Luxembourg\",\n        \"Emerging Market Bonds\",\n        \"Lokalvaluta\",\n        \"Globale Aktier\",\n        \"Emerging Market BondsDK0062729406SPVIEBINDEX\"\n      ],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Handel med de berørte afdelinger er derfor midlertidigt suspenderet.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"ID-Sparinvest\",\n      \"predicate\": \"subsidiary_of\",\n      \"object_ref\": \"Sparinvest\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"ID-Sparinvest, Filial af Sparinvest S.A., Luxembourg\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Sparinvest\",\n      \"predicate\": \"headquartered_in\",\n      \"object_ref\": \"Luxembourg\",\n      \"confidence\": 0.94,\n      \"evidence_text\": \"ID-Sparinvest, Filial af Sparinvest S.A., Luxembourg\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Temporary suspension of trading for all departments of Værdipapirfonden Sparinvest",
+          "entity_refs": [
+            "Sparinvest",
+            "ID-Sparinvest",
+            "Luxembourg",
+            "Emerging Market Bonds",
+            "Lokalvaluta",
+            "Globale Aktier",
+            "Emerging Market BondsDK0062729406SPVIEBINDEX"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "Handel med de berørte afdelinger er derfor midlertidigt suspenderet.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "ID-Sparinvest",
+          "predicate": "subsidiary_of",
+          "object_ref": "Sparinvest",
+          "confidence": 0.95,
+          "evidence_text": "ID-Sparinvest, Filial af Sparinvest S.A., Luxembourg",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Sparinvest",
+          "predicate": "headquartered_in",
+          "object_ref": "Luxembourg",
+          "confidence": 0.94,
+          "evidence_text": "ID-Sparinvest, Filial af Sparinvest S.A., Luxembourg",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecfb5-034a-7cf9-87bb-27dce0cc5230",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 38.437,
+    "tokens_in": 4035,
+    "tokens_out": 1869,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Bloomberg reported that Meta Platforms, Inc. completed an operational split from Manus\",\n      \"entity_refs\": [\"Bloomberg\", \"Meta Platforms, Inc.\"],\n      \"valid_from\": \"2026-06-11\",\n      \"valid_to\": null,\n      \"evidence_text\": \"On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Meta Platforms, Inc.\",\n      \"predicate\": \"corporate_action\",\n      \"object_ref\": \"Manus\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Meta Platforms, Inc.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"NASDAQ\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Bloomberg reported that Meta Platforms, Inc. completed an operational split from Manus",
+          "entity_refs": [
+            "Bloomberg",
+            "Meta Platforms, Inc."
+          ],
+          "valid_from": "2026-06-11",
+          "valid_to": null,
+          "evidence_text": "On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Meta Platforms, Inc.",
+          "predicate": "corporate_action",
+          "object_ref": "Manus",
+          "confidence": 0.96,
+          "evidence_text": "On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Meta Platforms, Inc.",
+          "predicate": "listed_on",
+          "object_ref": "NASDAQ",
+          "confidence": 0.96,
+          "evidence_text": "On June 11, Bloomberg reported that Meta Platforms, Inc. (NASDAQ:META) had completed an operational split from Manus and stopped data sharing between the two companies.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecf95-22f6-7e2e-818a-2dce56aae153",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 35.956,
+    "tokens_in": 4362,
+    "tokens_out": 1809,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"SpaceX offered 555.6 million shares to investors, raising a record $75 billion.\",\n      \"entity_refs\": [\"SpaceX\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"SpaceX had offered 555.6 million shares to investors, raising a record $75 billion.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Elon Musk\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"A live feed shows SpaceX CEO Elon Musk on the day of SpaceX's initial public offering (IPO) at the Nasdaq MarketSite, in New York City, U.S., June 12, 2026.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"SpaceX\",\n      \"predicate\": \"market_share_claim\",\n      \"object_ref\": \"Berkshire Hathaway\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"\\\"Elon Musk's SPCX is already $700 billion larger than Tesla (TSLA), and it's more than twice the size of Berkshire Hathaway (BRK-B),\\\" Bespoke Investment said in a note.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "SpaceX offered 555.6 million shares to investors, raising a record $75 billion.",
+          "entity_refs": [
+            "SpaceX"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "SpaceX had offered 555.6 million shares to investors, raising a record $75 billion.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "has_executive",
+          "object_ref": "Elon Musk",
+          "confidence": 0.96,
+          "evidence_text": "A live feed shows SpaceX CEO Elon Musk on the day of SpaceX's initial public offering (IPO) at the Nasdaq MarketSite, in New York City, U.S., June 12, 2026.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "SpaceX",
+          "predicate": "market_share_claim",
+          "object_ref": "Berkshire Hathaway",
+          "confidence": 0.95,
+          "evidence_text": "\"Elon Musk's SPCX is already $700 billion larger than Tesla (TSLA), and it's more than twice the size of Berkshire Hathaway (BRK-B),\" Bespoke Investment said in a note.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecf60-1183-7dc2-b758-798f77b8b328",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 32.91,
+    "tokens_in": 5634,
+    "tokens_out": 1337,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Paychex has been named to the inaugural list of America’s Top WorkTech Companies presented by TIME and Statista\",\n      \"entity_refs\": [\"Paychex\", \"TIME\", \"Statista\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Paychex, Inc. (Nasdaq: PAYX), an industry-leading human capital management (HCM) company, today announced that the company has been named to the inaugural list of America’s Top WorkTech Companies presented by TIME and Statista.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Paychex\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Ryan Bergstrom\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"“It’s an honor for Paychex to be recognized among America’s Top WorkTech Companies …,” said Ryan Bergstrom, Chief Product Officer at Paychex.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Paychex\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Paychex, Inc. (Nasdaq: PAYX), an industry-leading human capital management (HCM) company, ...\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Paychex has been named to the inaugural list of America’s Top WorkTech Companies presented by TIME and Statista",
+          "entity_refs": [
+            "Paychex",
+            "TIME",
+            "Statista"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Paychex, Inc. (Nasdaq: PAYX), an industry-leading human capital management (HCM) company, today announced that the company has been named to the inaugural list of America’s Top WorkTech Companies presented by TIME and Statista.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Paychex",
+          "predicate": "has_executive",
+          "object_ref": "Ryan Bergstrom",
+          "confidence": 0.97,
+          "evidence_text": "“It’s an honor for Paychex to be recognized among America’s Top WorkTech Companies …,” said Ryan Bergstrom, Chief Product Officer at Paychex.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Paychex",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.95,
+          "evidence_text": "Paychex, Inc. (Nasdaq: PAYX), an industry-leading human capital management (HCM) company, ...",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecfa9-fee9-7f14-a5f8-b078ceb2e2fe",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 24.869,
+    "tokens_in": 3182,
+    "tokens_out": 1097,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"RBC says Lennar has limited scope for near-term improvement amid demand headwinds\",\n      \"entity_refs\": [\"LEN\", \"RBC\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"LEN\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "RBC says Lennar has limited scope for near-term improvement amid demand headwinds",
+          "entity_refs": [
+            "LEN",
+            "RBC"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "LEN",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0af-e02f-787c-b9dd-c15b502143f5",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 40.031,
+    "tokens_in": 3700,
+    "tokens_out": 2158,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"M_AND_A\",\n      \"description\": \"Yum! Brands will sell Pizza Hut to LongRange Capital and Yum China Holdings, Inc.\",\n      \"entity_refs\": [\"Yum! Brands\", \"LongRange Capital\", \"Yum China Holdings, Inc.\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Yum! Brands (YUM) said Yum! will sell Pizza Hut, excluding Mainland China, to LongRange Capital for approximately $1.5 billion. Also, Yum! will sell Pizza Hut in Mainland China to Yum China Holdings, Inc. for approximately $1.2 billion.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Yum! Brands' Board approved an incremental $4 billion share repurchase authorization.\",\n      \"entity_refs\": [\"Yum! Brands\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Concurrent with approval of the transactions, Yum!'s Board approved an incremental $4 billion authorization for the repurchase of common stock.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Yum! Brands\",\n      \"predicate\": \"divested_from\",\n      \"object_ref\": \"LongRange Capital\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Yum! will sell Pizza Hut, excluding Mainland China, to LongRange Capital for approximately $1.5 billion.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Yum! Brands\",\n      \"predicate\": \"divested_from\",\n      \"object_ref\": \"Yum China Holdings, Inc.\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Yum! will sell Pizza Hut in Mainland China to Yum China Holdings, Inc. for approximately $1.2 billion.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Yum! Brands\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"NYSE\",\n      \"confidence\": 0.97,\n      \"evidence_text\": \"In pre-market trading on NYSE, Yum! Brands shares are up 0.85 percent to $156.00.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "M_AND_A",
+          "description": "Yum! Brands will sell Pizza Hut to LongRange Capital and Yum China Holdings, Inc.",
+          "entity_refs": [
+            "Yum! Brands",
+            "LongRange Capital",
+            "Yum China Holdings, Inc."
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Yum! Brands (YUM) said Yum! will sell Pizza Hut, excluding Mainland China, to LongRange Capital for approximately $1.5 billion. Also, Yum! will sell Pizza Hut in Mainland China to Yum China Holdings, Inc. for approximately $1.2 billion.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "OTHER",
+          "description": "Yum! Brands' Board approved an incremental $4 billion share repurchase authorization.",
+          "entity_refs": [
+            "Yum! Brands"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Concurrent with approval of the transactions, Yum!'s Board approved an incremental $4 billion authorization for the repurchase of common stock.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Yum! Brands",
+          "predicate": "divested_from",
+          "object_ref": "LongRange Capital",
+          "confidence": 0.96,
+          "evidence_text": "Yum! will sell Pizza Hut, excluding Mainland China, to LongRange Capital for approximately $1.5 billion.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Yum! Brands",
+          "predicate": "divested_from",
+          "object_ref": "Yum China Holdings, Inc.",
+          "confidence": 0.96,
+          "evidence_text": "Yum! will sell Pizza Hut in Mainland China to Yum China Holdings, Inc. for approximately $1.2 billion.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Yum! Brands",
+          "predicate": "listed_on",
+          "object_ref": "NYSE",
+          "confidence": 0.97,
+          "evidence_text": "In pre-market trading on NYSE, Yum! Brands shares are up 0.85 percent to $156.00.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 0,
+    "n_relations": 3
+  },
+  {
+    "doc_id": "019ed099-c113-7e2c-81bb-fbc35f9ea64b",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 29.498,
+    "tokens_in": 5836,
+    "tokens_out": 1824,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Schlage Launches Sense Pro™ Smart Deadbolt\",\n      \"entity_refs\": [\"Schlage\"],\n      \"valid_from\": \"2026-06-16\",\n      \"valid_to\": null,\n      \"evidence_text\": \"CARMEL, Ind., June 16, 2026 /PRNewswire/ -- Schlage®, a trusted leader in home security and access solutions for more than a century, announces that the Schlage Sense Pro™ Smart Deadbolt will be available for purchase beginning June 29, 2026.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Schlage\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.94,\n      \"evidence_text\": \"With standard usage, Sense Pro™ has up to six months of expected battery life.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Allegion Home\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"David Perozzi\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"\\\"At Schlage, we are committed to delivering innovative, reliable, and high-quality products and experiences to our customers who trust us to secure their homes,\\\" said David Perozzi, general manager, Allegion Home.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Schlage Launches Sense Pro™ Smart Deadbolt",
+          "entity_refs": [
+            "Schlage"
+          ],
+          "valid_from": "2026-06-16",
+          "valid_to": null,
+          "evidence_text": "CARMEL, Ind., June 16, 2026 /PRNewswire/ -- Schlage®, a trusted leader in home security and access solutions for more than a century, announces that the Schlage Sense Pro™ Smart Deadbolt will be available for purchase beginning June 29, 2026.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Schlage",
+          "claim_type": "OTHER",
+          "polarity": "neutral",
+          "confidence": 0.94,
+          "evidence_text": "With standard usage, Sense Pro™ has up to six months of expected battery life."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Allegion Home",
+          "predicate": "employs",
+          "object_ref": "David Perozzi",
+          "confidence": 0.95,
+          "evidence_text": "\"At Schlage, we are committed to delivering innovative, reliable, and high-quality products and experiences to our customers who trust us to secure their homes,\" said David Perozzi, general manager, Allegion Home.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfa7-e1d4-77e8-9463-56452ce7a946",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 44.682,
+    "tokens_in": 5246,
+    "tokens_out": 2973,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"LEGAL\",\n      \"description\": \"Class action lawsuit filed against Verra Mobility Corporation\",\n      \"entity_refs\": [\n        \"Bragar Eagel &amp; Squire, P.C.\",\n        \"Verra Mobility Corporation\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\\\"Verra Mobility\\\" or the \\\"Company\\\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona on behalf of all persons and entities who purchased or otherwise acquired Verra common stock between February 24, 2026, to May 26, 2026, both dates inclusive (the \\\"Class Period\\\").\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Verra Mobility Corporation\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.94,\n      \"evidence_text\": \"The Company further disclosed that it \\\"expects the termination to reduce Commercial Services’ 2026 annualized revenue by approximately $135 million to $145 million and 2026 annualized segment profit by approximately $120 million to $125 million, before taking into account expected cost reduction initiatives.\\\"\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Bragar Eagel &amp; Squire, P.C.\",\n      \"predicate\": \"filed_lawsuit_against\",\n      \"object_ref\": \"Verra Mobility Corporation\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\\\"Verra Mobility\\\" or the \\\"Company\\\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona on behalf of all persons and entities who purchased or otherwise acquired Verra common stock between February 24, 2026, to May 26, 2026, both dates inclusive (the \\\"Class Period\\\").\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Bragar Eagel &amp; Squire, P.C.\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Brandon Walker\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"If you purchased or acquired Verra common stock between February 24, 2026, to May 26, 2026 and would like to discuss your legal rights, call Bragar Eagel & Squire partner Brandon Walker or Melissa Fortunato directly at (212) 355-4648.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Bragar Eagel &amp; Squire, P.C.\",\n      \"predicate\": \"employs\",\n      \"object_ref\": \"Melissa Fortunato\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"If you purchased or acquired Verra common stock between February 24, 2026, to May 26, 2026 and would like to discuss your legal rights, call Bragar Eagel & Squire partner Brandon Walker or Melissa Fortunato directly at (212) 355-4648.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Verra Mobility Corporation\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"NASDAQ\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\\\"Verra Mobility\\\" or the \\\"Company\\\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona...\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "LEGAL",
+          "description": "Class action lawsuit filed against Verra Mobility Corporation",
+          "entity_refs": [
+            "Bragar Eagel &amp; Squire, P.C.",
+            "Verra Mobility Corporation"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\"Verra Mobility\" or the \"Company\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona on behalf of all persons and entities who purchased or otherwise acquired Verra common stock between February 24, 2026, to May 26, 2026, both dates inclusive (the \"Class Period\").",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Verra Mobility Corporation",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.94,
+          "evidence_text": "The Company further disclosed that it \"expects the termination to reduce Commercial Services’ 2026 annualized revenue by approximately $135 million to $145 million and 2026 annualized segment profit by approximately $120 million to $125 million, before taking into account expected cost reduction initiatives.\""
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Bragar Eagel &amp; Squire, P.C.",
+          "predicate": "filed_lawsuit_against",
+          "object_ref": "Verra Mobility Corporation",
+          "confidence": 0.96,
+          "evidence_text": "Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\"Verra Mobility\" or the \"Company\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona on behalf of all persons and entities who purchased or otherwise acquired Verra common stock between February 24, 2026, to May 26, 2026, both dates inclusive (the \"Class Period\").",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Bragar Eagel &amp; Squire, P.C.",
+          "predicate": "employs",
+          "object_ref": "Brandon Walker",
+          "confidence": 0.95,
+          "evidence_text": "If you purchased or acquired Verra common stock between February 24, 2026, to May 26, 2026 and would like to discuss your legal rights, call Bragar Eagel & Squire partner Brandon Walker or Melissa Fortunato directly at (212) 355-4648.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Bragar Eagel &amp; Squire, P.C.",
+          "predicate": "employs",
+          "object_ref": "Melissa Fortunato",
+          "confidence": 0.95,
+          "evidence_text": "If you purchased or acquired Verra common stock between February 24, 2026, to May 26, 2026 and would like to discuss your legal rights, call Bragar Eagel & Squire partner Brandon Walker or Melissa Fortunato directly at (212) 355-4648.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Verra Mobility Corporation",
+          "predicate": "listed_on",
+          "object_ref": "NASDAQ",
+          "confidence": 0.96,
+          "evidence_text": "Bragar Eagel & Squire, P.C., a nationally recognized stockholder rights law firm, announces that a class action lawsuit has been filed against Verra Mobility Corporation (\"Verra Mobility\" or the \"Company\") (NASDAQ:VRRM) in the United States District Court for the District of Arizona...",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 4
+  },
+  {
+    "doc_id": "019ecf9b-c67a-7849-8efe-ac335146c8dd",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 28.623,
+    "tokens_in": 5483,
+    "tokens_out": 1903,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Celanese and Siegwerk announced a collaboration to supply more sustainable solutions in the printing ink value chain.\",\n      \"entity_refs\": [\"Celanese\", \"Siegwerk\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Celanese, a global chemical and specialty materials company, and Siegwerk, one of the world's leading providers of printing inks and coatings for packaging applications and labels, today announced a collaboration to supply more sustainable solutions in the printing ink value chain through utilizing bio-based ethyl acetate manufactured by Celanese.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Celanese\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The ethyl acetate produced by Celanese contains 50% bio-based content, helping to reduce the use of fossil-derived raw materials compared to conventional alternatives.\"\n    },\n    {\n      \"entity_ref\": \"Siegwerk\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Siegwerk uses the bio-based solvent as a drop-in solution in its existing ink formulations, enabling the production of more sustainable products without compromising performance or requiring changes to established manufacturing processes.\"\n    },\n    {\n      \"entity_ref\": \"Siegwerk\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.94,\n      \"evidence_text\": \"\\\"The partnership with Celanese directly aligns with Siegwerk's SustainUP program, our global sustainable procurement initiative, which is a key pillar of HorizonNOW 2030 – Siegwerk's overarching sustainability strategy,\\\" said Cathleen Hansohm, Global Supplier Sustainability Manager.\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Celanese\",\n      \"predicate\": \"partner_of\",\n      \"object_ref\": \"Siegwerk\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Celanese, a global chemical and specialty materials company, and Siegwerk, one of the world's leading providers of printing inks and coatings for packaging applications and labels, today announced a collaboration to supply more sustainable solutions in the printing ink value chain through utilizing bio-based ethyl acetate manufactured by Celanese.\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"Celanese\",\n      \"predicate\": \"has_executive\",\n      \"object_ref\": \"Kevin Norfleet\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"\\\"Collaboration is key to driving meaningful progress toward sustainability,\\\" said Kevin Norfleet, Senior Director, Sustainability, at Celanese.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Celanese and Siegwerk announced a collaboration to supply more sustainable solutions in the printing ink value chain.",
+          "entity_refs": [
+            "Celanese",
+            "Siegwerk"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Celanese, a global chemical and specialty materials company, and Siegwerk, one of the world's leading providers of printing inks and coatings for packaging applications and labels, today announced a collaboration to supply more sustainable solutions in the printing ink value chain through utilizing bio-based ethyl acetate manufactured by Celanese.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Celanese",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "The ethyl acetate produced by Celanese contains 50% bio-based content, helping to reduce the use of fossil-derived raw materials compared to conventional alternatives."
+        },
+        {
+          "entity_ref": "Siegwerk",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Siegwerk uses the bio-based solvent as a drop-in solution in its existing ink formulations, enabling the production of more sustainable products without compromising performance or requiring changes to established manufacturing processes."
+        },
+        {
+          "entity_ref": "Siegwerk",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.94,
+          "evidence_text": "\"The partnership with Celanese directly aligns with Siegwerk's SustainUP program, our global sustainable procurement initiative, which is a key pillar of HorizonNOW 2030 – Siegwerk's overarching sustainability strategy,\" said Cathleen Hansohm, Global Supplier Sustainability Manager."
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Celanese",
+          "predicate": "partner_of",
+          "object_ref": "Siegwerk",
+          "confidence": 0.96,
+          "evidence_text": "Celanese, a global chemical and specialty materials company, and Siegwerk, one of the world's leading providers of printing inks and coatings for packaging applications and labels, today announced a collaboration to supply more sustainable solutions in the printing ink value chain through utilizing bio-based ethyl acetate manufactured by Celanese.",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "Celanese",
+          "predicate": "has_executive",
+          "object_ref": "Kevin Norfleet",
+          "confidence": 0.95,
+          "evidence_text": "\"Collaboration is key to driving meaningful progress toward sustainability,\" said Kevin Norfleet, Senior Director, Sustainability, at Celanese.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 3,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecf84-cc90-78c2-bb47-e120ddd9594c",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 21.555,
+    "tokens_in": 3902,
+    "tokens_out": 1520,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"US government last month announced $2 billion in funding support\",\n      \"entity_refs\": [\"US government\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The stock climbed alongside its counterparts, helped primarily by rosy prospects for the sector after the US government last month announced $2 billion in funding support to accelerate the country's leadership in quantum computing.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"$100 million in funding from the Department of Commerce\",\n      \"entity_refs\": [\"Department of Commerce\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"D-Wave Quantum Inc. (NYSE:QBTS) was among the nine named beneficiary companies, with a $100 million in funding from the Department of Commerce to help finance its critical advancements in annealing and gate-model superconducting quantum computing systems, including qubit counts, error rates, and coherence through advanced dielectric material optimization, interface control, and high-density advanced packaging.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "US government last month announced $2 billion in funding support",
+          "entity_refs": [
+            "US government"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The stock climbed alongside its counterparts, helped primarily by rosy prospects for the sector after the US government last month announced $2 billion in funding support to accelerate the country's leadership in quantum computing.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "$100 million in funding from the Department of Commerce",
+          "entity_refs": [
+            "Department of Commerce"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "D-Wave Quantum Inc. (NYSE:QBTS) was among the nine named beneficiary companies, with a $100 million in funding from the Department of Commerce to help finance its critical advancements in annealing and gate-model superconducting quantum computing systems, including qubit counts, error rates, and coherence through advanced dielectric material optimization, interface control, and high-density advanced packaging.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfb7-0a2f-72d7-a3fc-35f246260b02",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 15.741,
+    "tokens_in": 3139,
+    "tokens_out": 739,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"ARK\",\n      \"predicate\": \"investment_in\",\n      \"object_ref\": \"SpaceX\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cathie Wood’s ARK Invest funds held roughly 3.29 million shares of SpaceX by the end of June 12, the day Elon Musk’s company went public.\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "ARK",
+          "predicate": "investment_in",
+          "object_ref": "SpaceX",
+          "confidence": 0.95,
+          "evidence_text": "Cathie Wood’s ARK Invest funds held roughly 3.29 million shares of SpaceX by the end of June 12, the day Elon Musk’s company went public.",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecfb6-db36-79aa-9e82-684b49632ea3",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 31.762,
+    "tokens_in": 4879,
+    "tokens_out": 2064,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"EARNINGS_RELEASE\",\n      \"description\": \"Upcoming earnings release for Phillips 66\",\n      \"entity_refs\": [\"Phillips 66\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Market participants will be closely following the financial results of Phillips 66 in its upcoming release.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Phillips 66 is currently a Zacks Rank #1 (Strong Buy)\",\n      \"entity_refs\": [\"Phillips 66\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Phillips 66 is currently a Zacks Rank #1 (Strong Buy).\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Phillips 66\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Phillips 66 is projected to report earnings of $5.94 per share, which would represent year-over-year growth of 149.58%.\"\n    },\n    {\n      \"entity_ref\": \"Phillips 66\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"revenue of $35.32 billion, up 5.37% from the prior-year quarter.\"\n    },\n    {\n      \"entity_ref\": \"Phillips 66\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"revenue of $141.01 billion, representing ... +3.26%, respectively, from the prior year.\"\n    },\n    {\n      \"entity_ref\": \"Phillips 66\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"earnings of $17.95 per share ... representing changes of +178.73% ... from the prior year.\"\n    },\n    {\n      \"entity_ref\": \"Phillips 66\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"The Zacks Consensus EPS estimate has moved 6.49% higher within the past month.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "EARNINGS_RELEASE",
+          "description": "Upcoming earnings release for Phillips 66",
+          "entity_refs": [
+            "Phillips 66"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Market participants will be closely following the financial results of Phillips 66 in its upcoming release.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Phillips 66 is currently a Zacks Rank #1 (Strong Buy)",
+          "entity_refs": [
+            "Phillips 66"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Phillips 66 is currently a Zacks Rank #1 (Strong Buy).",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Phillips 66",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Phillips 66 is projected to report earnings of $5.94 per share, which would represent year-over-year growth of 149.58%."
+        },
+        {
+          "entity_ref": "Phillips 66",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "revenue of $35.32 billion, up 5.37% from the prior-year quarter."
+        },
+        {
+          "entity_ref": "Phillips 66",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "revenue of $141.01 billion, representing ... +3.26%, respectively, from the prior year."
+        },
+        {
+          "entity_ref": "Phillips 66",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "earnings of $17.95 per share ... representing changes of +178.73% ... from the prior year."
+        },
+        {
+          "entity_ref": "Phillips 66",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "The Zacks Consensus EPS estimate has moved 6.49% higher within the past month."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 5,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfae-8833-7e0e-be09-036d241c1e29",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 22.023,
+    "tokens_in": 4240,
+    "tokens_out": 1322,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"PRODUCT_LAUNCH\",\n      \"description\": \"Alibaba launched a new suite of AI models designed to help robots better understand and perform real-world tasks\",\n      \"entity_refs\": [\"Alibaba\", \"Tongyi Lab\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Alibaba Group (BABA [https://seekingalpha.com/symbol/BABA]) launched a new suite of AI models designed to help robots better understand and perform real-world tasks, as technology companies intensify efforts to expand into the rapidly growing physical AI sector.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "PRODUCT_LAUNCH",
+          "description": "Alibaba launched a new suite of AI models designed to help robots better understand and perform real-world tasks",
+          "entity_refs": [
+            "Alibaba",
+            "Tongyi Lab"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Alibaba Group (BABA [https://seekingalpha.com/symbol/BABA]) launched a new suite of AI models designed to help robots better understand and perform real-world tasks, as technology companies intensify efforts to expand into the rapidly growing physical AI sector.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  }
+]

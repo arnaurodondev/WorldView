@@ -22,6 +22,9 @@ import common.time  # type: ignore[import-untyped]
 from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
 from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+from nlp_pipeline.infrastructure.messaging.consumers.blocks.endpoint_recovery import (
+    recover_missed_endpoints,
+)
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.helpers import (
     _BUILD_RAW_SUFFIX_RX,
     _resolve_ref,
@@ -57,6 +60,20 @@ async def _enqueue_enriched(
     correlation_id: str | None,
     extraction_model_id: str | None = None,
     schema_dir: Any = None,
+    # BUG-3 (2026-06-22 e2e-coverage audit): the BP-698 endpoint-recovery
+    # mitigation (M1 canonical-store fall-back + M2 provisional-mint) was added
+    # in commit 2295a4a15 but its production call site was NEVER wired in — the
+    # commit only added ``endpoint_recovery.py`` + tests + metrics and left
+    # ``recover_missed_endpoints`` as dead code, so every relation/event/claim
+    # endpoint whose surface was not a doc-local NER mention kept being
+    # silently dropped (the 100%-silent-drop the audit diagnosed). These two
+    # optional params let ``_run_pipeline`` inject the canonical-alias repo +
+    # the open intelligence session so recovery runs here, where the
+    # ``entity_id_by_ref`` lookup is built. They default to None so existing
+    # unit tests that call ``_enqueue_enriched`` directly (legacy doc-local
+    # path) keep working unchanged — recovery simply no-ops without them.
+    alias_repo: Any = None,
+    intelligence_session: Any = None,
 ) -> None:
     """Assemble and write the ``nlp.article.enriched.v1`` outbox event.
 
@@ -128,6 +145,30 @@ async def _enqueue_enriched(
                     provisional_refs.add(variant)
         # else: UNRESOLVED with no queue id — excluded from lookup
 
+    # ── BUG-3 / BP-698: layered endpoint recovery (M1 canonical fall-back + M2
+    # provisional mint) ─────────────────────────────────────────────────────
+    # The lookup above is DOCUMENT-LOCAL — built only from this doc's NER
+    # mentions. Any LLM endpoint ref whose surface is not one of those mentions
+    # (the "Jackery counterparty" case) would otherwise resolve to None and be
+    # ``continue``-dropped in the ``_build_raw_*`` helpers below, silently
+    # destroying real relations/events/claims. ``recover_missed_endpoints``
+    # closes that asymmetry IN PLACE, exactly where the audit
+    # (2026-06-14-entity-ref-matching-and-mitigation.md §"Recommended fix")
+    # specifies — AFTER ``entity_id_by_ref`` is built, BEFORE the ``_build_raw_*``
+    # calls. It mutates ``entity_id_by_ref`` + ``provisional_refs`` so the
+    # builders see the recovered bindings. It no-ops safely when ``alias_repo`` /
+    # ``intelligence_session`` are absent (legacy unit-test path).
+    # ``recover_missed_endpoints`` is imported at MODULE level (top of file) so
+    # the production call site is real and unit tests can patch it here.
+    await recover_missed_endpoints(
+        extraction_result=extraction_result,
+        entity_id_by_ref=entity_id_by_ref,
+        provisional_refs=provisional_refs,
+        alias_repo=alias_repo,
+        intelligence_session=intelligence_session,
+        doc_id=doc_id,
+    )
+
     # Hallucination detection: count entity_refs produced by the LLM that are NOT
     # in the known-entities lookup. A non-zero count indicates model drift.
     _all_llm_refs: set[str] = set()
@@ -154,6 +195,12 @@ async def _enqueue_enriched(
         entity_id_by_ref,
         provisional_refs,
         published_at=published_at,
+        # P0 chunk-provenance fix (2026-06-11): thread the persisted chunks so
+        # each relation dict carries a REAL nlp_db chunk_id. KG's
+        # relation_evidence_raw.chunk_id is NOT NULL (migration 0047) and the
+        # writer guard rejects rows without it — omitting this key killed the
+        # entire news-path evidence flow since 2026-05-23.
+        chunks=chunks,
     )
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
     raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
@@ -199,12 +246,42 @@ async def _enqueue_enriched(
     )
 
 
+def _match_chunk_id(evidence_text: str | None, chunks: list[Chunk] | None) -> str | None:
+    """Resolve the chunk that contains *evidence_text* (chunk provenance).
+
+    P0 fix (2026-06-11): KG's ``relation_evidence_raw.chunk_id`` is NOT NULL
+    (intelligence-migrations 0047, PLAN-0093 T-B-3-01) and references real
+    ``nlp_db.chunks`` rows (no DB-level FK — cross-database — so THIS function
+    is the app-level invariant). Strategy:
+
+    1. Whitespace-normalized substring match of evidence_text inside each
+       chunk's text (the LLM quotes evidence verbatim from the chunk window,
+       but may collapse newlines/double spaces).
+    2. Fallback: the FIRST chunk of the document — weaker provenance but still
+       a real chunk row belonging to the same doc.
+    3. ``None`` only when the document has no chunks at all (KG then mints its
+       own fallback; see knowledge-graph graph_write.materialize_graph).
+    """
+    if not chunks:
+        return None
+    if evidence_text:
+        needle = " ".join(evidence_text.split()).lower()
+        if needle:
+            for chunk in chunks:
+                haystack = " ".join(chunk.text.split()).lower()
+                if needle in haystack:
+                    return str(chunk.chunk_id)
+    # No substring hit — anchor to the document's first chunk (real row).
+    return str(chunks[0].chunk_id)
+
+
 def _build_raw_relations(
     relations: list[Any],
     entity_id_by_ref: dict[str, str],
     provisional_refs: set[str],
     *,
     published_at: datetime | None = None,
+    chunks: list[Chunk] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction relations into the dict format S7 expects.
 
@@ -245,17 +322,30 @@ def _build_raw_relations(
             provisional_qid = subject_id
         elif object_is_provisional:
             provisional_qid = object_id
+        evidence_text = str(rel_d.get("evidence_text", "")) or None
         result.append(
             {
                 "subject_entity_id": subject_id,
                 "object_entity_id": object_id,
                 "raw_type": str(rel_d.get("predicate", "")),
                 "extraction_confidence": float(rel_d.get("confidence", 0.5)),
-                "evidence_text": str(rel_d.get("evidence_text", "")) or None,
+                "evidence_text": evidence_text,
                 "entity_provisional": subject_is_provisional or object_is_provisional,
                 "provisional_queue_id": provisional_qid,
                 # SA-3 (2026-05-10): carry article publication date into each relation row.
                 "evidence_date": evidence_date_iso,
+                # P0 fix (2026-06-11): real chunk provenance. KG's evidence
+                # writer requires a non-NULL chunk_id (migration 0047); this
+                # key was previously never emitted, so the KG-side guard added
+                # by PLAN-0093 T-B-3-01 rejected EVERY news-path evidence row.
+                # claim_id is intentionally NOT emitted here: claims are not
+                # persisted in nlp_db (legacy topic removed in PLAN-0057 D-1),
+                # so KG mints the backing claims row itself (graph_write).
+                "chunk_id": _match_chunk_id(evidence_text, chunks),
+                # PLAN-0109 W5: optional per-fact end-of-validity date the LLM
+                # extracted from the text (ISO string or None). Drives bitemporal
+                # step-decay in the knowledge graph (relations.valid_to).
+                "valid_to": rel_d.get("valid_to"),
             }
         )
     return result

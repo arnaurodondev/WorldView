@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
-    from portfolio.domain.value_objects import AuthAuditEvent
+    from portfolio.domain.value_objects import AuthAuditEvent, TransactionFilter
 
 
 class FakeTenantRepository(TenantRepository):
@@ -347,6 +347,62 @@ class FakeTransactionRepository(TransactionRepository):
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
 
+    def _apply_tx_filter(self, items: list[Transaction], tx_filter: TransactionFilter) -> list[Transaction]:
+        """Apply TransactionFilter predicates in-memory (mirrors SQL WHERE logic).
+
+        Ticker filtering is skipped: it requires an instrument lookup that
+        FakeTransactionRepository doesn't have. Tested at integration level.
+        """
+        result = items
+        if tx_filter.from_date is not None:
+            result = [t for t in result if t.executed_at.date() >= tx_filter.from_date]
+        if tx_filter.to_date is not None:
+            result = [t for t in result if t.executed_at.date() <= tx_filter.to_date]
+        if tx_filter.transaction_types:
+            type_set = set(tx_filter.transaction_types)
+            result = [t for t in result if t.transaction_type in type_set]
+        return result
+
+    async def list_by_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """PLAN-0114 T-W2-02: filtered + paginated list for a single portfolio."""
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        total = len(items)
+        return items[tx_filter.offset : tx_filter.offset + tx_filter.limit], total
+
+    async def list_by_portfolio_ids_filtered(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> tuple[list[Transaction], int]:
+        """PLAN-0114 T-W2-02: filtered + paginated list across multiple portfolios (ROOT)."""
+        if not portfolio_ids:
+            return [], 0
+        pid_set = set(portfolio_ids)
+        items = [t for t in self._store.values() if t.portfolio_id in pid_set and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        items.sort(key=lambda t: (t.executed_at, t.created_at), reverse=True)
+        total = len(items)
+        return items[tx_filter.offset : tx_filter.offset + tx_filter.limit], total
+
+    async def list_all_for_portfolio_filtered(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        tx_filter: TransactionFilter,
+    ) -> list[Transaction]:
+        """PLAN-0114 T-W2-05: all matching transactions ASC order for CSV export."""
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items = self._apply_tx_filter(items, tx_filter)
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
+
 
 class FakeHoldingRepository(HoldingRepository):
     """In-memory holding store keyed by (portfolio_id, instrument_id)."""
@@ -423,7 +479,7 @@ class FakeOutboxRepository(OutboxRepository):
 
     async def increment_attempts(self, record_id: UUID) -> None: ...
 
-    async def move_to_dead_letter(self, record_id: UUID) -> None: ...
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None: ...
 
     def events_by_type(self, event_type: str) -> list[OutboxRecord]:
         return [r for r in self.saved if r.event_type == event_type]
@@ -616,6 +672,24 @@ class FakeBrokerageConnectionRepository(BrokerageConnectionRepository):
 
         return [c for c in self._store.values() if c.status in (ConnectionStatus.ACTIVE, ConnectionStatus.ERROR)]
 
+    async def get_by_portfolio_id(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> BrokerageConnection | None:
+        """W3 (FR-4): return the connection whose portfolio_id matches, or None.
+
+        Mirrors the SQL implementation's scalar_one_or_none semantics --
+        if two connections share a portfolio_id (data integrity violation)
+        this returns the first one found, which is fine for tests because
+        the scoping correctness test (test_brokerage_error_count_is_scoped_*)
+        seeds connections with different portfolio_ids by design.
+        """
+        for c in self._store.values():
+            if c.portfolio_id == portfolio_id and c.tenant_id == tenant_id:
+                return c
+        return None
+
     async def save(self, connection: BrokerageConnection) -> None:
         self._store[connection.id] = connection
 
@@ -632,6 +706,19 @@ class FakeBrokerageTransactionSyncErrorRepository(BrokerageTransactionSyncErrorR
     async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]:
         results = [e for e in self._store if e.connection_id == connection_id]
         return sorted(results, key=lambda e: e.created_at, reverse=True)[:limit]
+
+    async def count_for_connection(self, connection_id: UUID) -> int:
+        """W3 (FR-7): return the number of sync errors for this connection.
+
+        The production implementation does a scalar COUNT(*) backed by the
+        ix_brokerage_sync_errors_connection_id index (migration 0026). Here
+        we iterate the in-memory list -- same O(n) semantics but acceptable
+        for tests where n is tiny.
+
+        Returns 0 (not None) to match production invariant -- callers must
+        not need to null-check the return value.
+        """
+        return sum(1 for e in self._store if e.connection_id == connection_id)
 
 
 class FakeBrokerageClient:
@@ -888,6 +975,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def notification_preferences(self) -> FakeNotificationPreferencesRepository:
         return self._notification_preferences
+
+    async def try_advisory_lock(self, portfolio_id: object) -> bool:
+        """Fake advisory lock — always returns True (lock acquired)."""
+        return True
 
     async def commit(self) -> None:
         self.committed = True

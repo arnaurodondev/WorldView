@@ -1,0 +1,102 @@
+{
+  "uid": "worldview-alert-rule-engine",
+  "title": "Alert Rule Engine (PLAN-0113)",
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Poller liveness",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Seconds since last successful cycle",
+      "description": "time() - s10_rule_poller_last_success_timestamp_seconds. Healthy < 60s (one tick). The AlertRulePollerStalled alert fires at > 120s (2x cadence).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        { "expr": "time() - s10_rule_poller_last_success_timestamp_seconds", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "red", "value": 120 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "graphMode": "area", "colorMode": "background" }
+    },
+    {
+      "type": "timeseries",
+      "title": "Poller cycle outcomes (rate)",
+      "description": "rate(s10_rule_poller_runs_total[5m]) by outcome (success/timeout/error). Sustained non-success = a stalled or failing loop.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 9, "x": 6, "y": 1 },
+      "targets": [
+        { "expr": "sum by (outcome) (rate(s10_rule_poller_runs_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Due rules per cycle",
+      "description": "s10_rule_poller_due_rules — how many enabled poll-type rules were due each cycle. A flat 0 with active rules suggests an is_due/cadence bug.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 9, "x": 15, "y": 1 },
+      "targets": [
+        { "expr": "s10_rule_poller_due_rules", "legendFormat": "due", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Evaluation & firing",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Evaluations by type & outcome (rate)",
+      "description": "rate(s10_rule_evaluations_total[5m]) split by rule_type and outcome (fired/no_fire/skipped/error).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 7 },
+      "targets": [
+        { "expr": "sum by (rule_type, outcome) (rate(s10_rule_evaluations_total[5m]))", "legendFormat": "{{rule_type}} / {{outcome}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Alerts fired by type (rate)",
+      "description": "rate(s10_rule_fired_total[5m]) by rule_type. The edge-trigger + cooldown design means this should be spiky, never a sustained high rate (sustained = a 'fires every tick' regression).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        { "expr": "sum by (rule_type) (rate(s10_rule_fired_total[5m]))", "legendFormat": "{{rule_type}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Evaluation errors by type (rate)",
+      "description": "rate(s10_rule_evaluations_total{outcome=\"error\"}[5m]) by rule_type — surfaces which evaluator's upstream (S3/S6/S7) is failing. Backs the AlertRuleEvaluationErrors alert.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "sum by (rule_type) (rate(s10_rule_evaluations_total{outcome=\"error\"}[5m]))", "legendFormat": "{{rule_type}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+    }
+  ]
+}

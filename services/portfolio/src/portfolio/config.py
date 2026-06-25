@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_auto_register_schemas: bool = True
+    # PLAN-0113 FIX-2: static-membership instance ID for Kafka consumers.
+    # Empty string → Kafka assigns a dynamic instance ID (default, fine for dev).
+    # Set to a stable hostname (e.g. pod name) in prod to enable static membership
+    # which reduces rebalance latency on rolling deploys.
+    kafka_instrument_consumer_instance_id: str = ""
+    # PLAN-0113 FIX-2: same static-membership opt-in for the manual-holdings
+    # recompute consumer (empty = dynamic membership, no-op).
+    kafka_manual_holdings_consumer_instance_id: str = ""
 
     # Kafka topics (produced)
     topic_portfolio_events: str = "portfolio.events.v1"
@@ -105,6 +113,17 @@ class Settings(BaseSettings):
     )
     brokerage_sync_cycle_seconds: int = 14400  # 4 hours
     brokerage_sync_history_days: int = 730  # 2 years initial import
+
+    # PLAN-0109 Sub-Plan G — holding.changed emission gating
+    # WHY: per audit 2026-06-09, no downstream consumer subscribes to
+    # ``portfolio.holding.changed.v1``; 14 historical events sat in the outbox
+    # dead-letter table for weeks with zero impact (the holdings table is the
+    # canonical source of truth for downstream queries). Until the alert
+    # service's position-closure rule lands, emission stays off by default.
+    # The domain event class, Avro schema, serializer registration and topic
+    # constant are intentionally kept so flipping this flag to True
+    # re-enables emission without a code change. See ADR-0007.
+    emit_holding_changed_events: bool = False
     # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
     market_data_service_url: str = "http://market-data:8003"
     # WHY SecretStr: the HS256 signing key for internal dev-mode JWTs must not
@@ -164,7 +183,7 @@ class Settings(BaseSettings):
         if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
-                "Set APP_ENV != 'production' or remove the flag."
+                "Set APP_ENV != 'production' or remove the flag.",
             )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]

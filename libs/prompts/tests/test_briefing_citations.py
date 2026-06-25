@@ -3,13 +3,16 @@
 WHY THESE TESTS: The 100% citation gate requires the LLM receives explicit
 citation-marker numbering instructions so it can embed stable markers in
 every bullet. These tests verify that:
-  * MORNING_BRIEFING v4.1 uses the [N#] marker form (PLAN-0103 W2 cleanup —
-    the legacy [c#] form went away when the contradictory v3.0 LEAD/DETAILS
-    template was removed). The brief parser still consumes both forms for
-    historical-record compatibility, but the prompt should only mandate one.
-  * INSTRUMENT_BRIEFING v4.0 continues to use the legacy [cN] marker form +
-    the LEAD/DETAILS template (PLAN-0062-W4); the instrument brief is a
-    separate pipeline and was not part of the PLAN-0103 W2 cleanup.
+  * MORNING_BRIEFING v4.7 uses the [cN] marker form (PRD-0030 fix). The
+    prior [N#] convention (v4.1-v4.6) was a latent bug: the brief parser's
+    resolver ``_CN_CITATION_RE`` only matches [cN], so [N#] markers were
+    stripped as orphans and morning-brief per-bullet citations never
+    resolved. v4.7 standardises on [cN] across the citation rules, the
+    summary directive, and both few-shot examples.
+  * INSTRUMENT_BRIEFING v4.2 continues to use the [cN] marker form +
+    the LEAD/DETAILS template (PLAN-0062-W4); additionally enforces a
+    definition-first Entity Overview ordering so the model opens with the
+    business identity (KG Definition) before any financial metrics appear.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from prompts.briefing.morning import MORNING_BRIEFING
 
 
 class TestMorningBriefingCitationInstructions:
-    """MORNING_BRIEFING v4.1 must instruct the LLM to embed [N#] markers."""
+    """MORNING_BRIEFING v4.7 must instruct the LLM to embed [cN] markers."""
 
     def _render(self) -> str:
         return MORNING_BRIEFING.render(
@@ -34,12 +37,11 @@ class TestMorningBriefingCitationInstructions:
         )
 
     def test_contains_marker_instruction(self) -> None:
-        """v4.1 mandates the [N#] marker format (the legacy [c#] form is gone)."""
+        """v4.7 mandates the [cN] marker format (the only form the resolver maps)."""
         result = self._render()
-        # v4.1 uses [N1]/[N2]/[N3] (matches the 6-section "News That Matters"
-        # spec). The legacy [c#] form was deleted alongside the LEAD/DETAILS
-        # template as part of the PLAN-0103 W2 contradiction cleanup.
-        assert "[N1]" in result and "[N2]" in result
+        # PRD-0030: [cN] is the resolvable form (brief_parser._CN_CITATION_RE).
+        # The prior [N#] form was an unresolvable orphan — see module docstring.
+        assert "[c1]" in result and "[c2]" in result
 
     def test_lead_block_removed_in_v41(self) -> None:
         """v4.1 deleted the legacy ## LEAD / ## DETAILS template (PLAN-0103 W2)."""
@@ -55,17 +57,32 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_46(self) -> None:
-        """MORNING_BRIEFING bumped to v4.5 for PLAN-0103 W11 (adaptive Summary length).
+    def test_version_is_48(self) -> None:
+        """MORNING_BRIEFING bumped to v4.8 for the brief-quality eval fixes.
 
-        v4.3 added few-shot examples; v4.4 split the single 250-word cap into
-        a 50-word Summary cap + a 700-word Details cap with per-section
-        guidance (BP-630); v4.5 replaces the fixed 50-word Summary cap with
-        ADAPTIVE length (target ~100w, 30-200w bands keyed off portfolio
-        breadth + market activity) to fix truncation on large books / very
-        active days. Asserting the current version pins prompt drift.
+        v4.8 adds the sentiment-SIGN + same-holding gate on driver attribution
+        (BUG 4) and the no-[cN]-on-the-tape-line + singular-marker-only rule
+        (BUG 5), on top of the v4.7 attribution ladder. Asserting the current
+        version pins prompt drift.
         """
-        assert MORNING_BRIEFING.version == "4.6"
+        assert MORNING_BRIEFING.version == "4.8"
+
+    def test_bug4_sentiment_sign_gate_present(self) -> None:
+        """BUG 4: rung 1 must require sentiment-sign + same-holding consistency."""
+        result = self._render()
+        assert "SIGN MATCH" in result
+        assert "SAME HOLDING" in result
+        # A positive article cannot explain a down move (and vice-versa).
+        assert "cannot explain a DOWN move" in result
+
+    def test_bug5_market_snapshot_no_citation_and_no_range(self) -> None:
+        """BUG 5: tape line carries no [cN]; range markers are forbidden."""
+        result = self._render()
+        assert "carry NO [cN]" in result or "carries NO [cN]" in result
+        # Range markers ([cA-cB]) are explicitly forbidden as unresolvable.
+        assert "NEVER a " in result and "range" in result.lower()
+        # The Market Snapshot example line must NOT carry a citation marker.
+        assert "VIX 13.8 — risk-on tone pre-mkt\n" in result
 
     def test_contains_few_shot_examples(self) -> None:
         """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""
@@ -106,7 +123,8 @@ class TestMorningBriefingCitationInstructions:
 
 
 class TestInstrumentBriefingCitationInstructions:
-    """INSTRUMENT_BRIEFING v4.0 must instruct the LLM to embed [cN] markers."""
+    """INSTRUMENT_BRIEFING v4.2 must instruct the LLM to embed [cN] markers
+    and enforce definition-first Entity Overview ordering."""
 
     def _render(self) -> str:
         return INSTRUMENT_BRIEFING.render(
@@ -128,6 +146,77 @@ class TestInstrumentBriefingCitationInstructions:
         result = self._render()
         assert "## LEAD" in result
 
-    def test_version_is_400(self) -> None:
-        """INSTRUMENT_BRIEFING must be bumped to v4.0 for PLAN-0062-W4."""
-        assert INSTRUMENT_BRIEFING.version == "4.0"
+    def test_version_is_43(self) -> None:
+        """INSTRUMENT_BRIEFING must be exactly v4.3.
+
+        v4.0: LEAD + [cN] gate (PLAN-0062-W4).
+        v4.1: KG definition + narrative context (PLAN-0107 follow-up).
+        v4.2: definition-FIRST ordering for Entity Overview — the model must open
+              the Overview with the business identity (Definition), not financials.
+        v4.3: brief-quality eval fixes — fundamentals are a CITABLE structured
+              source (cite the advertised [cN], never [fundamentals_context]) so
+              the Price & Fundamentals section is no longer dropped (BUG 2); the
+              narrative staleness caveat is injected deterministically and must be
+              surfaced when present (BUG 3).
+        Pinning the exact version catches accidental rollback or drift.
+        """
+        assert INSTRUMENT_BRIEFING.version == "4.3"
+
+    def test_bug2_forbids_fundamentals_context_token_and_cites_real_cn(self) -> None:
+        """BUG 2: prompt forbids the [fundamentals_context] token and directs a real [cN]."""
+        result = self._render()
+        # The placeholder token must be explicitly forbidden as a citation.
+        assert "[fundamentals_context]" in result  # named in the prohibition
+        assert "NEVER emit a bracketed prompt-variable name" in result
+        # The Price & Fundamentals citation guidance must be present.
+        assert "Price & Fundamentals — CITATION" in result
+
+    def test_bug3_surfaces_deterministic_staleness_caveat(self) -> None:
+        """BUG 3: prompt instructs the model to surface the injected CAVEAT clause."""
+        result = self._render()
+        assert "CAVEAT:" in result
+
+    def test_documents_entity_definition_and_narrative(self) -> None:
+        """v4.1+ must instruct the model on the KG definition + background narrative."""
+        result = self._render()
+        # Definition framing for the Entity Overview.
+        assert "Definition (business identity)" in result
+        # Background narrative with the staleness caveat (must not be a catalyst).
+        assert "Background thematic context" in result
+        assert "STALE" in result
+        assert "MUST NOT present" in result
+
+    def test_entity_overview_definition_first_ordering(self) -> None:
+        """v4.2 must mandate definition-first ordering in the Entity Overview section.
+
+        WHY: In live tests the LLM opened Entity Overview with financial metrics
+        (market cap, P/E, revenue) even though the KG Definition was available.
+        v4.2 adds an explicit MANDATORY ORDERING rule so the model:
+          1. OPENS with the Definition (business identity in plain language).
+          2. LAYERS the narrative (thematic/sector/competitive context).
+          3. SUPPORTS with fundamentals — as evidence, not the lead.
+        These assertions pin the new ordering contract so a future edit cannot
+        silently revert to the metric-first pattern (R19).
+        """
+        result = self._render()
+        # The mandatory ordering section heading must be present.
+        assert "Entity Overview Section — MANDATORY ORDERING" in result
+        # The three-step sequence must be spelled out.
+        assert "OPEN with the Definition" in result
+        assert "LAYER the narrative" in result
+        assert "SUPPORT with fundamentals" in result
+        # The explicit anti-pattern prohibition must be present.
+        assert "DO NOT open Entity Overview with a stock price" in result
+        # Fundamentals must be labelled as supporting evidence, not the lead.
+        assert "EVIDENCE, not the lead" in result
+
+    def test_entity_overview_narrative_staleness_caveat_preserved(self) -> None:
+        """v4.2 must retain the v4.1 staleness caveat for the background narrative.
+
+        The narrative is regenerated weekly; presenting it as a current catalyst
+        is a factual-accuracy hazard. This test guards the caveat from being
+        accidentally dropped when the ordering language was strengthened.
+        """
+        result = self._render()
+        assert "MUST NOT present" in result
+        assert "current catalyst" in result

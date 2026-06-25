@@ -137,6 +137,7 @@ class RelationRepositoryPort(ABC):
         decay_class: str,
         decay_alpha: float,
         base_confidence: float,
+        valid_to: datetime | None = None,
     ) -> UUID: ...
 
     @abstractmethod
@@ -161,6 +162,18 @@ class RelationRepositoryPort(ABC):
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]: ...
+
+    @abstractmethod
+    async def get_by_id(self, relation_id: UUID) -> dict[str, Any] | None:
+        """Fetch the full relation row by UUID (PLAN-0099 relation detail).
+
+        Includes temporal validity, contradiction stats, relation_source and
+        created_at/updated_at audit timestamps.  Returns None when not found.
+        """
+
+    @abstractmethod
+    async def count_for_entity(self, entity_id: UUID) -> int:
+        """Count relations where the entity is subject OR object."""
 
     @abstractmethod
     async def get_stats(self) -> dict[str, Any]: ...
@@ -219,6 +232,19 @@ class RelationEvidenceRepositoryPort(ABC):
         Ordered by extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST.
         Returns {} for any relation_id with no evidence text.
         # TODO(PRD-0074): upgrade to denormalized top_evidence_snippets JSONB on relations
+        """
+
+    @abstractmethod
+    async def get_detail_for_relation(
+        self,
+        relation_id: UUID,
+        limit: int = 25,
+    ) -> list[dict[str, object]]:
+        """Rich evidence rows for the relation detail endpoint (PLAN-0099).
+
+        Resolves relation_id → triple via JOIN; includes evidence_text,
+        source_document_id, source_name/source_type provenance, polarity and
+        confidence/trust weights.  Newest evidence first.
         """
 
 

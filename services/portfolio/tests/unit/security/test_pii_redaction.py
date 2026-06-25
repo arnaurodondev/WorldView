@@ -39,9 +39,9 @@ def test_redacts_raw_jwt() -> None:
 
 
 def test_redacts_api_key_assignment() -> None:
-    out = redact('api_key="sk-1234567890abcdef1234567890"')
+    out = redact('api_key="sk-1234567890abcdef1234567890"')  # pragma: allowlist-secret
     assert out is not None
-    assert "sk-1234567890abcdef1234567890" not in out
+    assert "sk-1234567890abcdef1234567890" not in out  # pragma: allowlist-secret
     # Keeps the "api_key" keyword so support staff can see what was scrubbed.
     assert "api_key" in out
     assert "[REDACTED:API_KEY]" in out

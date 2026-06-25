@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from api_gateway.routes.helpers import _auth_headers, _clients, _document_headers, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _document_headers, _system_headers, proxy_json_response
 from api_gateway.schemas import NewsTopResponse
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -43,7 +43,7 @@ async def find_similar_entities(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity detail (PRD-0073 Wave D-1) ────────────────────────────────────────
@@ -77,7 +77,7 @@ async def get_entity_detail(entity_id: UUID, request: Request) -> Any:
         f"/api/v1/entities/{entity_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: /entities/{entity_id}/articles MUST be registered before /entities/{entity_id}/graph
@@ -106,7 +106,7 @@ async def get_entity_articles(entity_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── News (PRD-0028 Wave S9-1) ────────────────────────────────────────────────
@@ -164,7 +164,7 @@ async def get_news_top(request: Request) -> Any:
     )
     if resp.status_code != 200:
         # Pass through non-200 responses unchanged (e.g. 429, 503 from S6).
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     # ── Cluster-size enrichment ───────────────────────────────────────────────
     # Parse the S6 response, collect article_ids (= content-store doc_ids),
@@ -217,7 +217,7 @@ async def get_news_top(request: Request) -> Any:
     except Exception:
         # Enrichment failed — return the original S6 response unchanged.
         logger.warning("news_top_cluster_size_enrichment_failed", exc_info=True)
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
 
 @router.get("/news/cluster/{cluster_id}")
@@ -242,7 +242,7 @@ async def get_news_cluster(cluster_id: str, request: Request) -> Any:
         f"/api/v1/documents/cluster/{cluster_id}/articles",
         headers=sys_headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/news/entity/{entity_id}")
@@ -262,7 +262,68 @@ async def get_news_entity(entity_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+# ── Article metadata resolution (backend-gaps wave 3, 2026-06-11) ───────────
+
+
+@router.get("/articles/{document_id}")
+async def get_article_metadata(document_id: UUID, request: Request) -> Any:
+    """Resolve a PIPELINE document id to its article metadata via content-store.
+
+    WHY this route exists: relation evidence rows (S7 ``relation_evidence``)
+    carry ``doc_id`` values that live in content-store (S5) — they are
+    pipeline-ingested news articles, NOT tenant uploads. The pre-existing
+    ``GET /v1/documents/{doc_id}`` route proxies S4 (content-ingestion), which
+    only knows tenant-uploaded documents, so every evidence doc_id 500'd and
+    the Intelligence tab could not render article titles/urls for evidence
+    chunks. This route queries the system of record directly.
+
+    Implementation: content-store has no single-document GET, but its internal
+    ``POST /api/v1/documents/batch`` (used by signals/news enrichment) accepts
+    1-50 doc_ids and returns {title, url, published_at, source_name, ...}.
+    We send a single-element batch and unwrap the result.
+
+    Returns 404 when content-store does not know the doc_id (genuinely missing
+    or tombstoned), mirroring resource-GET semantics.
+
+    Requires authentication — same posture as the other /articles/* routes.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.content_store.post(
+        "/api/v1/documents/batch",
+        json={"doc_ids": [str(document_id)]},
+        headers=headers,
+    )
+    if resp.status_code != 200:
+        # Pass through downstream failures (401/503/...) unchanged — the
+        # frontend treats non-200 as "metadata unavailable" and keeps the
+        # bare doc_id chip, never a hard error.
+        return proxy_json_response(request, resp)
+    try:
+        documents = json.loads(resp.content).get("documents", [])
+    except (ValueError, AttributeError):
+        documents = []
+    if not documents:
+        # Batch contract: missing doc_ids are silently omitted → empty list
+        # means "not found" for our single-element request.
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
+    doc = documents[0]
+    # Reshape to the frontend-facing article metadata contract. ``source``
+    # aliases source_name for consistency with the news/top article shape.
+    return {
+        "document_id": doc.get("doc_id", str(document_id)),
+        "title": doc.get("title"),
+        "url": doc.get("url"),
+        "source": doc.get("source_name"),
+        "source_type": doc.get("source_type"),
+        "published_at": doc.get("published_at"),
+        "word_count": doc.get("word_count"),
+    }
 
 
 # ── Article Impact History (PLAN-0091 Wave A-2, T-A-2-01) ───────────────────
@@ -283,7 +344,7 @@ async def get_article_impact_history(article_id: UUID, request: Request) -> Any:
         f"/api/v1/articles/{article_id}/impact-windows",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Tenant Document Management (PLAN-0086 Wave E-2) ───────────────────────────
@@ -331,7 +392,7 @@ async def upload_document_proxy(request: Request) -> Response:
         content=body,
         headers={"Content-Type": content_type, **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/documents/{doc_id}")
@@ -351,7 +412,7 @@ async def get_document_proxy(doc_id: str, request: Request) -> Response:
         f"/api/v1/documents/{doc_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/documents")
@@ -374,7 +435,7 @@ async def list_documents_proxy(request: Request) -> Response:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/documents/{doc_id}", status_code=200)
@@ -395,4 +456,4 @@ async def delete_document_proxy(doc_id: str, request: Request) -> Response:
         f"/api/v1/documents/{doc_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

@@ -37,7 +37,16 @@ def _make_resolver(
     alias_repo.batch_fuzzy_trigram = AsyncMock(return_value=fuzzy or {})
 
     canonical_repo = AsyncMock()
-    canonical_repo.get = AsyncMock(return_value=entity_data or _ENTITY_DATA)
+    _data = entity_data or _ENTITY_DATA
+    canonical_repo.get = AsyncMock(return_value=_data)
+
+    # Stages 1-3 now resolve every matched entity via a single ``batch_get``
+    # (RC-3 follow-up: removes the per-match canonical N+1).  Mirror the old
+    # ``get``-returns-the-same-row stub by mapping each requested id to ``_data``.
+    async def _batch_get(entity_ids: list) -> dict:  # type: ignore[type-arg]
+        return dict.fromkeys(entity_ids, _data)
+
+    canonical_repo.batch_get = AsyncMock(side_effect=_batch_get)
 
     valkey = AsyncMock()
     valkey.get = AsyncMock(return_value=valkey_cached)
@@ -137,6 +146,7 @@ class TestQueryEntityResolverUseCase:
         # Repos must NOT have been called (result came from cache)
         resolver._alias_repo.batch_exact_match.assert_not_called()  # type: ignore[attr-defined]
         resolver._canonical_repo.get.assert_not_called()  # type: ignore[attr-defined]
+        resolver._canonical_repo.batch_get.assert_not_called()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio
     async def test_resolve_below_min_confidence_filtered(self) -> None:

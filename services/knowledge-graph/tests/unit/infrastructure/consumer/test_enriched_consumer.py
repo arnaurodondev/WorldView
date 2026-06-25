@@ -8,7 +8,9 @@ from uuid import uuid4
 import pytest
 from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
     EnrichedArticleConsumer,
+    _parse_dt_optional,
     _parse_raw_claims,
+    _parse_raw_relations,
 )
 from structlog.testing import capture_logs
 
@@ -764,3 +766,46 @@ class TestParseRawRelationsTruncationAndPolarity:
         assert results[0].polarity == "neutral"
         norm_logs = [le for le in logs if le.get("event") == "enriched_consumer_polarity_normalized"]
         assert norm_logs, "expected polarity-normalization warning to be logged"
+
+
+class TestValidToThreading:
+    """PLAN-0109 W5: per-fact valid_to flows LLM → RawRelation → upsert."""
+
+    def test_parse_dt_optional_returns_none_when_absent(self) -> None:
+        assert _parse_dt_optional(None) is None
+        assert _parse_dt_optional("") is None
+        assert _parse_dt_optional("not-a-date") is None
+
+    def test_parse_dt_optional_parses_iso_date(self) -> None:
+        from datetime import UTC, datetime
+
+        assert _parse_dt_optional("2023-05-01") == datetime(2023, 5, 1, tzinfo=UTC)
+
+    def test_raw_relation_carries_valid_to(self) -> None:
+        rels = _parse_raw_relations(
+            [
+                {
+                    "subject_entity_id": "00000000-0000-0000-0000-0000000000a1",
+                    "object_entity_id": "00000000-0000-0000-0000-0000000000b2",
+                    "raw_type": "has_executive",
+                    "extraction_confidence": 0.9,
+                    "valid_to": "2023-12-31",
+                }
+            ]
+        )
+        assert len(rels) == 1
+        assert rels[0].valid_to is not None
+        assert rels[0].valid_to.year == 2023
+
+    def test_raw_relation_valid_to_none_when_omitted(self) -> None:
+        rels = _parse_raw_relations(
+            [
+                {
+                    "subject_entity_id": "00000000-0000-0000-0000-0000000000a1",
+                    "object_entity_id": "00000000-0000-0000-0000-0000000000b2",
+                    "raw_type": "employs",
+                    "extraction_confidence": 0.8,
+                }
+            ]
+        )
+        assert rels[0].valid_to is None  # absence must NOT coerce to now()

@@ -27,6 +27,7 @@ from common.ids import new_uuid7  # type: ignore[import-untyped]
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -71,22 +72,41 @@ async def main() -> None:
 
     engine, read_engine, write_factory, _read_factory = _build_factories(settings)
 
-    # Build PathDiscovery, PathScorer, PathTemplateMatcher.
+    # Build GraphPathEngine (typed-VLE adapter, PLAN-0112 T-2-04 — replaces the
+    # deprecated PathDiscovery), PathScorer, PathTemplateMatcher.
     from knowledge_graph.application.services.path_scorer import PathScorer
     from knowledge_graph.application.services.path_template_matcher import PathTemplateMatcher
-    from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
+    from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
     from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
-    path_discovery = PathDiscovery(write_factory)
+    path_engine = AgeGraphPathEngine(write_factory)
     scorer = PathScorer()
     template_matcher = PathTemplateMatcher(write_factory)
 
+    # PLAN-0112 W3 (T-3-04): inject the node_degree repo factory + settings so
+    # the worker scores via WeirdnessScorer (degrees/embeddings/first_seen).
+    from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+        NodeDegreeRepository,
+    )
+
     worker = PathInsightWorker(
         session_factory=write_factory,
-        path_discovery=path_discovery,
+        path_engine=path_engine,
         scorer=scorer,
         template_matcher=template_matcher,
         instance_uuid=instance_uuid,
+        path_max_hops=settings.path_max_hops,
+        node_degree_repo_factory=NodeDegreeRepository,
+        settings=settings,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "knowledge-graph-path-insight-worker",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "instance_uuid": str(instance_uuid),
+        },
     )
 
     try:

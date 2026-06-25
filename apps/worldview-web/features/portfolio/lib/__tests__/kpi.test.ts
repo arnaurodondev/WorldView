@@ -280,15 +280,16 @@ describe("computeAllocations", () => {
     };
     const a = computeAllocations(holdings, overviews, {});
     expect(a.bySector).toHaveLength(2);
+    // pct is a 0-1 fraction (matches server sector-breakdown `weight`). (BP-487)
     expect(a.bySector[0]).toEqual({
       label: "Technology",
       value: 2000,
-      pct: expect.closeTo(66.66666, 3) as number,
+      pct: expect.closeTo(0.66666, 3) as number,
     });
     expect(a.bySector[1]).toEqual({
       label: "Healthcare",
       value: 1000,
-      pct: expect.closeTo(33.33333, 3) as number,
+      pct: expect.closeTo(0.33333, 3) as number,
     });
   });
 
@@ -298,11 +299,12 @@ describe("computeAllocations", () => {
     expect(a.bySector[0]?.label).toBe("Unknown");
   });
 
-  it("byType is currently a single 100% Equity bar", () => {
+  it("byType is currently a single 100% Equity bar (pct=1 on 0-1 scale)", () => {
     const holdings = [mkHolding({ instrument_id: "i1", quantity: 10, average_cost: 100 })];
     const overviews = { i1: { sector: "Technology", ticker: "T", name: "T", entity_id: "e" } };
     const a = computeAllocations(holdings, overviews, {});
-    expect(a.byType).toEqual([{ label: "Equity", value: 1000, pct: 100 }]);
+    // pct is a 0-1 fraction: 1 = 100% of the book. (BP-487)
+    expect(a.byType).toEqual([{ label: "Equity", value: 1000, pct: 1 }]);
   });
 
   it("uses live-quote price for sector valuation (matches KPI total)", () => {

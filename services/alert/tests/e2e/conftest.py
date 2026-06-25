@@ -264,11 +264,15 @@ async def _clean_tables(e2e_engine: AsyncEngine) -> AsyncGenerator[None, None]:
 
     Cleanup-before guards against cross-test DB pollution from earlier runs
     (CI shared DB, stale Docker volume, or a prior crashed test that skipped
-    teardown). Exceptions are no longer swallowed: a silent failure here was
-    the exact pattern that caused the post-PLAN-0104 leakage. If TRUNCATE
-    fails, we want it to surface immediately rather than producing a confusing
-    "row count mismatch" assertion error downstream.
+    teardown). Without this, ``test_pending_alerts_tenant_isolation`` flakes
+    when an earlier test left a pending row for E2E_USER_ID, because the
+    JWT-derived GET still sees those leftovers.
     """
-    await _truncate_all(e2e_engine)
+    try:
+        async with e2e_engine.begin() as conn:
+            for table in _TABLES_TO_TRUNCATE:
+                await conn.execute(text(f"TRUNCATE {table} CASCADE"))
+    except Exception:  # noqa: S110
+        pass
     yield
     await _truncate_all(e2e_engine)

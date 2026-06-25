@@ -41,10 +41,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from collections import Counter as _Counter
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +68,7 @@ from rag_chat.application.metrics.prometheus import (
     record_reranker_position_change,
 )
 from rag_chat.application.observability import PhaseTimings, phase
+from rag_chat.application.pipeline.sse_events import SSEStatusStep
 from rag_chat.application.pipeline.transport_error import TransportErrorMarker
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery  # noqa: F401 (preserved for public surface)
@@ -158,6 +161,323 @@ _CITATION_MARKER_RE = re.compile(r"\[N(\d+)\]")
 _STREAM_WORDS_PER_CHUNK = 8
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0107 follow-up Fix #4 — post-stream narration scrubbing (last resort)
+# ─────────────────────────────────────────────────────────────────────────────
+# Fixes #1 (synthesis-specific system prompt), #2 (tool_choice="none"), and #3
+# (anti-narration clause in planning prompt) SHOULD prevent any of the
+# following leak patterns from ever reaching synthesis output. This filter is
+# defense-in-depth: if a model still slips through, the PERSISTED answer +
+# the inputs to grounding/citation validation are cleaned. Streaming chunks
+# are NOT filtered live (the user may see a brief flash) — filtering tokens
+# mid-stream would either require complete rewinds (impossible on SSE) or a
+# buffering window long enough to introduce noticeable lag. Accepting the
+# brief visual flicker keeps the streaming UX snappy while guaranteeing the
+# saved artefact is clean.
+#
+# Each regex targets one well-attested leak shape (sources: live QA reports
+# 2026-06-05 with MSTR question, internal narration test fixtures). When all
+# patterns miss, the function is a no-op — safe to call unconditionally.
+
+_TOOL_NARRATION_LEAD_RE = re.compile(
+    r"^("
+    # "I will fetch...", "I'll fetch..." — note 'll attaches without whitespace.
+    r"I(?:\s+will|'ll)\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find)"
+    # 2026-06-12 root-cause audit Theme D: plan-prose leads. The
+    # ``chain_nvda_competitor_growth_rank`` FAIL shipped a pure plan
+    # ("I'll start by identifying… Let me first get…"). These open a
+    # FUTURE-tense plan, not an answer — treat them as narration leads.
+    r"|I(?:\s+will|'ll)\s+(?:start|begin)\s+by"
+    # "I'm fetching..."
+    r"|I'm\s+(?:fetching|pulling|retrieving|calling|searching|looking\s*up)"
+    # "Let me fetch..." / "Let me first ..." / "Let me begin by ..." /
+    # "Let me start by ..."
+    r"|Let\s+me\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find|first|begin|start)"
+    # "First, I'll ..." / "Now I'll ..." / "Next, I'll ..."
+    r"|First[,\s]+I(?:\s+will|'ll)"
+    r"|Now\s+I(?:\s+will|'ll)"
+    r"|Next[,\s]+I(?:\s+will|'ll)"
+    r")\b[^.\n]*[.\n]+\s*",
+    re.IGNORECASE,
+)
+
+# 2026-06-12 root-cause audit Theme D: a markdown ``**Step N:**`` plan block —
+# the ``chain_nvda_competitor_growth_rank`` answer was a sequence of
+# ``**Step 1: Find NVIDIA's competitors**`` headers with future-tense prose
+# under each. This is a planning skeleton, never a real answer. Sibling of
+# ``_TOOL_PLAN_BLOCK_RE`` (which targets ``**Tool calls:**`` headers). We strip
+# the header line and any immediately-following prose up to the next blank line
+# or next ``**Step`` header so plan scaffolding never ships as the final answer.
+_TOOL_PLAN_STEP_RE = re.compile(
+    r"\*\*Step\s+\d+\s*:[^\n*]*\*\*[ \t]*\n?",
+    re.IGNORECASE,
+)
+_TOOL_PLAN_BLOCK_RE = re.compile(
+    r"(\*\*(?:Tool|Function)\s+calls?:?\*\*\s*\n(?:[-*]\s+.+\n?)+)\n*",
+    re.IGNORECASE,
+)
+_TOOL_XML_RE = re.compile(
+    r"</?(?:function_calls?|function_router|invoke|tool_call|tool_name|parameter)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+# BP-675: a fenced (```json) OR bare top-level JSON OBJECT that is a tool-call
+# invocation — i.e. it carries BOTH a ``"name"`` key and an ``"arguments"`` key.
+# The capture group is the object text; we confirm the two keys separately so a
+# plain config/example JSON block (``{"setting": "value"}``) is never matched.
+# One level of brace nesting is allowed so the nested ``"arguments": { … }``
+# object is captured. NB: the object may be INVALID JSON (the live leak had
+# ``"periods":`` with no value), so we pattern-match — never ``json.loads``.
+_TOOL_CALL_JSON_KEYS_RE = re.compile(r'"name"\s*:', re.IGNORECASE)
+_TOOL_CALL_JSON_ARGS_RE = re.compile(r'"arguments"\s*:', re.IGNORECASE)
+_FENCED_JSON_BLOCK_RE = re.compile(
+    r"```(?:json)?\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*```",
+    re.DOTALL,
+)
+# Bare object only when it stands alone on its own line(s) — anchored at a line
+# start and ending at a line end — so an inline ``{"foo": 1}`` mid-sentence is
+# never swallowed.
+_BARE_JSON_OBJECT_RE = re.compile(
+    r"(?m)^\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*$",
+    re.DOTALL,
+)
+
+
+def _is_json_tool_call_object(blob: str) -> bool:
+    """True when *blob* (a JSON object's text) has both ``name`` + ``arguments`` keys."""
+    return bool(_TOOL_CALL_JSON_KEYS_RE.search(blob) and _TOOL_CALL_JSON_ARGS_RE.search(blob))
+
+
+# Chat-eval traceback root cause #3 (2026-06-12), the ``ru_nvda_amd_compare_qtr``
+# leak shape: ``{"get_fundamentals_history": {"ticker": "NVDA", "periods": }}`` —
+# a single top-level key that IS a known tool name, mapping to an (often
+# malformed) arguments object. The BP-675 ``{"name":…, "arguments":…}`` detector
+# does NOT match this shape, so we add a registry-aware detector. We require the
+# key to be a KNOWN tool name (passed in by the orchestrator from the live
+# registry) so a legitimate JSON answer like ``{"revenue": {...}}`` is never
+# stripped.
+_SINGLE_KEY_JSON_RE = re.compile(r'^\s*\{\s*"(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"\s*:\s*\{', re.DOTALL)
+
+
+def _is_named_tool_call_object(blob: str, tool_names: frozenset[str]) -> bool:
+    """True when *blob* is a ``{"<known_tool_name>": {…}}`` single-key tool-call stub."""
+    if not tool_names:
+        return False
+    m = _SINGLE_KEY_JSON_RE.match(blob)
+    return bool(m and m.group("key") in tool_names)
+
+
+def _strip_named_tool_call_json(text: str, tool_names: frozenset[str]) -> str:
+    """Strip fenced/bare ``{"<tool_name>": {…}}`` single-key tool-call objects.
+
+    Companion to :func:`_strip_tool_call_json` (which targets the
+    ``{"name":…, "arguments":…}`` BP-675 shape). Only objects whose single
+    top-level key is a registered tool name are removed; ordinary JSON in a
+    real answer is left untouched.
+    """
+    if not tool_names:
+        return text
+
+    def _repl(m: re.Match[str]) -> str:
+        return "" if _is_named_tool_call_object(m.group(1), tool_names) else m.group(0)
+
+    text = _FENCED_JSON_BLOCK_RE.sub(_repl, text)
+    text = _BARE_JSON_OBJECT_RE.sub(_repl, text)
+    return text
+
+
+def _strip_tool_call_json(text: str) -> str:
+    """Remove fenced/bare JSON tool-call OBJECTS (``{"name":…, "arguments":…}``).
+
+    Only objects that pattern-match the tool-call shape (both keys present) are
+    removed; a legitimate config/example JSON snippet inside a larger answer is
+    left untouched. Safe (no-op) on a clean answer.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        return "" if _is_json_tool_call_object(m.group(1)) else m.group(0)
+
+    text = _FENCED_JSON_BLOCK_RE.sub(_repl, text)
+    text = _BARE_JSON_OBJECT_RE.sub(_repl, text)
+    return text
+
+
+def _strip_tool_narration(text: str, tool_names: frozenset[str] | None = None) -> str:
+    """Last-resort scrub of tool-call narration leaks from synthesis output.
+
+    Five independent passes, each safe to run on a clean answer (no-op when
+    the pattern is absent):
+
+    1. Strip a single leading "I will fetch ..." sentence if the answer opens
+       with one. We only strip the FIRST occurrence — repeated mid-answer
+       phrasings of "I'll check" can be legitimate prose in some contexts and
+       we'd rather under-strip than mangle valid English.
+    2. Remove ``**Tool calls:**`` / ``**Function calls:**`` markdown headers
+       and the bullet list that follows them. These are pure planning blocks
+       that should never reach the user.
+    3. Strip any tool-call-like XML tags (open + close + self-closing).
+    4. BP-675: strip a fenced/bare JSON tool-call object
+       (``{"name": …, "arguments": …}``) — the third leaked-stub shape after
+       the XML and ``**Tool calls:**`` markdown forms.
+    5. Chat-eval #3 (2026-06-12): strip a fenced/bare ``{"<tool_name>": {…}}``
+       single-key tool-call object when ``tool_names`` is supplied — the
+       ``ru_nvda_amd_compare_qtr`` leak shape. No-op when ``tool_names`` is
+       None/empty (legacy callers keep identical behaviour).
+
+    See module-level comment block above for streaming-chunk caveat.
+    """
+    # 1. Strip leading "I will fetch..." sentence if it opens the answer.
+    text = _TOOL_NARRATION_LEAD_RE.sub("", text, count=1)
+    # 2. Strip **Tool calls:** markdown blocks (keep them out of final answer).
+    text = _TOOL_PLAN_BLOCK_RE.sub("", text)
+    # 2b. Theme D: strip ``**Step N:**`` plan-skeleton headers (chain questions
+    #     leak a multi-step plan instead of an answer).
+    text = _TOOL_PLAN_STEP_RE.sub("", text)
+    # 3. Strip any tool-call-like XML tags.
+    text = _TOOL_XML_RE.sub("", text)
+    # 4. Strip fenced/bare JSON tool-call objects (BP-675).
+    text = _strip_tool_call_json(text)
+    # 5. Strip {"<tool_name>": {…}} single-key tool-call objects (chat-eval #3).
+    if tool_names:
+        text = _strip_named_tool_call_json(text, tool_names)
+    return text.strip()
+
+
+# ── BP-674 — leaked tool-call / planning-stub detector ───────────────────────
+#
+# WHY: a grounding-validation rewrite turn (``_run_grounding_validation`` /
+# ``_run_entity_grounding_validation``) re-prompts the LLM with prior tool turns
+# in history. The model frequently responds with a PLANNING stub — "I will fetch
+# … <function_calls><invoke name=…>…" or "**Tool calls:**\n- get_…(…)" — instead
+# of a prose answer. That stub then REPLACES the grounded, already-streamed
+# synthesis and is shipped as ``final_answer`` (the user/downstream consumer
+# sees the planning stub, not the real table).
+#
+# Round-2 live evidence (run_20260612T041327Z):
+#   q_ru_nvda_amd_compare_qtr_run1: streamed real comparison table; final_answer
+#       = 'I will fetch … <function_calls><invoke name="get_fundamentals_history_batch">…'
+#   q_ru_nvda_amd_revenue_4q_run1: streamed real quarterly table; final_answer
+#       = "**Tool calls:**\n- get_fundamentals_history_batch(…)"
+# Round-3 live evidence (run_20260612T051019Z):
+#   q_ru_nvda_amd_compare_qtr_run2: streamed real gross-margin comparison; the
+#       final_answer was a fenced ```json tool-call OBJECT
+#       ``{"name": "get_fundamentals_history_batch", "arguments": {…}}`` — the
+#       THIRD stub shape (BP-675), missed by the XML/markdown detectors.
+#
+# Detection: ``_strip_tool_narration`` removes the lead narration sentence,
+# ``**Tool calls:**`` blocks, ``<function_calls>``/``<invoke>`` XML, AND (BP-675)
+# fenced/bare JSON tool-call objects. If stripping a candidate answer removes
+# (almost) all of it, the candidate was predominantly a tool-call stub — there
+# is no real prose answer underneath. We use that as a robust, pattern-driven
+# signal to REJECT such a rewrite and keep the original grounded answer.
+
+# Grounding banners are appended to the final answer AFTER the rewrite is chosen,
+# so a stub that survived would arrive as "<stub>\n\n⚠ … could not be verified".
+# We discount the banner when measuring collapse so the banner text is never
+# mistaken for "real answer content" left behind after the stub is stripped.
+_GROUNDING_BANNER_RE = re.compile(
+    r"⚠\s*Some (?:numbers|entity references) could not be verified[^\n]*",
+    re.IGNORECASE,
+)
+
+
+# Theme D plan-only guard: future-tense plan-prose line leads. A line that
+# OPENS with one of these and carries no substantive payload is plan scaffolding,
+# not an answer. Broader than ``_TOOL_NARRATION_LEAD_RE`` (which is anchored at
+# the start of the WHOLE answer); this matches the start of ANY line.
+_PLAN_LINE_LEAD_RE = re.compile(
+    r"^\s*(?:I(?:\s+will|'ll)\b|I'm\s+(?:going\s+to|fetching|pulling|retrieving|calling|searching|looking)"
+    r"|Let\s+me\b|First[,\s]|Now\s+I\b|Next[,\s]|Then\s+I\b|To\s+(?:answer|do)\s+this\b)",
+    re.IGNORECASE,
+)
+# Substantive-content signals — if ANY are present the answer is NOT plan-only.
+_SUBSTANTIVE_NUMBER_RE = re.compile(r"\d")
+_SUBSTANTIVE_CITATION_RE = re.compile(r"\[(?:N\d+|entity:|article:)", re.IGNORECASE)
+
+
+def _is_plan_only_narration(text: str) -> bool:
+    """Return True when *text* is a future-tense PLAN with no substantive answer.
+
+    2026-06-12 root-cause audit Theme D: ``chain_nvda_competitor_growth_rank``
+    shipped a plan ("I'll start by… **Step 1**… I'll search… Let me first…")
+    instead of an answer. After stripping ``**Step N:**`` headers, EVERY
+    remaining non-empty line opens with a plan-prose lead and there is no
+    substantive payload (no digits, no markdown table row, no citation marker).
+    Conservative on purpose — a single line with real content (a number, a table
+    pipe, a citation) disqualifies the text so genuine answers are never flagged.
+    """
+    stripped = _TOOL_PLAN_STEP_RE.sub("", text)
+    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    # Any substantive payload anywhere → not plan-only.
+    body = "\n".join(lines)
+    if "|" in body or _SUBSTANTIVE_NUMBER_RE.search(body) or _SUBSTANTIVE_CITATION_RE.search(body):
+        return False
+    # Every remaining line must open with a plan-prose lead.
+    return all(_PLAN_LINE_LEAD_RE.match(ln) for ln in lines)
+
+
+def _is_tool_call_stub(text: str, tool_names: frozenset[str] | None = None) -> bool:
+    """Return True when *text* is predominantly a leaked tool-call / planning stub.
+
+    A genuine answer survives ``_strip_tool_narration`` largely intact; a
+    planning/tool-call stub collapses to (almost) nothing once the narration
+    sentence, ``**Tool calls:**`` block, ``<function_calls>``/``<invoke>`` XML,
+    (BP-675) a fenced/bare ``{"name":…, "arguments":…}`` JSON object, and
+    (chat-eval #3) a ``{"<tool_name>": {…}}`` single-key object are removed. We
+    flag the text when the scrubbed remainder is empty OR shrank to a small
+    fraction of the original AND the original carried a tool-call signal. The
+    signal gate prevents false positives on a short-but-clean prose answer that
+    merely happens to be brief OR that quotes a small inline JSON snippet.
+
+    ``tool_names`` (the live registry tool names) enables the single-key
+    ``{"<tool_name>": {…}}`` detection; None/empty keeps legacy behaviour.
+    """
+    if not text or not text.strip():
+        return False
+    # A tool-call signal must be present: XML tag, ``**Tool calls:**`` header,
+    # "I will fetch…" lead, a fenced/bare JSON object that is a tool-call
+    # invocation (both ``"name"`` and ``"arguments"`` keys), OR a single-key
+    # ``{"<tool_name>": {…}}`` object. The JSON gates are tight: an inline
+    # ``{"foo": 1}`` or a config block does NOT qualify, so a prose/table
+    # answer that merely quotes JSON is untouched.
+    _json_blobs = [m.group(1) for m in (*_FENCED_JSON_BLOCK_RE.finditer(text), *_BARE_JSON_OBJECT_RE.finditer(text))]
+    has_json_tool_call = any(_is_json_tool_call_object(b) for b in _json_blobs)
+    _names = tool_names or frozenset()
+    has_named_tool_call = bool(_names) and any(_is_named_tool_call_object(b, _names) for b in _json_blobs)
+    has_tool_signal = bool(
+        _TOOL_XML_RE.search(text)
+        or _TOOL_PLAN_BLOCK_RE.search(text)
+        # Theme D: a ``**Step N:**`` plan skeleton is a tool/planning signal too
+        # (chain_nvda_competitor_growth_rank shipped a plan, not an answer).
+        or _TOOL_PLAN_STEP_RE.search(text)
+        or _TOOL_NARRATION_LEAD_RE.search(text)
+        or has_json_tool_call
+        or has_named_tool_call
+    )
+    if not has_tool_signal:
+        return False
+    # Theme D: a future-tense plan with no substantive payload is a stub even if
+    # the post-scrub remainder is long (the ``**Step N:**`` headers strip but the
+    # plan prose under them survives). Flag it directly.
+    if _is_plan_only_narration(text):
+        return True
+    # Measure collapse against the content MINUS any trailing grounding banner —
+    # the banner is appended post-rewrite and is not "real answer" content.
+    base = _GROUNDING_BANNER_RE.sub("", text).strip()
+    if not base:
+        # Nothing but a banner around the stub → pure stub.
+        return True
+    scrubbed = _GROUNDING_BANNER_RE.sub("", _strip_tool_narration(text, tool_names)).strip()
+    # Empty after scrub → pure stub. Otherwise flag when the scrub removed the
+    # large majority of the content (the remainder is leftover argument
+    # fragments, not a real answer).
+    if not scrubbed:
+        return True
+    return len(scrubbed) < max(40, int(len(base) * 0.35))
+
+
 def _chunk_text_for_streaming(text: str, words_per_chunk: int = _STREAM_WORDS_PER_CHUNK) -> list[str]:
     """Split ``text`` into word groups suitable for per-chunk SSE emission.
 
@@ -219,6 +539,58 @@ def _scrub_orphan_citations(text: str, max_index: int) -> tuple[str, int]:
     return _CITATION_MARKER_RE.sub(_replace_orphan, text), count
 
 
+# BP-669: plain [N] markers in the PROCESSED answer (OutputProcessor has
+# already normalised the [N6]-style prefix forms to [6]). Bounded to 1-2
+# digits so bracketed years ("[2026]") or issue numbers are never mistaken
+# for citation markers — context enumerations are capped well below 100.
+_PLAIN_MARKER_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+def _renumber_citations_dense(text: str, citations: list[Any]) -> tuple[str, list[Any]]:
+    """BP-669: renumber citation markers + citations densely to [1..K].
+
+    The LLM cites a sparse subset of the [1..N] context enumeration (e.g.
+    [5], [6], [8] out of 10 items). The frontend renders the citation list
+    positionally — pill k is labelled "[k]" — so sparse body markers point
+    past the visible source list. This helper:
+
+      1. Maps each cited ref (sorted ascending) to its dense position 1..K.
+      2. Rewrites every plain ``[N]`` marker in the text accordingly.
+      3. REMOVES markers that have no matching citation (the legacy orphan
+         scrub only matched the ``[N7]`` prefix form, which
+         ``OutputProcessor`` normalises away before the scrub runs — so
+         out-of-range plain markers used to survive to the user).
+      4. Rewrites each citation's ``ref`` to its dense position (order
+         preserved: ascending by original ref).
+
+    Returns ``(new_text, new_citations)``. No-op fast path when the refs
+    are already dense starting at 1 and every marker is mapped.
+    """
+    mapping: dict[int, int] = {}
+    for i, old_ref in enumerate(sorted({int(c.ref) for c in citations})):
+        mapping[old_ref] = i + 1
+
+    orphans = 0
+
+    def _rewrite(m: re.Match) -> str:  # type: ignore[type-arg]
+        nonlocal orphans
+        old = int(m.group(1))
+        new = mapping.get(old)
+        if new is None:
+            orphans += 1
+            return ""
+        return f"[{new}]"
+
+    new_text = _PLAIN_MARKER_RE.sub(_rewrite, text)
+    if orphans:
+        log.warning("citation_marker_orphan_scrubbed", count=orphans, cited=len(mapping))  # type: ignore[no-any-return]
+    new_citations = sorted(
+        (_dc_replace(c, ref=mapping.get(int(c.ref), int(c.ref))) for c in citations),
+        key=lambda c: int(c.ref),
+    )
+    return new_text, new_citations
+
+
 def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
     """Replace entity/article refs not in seen_ids with [ref:redacted].
 
@@ -252,11 +624,49 @@ def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
 _W50_NUMERIC_TOKEN_RE = re.compile(
     r"(?:\$)?-?\d[\d,]*(?:\.\d+)?\s*(?:%|[bBmMkKtT])?\b",
 )
-# Citation marker shape used by the orchestrator/tool layer: ``[tool_name row N]``
-# or bare ``[tool_name]``. Matches the citation immediately after grounding
-# pass; both forms are produced upstream and are sufficient to consider a
-# nearby numeric token "covered" by retrieved data.
-_W50_CITATION_RE = re.compile(r"\[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]", re.IGNORECASE)
+# Citation marker shape used by the orchestrator/tool layer.
+#
+# Merged from two parallel fix paths (PLAN-0099 W4 prose-form variants +
+# PLAN-0107 v2.0 LOW fix #1 italic-Source variants). Keeps ALL alternations
+# from both — permissive on purpose: false negatives (banner on a good
+# answer) erode trust far more than false positives.
+#
+# Recognised forms:
+#   - [tool] / [tool row N]                        — canonical bracket
+#   - (source: tool…)                              — parenthesised
+#   - per/from/according to tool row N             — unbracketed prose
+#   - per/from/according to tool [row N]           — bracketed row only
+#   - *Source: tool for X, rows 0-3 (notes)*       — italic markdown
+#   - _source: tool row N_                         — underscore italic
+#   - Source: tool for X, rows N-M                 — plain markdown prose
+#
+# This alternation mirrors ``_PROSE_CITATION_RE`` in
+# ``services/numeric_grounding`` — keep the two in sync when adding shapes.
+_W50_CITATION_RE = re.compile(
+    r"""
+    (?:
+        \[\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\)
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | (?:per|from|according\s+to)\s+[a-z_][a-z0-9_]*\s*\[\s*row\s+\d+\s*\]
+      | \*\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*\*
+      | _\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*_
+      | (?<![\w*])source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*)?
+        (?![\w*])
+    )
+    """,  # noqa: RUF001
+    re.IGNORECASE | re.VERBOSE,
+)
 # ±200 chars window around each numeric token where a citation must appear.
 _W50_CITATION_WINDOW = 200
 
@@ -310,6 +720,116 @@ def _answer_has_full_citation_coverage(text: str) -> bool:
     return True
 
 
+# ── BP-671 — re-synthesis divergence guard ───────────────────────────────────
+#
+# WHY: the numeric-grounding rewrite turn (``_run_grounding_validation``) does
+# NOT re-show the LLM its own grounded draft (it strips prose assistant turns to
+# avoid apology-preamble leaks). With only "these numbers are unsupported" as
+# input the model frequently FREE-GENERATES a brand-new answer from parametric
+# memory instead of CORRECTING the draft. Live MSTR-news run
+# (run_20260609T175104Z/q_ru_mstr_news_run2.json): the streamed draft was
+# grounded (real "Peter Schiff" headline, real $165.38→$135.69 price table,
+# "~$15B BTC treasury"), but the rewrite shipped as ``final_answer`` invented
+# "271,474 BTC", "$28.0 billion market cap", "$509.0M revenue" — none of which
+# appeared in the single news item the tools returned. The legacy
+# unsupported-count guard (BP-670) did NOT catch it because the fabrication used
+# round numbers the validator could not disprove. This helper detects that the
+# rewrite has DIVERGED from the original (a different answer, not a correction)
+# so the caller can keep the grounded original instead.
+#
+# A genuine CORRECTION keeps most of the original's "content anchors" — the
+# proper nouns and number tokens that make the answer substantive — and only
+# swaps the handful of bad figures. A re-SYNTHESIS drops most of them and
+# introduces new ones. We measure the fraction of the original's content
+# anchors that survive into the rewrite; below a threshold the rewrite is a
+# divergent re-synthesis.
+
+# Content anchors: capitalised multi-letter words (proper nouns / headlines)
+# plus numeric tokens. Lower-case function words are ignored — they overlap
+# trivially between ANY two English texts and would mask real divergence.
+_ANCHOR_PROPER_NOUN_RE = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
+_ANCHOR_NUMBER_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?")
+# Common headline / boilerplate capitalised words that appear in almost any
+# answer; excluding them keeps the overlap metric focused on the substantive
+# anchors (entity names, person names, source names) rather than scaffolding.
+_ANCHOR_STOPWORDS = frozenset(
+    {
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "Here",
+        "There",
+        "What",
+        "When",
+        "Would",
+        "Bottom",
+        "Key",
+        "Latest",
+        "Recent",
+        "Most",
+        "Over",
+        "Year",
+        "Market",
+        "Stock",
+        "Price",
+        "Date",
+        "Close",
+        "Value",
+        "Metric",
+        "Note",
+    }
+)
+
+
+def _content_anchors(text: str) -> set[str]:
+    """Extract substantive content anchors (proper nouns + numbers) from text."""
+    nouns = {m for m in _ANCHOR_PROPER_NOUN_RE.findall(text) if m not in _ANCHOR_STOPWORDS}
+    numbers = set(_ANCHOR_NUMBER_RE.findall(text))
+    return nouns | numbers
+
+
+# A re-synthesis is a full alternative answer — substantial prose, not a short
+# refusal or a focused one-line correction. We require the rewrite to be at
+# least this long AND to carry several content anchors of its own before the
+# divergence guard considers rejecting it; this keeps honest refusals ("Forward
+# P/E is not currently available …") and tight corrections out of scope (those
+# are handled by the existing refusal / defeatist guards).
+_RESYNTHESIS_MIN_REWRITE_CHARS = 600
+_RESYNTHESIS_MIN_ORIG_ANCHORS = 8
+
+
+def _rewrite_is_divergent_resynthesis(original: str, rewritten: str, *, min_retained: float = 0.5) -> bool:
+    """Return True when *rewritten* is a fresh re-synthesis, not a correction.
+
+    Computes the fraction of *original*'s content anchors (proper nouns +
+    numeric tokens, minus boilerplate) that also appear in *rewritten*. A
+    faithful correction retains most anchors (only the bad numbers change); a
+    divergent re-synthesis retains few. Below ``min_retained`` the rewrite is
+    flagged as divergent so the caller keeps the grounded original.
+
+    Conservative by construction (every gate must pass before we flag):
+      * the original must carry enough anchors to make the ratio meaningful —
+        a 1-2 anchor original (short factual reply) is never flagged because a
+        single swapped number would already trip a 50% threshold.
+      * the rewrite must itself be a SUBSTANTIAL alternative answer
+        (``>= _RESYNTHESIS_MIN_REWRITE_CHARS``). Short rewrites are honest
+        refusals or focused corrections — handled by the refusal / defeatist
+        guards, never by this one.
+      * an empty original (no anchors) is never flagged — defer to the numeric
+        guards.
+    """
+    orig_anchors = _content_anchors(original)
+    if len(orig_anchors) < _RESYNTHESIS_MIN_ORIG_ANCHORS:
+        return False
+    if len(rewritten) < _RESYNTHESIS_MIN_REWRITE_CHARS:
+        return False
+    rewrite_anchors = _content_anchors(rewritten)
+    retained = len(orig_anchors & rewrite_anchors) / len(orig_anchors)
+    return retained < min_retained
+
+
 def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
     """Extract model_id from the active provider in the chain (Bug 4 Fix pattern).
 
@@ -347,6 +867,157 @@ def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
 # "tool returned None".  See FIX-LIVE-E in
 # docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
 
+
+def _successful_item_count(result: Any) -> int:
+    """Count usable RetrievedItems in a tool result, treating failures as 0.
+
+    Chat-eval #1 round-2 (2026-06-12): a tool that returns a
+    ``TransportErrorMarker`` (KG 504 / upstream 5xx) is a FAILURE, not a
+    success — but the old ``1 if item is not None else 0`` expression counted
+    the sentinel as one successful item, so the fallback chain (which only
+    fires for failed primaries) skipped it and ``ru_openai_msft_paths`` got an
+    infra-apology refusal instead of degrading to ``get_entity_paths``.
+
+    Failure shapes (all → 0): ``None`` (handler raised / no result) and any
+    ``TransportErrorMarker`` (upstream transport_error). Empty list → 0.
+    A list of items → its length. A bare non-marker item → 1.
+    """
+    if result is None or isinstance(result, TransportErrorMarker):
+        return 0
+    if isinstance(result, list):
+        return len(result)
+    return 1
+
+
+# ── 2026-06-12 root-cause audit Theme A — refusal strings ────────────────────
+# Worded (never empty) refusals returned by the grounding gates. They REPLACE
+# the fabricated answer and the caller marks the turn grounded=False so it is
+# never written to the completion cache (poisoning it for 24h).
+_PHANTOM_CITATION_REFUSAL = (
+    "I could not verify this against the data I actually retrieved — the answer "
+    "referenced tool results that were not part of this query. I won't present "
+    "unverified figures. Please rephrase your question, or ask about a specific "
+    "ticker or metric so I can pull the data directly."
+)
+_EMPTY_POOL_REFUSAL = (
+    "I couldn't retrieve any data to support the specific figures for this "
+    "question, so I won't report numbers I cannot verify. The data source may "
+    "be unavailable or hold no records for this request — please try again, or "
+    "narrow the question to a specific ticker, metric, or time period."
+)
+# Theme D: fallback when the synthesis turn produced only a plan and the
+# single re-prompt failed to yield a substantive answer.
+_PLAN_ONLY_REFUSAL = (
+    "I wasn't able to complete this multi-step question with the data available. "
+    "Please try rephrasing it, or break it into a more specific question (a single "
+    "company, metric, or comparison) and I'll answer directly."
+)
+
+
+# ── Theme F (2026-06-12 root-cause audit) — false write-action claim guard ───
+#
+# WHY: ``tc_create_alert_nvda_below`` ("Set an alert to notify me when NVDA drops
+# below $400.") FAILED because the agent answered with a PROSE confirmation
+# request — "I'd be happy to set that alert for you. Before I proceed, I need
+# your explicit confirmation … Could you please confirm that you'd like me to
+# create this alert?" — WITHOUT calling the confirmation-gated ``create_alert``
+# tool. No ``pending_action`` SSE event fired, so the alert was never registered.
+# Asserting (or offering) a write-action in free prose while the actual
+# confirmable-action flow was never engaged is a trust failure: the user is led
+# to believe an action is in motion when nothing happened.
+#
+# The set of registered confirmation-gated WRITE tools. ``create_alert`` is the
+# only one today (PLAN-0082). When a new requires_confirmation tool is added,
+# extend this set so the guard recognises its imperative + claim shapes.
+_WRITE_ACTION_TOOLS: frozenset[str] = frozenset({"create_alert"})
+
+# QUESTION shape: the user issued an alert/notify imperative. Matches
+# "set/create/add an alert", "alert me when …", "notify me when/if …",
+# "let me know when …", "watch … and tell me". Deliberately broad on the verb
+# but anchored on alert/notify intent so ordinary questions never match.
+_ALERT_IMPERATIVE_RE = re.compile(
+    r"\b("
+    r"(?:set|create|add|place|make|configure|setup|set\s+up)\s+(?:an?\s+|a\s+)?(?:price\s+|stock\s+)?alert"
+    r"|alert\s+me\s+(?:when|if|once)"
+    r"|notify\s+me\s+(?:when|if|once)"
+    r"|let\s+me\s+know\s+(?:when|if|once)"
+    r"|(?:send|give)\s+me\s+(?:an?\s+)?(?:alert|notification)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# ANSWER shape (FALSE-COMPLETION): the reply asserts the alert was ALREADY set.
+# This is the most severe failure — claiming a completed write that never ran.
+# Matches "I('ve| have)? (set|created|added|placed|configured) (an? )?alert",
+# "your alert (is|has been) (set|created)", "the alert (is|has been) created",
+# "alert (is|has been) set up", "I've gone ahead and set …".
+_ALERT_COMPLETION_CLAIM_RE = re.compile(
+    r"\b("
+    r"I(?:'ve|\s+have)?\s+(?:gone\s+ahead\s+and\s+)?(?:set|created|added|placed|configured|set\s+up)\s+"
+    r"(?:an?\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r"|(?:your|the)\s+(?:price\s+)?alert\s+(?:is|has\s+been|was)\s+(?:now\s+)?(?:set|created|added|placed|configured|active|live)"
+    r"|(?:price\s+)?alert\s+(?:is\s+now|has\s+been)\s+(?:set|created|configured)"
+    r"|done[!.]?\s+(?:I(?:'ve|\s+have)?\s+)?(?:set|created)\s+(?:an?\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# ANSWER shape (PROSE OFFER / FAKE GATE): the reply OFFERS to set the alert or
+# free-texts a confirmation request instead of invoking the tool. This is the
+# observed ``tc_create_alert_nvda_below`` shape ("I'd be happy to set that
+# alert … I need your explicit confirmation"). Less severe than a false
+# completion claim, but still a misroute — the real confirmation gate
+# (pending_action card) never surfaced. Matches "I'd be happy to set …",
+# "I can set up an alert …", "(could you )confirm … (create|set) … alert",
+# "shall I set …", "would you like me to set/create … alert".
+_ALERT_PROSE_OFFER_RE = re.compile(
+    r"\b("
+    r"I(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to\s+(?:set|create|add|place)\b"
+    r"|I\s+can\s+(?:set|create|add|place|configure)\s+(?:up\s+)?(?:an?\s+|that\s+|the\s+|your\s+)?(?:price\s+)?alert"
+    r"|(?:shall|should|would\s+you\s+like\s+me\s+to)\s+I?\s*(?:set|create|add|place|go\s+ahead)\b"
+    r"|confirm\s+(?:that\s+)?you(?:'d|\s+would)?\s+(?:like|want)\s+(?:me\s+to\s+)?(?:set|create|add|place)\b"
+    r"|need\s+your\s+(?:explicit\s+)?confirmation\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Honest offer text used to REPAIR a misrouted reply when create_alert/
+# pending_action never fired. It explicitly states the alert was NOT created —
+# never asserts a completed action — and invites the user to retry the request
+# so the confirmation-gated tool runs. ``{detail}`` is filled with the parsed
+# condition when available, else a generic phrasing.
+_ALERT_NOT_CREATED_REPAIR = (
+    "To be clear, I have not created any alert and nothing has been registered on "
+    "your account. If you'd like to go ahead, please restate the request (for "
+    'example: "yes, notify me when NVDA drops below $400") and it will be set up '
+    "through the confirmation step."
+)
+
+
+def _is_alert_imperative(question: str) -> bool:
+    """Return True when *question* is an alert/notify write-action imperative.
+
+    Theme F: gate the false-write-action guard to genuine alert requests so a
+    normal question that happens to contain the word "alert" in passing does not
+    trip the repair path.
+    """
+    return bool(_ALERT_IMPERATIVE_RE.search(question or ""))
+
+
+def _claims_or_offers_uninvoked_alert(answer: str) -> bool:
+    """Return True when *answer* asserts/ offers an alert action in prose.
+
+    Either a false completion claim ("I've set an alert …") OR a prose
+    offer / fake confirmation gate ("I'd be happy to set that alert … I need
+    your confirmation"). Both shapes mean the LLM produced a write-action reply
+    in free text; the caller only repairs when the real ``create_alert`` /
+    ``pending_action`` flow did NOT fire this turn.
+    """
+    if not answer:
+        return False
+    return bool(_ALERT_COMPLETION_CLAIM_RE.search(answer) or _ALERT_PROSE_OFFER_RE.search(answer))
+
+
 _FALLBACK_MAP: dict[str, list[str]] = {
     # search_documents → relaxed-filter retry → claims → intelligence bundle
     # WHY this order: cheapest first (same tool, looser filters), then claims
@@ -362,6 +1033,15 @@ _FALLBACK_MAP: dict[str, list[str]] = {
     # "should have data somewhere" macro queries; it also satisfies the
     # min_distinct_tools=2 grading rule on Q5.
     "get_economic_calendar": ["search_documents"],
+    # Chat-eval #1 (2026-06-12): the live Cypher PATH query for hub entities
+    # (Microsoft, Apple) exceeds the AGE 5 s statement_timeout → 504 →
+    # traverse_graph returns [] (the handler degrades on error). A 504 then
+    # dead-ended the whole answer with no alt tried. Fall back to the
+    # pre-computed S9→S7 ``/paths`` endpoint (``get_entity_paths``), which is a
+    # cheap materialised lookup that does not run the expensive variable-length
+    # match. (A separate KG agent is raising the backend timeout; this is the
+    # rag-chat-side graceful degradation.)
+    "traverse_graph": ["get_entity_paths"],
 }
 
 
@@ -472,6 +1152,28 @@ def _project_economic_calendar_to_search_documents(
     return out
 
 
+def _project_traverse_graph_to_entity_paths(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """traverse_graph → get_entity_paths: paths anchored on the start entity.
+
+    Chat-eval #1 (2026-06-12): when the Cypher path query 504s, fall back to the
+    pre-computed ``/paths`` endpoint for the START entity. ``get_entity_paths``
+    takes a single ``entity_id`` (which the NarrativeHandler resolves tool-side
+    from a ticker / company name / UUID via BP-661), so we forward the
+    ``start_entity`` name verbatim. We prefer the LLM's ``start_entity`` and fall
+    back to the EntityContext name/ticker so the fallback still has an anchor
+    when the LLM omitted it. Returns None when no anchor is available.
+    """
+    anchor = failed_args.get("start_entity") or failed_args.get("entity_name") or failed_args.get("entity_id")
+    if not anchor and ctx is not None:
+        anchor = getattr(ctx, "name", None) or getattr(ctx, "ticker", None)
+    if not anchor:
+        return None
+    return {"entity_id": str(anchor), "top_n": 5}
+
+
 # Keyed by (failed_tool, alt_tool).  Default behaviour (when a pair is absent)
 # is to copy args verbatim — this preserves backward compatibility with any
 # alt tool whose signature happens to match the failed tool's.
@@ -481,6 +1183,8 @@ _FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
     ("search_documents", "get_entity_intelligence"): _project_search_documents_to_entity_intelligence,
     # FIX-LIVE-S: empty economic-calendar → macro-news search_documents.
     ("get_economic_calendar", "search_documents"): _project_economic_calendar_to_search_documents,
+    # Chat-eval #1: traverse_graph 504 → pre-computed /paths for the start node.
+    ("traverse_graph", "get_entity_paths"): _project_traverse_graph_to_entity_paths,
 }
 
 
@@ -519,6 +1223,52 @@ _ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
 # "tsla" ↔ "tesla" → false refusal. Pulling "TSLA" from the prior tool call
 # bridges the gap without weakening BP-604.
 _TICKER_LIKE_FIELDS: frozenset[str] = frozenset({"ticker", "tickers", "symbol", "symbols"})
+
+
+def _extract_ticker_hint(tool_calls: list[Any]) -> str | None:
+    """Best-effort extraction of the ticker/symbol the LLM searched for.
+
+    2026-06-12 root-cause audit Theme E (fix #3): when a single not-found-ticker
+    query errors out (``safety_unknown_ticker`` — "What's the revenue of
+    ZZZQQQ?"), the worded refusal reads far better with the actual symbol
+    echoed back ("I couldn't find a match for 'ZZZQQQ'"). We pull it from the
+    failed tool inputs' ticker/symbol/entity-name fields — the LLM put the
+    user's symbol there. Returns the first non-empty scalar value found, or
+    ``None`` when no ticker-like argument is present (caller falls back to a
+    generic message).
+    """
+    for tc in tool_calls:
+        tc_input = getattr(tc, "input", None) or {}
+        if not isinstance(tc_input, dict):
+            continue
+        for key in ("ticker", "symbol", "entity_ticker", "entity_name", "entity_id"):
+            val = tc_input.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            if isinstance(val, list | tuple) and val:
+                first = val[0]
+                if isinstance(first, str) and first.strip():
+                    return first.strip()
+    return None
+
+
+# Chat-eval pack-10 (2026-06-12): tools that answer UNIVERSE / AGGREGATE /
+# SCREENER questions — by construction they are NOT scoped to a single anchor
+# entity ("Which S&P 500 names report earnings next week?", "biggest losers this
+# week", "screen for AI semis"). For these the BP-605 entity-grounding guard has
+# no single anchor to ground against; S6 mis-resolves the question to garbage
+# (``question_ids=["41c379f9…", "p", "pandora"]``) and the calendar/screener/
+# movers items carry ``entity_name=None`` → ZERO overlap → a FALSE refusal that
+# replaces a perfectly valid answer. We skip the guard when ANY executed tool is
+# in this set. (Single-entity intelligence/search tools keep the guard.)
+_UNIVERSE_AGGREGATE_TOOLS: frozenset[str] = frozenset(
+    {
+        "screen_universe",
+        "get_market_movers",
+        "get_economic_calendar",
+        "get_earnings_calendar",
+    }
+)
 
 # F-NEW-015 Option A — extract ticker-like tokens from tool result text bodies.
 # Targets the screener row format ``  NVDA — NVIDIA Corp | MCap: ...`` and the
@@ -785,6 +1535,16 @@ def _check_entity_grounding(
     # GOOGL) and lowercased canonical names (tesla, apple inc.) survive this
     # cutoff comfortably.
     text_match_tokens = {tok for tok in question_entity_ids if len(tok) >= 2 and tok.isascii()}
+    # BP-670: head-word variants of multi-word canonical names. News titles
+    # rarely contain the full registered name — "Apple's AI Push Deepens..."
+    # never matches the token "apple inc." but DOES whole-word match
+    # "apple". Only heads >= 4 chars qualify so "ON Semiconductor Corp."
+    # cannot contribute the promiscuous token "on".
+    for _qid in list(text_match_tokens):
+        if " " in _qid:
+            _head = _qid.split()[0].strip(".,")
+            if len(_head) >= 4:
+                text_match_tokens.add(_head)
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
@@ -806,7 +1566,18 @@ def _check_entity_grounding(
         # PLAN-0103 W26 / BP-644: text-token fallback for items whose
         # citation_meta was not populated by the handler. Cheap: lowercase +
         # whole-word check against the first 2000 chars.
+        #
+        # BP-668 ext (2026-06-11): prepend the item_id to the scanned text.
+        # Tool items such as ``tool:price_history:BTC-USD:latest_1m`` carry
+        # the requested symbol ONLY in their id (no citation_meta.entity_name,
+        # symbol may be absent from the rendered table text) — the live
+        # BTC-USD failure refused a CORRECT price answer because none of the
+        # three fallbacks could see "BTC-USD" anywhere. The ':' separators in
+        # the id act as word delimiters for the whole-word walk below.
         item_text = getattr(item, "text", None)
+        _id_for_scan = getattr(item, "item_id", None)
+        _scan_parts = [p for p in (_id_for_scan, item_text) if isinstance(p, str) and p]
+        item_text = " ".join(_scan_parts) if _scan_parts else None
         snippet: str | None = None
         if isinstance(item_text, str) and item_text:
             snippet = item_text[:2000].lower()
@@ -1036,6 +1807,16 @@ class ChatOrchestratorUseCase:
                 entity_id=_primary.entity_id,
                 ticker=_primary.ticker or "",
                 name=_primary.canonical_name,
+                # BP-661 P/E→Pandora (2026-06-12): this scope is INFERRED from
+                # the first S6-resolved question entity, NOT a pinned
+                # entity-context surface. ``pinned=False`` lets the
+                # NarrativeHandler keep a valid LLM-supplied entity_id instead
+                # of blindly overriding it with ``entities[0]`` (which mis-ranked
+                # Alexandria Real Estate for "Apple's competitors" and Pandora
+                # for "AAPL's P/E"). The pinned ``/chat/entity-context``
+                # endpoints construct their own scope with the default
+                # ``pinned=True``.
+                pinned=False,
             )
             if _primary is not None
             else None
@@ -1062,6 +1843,20 @@ class ChatOrchestratorUseCase:
         tool_defs = None
         if hasattr(tool_executor._registry, "to_tool_definitions"):
             tool_defs = tool_executor._registry.to_tool_definitions()
+
+        # Chat-eval #3 (2026-06-12): the live registry tool names — used to
+        # detect the ``{"<tool_name>": {…}}`` single-key tool-call leak shape on
+        # the direct-text path (and any other scrub site). Best-effort: an
+        # unusual registry without ``all_specs`` degrades to an empty set, which
+        # only disables the registry-aware named-shape scrub (the BP-675
+        # ``{"name":…}`` + XML + markdown scrubs still run).
+        _registry_tool_names: frozenset[str] = frozenset()
+        _all_specs = getattr(tool_executor._registry, "all_specs", None)
+        if callable(_all_specs):
+            try:
+                _registry_tool_names = frozenset(s.name for s in _all_specs())
+            except Exception:  # pragma: no cover - defensive
+                _registry_tool_names = frozenset()
 
         from common.time import utc_now  # type: ignore[import-untyped]
 
@@ -1137,6 +1932,17 @@ class ChatOrchestratorUseCase:
         # it whether or not the inner branch ran). See FIX-LIVE-Y comments
         # below for why this is needed.
         _skip_final_stream = False
+
+        # ── Theme F (2026-06-12 root-cause audit) — write-action provenance ──
+        # ``tc_create_alert_nvda_below`` FAILED because the agent answered an
+        # alert imperative ("notify me when NVDA drops below $400") with a PROSE
+        # confirmation request ("I'd be happy to set that alert … I need your
+        # explicit confirmation") WITHOUT ever calling ``create_alert`` — so no
+        # ``pending_action`` SSE event fired and no alert was ever registered.
+        # We track whether a confirmation-gated write-action actually surfaced
+        # this turn so the synthesis guard below can repair a free-texted
+        # "I'll set that alert"/"alert set" reply that never invoked the tool.
+        _pending_action_emitted = False
 
         # PLAN-0093 E-5 T-E-5-02: tool-call dedup cache across iterations.
         # Key = (tool_name, frozenset((k, repr(v)) for k,v in input.items())).
@@ -1295,6 +2101,51 @@ class ChatOrchestratorUseCase:
                 # TPS reflects real per-frame cadence. Wire-compatible (still
                 # ``event: token``) — frontends and the harness need no changes.
                 direct_text = getattr(llm_response, "text", "") or ""
+                # ── Chat-eval #3 (2026-06-12): scrub tool-call stubs on the
+                # direct-text path BEFORE streaming. ───────────────────────────
+                # The streaming SECOND-turn branch runs ``_strip_tool_narration``
+                # (line ~2900), but this direct-text branch streamed
+                # ``chat_with_tools``'s ``text`` verbatim and set
+                # ``_skip_final_stream=True``, so a leaked tool-call stub
+                # (XML / ``**Tool calls:**`` / ``{"name":…}`` / the
+                # ``{"<tool_name>": {…}}`` ``ru_nvda_amd_compare_qtr`` shape)
+                # shipped unscrubbed (~1-in-6, stochastic). We now scrub here
+                # too, passing the live registry names so the single-key shape
+                # is covered. If the scrub leaves a DEGENERATE stub (the whole
+                # "answer" was a tool-call), we do NOT ship it — we re-prompt
+                # the LLM (continue the agent loop) instead of dead-ending on a
+                # stub, unless this is the last iteration (then the scrubbed
+                # remainder, even if empty, flows to the empty/all-failed path).
+                if direct_text:
+                    _scrubbed_direct = _strip_tool_narration(direct_text, _registry_tool_names)
+                    if _is_tool_call_stub(direct_text, _registry_tool_names) or not _scrubbed_direct.strip():
+                        log.warning(  # type: ignore[no-any-return]
+                            "direct_text_tool_call_stub_scrubbed",
+                            iteration=iteration,
+                            pre_len=len(direct_text),
+                            post_len=len(_scrubbed_direct.strip()),
+                            provider=provider_name,
+                        )
+                        # Re-prompt unless we are out of iterations: nudge the
+                        # LLM to emit a prose answer (or call a tool) instead of
+                        # echoing a tool-call stub as the answer.
+                        if iteration < budget.max_iterations - 1:
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "Your previous reply was a tool-call stub, not an answer. "
+                                        "Either call the tool properly or write the final answer in "
+                                        "plain prose. Do NOT output tool-call JSON or XML as the answer."
+                                    ),
+                                }
+                            )
+                            continue
+                        # Last iteration — keep only the scrubbed remainder
+                        # (may be empty → downstream empty/all-failed handling).
+                        direct_text = _scrubbed_direct.strip()
+                    else:
+                        direct_text = _scrubbed_direct
                 if direct_text:
                     # PLAN-0102 W4 T-W4-B (BP-621): record the LLM-generation
                     # wall-clock as ``llm_direct_text_generation`` so the
@@ -1578,6 +2429,10 @@ class ChatOrchestratorUseCase:
                     description=_description,
                     params=_display_params,
                 )
+                # Theme F: a structured confirmation-gate surfaced this turn —
+                # the write-action guard below must NOT flag a prose "I'll set
+                # that alert" reply when the real pending_action card was emitted.
+                _pending_action_emitted = True
 
             # Emit tool_result events + record per-tool metrics + E-12 audit.
             #
@@ -1655,6 +2510,17 @@ class ChatOrchestratorUseCase:
                 # "I cannot reach <upstream> right now" instead of the
                 # misleading "no data was found".
                 _te = _transport_errors_by_call_id.get(id(tc))
+                # tool_result SSE enrichment: server-measured duration_ms (all
+                # statuses) + a bounded result_preview (ok results only). The
+                # frontend prefers duration_ms over its own client-side timing
+                # when present; result_preview lets it render the first items'
+                # titles inline without waiting for the citations event.
+                _duration_ms = int(_per_tool_latency * 1000)
+                # Phase-1: rebuild the SAME human label as the tool_call so the
+                # Research timeline's completion line keeps the subject ("✓
+                # Searching news for NVIDIA"). Deterministic templating — no LLM.
+                _result_input = {k: v for k, v in tc.input.items() if k not in {"query", "text"}}
+                _result_label = p.emitter.human_tool_label(tc.name, _result_input)
                 if _te is not None:
                     yield p.emitter.emit_tool_result(
                         tc.name,
@@ -1663,9 +2529,27 @@ class ChatOrchestratorUseCase:
                         reason=_te.reason,
                         status_code=_te.status_code,
                         elapsed_ms=_te.elapsed_ms,
+                        duration_ms=_duration_ms,
+                        label=_result_label,
                     )
                 else:
-                    yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
+                    _preview_items = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    # PLAN-0110 W2 (PRD-0091 FR-5): attach a bounded, redacted,
+                    # allow-list-only sample of the tool-result VALUES so the W3
+                    # judge can verify (not presume) numeric grounding. The
+                    # builder returns None for non-allow-listed tools and the
+                    # emitter only attaches the field when CHAT_EVAL_GROUNDING_SAMPLES
+                    # is on AND status == "ok" — so this is a no-op when the flag
+                    # is off (legacy frame byte-identical).
+                    yield p.emitter.emit_tool_result(
+                        tc.name,
+                        status=_status,
+                        item_count=_count,
+                        duration_ms=_duration_ms,
+                        result_preview=p.emitter.build_result_preview(_preview_items),
+                        grounding_sample=p.emitter.build_grounding_sample(tc.name, _preview_items),
+                        label=_result_label,
+                    )
 
                 # E-12: record each tool call outcome.
                 _success = _count > 0
@@ -1894,7 +2778,28 @@ class ChatOrchestratorUseCase:
                         query_length=len(_q),
                         query_first_word=_q_word,
                     )
-                    yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
+                    # 2026-06-12 root-cause audit Theme E (fix #3): a genuine
+                    # not-found single-ticker error (``safety_unknown_ticker``:
+                    # "What's the revenue of ZZZQQQ?") previously hard-returned
+                    # an EMPTY answer body, which reads as a crash. Emit a WORDED
+                    # message naming the ticker so the user can correct the
+                    # symbol. We stream it as a normal answer (token +
+                    # final_answer + done) rather than an error event so the
+                    # body is never empty.
+                    _ticker_hint = _extract_ticker_hint(tool_calls)
+                    if _ticker_hint:
+                        _worded = (
+                            f"I couldn't find a match for '{_ticker_hint}'. Please double-check the "
+                            "symbol or provide more context (company name, exchange) and I'll try again."
+                        )
+                    else:
+                        _worded = (
+                            "I couldn't find a match for that symbol. Please double-check it or "
+                            "provide more context (company name, exchange) and I'll try again."
+                        )
+                    yield p.emitter.emit_token(_worded)
+                    yield p.emitter.emit_final_answer(_worded)
+                    yield p.emitter.emit_done()
                     return
 
             # ── E-6: Soft budget checks ───────────────────────────────────────
@@ -2164,16 +3069,94 @@ class ChatOrchestratorUseCase:
             # bounded (~1.5 s extra worst case).
             _stream_attempts = 0
             _last_exc: Exception | None = None
+            # ── Synthesis-turn system-prompt swap (PLAN-0107 follow-up, Fix #1) ──
+            # The planning-turn system prompt (TOOL_USE_SYSTEM_PROMPT) teaches
+            # the model HOW to plan + call tools. Reusing it on the synthesis
+            # turn (where tools are no longer available) caused the model to
+            # narrate "I'll pull..." and emit <function_calls> XML as visible
+            # answer text. The minimal SYNTHESIS_SYSTEM_PROMPT strips all
+            # tool-use guidance + adds a FORBIDDEN list for known leak patterns.
+            #
+            # We build a SHALLOW COPY of the messages list with index 0 swapped
+            # so the assistant + tool messages accumulated during the loop
+            # (which carry the actual data the answer needs) are reused
+            # verbatim. Building the synthesis prompt here (not at the top of
+            # _execute) means failed-loop branches above never pay the
+            # render() cost.
+            from prompts._safety import SAFETY_FOOTER  # type: ignore[import-untyped]
+            from prompts.chat.synthesis import SYNTHESIS_SYSTEM_PROMPT  # type: ignore[import-untyped]
+
+            # ── Sparse-data guard (Fix: pre-synthesis fabrication prevention) ──
+            # When total retrieved items are below threshold, inject an explicit
+            # instruction forbidding fabrication. The grounding validator fires
+            # AFTER synthesis, so without this guard the LLM pads thin results
+            # with parametric knowledge (e.g. MSTR run 2: 1 news item → 20+
+            # invented numbers). Thresholds: 5 items for comparisons (need both
+            # entities' data), 3 for numeric questions, 2 otherwise.
+            _total_items = len(non_none_items)
+            _msg_lower = request.message.lower()
+            _is_comparison = any(kw in _msg_lower for kw in ("vs", " and ", "compare", "versus", "both"))
+            _wants_numbers = any(
+                kw in _msg_lower
+                for kw in ("revenue", "earnings", "price", "market cap", "pe ratio", "eps", "margin", "growth")
+            )
+            _sparse_threshold = 5 if _is_comparison else (3 if _wants_numbers else 2)
+            _sparse_guard = ""
+            if _total_items < _sparse_threshold:
+                _sparse_guard = (
+                    f"\n\n## SPARSE DATA INSTRUCTION\n"
+                    f"Only {_total_items} item(s) were retrieved from the knowledge base. "
+                    "If specific numbers are not present in the data above, say so explicitly. "
+                    "Do NOT invent figures from memory. Answer qualitatively when data is insufficient."
+                )
+
+            _synthesis_system = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER + _sparse_guard)
+
+            # ── Strip planning narration from prior assistant messages ──────────
+            # Planning-turn assistant messages carry a .content field with
+            # narration ("I will fetch...", "Step 1: Calling..."). When passed
+            # verbatim to the synthesis turn the LLM mirrors that pattern and
+            # leaks tool-call stubs into the final answer. The messages' purpose
+            # here is only to carry the tool_calls blocks (so the model sees
+            # what was executed); strip .content from them before synthesis.
+            _clean_prior: list[dict[str, Any]] = []
+            for _msg in messages[1:]:
+                if _msg.get("role") == "assistant" and _msg.get("tool_calls"):
+                    _c = dict(_msg)
+                    _c.pop("content", None)
+                    _clean_prior.append(_c)
+                else:
+                    _clean_prior.append(_msg)
+
+            _synthesis_messages: list[dict[str, Any]] = [
+                {"role": "system", "content": _synthesis_system},
+                *_clean_prior,
+            ]
             try:
                 while _stream_attempts < 2:
                     _stream_attempts += 1
                     try:
                         async for chunk in p.llm_chain.stream_chat(
-                            messages,
+                            _synthesis_messages,
                             max_tokens=budget.max_tokens_final,
-                            temperature=0.1,
+                            # PLAN-0107 follow-up: forbid function calling on the synthesis turn
+                            # so the model can't emit `<tool_call>` XML as visible text when it
+                            # sees prior tool turns in the history. With reasoning_effort=medium
+                            # on DeepSeek V4 Flash, the model otherwise plans MORE tool calls
+                            # and emits them as JSON text in the answer.
+                            tools=[],
+                            # PLAN-0107 follow-up: temperature=0.0 (was 0.1 overriding env default).
+                            # Reasoning_effort already adds enough variance — don't compound it.
+                            temperature=0.0,
+                            # PLAN-0107 follow-up: forward seed for eval-mode reproducibility
+                            # (benchmark runner passes seed=42 in --judge mode).
+                            seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
                             thread_id=request.thread_id,
+                            # Note: tools=[] above (Fix #1 + Fix #2 combined) —
+                            # the adapter translates the empty list into
+                            # tool_choice="none" so the provider unambiguously
+                            # forbids tool calling on this synthesis turn.
                         ):
                             full_text += chunk
                             if chunk:
@@ -2189,15 +3172,15 @@ class ChatOrchestratorUseCase:
                             raise
                         # Only retry on transient signatures. Anything else
                         # (e.g. validation errors) propagates immediately.
-                        _msg = str(inner_exc).lower()
+                        _exc_msg = str(inner_exc).lower()
                         _is_transient = (
-                            "429" in _msg
-                            or "too many requests" in _msg
-                            or "all llm providers failed" in _msg
-                            or "timeout" in _msg
-                            or "503" in _msg
-                            or "502" in _msg
-                            or "504" in _msg
+                            "429" in _exc_msg
+                            or "too many requests" in _exc_msg
+                            or "all llm providers failed" in _exc_msg
+                            or "timeout" in _exc_msg
+                            or "503" in _exc_msg
+                            or "502" in _exc_msg
+                            or "504" in _exc_msg
                         )
                         if not _is_transient or _stream_attempts >= 2:
                             raise
@@ -2294,6 +3277,133 @@ class ChatOrchestratorUseCase:
                 for _chunk in _chunk_text_for_streaming(full_text):
                     yield p.emitter.emit_token(_chunk)
 
+        # ── Phase-1: verify-phase status ─────────────────────────────────────
+        # Everything below (narration scrub, plan-only guard, false-write-action
+        # guard, BP-605 entity grounding, numeric grounding/citation validation
+        # and any repair re-prompt) is the post-synthesis VERIFICATION phase.
+        # Before this it ran silently — on a heavy answer the user saw the token
+        # stream stop and then a multi-second gap before the final answer
+        # settled, with no signal that the agent was checking its work. Emit a
+        # distinct ``verifying`` status so the Research timeline can render
+        # "Verifying answer against sources…". Only emitted when there is text
+        # to verify (a zero-text stream has nothing to ground-check).
+        if full_text:
+            yield p.emitter.emit_status(SSEStatusStep.VERIFYING.value)
+
+        # ── PLAN-0107 follow-up Fix #4: post-stream narration scrub ──────────
+        # Last-resort cleanup of any tool-call narration that slipped past
+        # Fixes #1-#3 (synthesis prompt, tool_choice="none", anti-narration
+        # planning clause). Runs on the FULLY-ASSEMBLED ``full_text`` only,
+        # so the live SSE stream above is unaffected (mid-stream filtering
+        # would require rewinds we cannot do over the wire — user may see a
+        # brief flicker, but the persisted artefact is clean). All downstream
+        # consumers (grounding validation, persistence, final_answer event)
+        # read the scrubbed text.
+        if full_text:
+            _pre_scrub_len = len(full_text)
+            # Chat-eval #3: pass registry names so the {"<tool_name>": {…}}
+            # single-key leak shape is scrubbed on the synthesis path too.
+            full_text = _strip_tool_narration(full_text, _registry_tool_names)
+            if len(full_text) != _pre_scrub_len:
+                log.warning(  # type: ignore[no-any-return]
+                    "synthesis_narration_scrubbed",
+                    pre_len=_pre_scrub_len,
+                    post_len=len(full_text),
+                    delta_chars=_pre_scrub_len - len(full_text),
+                )
+
+        # ── 2026-06-12 root-cause audit Theme D: plan-only synthesis guard ────
+        # ``chain_nvda_competitor_growth_rank`` shipped a future-tense PLAN
+        # ("I'll start by… **Step 1**… I'll search… Let me first…") as the final
+        # answer — the narration scrub alone leaves the plan prose under the
+        # ``**Step N:**`` headers. When the synthesised answer is plan-only with
+        # no substantive payload, re-prompt ONCE to answer directly using the
+        # tool results already in ``messages``; if the re-prompt ALSO returns a
+        # plan (or empty), replace it with a bounded refusal so we never ship a
+        # plan-only stub. ``_plan_only_refused`` is folded into ``grounding_passed``
+        # below so a refused plan is never cached.
+        _plan_only_refused = False
+        if full_text and _is_plan_only_narration(full_text):
+            log.warning(  # type: ignore[no-any-return]
+                "synthesis_plan_only_detected",
+                chars=len(full_text),
+            )
+            _plan_reprompt = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "Answer the question NOW using the tool results above. "
+                        "Do NOT narrate a plan, list steps, or say what you will do next — "
+                        "give the final answer directly with the data already retrieved."
+                    ),
+                },
+            ]
+            _reprompted = ""
+            try:
+                async for _chunk in p.llm_chain.stream_chat(
+                    _plan_reprompt,
+                    max_tokens=budget.max_tokens_final,
+                    temperature=0.0,
+                    tools=[],
+                    seed=request.seed,
+                ):
+                    _reprompted += _chunk
+            except Exception as exc:  # — degrade gracefully, never crash the turn
+                log.warning("synthesis_plan_only_reprompt_failed", error=str(exc))  # type: ignore[no-any-return]
+                _reprompted = ""
+            _reprompted = _strip_tool_narration(_reprompted, _registry_tool_names)
+            if _reprompted.strip() and not _is_plan_only_narration(_reprompted):
+                full_text = _reprompted
+                log.info("synthesis_plan_only_repaired", chars=len(full_text))  # type: ignore[no-any-return]
+            else:
+                full_text = _PLAN_ONLY_REFUSAL
+                _plan_only_refused = True
+                log.warning(  # type: ignore[no-any-return]
+                    "synthesis_plan_only_refused",
+                    reprompt_chars=len(_reprompted),
+                )
+
+        # ── Theme F (2026-06-12 root-cause audit): false write-action guard ───
+        # ``tc_create_alert_nvda_below`` shipped a PROSE confirmation request
+        # ("I'd be happy to set that alert … I need your explicit confirmation")
+        # for an alert imperative WITHOUT calling ``create_alert`` — so no
+        # ``pending_action`` ever surfaced and no alert was registered. Claiming
+        # (or offering, via a fake prose gate) a write-action that was never
+        # routed through the confirmation-gated tool is a trust failure.
+        #
+        # Deterministic repair: when (a) the question is an alert/notify
+        # imperative, (b) the answer asserts/offers an alert action in prose,
+        # and (c) NO write-action tool ran AND NO ``pending_action`` fired this
+        # turn → rewrite the answer to an honest offer that EXPLICITLY states
+        # the alert has NOT been created and invites the user to confirm (which
+        # re-runs the turn through ``create_alert``'s real confirmation gate).
+        # Mirrors the Theme D plan-only repair shape; ``grounded=False`` folds
+        # it into ``grounding_passed`` below so the repaired text is never cached.
+        #
+        # Gating is intentionally conservative: it fires ONLY for genuine alert
+        # imperatives whose reply free-texts the action while the structured
+        # action flow was absent. If ``create_alert`` ran (pending_action
+        # emitted) the guard is a no-op — the prose offer is the legitimate
+        # companion to a real confirmation card.
+        _write_action_repaired = False
+        _write_action_ran = any(name in _WRITE_ACTION_TOOLS for name in _executed_tool_names)
+        if (
+            full_text.strip()
+            and not _pending_action_emitted
+            and not _write_action_ran
+            and _is_alert_imperative(request.message)
+            and _claims_or_offers_uninvoked_alert(full_text)
+        ):
+            log.warning(  # type: ignore[no-any-return]
+                "synthesis_false_write_action_detected",
+                executed_tools=sorted(set(_executed_tool_names)),
+                pending_action_emitted=_pending_action_emitted,
+                chars=len(full_text),
+            )
+            full_text = _ALERT_NOT_CREATED_REPAIR
+            _write_action_repaired = True
+
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
         # Before any other synthesis check, confirm that AT LEAST ONE
         # retrieved item references an entity from the original question.
@@ -2311,8 +3421,26 @@ class ChatOrchestratorUseCase:
         # refusal REPLACES the streamed full_text so downstream synthesis +
         # citation passes see a coherent message; ``grounded=False`` is
         # captured in structured logs for ops visibility.
-        grounded = True
-        if had_tool_calls and non_none_items and _question_entity_ids:
+        # Theme D: a plan-only refusal also sets grounded=False so the numeric /
+        # entity grounding passes skip the bounded refusal string and it is never
+        # cached (folded via grounding_passed below).
+        # Theme F: a write-action repair also sets grounded=False so the honest
+        # "not created" offer skips numeric/entity grounding (it has no facts to
+        # verify) and is never written to the completion cache.
+        grounded = not _plan_only_refused and not _write_action_repaired
+        # Chat-eval pack-10 (2026-06-12): skip the guard for universe/aggregate/
+        # screener questions — they have no single anchor entity, S6 mis-resolves
+        # the question to garbage, and the calendar/screener/movers items carry
+        # entity_name=None, so the guard would FALSE-refuse a valid answer
+        # (``tc_earnings_next_week_universe``). The guard is meant for
+        # single-entity intelligence/search questions only.
+        _is_universe_question = any(name in _UNIVERSE_AGGREGATE_TOOLS for name in _executed_tool_names)
+        if _is_universe_question:
+            log.info(  # type: ignore[no-any-return]
+                "entity_grounding_skipped_universe_intent",
+                executed_tools=sorted(set(_executed_tool_names)),
+            )
+        if had_tool_calls and non_none_items and _question_entity_ids and not _is_universe_question:
             _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids, _prior_tool_calls)
             if _grounding_refusal is not None:
                 # PLAN-0104 W29: log the actual ids so we can diagnose
@@ -2350,52 +3478,86 @@ class ChatOrchestratorUseCase:
         # already short-circuited — the refusal text has no numbers to
         # validate and the validator would either no-op or false-positive.
         grounding_passed = True
+        # RC-1 (2026-06-18 internal-tool latency investigation): the numeric and
+        # entity-name grounding passes are MERGED into ONE combined pass. Both
+        # deterministic validators still run (the cheap ~105ms checks identify
+        # the ungrounded numbers AND names); if EITHER finds genuine issues a
+        # SINGLE rewrite completion is fired whose prompt lists both classes,
+        # then both are re-validated. This replaces the prior up-to-two
+        # sequential rewrites (16.5s numeric + 15s entity on the live 50s
+        # Apple-news turn) with at most ONE — and FIXES a name issue that
+        # co-occurs with a number issue instead of merely bannering it
+        # (BP-670 forced the entity pass to validate-only when numeric rewrote).
+        #
+        # ``grounding_passed`` is the AND of numeric AND entity grounding — same
+        # semantics as the prior ``grounding_passed and entity_grounding_passed``
+        # that gated the completion-cache write (F-LIVE-008: never cache a
+        # validator-rejected answer; it poisons the deterministic key for 24h).
         if had_tool_calls and full_text.strip() and grounded:
+            # RC-1: resolve the optional repair-rewrite model override. Lazy
+            # ``Settings()`` mirrors the existing grounding-timeout lookup; a
+            # construction failure (missing env) degrades to None → default
+            # completion model (unchanged behaviour).
+            try:
+                from rag_chat.config import Settings as _RagChatSettings
+
+                _grounding_rewrite_model = _RagChatSettings().grounding_rewrite_model  # type: ignore[call-arg]
+            except Exception:
+                _grounding_rewrite_model = None
             async with phase("grounding_validation", phases):
-                full_text, grounding_passed = await self._run_grounding_validation(
+                full_text, grounding_passed = await self._run_combined_grounding_validation(
                     p=p,
                     response=full_text,
                     tool_items=non_none_items,
+                    resolved_entities=list(entities),
                     messages=messages,
                     budget=budget,
                     entity_context=entity_context,
+                    # 2026-06-12 root-cause audit Theme A fix #2: feed the
+                    # actually-called tool names so the phantom-citation gate
+                    # and the validator's tool-name cross-check activate.
+                    called_tool_names=list(_executed_tool_names),
+                    # PLAN-0104 W42: forward the prior-tool-call list so the
+                    # entity-NAME validator accepts the LLM's tool-call ticker
+                    # bridge (Round 6 TSLA double-refusal fix).
+                    prior_tool_calls=_prior_tool_calls,
+                    # Entity-name grounding only runs when the question carries
+                    # resolved entities — an empty set means open-domain, where
+                    # the grounded set would be empty and every name would
+                    # fail-closed (false-positive flood). Mirrors the prior
+                    # ``... and entities`` gate on the entity pass.
+                    run_entity_pass=bool(entities),
+                    # PLAN-0107 follow-up: forward eval-mode seed for repro.
+                    seed=request.seed,
+                    # RC-1: configurable repair-rewrite model (None → default
+                    # completion model, unchanged behaviour).
+                    rewrite_model=_grounding_rewrite_model,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
             # generic message that would replay for any future failure.
             grounding_passed = False
 
-        # ── F-LIVE-NEW-002: Entity-name grounding validation ──────────────────
-        # Catches the empty-result hallucination pattern: the LLM names a
-        # company that exists nowhere in the resolved-entity set OR the
-        # tool result payloads. The check is fail-safe — false positives
-        # surface as ``[unverified]`` markers, false negatives let
-        # confident wrong answers through. Tune toward false positives.
-        #
-        # Gating: only runs when the question has resolved entities. An
-        # empty entity set means the question is open-domain (no specific
-        # company anchor) and the grounded set would be empty — every
-        # company name in the response would fail closed, flooding false
-        # positives. Mirrors the BP-605 gating on _question_entity_ids.
-        if had_tool_calls and full_text.strip() and grounded and entities:
-            full_text, entity_grounding_passed = await self._run_entity_grounding_validation(
-                p=p,
-                response=full_text,
-                resolved_entities=list(entities),
-                tool_items=non_none_items,
-                messages=messages,
-                budget=budget,
-                # PLAN-0104 W42: forward the same prior-tool-call list the
-                # W37 ``_check_entity_grounding`` fallback uses so the
-                # second-pass entity-NAME validator also accepts the LLM's
-                # tool-call ticker bridge (Round 6 TSLA double-refusal fix).
-                prior_tool_calls=_prior_tool_calls,
-            )
-            # If entity grounding failed and even the rewrite + banner
-            # produced text, we treat the answer as un-cacheable for the
-            # same reason as numeric grounding (poison the 24h cache).
-            if not entity_grounding_passed:
-                grounding_passed = False
+        # ── BP-674 defense-in-depth: post-grounding narration scrub ───────────
+        # The grounding rewrites (above) replace ``full_text`` with their own
+        # stream_chat output, which BYPASSES the pre-grounding
+        # ``_strip_tool_narration`` pass at the top of this block. The rewrite
+        # guards keep the original on a detected stub, but a rewrite that only
+        # PARTIALLY leaks narration (a real answer with a stray "I will fetch…"
+        # lead or a trailing ``<invoke>`` fragment) would slip through. Re-run
+        # the scrub on the final ``full_text`` so the persisted answer and the
+        # ``final_answer`` event are always free of control-token leakage —
+        # regardless of which synthesis/rewrite path produced the text. Idempotent
+        # and a no-op on a clean answer.
+        if full_text:
+            _pre = full_text
+            full_text = _strip_tool_narration(full_text, _registry_tool_names)
+            if len(full_text) != len(_pre):
+                log.warning(  # type: ignore[no-any-return]
+                    "post_grounding_narration_scrubbed",
+                    pre_len=len(_pre),
+                    post_len=len(full_text),
+                )
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
@@ -2406,7 +3568,35 @@ class ChatOrchestratorUseCase:
             rag_citations_scrubbed_total.inc(scrub_count)
 
         # ── Step 9: Output processing + citations ────────────────────────────────
-        answer, citations = p.process_output(full_text, reranked)
+        # BP-669: ``prompt_items`` MUST be the same list (same order) that
+        # ``build_prompt`` enumerated as [1..N] in the context block — the
+        # LLM's citation markers index into THAT enumeration. The prompt
+        # builder receives ``reranked or non_none_items`` (rerank may fail
+        # and return []), so the citation resolver must use the identical
+        # fallback or every marker resolves against the wrong list.
+        prompt_items = reranked or non_none_items
+        answer, citations = p.process_output(full_text, prompt_items)
+
+        # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
+        # point past the retrieved-item count. The LLM occasionally emits
+        # e.g. "[N7]" when only 3 items were retrieved — those markers must
+        # not surface to users (F-RAG-006).
+        if prompt_items:
+            answer, _orphans = _scrub_orphan_citations(answer, max_index=len(prompt_items))
+            if _orphans:
+                log.warning("citation_marker_orphan", count=_orphans, retrieved=len(prompt_items))  # type: ignore[no-any-return]
+
+        # BP-669 (2026-06-11): renumber surviving markers densely to [1..K].
+        # The LLM cites a SUBSET of the enumerated items (e.g. [5], [6], [8]
+        # out of 10) but the frontend renders the citation list positionally
+        # ([1], [2], [3]) — sparse refs made body markers point "past" the
+        # visible source list. After the orphan scrub every remaining marker
+        # has a matching citation, so a dense renumber preserves the 1:1
+        # marker↔citation mapping while making both sides agree on labels.
+        # Gated on prompt_items (mirrors process_output's marker discipline:
+        # with no retrieved items every [N] was already stripped above).
+        if prompt_items:
+            answer, citations = _renumber_citations_dense(answer, citations)
 
         # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
         # point past the retrieved-item count. The LLM occasionally emits
@@ -2431,6 +3621,25 @@ class ChatOrchestratorUseCase:
         yield p.emitter.emit_final_answer(answer)
         yield p.emitter.emit_citations(citations)
         yield p.emitter.emit_contradictions(contradiction_refs)
+
+        # ── Follow-up suggestions (server-derived, zero extra LLM calls) ─────
+        # Deterministic templating from the turn's resolved entities + the
+        # tools that actually ran — see application/services/suggestions.py.
+        # The frontend prefers these over its client-templated fallbacks.
+        # Per-call env read (same pattern as RAG_COMPLETION_CACHE_DISABLED)
+        # so the toggle takes effect without a service restart.
+        if os.environ.get("RAG_CHAT_SUGGESTIONS_ENABLED", "true").strip().lower() != "false":
+            from rag_chat.application.services.suggestions import derive_followup_suggestions
+
+            try:
+                _suggestions = derive_followup_suggestions(
+                    entities=list(entities),
+                    tool_names=list(_executed_tool_names),
+                    intent=intent.value,
+                )
+                yield p.emitter.emit_suggestions(_suggestions)
+            except Exception as _sugg_exc:  # pragma: no cover — never break the stream for a nicety
+                log.warning("suggestions_derivation_failed", error=str(_sugg_exc))
 
         # ── Step 10: Persist + cache + metrics ───────────────────────────────────
         thread_id: UUID = request.thread_id or _new_thread_id()
@@ -2522,6 +3731,440 @@ class ChatOrchestratorUseCase:
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
         yield p.emitter.emit_done(phase_timings_ms=_phase_snapshot)
 
+    def _build_entity_grounded_sets(
+        self,
+        *,
+        resolved_entities: list[Any],
+        tool_items: list,
+        prior_tool_calls: list[Any] | None,
+    ) -> tuple[set[str], set[str], str]:
+        """Build the entity-name grounded sets used by both the entity pass and
+        the combined pass.
+
+        Extracted VERBATIM from :meth:`_run_entity_grounding_validation` so the
+        combined pass grounds names with byte-identical logic (resolved-entity
+        attrs + tool citation_meta/item_id + text-body tickers + prior-tool-call
+        ticker bridge + verbatim tool-text blob). Returns
+        ``(grounded_names, tool_refs, tool_text_blob)``. No behavioural change —
+        this is a shared helper, not a new rule.
+        """
+        grounded_names: set[str] = set()
+        for ent in resolved_entities:
+            if ent is None:
+                continue
+            for attr in ("canonical_name", "ticker", "matched_text"):
+                v = getattr(ent, attr, None)
+                if isinstance(v, str) and v:
+                    grounded_names.add(v)
+
+        tool_refs: set[str] = set()
+        for item in tool_items:
+            if item is None:
+                continue
+            cm = getattr(item, "citation_meta", None)
+            if cm is not None:
+                ent_name = getattr(cm, "entity_name", None)
+                if isinstance(ent_name, str) and ent_name:
+                    tool_refs.add(ent_name)
+            item_id = getattr(item, "item_id", None)
+            if isinstance(item_id, str) and item_id:
+                tool_refs.add(item_id)
+            for attr in ("ticker", "canonical_name", "entity_name"):
+                v = getattr(item, attr, None)
+                if isinstance(v, str) and v:
+                    tool_refs.add(v)
+            text_body = getattr(item, "text", None)
+            if isinstance(text_body, str) and text_body:
+                for match in _TOOL_TEXT_TICKER_RE.findall(text_body):
+                    tool_refs.add(match)
+
+        if prior_tool_calls:
+            for tc in prior_tool_calls:
+                tc_input = getattr(tc, "input", None) or {}
+                if not isinstance(tc_input, dict):
+                    continue
+                for k, v in tc_input.items():
+                    if k not in _ENTITY_TYPED_FIELDS and k not in _TICKER_LIKE_FIELDS:
+                        continue
+                    for ident in _normalise_entity_identifier(v):
+                        if ident:
+                            tool_refs.add(ident)
+
+        _tool_text_parts: list[str] = []
+        for item in tool_items:
+            _t = getattr(item, "text", None)
+            if isinstance(_t, str) and _t:
+                _tool_text_parts.append(_t[:4000])
+        tool_text_blob = "\n".join(_tool_text_parts)
+        return grounded_names, tool_refs, tool_text_blob
+
+    async def _run_combined_grounding_validation(
+        self,
+        *,
+        p: ChatPipeline,
+        response: str,
+        tool_items: list,
+        resolved_entities: list[Any],
+        messages: list[dict[str, Any]],
+        budget: AgentBudget,
+        entity_context: Any = None,
+        called_tool_names: list[str] | None = None,
+        prior_tool_calls: list[Any] | None = None,
+        run_entity_pass: bool = True,
+        seed: int | None = None,
+        rewrite_model: str | None = None,
+    ) -> tuple[str, bool]:
+        """RC-1 — single combined numeric + entity-name grounding pass.
+
+        Merges the two formerly-sequential rewrite passes
+        (:meth:`_run_grounding_validation` for numbers,
+        :meth:`_run_entity_grounding_validation` for names) into ONE repair
+        completion per turn. The two deterministic validators (the cheap
+        ~105ms checks) STILL run independently and identify the ungrounded
+        numbers AND names; if EITHER finds genuine issues we fire a SINGLE
+        ``stream_chat`` rewrite whose prompt lists BOTH the ungrounded numbers
+        and the ungrounded names, then re-validate both and banner only on
+        residual failure.
+
+        Why this is faster AND better:
+          * Faster: at most ONE rewrite completion (the dominant tail-latency
+            cost) instead of up to two sequential ones.
+          * Better: today, when the numeric pass rewrites, the entity pass is
+            forced to validate-only (``allow_rewrite=False``) and merely
+            BANNERS a fixable name issue (BP-670). Here the single rewrite is
+            instructed to ground BOTH classes, so a name problem that
+            co-occurs with a number problem is actually FIXED, not bannered.
+
+        Stricter trigger: when both validators pass on the ORIGINAL answer we
+        return it unchanged with NO LLM call. A fully-grounded answer never
+        triggers a rewrite — there is no quality loss because grounded answers
+        never needed one.
+
+        PRESERVED EXACTLY (the anti-fabrication safeguards):
+          * numeric phantom-citation + empty-pool refusals (deterministic, no
+            LLM) and the BP-648 small-revenue banner-suppression guard;
+          * the BP-671 divergence guard ``_rewrite_is_divergent_resynthesis``;
+          * the BP-674/675 tool-call-stub guard, the BP-648 defeatist guard,
+            the BP-670 worse-than-original numeric-degradation guard, and the
+            entity fabricated-number guard;
+          * the ``[unverified]`` banner behaviour and the
+            ``(final_text, grounding_passed)`` return + metric contract.
+
+        Returns ``(final_text, grounding_passed)``. ``grounding_passed`` is the
+        AND of numeric AND entity grounding (matching the prior orchestrator
+        semantics where ``grounding_passed and entity_grounding_passed`` gated
+        the completion-cache write).
+        """
+        from rag_chat.application.services.entity_name_grounding import (
+            EntityNameGroundingValidator,
+        )
+        from rag_chat.application.services.numeric_grounding import (
+            FieldKind,
+            NumericGroundingValidator,
+            find_phantom_tool_citations,
+            flatten_tool_values_count,
+            response_has_numeric_claims,
+        )
+
+        _called = list(called_tool_names or [])
+        _have_called_set = called_tool_names is not None
+
+        # ── NUMERIC deterministic gates (PRESERVED EXACTLY) ───────────────────
+        # Phantom-citation + empty-pool refusals fire BEFORE any rewrite and
+        # never spend an LLM call. Identical to the numeric pass.
+        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
+        if _phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_phantom_citation_refused",
+                phantom_tools=sorted(_phantom),
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_empty_pool_refused",
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_empty_pool").inc()
+            return _EMPTY_POOL_REFUSAL, False
+
+        # ── Deterministic validations (the cheap ~105ms checks) ───────────────
+        numeric_validator = NumericGroundingValidator()
+        numeric_first = numeric_validator.validate(response, tool_items, called_tool_names=_called)
+
+        # Entity validation only when the question carries resolved entities
+        # (mirrors the orchestrator gate ``... and entities``). When the entity
+        # pass is disabled the entity result is treated as a pass.
+        grounded_names: set[str] = set()
+        tool_refs: set[str] = set()
+        tool_text_blob = ""
+        entity_validator = EntityNameGroundingValidator()
+        entity_first_passed = True
+        entity_unsupported: tuple[Any, ...] = ()
+        if run_entity_pass:
+            grounded_names, tool_refs, tool_text_blob = self._build_entity_grounded_sets(
+                resolved_entities=resolved_entities,
+                tool_items=tool_items,
+                prior_tool_calls=prior_tool_calls,
+            )
+            entity_first = entity_validator.validate(response, grounded_names, tool_refs, tool_text=tool_text_blob)
+            entity_first_passed = entity_first.passed
+            entity_unsupported = entity_first.unsupported
+
+        # ── STRICTER TRIGGER: both classes grounded → no rewrite, no LLM ──────
+        if numeric_first.passed and entity_first_passed:
+            rag_grounding_validation_total.labels(result="passed").inc()
+            return response, True
+
+        # BP-648 Guard A (PRESERVED) — numeric unsupported set dominated by
+        # small-revenue quarter-label false positives: the validator is
+        # misfiring, the original is fine. Suppress the banner, skip the
+        # rewrite. Only applies when the ENTITY pass also has no genuine issue
+        # (an entity problem still warrants the combined rewrite below).
+        if entity_first_passed:
+            _total = len(numeric_first.unsupported)
+            if _total > 0:
+                _small_rev = sum(
+                    1 for u in numeric_first.unsupported if u.field_kind == FieldKind.REVENUE and abs(u.value) < 100
+                )
+                if _small_rev / _total >= 0.8:
+                    log.warning(  # type: ignore[no-any-return]
+                        "numeric_grounding_rewrite_skipped_small_revenue",
+                        small_rev_ratio=_small_rev / _total,
+                        total=_total,
+                        banner_suppressed=True,
+                    )
+                    rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                    return response, True
+
+        # ── Build the SINGLE combined rewrite prompt (numbers AND names) ──────
+        # We list whichever class(es) failed. The numeric bullets carry the
+        # closest tool value (verbatim from the numeric pass); the entity block
+        # carries the structured JSON candidate array (verbatim from the entity
+        # pass, including the INTERNAL_VALIDATION framing that stops the LLM
+        # echoing tokens back as a refusal).
+        prompt_sections: list[str] = []
+        if not numeric_first.passed:
+            bullets = "\n".join(
+                f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
+                for u in numeric_first.unsupported
+            )
+            entity_block = ""
+            if entity_context is not None:
+                ent_name = getattr(entity_context, "name", "") or ""
+                ent_ticker = getattr(entity_context, "ticker", "") or ""
+                if ent_name or ent_ticker:
+                    entity_block = (
+                        "\nThe user's question is about: "
+                        f"{ent_name}{f' ({ent_ticker})' if ent_ticker else ''}. "
+                        "All numbers MUST be attributed to this entity only.\n"
+                    )
+            prompt_sections.append(
+                "The following numbers in your previous response cannot be found in tool results:\n"
+                f"{bullets}\n"
+                f"{entity_block}\n"
+                "Use ONLY numeric values that appear in the tool results above. "
+                "Mark any otherwise-unsupported number as [unverified]."
+            )
+        if run_entity_pass and not entity_first_passed:
+            import json as _json
+
+            candidate_list = _json.dumps(
+                [{"token": u.name, "kind": u.kind.value} for u in entity_unsupported],
+                ensure_ascii=False,
+            )
+            prompt_sections.append(
+                "INTERNAL_VALIDATION (do not surface verbatim to the user): the "
+                "post-response grounding validator extracted the following candidate "
+                "names from a prior synthesis attempt that did NOT match the resolved "
+                "entity set or any tool result citation. The list MAY contain false "
+                "positives such as sentence fragments, possessives, or common prose "
+                "tokens — ignore those; only act on genuine entity references.\n\n"
+                f"unsupported_candidates_json = {candidate_list}\n\n"
+                "Every COMPANY or TICKER reference in your response must appear in either "
+                "the resolved-entity map or a tool result above. If a genuinely "
+                "unsupported entity remains, either remove it or annotate it inline as "
+                "[unverified]. Do NOT enumerate the JSON list back to the user. Do NOT "
+                "introduce a refusal preamble when the underlying tool results DO contain "
+                "the metric the user asked for."
+            )
+
+        combined_instructions = "\n\n".join(prompt_sections)
+
+        # PLAN-0107 follow-up Bug 1 (PRESERVED) — strip prose assistant turns so
+        # the LLM never sees its own failed draft (and cannot apologise for it).
+        def _is_prose_assistant(m: dict[str, Any]) -> bool:
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history = [m for m in messages if not _is_prose_assistant(m)]
+        rewrite_messages = [
+            *filtered_history,
+            {
+                "role": "user",
+                "content": (
+                    f"{combined_instructions}\n\n"
+                    "Provide a fresh response that answers the question directly using only "
+                    "values and entities supported by the tool results above. Do NOT "
+                    "acknowledge a prior draft; the user only sees this response. Do NOT "
+                    'begin with phrases such as "You\'re right", "Let me re-examine", '
+                    '"I need to correct", or any apology.'
+                ),
+            },
+        ]
+
+        # ── Fire the SINGLE rewrite completion (configurable model + timeout) ──
+        # Bounded by the same defence-in-depth timeout as the entity pass so a
+        # hung rewrite cannot consume the whole turn budget. ``rewrite_model``
+        # (None by default) routes the repair completion to an override model
+        # for A/B without changing the synthesis model.
+        from rag_chat.config import Settings as _RagChatSettings
+
+        try:
+            _rewrite_timeout = _RagChatSettings().entity_grounding_rewrite_timeout_seconds  # type: ignore[call-arg]
+        except Exception:
+            _rewrite_timeout = 15.0
+
+        async def _drain_rewrite() -> str:
+            buf = ""
+            async for chunk in p.llm_chain.stream_chat(
+                rewrite_messages,
+                max_tokens=budget.max_tokens_final,
+                temperature=0.0,  # deterministic rewrite
+                tools=[],  # forbid function calling on the repair turn
+                seed=seed,
+                # RC-1: route the single repair completion to the override model
+                # when configured; None preserves the default completion model.
+                model=rewrite_model,
+            ):
+                buf += chunk
+            return buf
+
+        rewritten = ""
+        try:
+            rewritten = await asyncio.wait_for(_drain_rewrite(), timeout=_rewrite_timeout)
+        except TimeoutError:
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_timeout",
+                timeout_s=_rewrite_timeout,
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified (validator timeout).", False
+        except Exception as exc:
+            log.warning("combined_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # ── Post-rewrite guards (ALL PRESERVED from both passes) ──────────────
+        # 1. Tool-call / planning stub (BP-674/675) — keep the grounded original.
+        if _is_tool_call_stub(rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_tool_call_stub",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 2. Defeatist short rewrite (BP-648) — keep the original.
+        _r_strip = rewritten.lstrip()
+        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
+        if any(_r_strip.startswith(pref) for pref in _refusal_prefixes) and len(rewritten) < len(response):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_defeatist",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 3. Divergent re-synthesis (BP-671) — keep the grounded original.
+        if _rewrite_is_divergent_resynthesis(response, rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_divergent_resynthesis",
+                original_len=len(response),
+                rewrite_len=len(rewritten),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # 4. Phantom-citation re-check on the rewrite (Theme A).
+        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
+        if _rewrite_phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_phantom_citation_refused",
+                phantom_tools=sorted(_rewrite_phantom),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        # ── Re-validate BOTH classes on the single rewrite ────────────────────
+        numeric_second = numeric_validator.validate(rewritten, tool_items, called_tool_names=_called)
+        entity_second_passed = True
+        if run_entity_pass:
+            entity_second_passed = entity_validator.validate(
+                rewritten, grounded_names, tool_refs, tool_text=tool_text_blob
+            ).passed
+
+        # 5. Numeric worse-than-original guard (BP-670) — a rewrite that
+        # invented MORE unsupported numbers than the original fabricated
+        # content; the original is strictly safer.
+        if len(numeric_second.unsupported) > len(numeric_first.unsupported):
+            log.warning(  # type: ignore[no-any-return]
+                "combined_grounding_rewrite_rejected_worse_than_original",
+                original_unsupported=len(numeric_first.unsupported),
+                rewrite_unsupported=len(numeric_second.unsupported),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
+        # Both classes now grounded → accept the rewrite.
+        if numeric_second.passed and entity_second_passed:
+            rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
+            return rewritten, True
+
+        # ── Residual failure: banner suppression (PRESERVED) then banner ──────
+        # Honest-refusal rewrite suppression (W44) — only when the residual is
+        # purely numeric (an honest "data unavailable" already conveys it).
+        if entity_second_passed and not numeric_second.passed:
+            _rw_strip = rewritten.lstrip()
+            _refusal_signals = (
+                "not currently available",
+                "not available",
+                "data is unavailable",
+                "I do not have",
+                "I don't have",
+                "no data is available",
+                "unable to retrieve",
+                "could not retrieve",
+            )
+            if any(sig.lower() in _rw_strip.lower()[:400] for sig in _refusal_signals) and len(rewritten) < 600:
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_banner_suppressed_honest_refusal",
+                    rewrite_len=len(rewritten),
+                )
+                rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                return rewritten, True
+
+            # Full-citation-coverage suppression (W50) — numeric residual but
+            # every number is cited (unit-suffix mismatch false positive).
+            if _answer_has_full_citation_coverage(rewritten):
+                log.warning(  # type: ignore[no-any-return]
+                    "combined_grounding_banner_suppressed_full_citation_coverage",
+                    rewrite_len=len(rewritten),
+                )
+                rag_grounding_validation_total.labels(result="failed_banner_suppressed").inc()
+                return rewritten, True
+
+        rag_grounding_validation_total.labels(result="failed_banner").inc()
+        return rewritten + "\n\n⚠ Some figures could not be verified against retrieved data.", False
+
     async def _run_grounding_validation(
         self,
         *,
@@ -2531,6 +4174,8 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         entity_context: Any = None,
+        called_tool_names: list[str] | None = None,
+        seed: int | None = None,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -2561,10 +4206,59 @@ class ChatOrchestratorUseCase:
         deterministic so the Sub-Plan G G-3 chat regression suite can
         re-run the validator on stored fixtures and get stable results.
         """
-        from rag_chat.application.services.numeric_grounding import NumericGroundingValidator
+        from rag_chat.application.services.numeric_grounding import (
+            NumericGroundingValidator,
+            find_phantom_tool_citations,
+            flatten_tool_values_count,
+            response_has_numeric_claims,
+        )
+
+        _called = list(called_tool_names or [])
+        # The phantom-citation gate needs the GROUND TRUTH set of called tools.
+        # Only run it when the caller explicitly supplied that set (the live
+        # orchestrator always does). When ``called_tool_names is None`` we have
+        # no ground truth — skip the gate (a stub-rewrite test that does not pass
+        # the set must not be refused just because it cites a real tool).
+        _have_called_set = called_tool_names is not None
+
+        # ── 2026-06-12 root-cause audit Theme A fix #1 — PHANTOM-CITATION GATE ──
+        # The dominant fabrication shape: the LLM invents a number and tags it
+        # with ``[tool_name row N]`` for a tool it NEVER called. The bracket
+        # fast-path in the validator then accepts the number because its OWN
+        # fake tag sits within ±50 chars. A structured ``[name row N]`` whose
+        # ``name`` is not in the called-tools set is a deterministic fabrication
+        # marker — refuse outright (grounded=False so it is NEVER cached) rather
+        # than let the rewrite/banner path rationalise it. Catches ~6/17 FAILs
+        # (tc_portfolio_dividend_yielders, agg_q5_tsla_macro,
+        # chain_macro_event_market_reaction, chain_portfolio_worst_fundamentals,
+        # chain_unhealthy_entity_investigation, iter3_apple_suppliers_compound).
+        _phantom = find_phantom_tool_citations(response, _called) if _have_called_set else set()
+        if _phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_phantom_citation_refused",
+                phantom_tools=sorted(_phantom),
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+
+        # ── Theme A fix #2 — EMPTY-POOL REFUSAL ────────────────────────────────
+        # When the answer makes specific numeric claims but the grounding
+        # candidate pool is EMPTY (every tool returned nothing / no tool ran),
+        # nothing can corroborate those numbers — the bracket fast-path would
+        # still pass them on a stray citation. Refuse rather than ship invented
+        # figures. Gated on numeric claims so empty-tool prose answers (handled
+        # by the entity-grounding pass) are untouched.
+        if response_has_numeric_claims(response) and flatten_tool_values_count(tool_items) == 0:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_empty_pool_refused",
+                called_tools=sorted({t.lower() for t in _called if t}),
+            )
+            rag_grounding_validation_total.labels(result="failed_empty_pool").inc()
+            return _EMPTY_POOL_REFUSAL, False
 
         validator = NumericGroundingValidator()
-        first_result = validator.validate(response, tool_items)
+        first_result = validator.validate(response, tool_items, called_tool_names=_called)
         if first_result.passed:
             rag_grounding_validation_total.labels(result="passed").inc()
             return response, True
@@ -2641,20 +4335,47 @@ class ChatOrchestratorUseCase:
                     f"{ent_name}{f' ({ent_ticker})' if ent_ticker else ''}. "
                     "All numbers MUST be attributed to this entity only.\n"
                 )
+
+        # PLAN-0107 follow-up Bug 1 — filter prior assistant draft from rewrite
+        # history. Previously we injected the failed draft as an assistant
+        # turn followed by a corrective user turn, which trained the LLM to
+        # acknowledge the correction in visible prose ("You're right — I
+        # need to correct this. Let me re-examine the data..."). That
+        # preamble leaked into the streamed answer because the rewrite
+        # text IS what we ship. Fix: strip trailing assistant turns from
+        # ``messages`` and do NOT re-inject the prior draft as a visible
+        # assistant turn. The user-turn payload still carries the closest-
+        # tool-value bullets so the LLM can correct the numbers; it just
+        # never sees its own failed draft, so it cannot acknowledge it.
+        # Tool-call assistant turns (with non-empty ``tool_calls`` and
+        # empty/no ``content``) are preserved because removing them would
+        # corrupt the tool-call/tool-result pairing that some providers
+        # validate. Only PROSE assistant turns are filtered.
+        def _is_prose_assistant(m: dict[str, Any]) -> bool:
+            # A "prose" assistant turn is one with textual content and no
+            # tool_calls — i.e. a natural-language draft the LLM might
+            # interpret as something to apologise for in the rewrite.
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history = [m for m in messages if not _is_prose_assistant(m)]
         rewrite_messages = [
-            *messages,
-            {
-                "role": "assistant",
-                "content": response,
-            },
+            *filtered_history,
             {
                 "role": "user",
                 "content": (
                     "The following numbers in your previous response cannot be found in tool results:\n"
                     f"{bullets}\n"
                     f"{entity_block}\n"
-                    "Rewrite your response, removing or marking each as [unverified]. "
-                    "Do not invent replacement numbers — only use values that appear in the tool results above."
+                    "Provide a fresh response using ONLY values that appear in the tool results above. "
+                    "Mark any otherwise-unsupported number as [unverified]. Do NOT acknowledge a prior "
+                    "draft; the user only sees this response. Do NOT begin with phrases such as "
+                    '"You\'re right", "Let me re-examine", "I need to correct", or any apology — '
+                    "answer the question directly."
                 ),
             },
         ]
@@ -2665,10 +4386,34 @@ class ChatOrchestratorUseCase:
                 rewrite_messages,
                 max_tokens=budget.max_tokens_final,
                 temperature=0.0,  # deterministic rewrite
+                # PLAN-0107 follow-up: forbid function calling on this rewrite turn
+                # so the model can't emit `<tool_call>` XML when it sees prior tool
+                # turns in the history (same root cause as the synthesis-turn fix).
+                tools=[],
+                # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
+                seed=seed,
             ):
                 rewritten += chunk
         except Exception as exc:
             log.warning("numeric_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+        # BP-674: leaked tool-call / planning-stub guard. The rewrite re-prompt
+        # includes prior tool turns, so the LLM frequently answers with a
+        # PLANNING stub ("I will fetch … <function_calls>…" / "**Tool calls:**
+        # - get_…(…)") instead of corrected prose. Shipping that stub as
+        # final_answer REPLACES a grounded, already-streamed synthesis with a
+        # control-token fragment (live nvda/amd compare + revenue_4q runs).
+        # When the rewrite is such a stub, keep the ORIGINAL grounded answer.
+        # Checked FIRST so a stub never reaches the divergence / validation
+        # branches that assume the rewrite is real prose.
+        if _is_tool_call_stub(rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_tool_call_stub",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
@@ -2687,11 +4432,65 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
-        # Re-validate the rewrite.
-        second_result = validator.validate(rewritten, tool_items)
+        # BP-671: re-synthesis divergence guard — keep the ORIGINAL grounded
+        # draft when the rewrite is a fresh re-synthesis rather than a
+        # correction. The numeric grounding rewrite turn never re-shows the LLM
+        # its own draft, so it frequently free-generates a brand-new answer from
+        # parametric memory (live MSTR-news run: streamed "Peter Schiff" +
+        # real price table was replaced by fabricated "271,474 BTC / $28.0B
+        # market cap / $509M revenue"). The legacy BP-670 unsupported-count
+        # guard misses this because the fabrication uses round numbers the
+        # validator cannot disprove. When the rewrite retains <50% of the
+        # original's content anchors (proper nouns + numbers) it has diverged —
+        # the grounded original is strictly safer than an unverifiable
+        # re-synthesis, so we keep it and append the banner so the user is
+        # still warned about the one bad figure that triggered the pass.
+        # Checked BEFORE re-validation so it fires even when the fabrication
+        # happens to pass the numeric validator.
+        if _rewrite_is_divergent_resynthesis(response, rewritten):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_divergent_resynthesis",
+                original_len=len(response),
+                rewrite_len=len(rewritten),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+        # Re-validate the rewrite. Theme A fix #2: also re-run the
+        # phantom-citation gate on the rewrite — a rewrite that re-invents a
+        # ``[tool row N]`` tag must not pass either. Same ground-truth guard.
+        _rewrite_phantom = find_phantom_tool_citations(rewritten, _called) if _have_called_set else set()
+        if _rewrite_phantom:
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_phantom_citation_refused",
+                phantom_tools=sorted(_rewrite_phantom),
+            )
+            rag_grounding_validation_total.labels(result="failed_phantom_citation").inc()
+            return _PHANTOM_CITATION_REFUSAL, False
+        second_result = validator.validate(rewritten, tool_items, called_tool_names=_called)
         if second_result.passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
             return rewritten, True
+
+        # BP-670: degradation guard — keep the ORIGINAL when the rewrite is
+        # numerically WORSE. Live Apple-news run: the draft had ONE
+        # unsupported number (a "35%" quoted verbatim from an article
+        # title) but the rewrite regenerated the whole answer from
+        # parametric memory — a fabricated news table with many unsupported
+        # figures ("$28.5B", "52% share") — and the legacy "rewrite is
+        # usually strictly better" policy shipped it. More unsupported
+        # numbers than the original = the rewrite invented content; the
+        # original + banner is strictly safer. (Checked BEFORE the
+        # full-citation-coverage suppression below, which previously let a
+        # fully-cited fabrication through as "grounded".)
+        if len(second_result.unsupported) > len(first_result.unsupported):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_worse_than_original",
+                original_unsupported=len(first_result.unsupported),
+                rewrite_unsupported=len(second_result.unsupported),
+            )
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
         # Both passes failed — append the banner. We return the
         # REWRITE text (not the original) because the rewrite at least
@@ -2756,8 +4555,15 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         prior_tool_calls: list[Any] | None = None,
+        seed: int | None = None,
+        allow_rewrite: bool = True,
     ) -> tuple[str, bool]:
         """F-LIVE-NEW-002 — entity-name grounding pass.
+
+        BP-670: ``allow_rewrite=False`` makes the pass validate-only — on
+        failure it appends the banner WITHOUT spending a second sequential
+        LLM rewrite. The orchestrator sets this when the numeric pass
+        already rewrote the answer this turn (one repair rewrite per turn).
 
         Sibling of :meth:`_run_grounding_validation` but for *names* rather
         than *numbers*. Builds the grounded set from resolved entities +
@@ -2861,8 +4667,24 @@ class ChatOrchestratorUseCase:
                         if ident:
                             tool_refs.add(ident)
 
+        # BP-670: verbatim-text grounding. A name the LLM copied straight out
+        # of a retrieved article title/body ("Morgan Stanley says...", "Siri")
+        # IS grounded in retrieval — but the previous grounded set only
+        # carried structured refs (entity_name / item_id / UPPERCASE tokens),
+        # so every mixed-case proper noun from a tool TEXT was flagged as a
+        # hallucination. The live Apple-news turn flagged 19 such names and
+        # burned a 15s rewrite-timeout repairing a correctly-cited answer.
+        # We hand the validator the raw tool text so substring membership
+        # against the actual retrieval payload counts as grounding.
+        _tool_text_parts: list[str] = []
+        for item in tool_items:
+            _t = getattr(item, "text", None)
+            if isinstance(_t, str) and _t:
+                _tool_text_parts.append(_t[:4000])
+        tool_text_blob = "\n".join(_tool_text_parts)
+
         validator = EntityNameGroundingValidator()
-        first_result = validator.validate(response, grounded_names, tool_refs)
+        first_result = validator.validate(response, grounded_names, tool_refs, tool_text=tool_text_blob)
         if first_result.passed:
             return response, True
 
@@ -2875,6 +4697,21 @@ class ChatOrchestratorUseCase:
             grounded_count=len(grounded_names),
             tool_ref_count=len(tool_refs),
         )
+
+        # BP-670: one repair rewrite per turn — when the numeric-grounding
+        # pass already replaced the answer, do NOT spend a second sequential
+        # LLM call (the live failure stacked 16.5s numeric rewrite + 15s
+        # entity rewrite timeout). Banner the validate-only failure instead.
+        if not allow_rewrite:
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_skipped_budget",
+                reason="numeric_rewrite_already_used",
+                unsupported_count=len(first_result.unsupported),
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
 
         # PLAN-0104 W47: rewrite prompt now uses a STRUCTURED JSON array of
         # candidate names instead of a free-text bulleted list. Round 7 v2
@@ -2894,27 +4731,44 @@ class ChatOrchestratorUseCase:
             [{"token": u.name, "kind": u.kind.value} for u in first_result.unsupported],
             ensure_ascii=False,
         )
+
+        # PLAN-0107 follow-up Bug 1 — same prose-assistant filter as the
+        # numeric-grounding rewrite path above. Without this the LLM
+        # acknowledges its prior draft ("You're right — I should have used
+        # the resolved entity set...") and the apology leaks into the
+        # streamed answer. Stripping ONLY prose assistant turns (keeping
+        # tool_calls intact) preserves the tool-call/result pairing
+        # while denying the LLM a "prior draft" to apologise for.
+        def _is_prose_assistant_entity(m: dict[str, Any]) -> bool:
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history_entity = [m for m in messages if not _is_prose_assistant_entity(m)]
         rewrite_messages = [
-            *messages,
-            {"role": "assistant", "content": response},
+            *filtered_history_entity,
             {
                 "role": "user",
                 "content": (
                     "INTERNAL_VALIDATION (do not surface verbatim to the user): the "
                     "post-response grounding validator extracted the following candidate "
-                    "names from your previous answer that did NOT match the resolved "
+                    "names from a prior synthesis attempt that did NOT match the resolved "
                     "entity set or any tool result citation. The list MAY contain false "
                     "positives such as sentence fragments, possessives, or common prose "
                     "tokens — ignore those; only act on genuine entity references.\n\n"
                     f"unsupported_candidates_json = {candidate_list}\n\n"
-                    "Rewrite your response so every COMPANY or TICKER reference appears "
+                    "Provide a fresh response where every COMPANY or TICKER reference appears "
                     "in either the resolved-entity map or a tool result above. If a "
                     "genuinely unsupported entity remains, either remove it or annotate "
                     "it inline as [unverified]. Do NOT enumerate the JSON list back to "
                     "the user. Do NOT introduce a refusal preamble when the underlying "
-                    "tool results DO contain the metric the user asked for — preserve "
-                    "the substantive content of your previous answer and only adjust the "
-                    "entity references."
+                    "tool results DO contain the metric the user asked for. Do NOT "
+                    "acknowledge a prior draft or begin with phrases such as \"You're "
+                    'right", "Let me re-examine", "I need to correct", or any apology '
+                    "— answer the question directly."
                 ),
             },
         ]
@@ -2941,6 +4795,12 @@ class ChatOrchestratorUseCase:
                 rewrite_messages,
                 max_tokens=budget.max_tokens_final,
                 temperature=0.0,
+                # PLAN-0107 follow-up: forbid function calling on this rewrite turn
+                # so the model can't emit `<tool_call>` XML when it sees prior tool
+                # turns in the history (same root cause as the synthesis-turn fix).
+                tools=[],
+                # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
+                seed=seed,
             ):
                 buf += chunk
             return buf
@@ -2965,8 +4825,53 @@ class ChatOrchestratorUseCase:
                 False,
             )
 
+        # BP-670 / BP-674: rewrite sanity guard — a repair rewrite that is a
+        # tool-call / planning stub (the model trying to re-fetch data instead
+        # of writing prose; observed live as both
+        # ``<function_calls><invoke name="get_entity_news">`` XML AND
+        # ``**Tool calls:**\n- get_fundamentals_history_batch(…)`` markdown,
+        # each shipped VERBATIM as the final answer over a grounded streamed
+        # table) or that collapses to a fraction of the original length is not a
+        # repair. ``_is_tool_call_stub`` covers the XML form, the
+        # ``**Tool calls:**`` markdown form AND the "I will fetch…" narration
+        # lead (BP-674 widened the BP-670 XML-only check, which missed the
+        # markdown form). Keep the original + banner.
+        _is_stub = _is_tool_call_stub(rewritten)
+        if _is_stub or len(rewritten) < max(80, int(0.3 * len(response))):
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_rejected_malformed",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+                tool_call_stub=_is_stub,
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
+
+        # BP-670: anti-fabrication guard. The entity rewrite regenerates the
+        # WHOLE answer from history; live evidence (2026-06-11 Apple-news
+        # turn) shows it can invent new "facts" with fresh numbers ("52%
+        # smartwatch share", "iPhone Pro supply chain ramp") that the tool
+        # corpus never produced. The numeric-grounding pass ran BEFORE this
+        # method and accepted ``response`` — so if the rewrite now FAILS
+        # numeric grounding, the rewrite fabricated numbers the original
+        # never had. Keep the original (numeric-clean) text + banner.
+        from rag_chat.application.services.numeric_grounding import NumericGroundingValidator
+
+        if not NumericGroundingValidator().validate(rewritten, tool_items).passed:
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_rejected_fabricated_numbers",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
+
         # Re-validate the rewrite.
-        second_result = validator.validate(rewritten, grounded_names, tool_refs)
+        second_result = validator.validate(rewritten, grounded_names, tool_refs, tool_text=tool_text_blob)
         if second_result.passed:
             return rewritten, True
 
@@ -3015,7 +4920,10 @@ class ChatOrchestratorUseCase:
         recovered: list[RetrievedItem] = []
 
         for tc, item in zip(tool_calls, tool_items, strict=False):
-            _count = len(item) if isinstance(item, list) else (1 if item is not None else 0)
+            # Chat-eval #1 round-2: a TransportErrorMarker (KG 504) is a FAILURE,
+            # so its count is 0 and the fallback fires — previously the marker
+            # counted as 1 "successful" item and the fallback was skipped.
+            _count = _successful_item_count(item)
             if _count > 0:
                 continue  # primary tool succeeded — no fallback needed
 
@@ -3050,16 +4958,46 @@ class ChatOrchestratorUseCase:
                 )
 
                 _alt_block = ToolUseBlock(name=alt_name, input=projected, tool_use_id=f"fallback_{alt_name}")
+                _alt_t0 = time.monotonic()
                 _alt_result = await tool_executor.execute(_alt_block)
-                _alt_count = (
-                    len(_alt_result) if isinstance(_alt_result, list) else (1 if _alt_result is not None else 0)
-                )
-                _alt_status = "ok" if _alt_count > 0 else ("empty" if _alt_result is not None else "error")
+                _alt_duration_ms = int((time.monotonic() - _alt_t0) * 1000)
+                # Chat-eval #1 round-2: treat an alt-tool TransportErrorMarker as a
+                # failure too — never count the sentinel as a recovered item (that
+                # would crash the downstream ``item_type`` accessor) and surface a
+                # ``transport_error`` status so the operator sees the alt outage.
+                _alt_is_transport_error = isinstance(_alt_result, TransportErrorMarker)
+                _alt_count = _successful_item_count(_alt_result)
+                if _alt_is_transport_error:
+                    _alt_status = "transport_error"
+                elif _alt_count > 0:
+                    _alt_status = "ok"
+                elif _alt_result is not None:
+                    _alt_status = "empty"
+                else:
+                    _alt_status = "error"
 
-                sse_events_out.append(emitter.emit_tool_result(alt_name, status=_alt_status, item_count=_alt_count))
+                # Only real RetrievedItems flow downstream — exclude the marker.
+                _alt_items = (
+                    _alt_result
+                    if isinstance(_alt_result, list)
+                    else ([_alt_result] if (_alt_result and not _alt_is_transport_error) else [])
+                )
+                sse_events_out.append(
+                    emitter.emit_tool_result(
+                        alt_name,
+                        status=_alt_status,
+                        item_count=_alt_count,
+                        duration_ms=_alt_duration_ms,
+                        result_preview=emitter.build_result_preview(_alt_items),
+                        # PLAN-0110 W2 (PRD-0091 FR-5): same grounding sample on
+                        # the fallback path so an alt-tool's verified values reach
+                        # the judge too. No-op when the flag is off.
+                        grounding_sample=emitter.build_grounding_sample(alt_name, _alt_items),
+                    )
+                )
 
                 # Record on audit log so /chat_audit_log captures the retry.
-                audit.record_tool_call(alt_name, success=_alt_count > 0, latency_ms=0)
+                audit.record_tool_call(alt_name, success=_alt_count > 0, latency_ms=_alt_duration_ms)
 
                 if _alt_count > 0:
                     log.info(  # type: ignore[no-any-return]

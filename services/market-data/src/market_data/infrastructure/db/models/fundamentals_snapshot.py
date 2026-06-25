@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Numeric, String, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -146,6 +146,32 @@ class InstrumentFundamentalsSnapshotModel(Base):
     # "earnings within N days" range queries cheap.
     next_earnings_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     next_dividend_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # ── Wave L-5b: intelligence rollup columns (PLAN-0089, migration 035) ─────
+    #
+    # 6 intelligence fields materialized nightly (04:00 UTC) from 4 upstream
+    # services (S6/S7/S10/S8) by ``SyncIntelligenceRollupUseCase``.  All are
+    # nullable so existing rows survive the migration unchanged (R11 forward-compat).
+    #
+    #   * ``news_count_7d``                 ← S6 news-rollup-7d endpoint
+    #   * ``llm_relevance_7d_max``          ← S6 news-rollup-7d endpoint
+    #   * ``display_relevance_7d_weighted`` ← S6 news-rollup-7d endpoint
+    #   * ``recent_contradiction_count``    ← S7 intelligence-rollup-7d endpoint
+    #   * ``has_active_alert``              ← S10 active-alert-flag endpoint
+    #   * ``has_ai_brief``                  ← S8 ai-brief-flag endpoint
+    #
+    # ``intelligence_rollup_synced_at`` records the last successful sync
+    # timestamp for skip-guard purposes (skip if < 18 hours ago).
+    news_count_7d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_relevance_7d_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    display_relevance_7d_weighted: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recent_contradiction_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    has_active_alert: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_ai_brief: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    intelligence_rollup_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # ── Metadata ──────────────────────────────────────────────────────────────
 

@@ -116,15 +116,33 @@ const nextConfig: NextConfig = {
   // This means components call `/api/v1/portfolios` and Next.js
   // transparently forwards to `http://localhost:8000/v1/portfolios`.
   // In production, API_GATEWAY_URL points to the Hetzner k3s S9 service.
+  //
+  // WAVE 3 (frontend-rework — streaming-paint fix): the rewrite moved from
+  // the default `afterFiles` phase to `fallback`.
+  //
+  // WHY: Next's routing order is
+  //   beforeFiles rewrites → filesystem/static routes → afterFiles rewrites
+  //   → DYNAMIC routes → fallback rewrites
+  // The chat SSE endpoints are now served by a DYNAMIC route handler
+  // (app/api/v1/chat/[...path]/route.ts) that streams the gateway response
+  // without gzip-buffering it (the rewrite proxy compressed text/event-stream
+  // for browser requests, which buffered entire streams until completion —
+  // the "streaming is not working" bug, measured live 2026-06-11). An
+  // afterFiles rewrite SHADOWS dynamic route handlers, so the proxy rewrite
+  // must run in the `fallback` phase: every /api/* path withOUT a dedicated
+  // route handler still proxies to S9 exactly as before, while the chat
+  // catch-all takes precedence.
   async rewrites() {
     const apiGatewayUrl =
       process.env.API_GATEWAY_URL ?? "http://localhost:8000";
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiGatewayUrl}/:path*`,
-      },
-    ];
+    return {
+      fallback: [
+        {
+          source: "/api/:path*",
+          destination: `${apiGatewayUrl}/:path*`,
+        },
+      ],
+    };
   },
 
   // Security headers applied to every response.

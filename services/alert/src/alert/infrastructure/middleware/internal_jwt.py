@@ -275,10 +275,15 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 request.state.tenant_id = payload.get("tenant_id", "")
                 request.state.user_id = payload.get("sub", "")
                 request.state.role = payload.get("role", "")
+                # PLAN-0094 follow-up: expose ``service_name`` so service-caller
+                # routes (e.g. /internal/v1/users/{id}/alerts/pending) can
+                # authorise the brief-scheduler identity. Parity with portfolio.
+                request.state.service_name = payload.get("service_name", "")
             except jwt.DecodeError:
                 request.state.tenant_id = ""
                 request.state.user_id = ""
                 request.state.role = ""
+                request.state.service_name = ""
             return cast("Response", await call_next(request))
 
         # W1-05 (BUG-005): resolve the public key by ``kid`` from the JWT
@@ -359,6 +364,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
+            # PLAN-0094 follow-up: expose ``service_name`` so service-caller
+            # routes can authorise the brief-scheduler identity (parity with
+            # portfolio's middleware). User tokens carry no such claim → "".
+            request.state.service_name = payload.get("service_name", "")
         except jwt.ExpiredSignatureError:
             return Response(
                 content='{"detail":"Internal JWT expired"}',

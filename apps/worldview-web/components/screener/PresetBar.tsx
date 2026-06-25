@@ -84,7 +84,9 @@ export function PresetBar({ presets, activeId, onApply, onSavePreset }: PresetBa
               // architecture test forbids `text-(sm|base|lg|xl)` inside
               // `components/screener/` so every font-size lives in a pixel-
               // exact bracketed value the design system controls.
-              "h-[22px] px-2 text-[10px] font-mono uppercase tracking-[0.06em] rounded-[2px] border transition-colors shrink-0",
+              // ROUND-3 item 6: chips get the shared focus-visible ring so
+              // Tab-navigating the preset strip is visibly tracked.
+              "h-[22px] px-2 text-[10px] font-mono uppercase tracking-[0.06em] rounded-[2px] border transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
               isActive
                 ? "bg-primary/10 border-primary text-primary"
                 : "bg-card border-border text-muted-foreground hover:text-foreground hover:border-border/80",
@@ -105,7 +107,7 @@ export function PresetBar({ presets, activeId, onApply, onSavePreset }: PresetBa
           type="button"
           onClick={onSavePreset}
           aria-label="Save current filters as a new preset"
-          className="h-[22px] px-2 text-[10px] font-mono uppercase tracking-[0.06em] rounded-[2px] border border-dashed border-border/60 text-muted-foreground hover:text-foreground hover:border-border transition-colors shrink-0"
+          className="h-[22px] px-2 text-[10px] font-mono uppercase tracking-[0.06em] rounded-[2px] border border-dashed border-border/60 text-muted-foreground hover:text-foreground hover:border-border transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           + New preset
         </button>

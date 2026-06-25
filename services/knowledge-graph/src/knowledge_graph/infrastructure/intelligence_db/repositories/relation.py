@@ -38,6 +38,7 @@ class RelationRepository(RelationRepositoryPort):
         decay_class: str,
         decay_alpha: float,
         base_confidence: float,
+        valid_to: datetime | None = None,
     ) -> UUID:
         """Upsert a relation, returning the relation_id.
 
@@ -65,12 +66,12 @@ INSERT INTO relations (
     subject_entity_id, canonical_type, object_entity_id,
     semantic_mode, decay_class, decay_alpha, base_confidence,
     confidence, confidence_stale, summary_stale,
-    first_evidence_at, latest_evidence_at, evidence_count
+    first_evidence_at, latest_evidence_at, evidence_count, valid_to
 ) VALUES (
     :subject_entity_id, :canonical_type, :object_entity_id,
     :semantic_mode, :decay_class, :decay_alpha, :base_confidence,
     :base_confidence, true, true,
-    now(), now(), 1
+    now(), now(), 1, :valid_to
 )
 ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET
     semantic_mode     = EXCLUDED.semantic_mode,
@@ -80,7 +81,10 @@ ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET
     latest_evidence_at = now(),
     evidence_count     = relations.evidence_count + 1,
     confidence_stale   = true,
-    summary_stale      = true
+    summary_stale      = true,
+    -- PLAN-0109 W5: a newly-extracted end date sets valid_to; a NULL (no end
+    -- stated this time) must never wipe a previously-recorded valid_to.
+    valid_to           = COALESCE(EXCLUDED.valid_to, relations.valid_to)
 RETURNING relation_id
 """),
             {
@@ -91,6 +95,7 @@ RETURNING relation_id
                 "decay_class": decay_class,
                 "decay_alpha": decay_alpha,
                 "base_confidence": base_confidence,
+                "valid_to": valid_to,
             },
         )
         row = result.fetchone()
@@ -221,6 +226,57 @@ FOR UPDATE SKIP LOCKED
             for r in rows
         ]
 
+    async def fetch_due_for_recompute(
+        self,
+        partition_key: int,
+        limit: int = 500,
+    ) -> list[dict[str, object]]:
+        """Fetch relations DUE for a time-driven confidence recompute (PLAN-0109 W2).
+
+        A relation is due when ``confidence_last_computed_at`` is older than its
+        decay-class cadence (``decay_class_config.recompute_interval_minutes``), or
+        was never computed. This drives the per-class *staleness sweep*: a
+        fast-decaying signal is refreshed hourly while a durable fact is refreshed
+        weekly, independent of new evidence arriving — so confidence actually
+        decays over wall-clock time rather than only on evidence updates. Same
+        logical hash partition as ``fetch_stale_confidence``; FOR UPDATE SKIP LOCKED.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id, r.canonical_type,
+       r.semantic_mode, r.decay_alpha, r.base_confidence
+FROM relations r
+JOIN decay_class_config dcc ON dcc.decay_class = r.decay_class
+WHERE (r.confidence_last_computed_at IS NULL
+       OR r.confidence_last_computed_at + (dcc.recompute_interval_minutes * interval '1 minute') < now())
+  AND abs(hashtext(r.subject_entity_id::text || r.canonical_type || r.object_entity_id::text)) % 8 = :partition_key
+  AND EXISTS (
+        SELECT 1 FROM relation_evidence_raw rer
+        WHERE rer.subject_entity_id = r.subject_entity_id
+          AND rer.object_entity_id  = r.object_entity_id
+          AND rer.canonical_type    = r.canonical_type
+          AND rer.entity_provisional = false
+      )
+ORDER BY r.confidence_last_computed_at ASC NULLS FIRST
+LIMIT :limit
+FOR UPDATE OF r SKIP LOCKED
+"""),
+            {"partition_key": partition_key, "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "subject_entity_id": UUID(str(r[1])),
+                "object_entity_id": UUID(str(r[2])),
+                "canonical_type": r[3],
+                "semantic_mode": r[4],
+                "decay_alpha": float(r[5]),
+                "base_confidence": float(r[6]),
+            }
+            for r in rows
+        ]
+
     async def fetch_stale_summary(self, limit: int = 50) -> list[dict[str, object]]:
         """Fetch relations needing a fresh LLM summary (Worker 13C).
 
@@ -335,7 +391,7 @@ LIMIT :limit
             for r in rows
         ]
 
-    async def get_valid_to(self, relation_id: UUID) -> object | None:
+    async def get_valid_to(self, relation_id: UUID) -> datetime | None:
         """Fetch the ``valid_to`` column for a relation (T-B-01 period-type derivation)."""
         result = await self._session.execute(
             text("SELECT valid_to FROM relations WHERE relation_id = :relation_id"),
@@ -390,6 +446,67 @@ WHERE relation_id = :relation_id
             },
         )
 
+    # ── Bitemporal history (PLAN-0109 W3) ─────────────────────────────────────
+
+    async def append_relation_history(
+        self,
+        *,
+        relation_id: UUID,
+        subject_entity_id: UUID,
+        object_entity_id: UUID,
+        canonical_type: str,
+        confidence: float,
+        valid_from: datetime | None,
+        valid_to: datetime | None,
+        decay_class: str | None,
+        recorded_at: datetime,
+    ) -> None:
+        """Append one bitemporal version row to ``relations_history``.
+
+        Records (valid_from, valid_to) = valid time and ``recorded_at`` =
+        transaction time, so "what did we believe on date X" is reconstructable
+        via :meth:`get_confidence_as_of`. Append-only; never updated.
+        """
+        await self._session.execute(
+            text("""
+INSERT INTO relations_history
+    (relation_id, subject_entity_id, object_entity_id, canonical_type,
+     confidence, valid_from, valid_to, decay_class, recorded_at)
+VALUES
+    (:relation_id, :subject_entity_id, :object_entity_id, :canonical_type,
+     :confidence, :valid_from, :valid_to, :decay_class, :recorded_at)
+"""),
+            {
+                "relation_id": str(relation_id),
+                "subject_entity_id": str(subject_entity_id),
+                "object_entity_id": str(object_entity_id),
+                "canonical_type": canonical_type,
+                "confidence": confidence,
+                "valid_from": valid_from,
+                "valid_to": valid_to,
+                "decay_class": decay_class,
+                "recorded_at": recorded_at,
+            },
+        )
+
+    async def get_confidence_as_of(self, relation_id: UUID, as_of: datetime) -> float | None:
+        """Reconstruct a relation's confidence AS OF a transaction time (bitemporal).
+
+        Returns the confidence we believed at ``as_of`` — the latest history row
+        with ``recorded_at <= as_of`` — or ``None`` if nothing was recorded by then.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT confidence FROM relations_history
+WHERE relation_id = :relation_id AND recorded_at <= :as_of
+ORDER BY recorded_at DESC
+LIMIT 1
+"""),
+            {"relation_id": str(relation_id), "as_of": as_of},
+        )
+        row = result.fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
     # ── API query methods ─────────────────────────────────────────────────────
 
     async def list_for_entity(
@@ -407,12 +524,20 @@ WHERE relation_id = :relation_id
         # Use CAST(:semantic_mode AS TEXT) to avoid asyncpg AmbiguousParameterError
         # when semantic_mode=None — asyncpg cannot infer the type of $N from
         # "$N IS NULL" alone; explicit CAST provides the type hint (BP-069).
+        #
+        # PLAN-0099 (edge-fields fix): valid_from / valid_to / relation_period_type /
+        # strongest_contra_score / latest_contra_at were NOT selected before, so
+        # _relation_response(confidence_breakdown=True) emitted null for all of
+        # them even though every row in `relations` has them populated — a silent
+        # drop at the repo layer (the T-A-1-02 temporal edge fields never worked).
         result = await self._session.execute(
             text("""
 SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
        r.canonical_type, r.semantic_mode, r.decay_class,
        r.confidence, r.confidence_stale,
-       r.evidence_count, r.first_evidence_at, r.latest_evidence_at
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at
 FROM relations r
 WHERE (r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id)
   AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
@@ -441,9 +566,142 @@ LIMIT :limit
                 "evidence_count": int(r[8]),
                 "first_evidence_at": r[9],
                 "latest_evidence_at": r[10],
+                "valid_from": r[11],
+                "valid_to": r[12],
+                "relation_period_type": r[13],
+                "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+                "latest_contra_at": r[15],
             }
             for r in rows
         ]
+
+    async def list_among_entities(
+        self,
+        entity_ids: list[UUID],
+        *,
+        min_confidence: float = 0.0,
+        semantic_mode: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        """Fetch relations whose BOTH endpoints are within *entity_ids*.
+
+        PLAN-0099 W3 (graph depth fix): CypherNeighborhoodUseCase discovers
+        depth-2/3 neighbor NODES via AGE but previously only returned the
+        center's direct relations (``list_for_entity``) — every multi-hop
+        node arrived edge-less and the S9 orphan filter deleted it, making
+        depth=2 indistinguishable from depth=1. This method supplies the
+        missing lateral/second-hop EDGES among the discovered node set.
+
+        Fully parameterised: ids bind as a single UUID[] array (same
+        ``ANY(CAST(:ids AS uuid[]))`` pattern as claim_repository /
+        relation_summary — no N-parameter expansion, no dynamic SQL).
+        """
+        if not entity_ids:
+            # ANY(ARRAY[]) always evaluates FALSE — short-circuit the no-op.
+            return []
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at
+FROM relations r
+WHERE r.subject_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+  AND r.object_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+  AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
+  AND (CAST(:semantic_mode AS TEXT) IS NULL OR r.semantic_mode = CAST(:semantic_mode AS TEXT))
+ORDER BY r.latest_evidence_at DESC
+LIMIT :limit
+"""),
+            {
+                "entity_ids": [str(eid) for eid in entity_ids],
+                "min_confidence": min_confidence,
+                "semantic_mode": semantic_mode,
+                "limit": limit,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "subject_entity_id": UUID(str(r[1])),
+                "object_entity_id": UUID(str(r[2])),
+                "canonical_type": r[3],
+                "semantic_mode": r[4],
+                "decay_class": r[5],
+                "confidence": float(r[6]) if r[6] is not None else None,
+                "confidence_stale": bool(r[7]),
+                "evidence_count": int(r[8]),
+                "first_evidence_at": r[9],
+                "latest_evidence_at": r[10],
+                "valid_from": r[11],
+                "valid_to": r[12],
+                "relation_period_type": r[13],
+                "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+                "latest_contra_at": r[15],
+            }
+            for r in rows
+        ]
+
+    async def count_for_entity(self, entity_id: UUID) -> int:
+        """Count relations where the entity is subject or object (PLAN-0099 detail)."""
+        result = await self._session.execute(
+            text("""
+SELECT COUNT(*)
+FROM relations r
+WHERE r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id)},
+        )
+        return int(result.scalar() or 0)
+
+    async def get_by_id(self, relation_id: UUID) -> dict[str, object] | None:
+        """Fetch the full relation row by its UUID (PLAN-0099 relation detail).
+
+        Returns all presentation-relevant columns including the temporal
+        validity window, contradiction stats and audit timestamps.
+        Returns None when the relation does not exist.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at,
+       r.valid_from, r.valid_to, r.relation_period_type,
+       r.strongest_contra_score, r.latest_contra_at,
+       r.relation_source, r.created_at, r.updated_at
+FROM relations r
+WHERE r.relation_id = :relation_id
+"""),
+            {"relation_id": str(relation_id)},
+        )
+        r = result.fetchone()
+        if r is None:
+            return None
+        return {
+            "relation_id": UUID(str(r[0])),
+            "subject_entity_id": UUID(str(r[1])),
+            "object_entity_id": UUID(str(r[2])),
+            "canonical_type": r[3],
+            "semantic_mode": r[4],
+            "decay_class": r[5],
+            "confidence": float(r[6]) if r[6] is not None else None,
+            "confidence_stale": bool(r[7]),
+            "evidence_count": int(r[8]),
+            "first_evidence_at": r[9],
+            "latest_evidence_at": r[10],
+            "valid_from": r[11],
+            "valid_to": r[12],
+            "relation_period_type": r[13],
+            "strongest_contra_score": float(r[14]) if r[14] is not None else None,
+            "latest_contra_at": r[15],
+            "relation_source": r[16],
+            "created_at": r[17],
+            "updated_at": r[18],
+        }
 
     async def list_filtered(
         self,

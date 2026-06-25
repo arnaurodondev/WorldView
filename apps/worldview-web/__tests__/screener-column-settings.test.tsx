@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
 import {
   DEFAULT_COLUMNS,
+  ESSENTIAL_COLUMN_KEYS,
   loadColumnPrefs,
   saveColumnPrefs,
   resetColumnPrefs,
@@ -36,27 +37,55 @@ describe("screener-columns lib — load / save / reset", () => {
   it("loadColumnPrefs returns defaults when localStorage is empty", () => {
     const cols = loadColumnPrefs();
     expect(cols.length).toBe(DEFAULT_COLUMNS.length);
-    // WHY not every(visible): PLAN-0092 Wave C added 3 opt-in columns
-    // (opMargin, evEbitda, avgVol); PRD-0089 fh-column-count-cap demoted
-    // forwardPe to opt-in to satisfy the §6.3 14-column cap. The 14
-    // default-visible columns below are the canonical set.
+    // WHY not every(visible): several columns are opt-in. PRD-0089
+    // fh-column-count-cap demoted forwardPe to satisfy the §6.3 14-column cap;
+    // Wave-2 (2026-06-10) demoted score (market_impact_score has no backend
+    // data source — permanently "—").
+    //
+    // DESIGN-QA S-1/S-2 (2026-06-18): `sparkline` (TREND 30d) was demoted to
+    // opt-in — it rendered EMPTY on every row by default ("looks broken"). Its
+    // freed default-visible slot went to `briefScore` (a real IB-L5 data
+    // column) which fills the right-side whitespace with information instead of
+    // a dead placeholder. The 14 default-visible columns below are the
+    // canonical set (matches the §6.3 cap pinned in
+    // lib/__tests__/screener-columns.test.ts).
     const defaultVisibleKeys = ["ticker", "name", "sector", "price", "change",
       "marketCap", "pe", "revenueGrowth", "divYield", "roe",
-      "beta", "score", "range52w", "sparkline"];
+      "beta", "range52w", "news7d", "briefScore"];
     const defaultVisible = cols.filter((c) => defaultVisibleKeys.includes(c.key));
     expect(defaultVisible.every((c) => c.visible)).toBe(true);
-    // Opt-in columns should be hidden by default (forwardPe demoted per §6.3 cap)
-    const optInKeys = ["opMargin", "evEbitda", "avgVol", "forwardPe"];
+    // Opt-in columns should be hidden by default (forwardPe demoted per §6.3
+    // cap; score demoted in Wave-2 — no data source; sparkline demoted per
+    // DESIGN-QA S-1 — empty on every row by default).
+    const optInKeys = ["opMargin", "forwardPe", "score", "sparkline"];
     const optIn = cols.filter((c) => optInKeys.includes(c.key));
     expect(optIn.every((c) => !c.visible)).toBe(true);
   });
 
   it("saveColumnPrefs + loadColumnPrefs round-trips visibility", () => {
+    // Round 2: ticker (index 0) became non-hideable, so the round-trip is
+    // asserted on a hideable column (sector) — same assertion strength,
+    // different subject. Pinned-column coercion has its own test below.
     const cols = makeCols();
-    cols[0].visible = false;
+    const sectorIdx = cols.findIndex((c) => c.key === "sector");
+    cols[sectorIdx].visible = false;
     saveColumnPrefs(cols);
     const loaded = loadColumnPrefs();
-    expect(loaded[0].visible).toBe(false);
+    expect(loaded.find((c) => c.key === "sector")?.visible).toBe(false);
+  });
+
+  it("loadColumnPrefs coerces essential columns (ticker, name) visible even when stored hidden", () => {
+    // Round 2 regression guard: prefs persisted BEFORE the pinned-column rule
+    // existed may carry visible:false for ticker/name. The read path must
+    // heal them — a screener without its identity columns is unusable.
+    const cols = makeCols();
+    for (const c of cols) {
+      if (ESSENTIAL_COLUMN_KEYS.includes(c.key)) c.visible = false;
+    }
+    saveColumnPrefs(cols);
+    const loaded = loadColumnPrefs();
+    expect(loaded.find((c) => c.key === "ticker")?.visible).toBe(true);
+    expect(loaded.find((c) => c.key === "name")?.visible).toBe(true);
   });
 
   it("loadColumnPrefs preserves user-saved order", () => {
@@ -121,12 +150,33 @@ describe("ColumnSettingsPopover — UI", () => {
     const onChange = vi.fn();
     render(<ColumnSettingsPopover columns={makeCols()} onChange={onChange} />);
     await user.click(screen.getByRole("button", { name: /configure columns/i }));
-    // Toggle the first column (Ticker).
-    const tickerToggle = await screen.findByLabelText(/toggle ticker column visibility/i);
-    await user.click(tickerToggle);
+    // Round 2: Ticker is now PINNED (non-hideable), so the toggle behaviour
+    // is asserted on Sector — the first hideable column. Same assertion
+    // strength (onChange fired with flipped visibility), different subject.
+    const sectorToggle = await screen.findByLabelText(/toggle sector column visibility/i);
+    await user.click(sectorToggle);
     expect(onChange).toHaveBeenCalled();
     const next = onChange.mock.calls[0][0] as ScreenerColumn[];
-    expect(next.find((c) => c.key === "ticker")?.visible).toBe(false);
+    expect(next.find((c) => c.key === "sector")?.visible).toBe(false);
+  });
+
+  it("essential columns (ticker, name) render disabled checkboxes that cannot toggle", async () => {
+    // Round 2: ticker/name are the row identity — hiding them makes every
+    // other cell context-free numbers, so the popover pins them on.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ColumnSettingsPopover columns={makeCols()} onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: /configure columns/i }));
+
+    const tickerToggle = await screen.findByLabelText(/toggle ticker column visibility/i);
+    const nameToggle = await screen.findByLabelText(/toggle name column visibility/i);
+    expect(tickerToggle).toBeDisabled();
+    expect(nameToggle).toBeDisabled();
+
+    // Clicking a disabled checkbox must be a no-op — no onChange, no persist.
+    await user.click(tickerToggle);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(SCREENER_COLUMNS_KEY)).toBeNull();
   });
 
   it("Reset button restores defaults and clears localStorage", async () => {

@@ -20,28 +20,7 @@
 
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-
-/**
- * TERMINAL_LINES — ASCII workspace mock displayed in the hero card.
- *
- * WHY ASCII over screenshot: ships zero bytes, never goes stale, renders
- * identically on every OS (box-drawing chars are universal in system fonts).
- * Communicates "keyboard-first terminal" to the target audience (PMs/quants
- * who use Bloomberg daily) before they even click.
- *
- * The 11px monospace + 1.6 line-height makes box-drawing characters visually
- * connect cleanly without gaps between rows.
- */
-const TERMINAL_LINES = [
-  "┌─ WATCHLIST ─────┬─ AAPL · 189.25 ──────────┐",
-  "│ AAPL    +1.24% │ Mkt Cap     2.94T        │",
-  "│ MSFT    -0.51% │ P/E         28.4x        │",
-  "│ NVDA    +3.42% │ EPS         6.42         │",
-  "│ TSLA    -2.13% │ ─────────────────────────│",
-  "│ AMZN    +0.81% │ News    Earnings beat …  │",
-  "│ META    +1.07% │ Impact  +0.62 (HIGH)     │",
-  "└─────────────────┴──────────────────────────┘",
-] as const;
+import { ProductShot } from "./ProductShot";
 
 export function HeroSection() {
   return (
@@ -85,9 +64,10 @@ export function HeroSection() {
           </h1>
 
           <p className="mb-8 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-            Real-time market signals, AI-powered news intelligence, and an
-            entity knowledge graph — built on EODHD data and externalized LLMs
-            for full data sovereignty.
+            A finance terminal that fuses market data, impact-scored news, and
+            an entity knowledge graph — with a grounded AI assistant that cites
+            every claim and a graph that surfaces the connections you&apos;d
+            never think to search for.
           </p>
 
           {/* ── CTA pair ───────────────────────────────────────────────── */}
@@ -119,11 +99,13 @@ export function HeroSection() {
           </p>
         </div>
 
-        {/* ── Right column: terminal mock card ──────────────────────────── */}
-        {/* WHY a card not a screenshot: ASCII art renders crisp on all DPRs
-            and never needs a CDN. The card chrome (window dots + tab strip)
-            communicates "this is a terminal", and the live-pulse confirms
-            the product is alive. */}
+        {/* ── Right column: real product screenshot ─────────────────────── */}
+        {/* WHY a screenshot (not the old ASCII mock): the redesign (§2) shows
+            rather than tells — a real crop of the instrument Intelligence tab
+            (entity graph + relations) proves the flagship capability above the
+            fold. The reusable ProductShot wraps it in window chrome + LIVE pill
+            so it still reads as a real terminal. Captured by
+            capture-landing-shots.mjs → public/landing/hero-intelligence.png. */}
         <div className="relative">
           {/* WHY -inset-2 + blur: subtle amber halo behind the card lifts it
               off the page without resorting to drop-shadow which often looks
@@ -133,97 +115,21 @@ export function HeroSection() {
             className="pointer-events-none absolute -inset-2 rounded-[2px] bg-primary/10 opacity-50 blur-2xl"
           />
 
-          <div className="relative overflow-hidden rounded-[2px] border border-border/60 bg-card shadow-2xl">
-            {/* macOS-style window chrome — tells the user "this is an app".
-                WHY semantic tokens (not raw HSL): PLAN-0059 token-compliance
-                policy forbids raw hex/HSL outside JSON-LD. The dots map to
-                destructive/primary/positive which all carry the right
-                semantic and visual weight for a window-chrome cue. Fixed in
-                PLAN-0052 Wave A QA iter-1 (design audit M1). */}
-            <div className="flex items-center gap-2 border-b border-border/50 bg-muted/30 px-3 py-2">
-              <div className="flex gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-destructive/70" />
-                <span className="h-2.5 w-2.5 rounded-full bg-primary/70" />
-                <span className="h-2.5 w-2.5 rounded-full bg-positive/70" />
-              </div>
-              <span className="ml-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">
-                worldview · workspace
-              </span>
-              <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[9px] text-muted-foreground/50">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-positive opacity-75" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-positive" />
-                </span>
-                LIVE
-              </span>
-            </div>
-
-            {/* ASCII workspace mock */}
-            <pre
-              aria-label="Worldview terminal workspace preview"
-              className="overflow-x-auto whitespace-pre p-4 font-mono text-[11px] leading-[1.6] text-muted-foreground"
-            >
-              {TERMINAL_LINES.map((line, i) => (
-                <span key={i} className="block">
-                  {highlight(line)}
-                </span>
-              ))}
-            </pre>
-
-            {/* Status row at the bottom of the terminal — mimics the StatusBar
-                in the real product. Ties the marketing visual to the actual UX. */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/50 bg-muted/20 px-3 py-2 font-mono text-[10px] text-muted-foreground/80">
-              <span>
-                <span className="text-positive">●</span> Markets open
-              </span>
-              <span className="text-border">·</span>
-              <span>S&amp;P 5,802.61 +0.34%</span>
-              <span className="text-border">·</span>
-              <span>VIX 14.82 -3.4%</span>
-              <span className="ml-auto">14:32 ET</span>
-            </div>
-          </div>
+          <ProductShot
+            src="/landing/hero-intelligence.png"
+            alt="Worldview instrument Intelligence tab: an entity knowledge graph with a node selected, alongside its top related entities and relationship types."
+            label="intelligence"
+            width={640}
+            height={440}
+            live
+            // Hero is above the fold — eager-load for LCP. (Placeholder on
+            // until capture-landing-shots.mjs writes the real PNG.)
+            priority
+            // TODO(landing-shots): set placeholder={false} after captures run.
+            placeholder
+          />
         </div>
       </div>
     </section>
   );
-}
-
-/**
- * highlight — split a terminal line into muted box-chars + bright data tokens.
- *
- * WHY THIS HELPER EXISTS: the <pre> uses a single `text-muted-foreground` color;
- * we want numeric data (prices, %, market caps) to render in foreground white
- * so it pops. We can't apply Tailwind classes to substrings inside a string,
- * so we split by regex and wrap matched tokens in a <span>.
- *
- * Patterns matched:
- *   - +1.24% / -0.51% — percent moves with sign
- *   - 189.25 / 28.4x / 6.42 — bare numbers and ratios
- *   - 2.94T — market cap with SI suffix
- *   - HIGH — uppercase severity tokens
- */
-function highlight(line: string): React.ReactNode {
-  const PATTERN = /([+-]?\d+\.\d+%|[\d,]+\.?\d*[TBM]?|HIGH|LOW|MED)/g;
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-
-  while ((m = PATTERN.exec(line)) !== null) {
-    if (m.index > last) parts.push(line.slice(last, m.index));
-    const token = m[0];
-    // Color positives green, negatives red, severity tags amber, rest white.
-    let color = "text-foreground";
-    if (token.startsWith("+")) color = "text-positive";
-    else if (token.startsWith("-")) color = "text-negative";
-    else if (token === "HIGH") color = "text-primary";
-    parts.push(
-      <span key={m.index} className={color}>
-        {token}
-      </span>,
-    );
-    last = m.index + token.length;
-  }
-  if (last < line.length) parts.push(line.slice(last));
-  return parts.length > 0 ? parts : line;
 }

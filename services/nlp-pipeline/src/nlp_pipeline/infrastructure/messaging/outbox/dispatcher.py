@@ -15,6 +15,9 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
+from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import (
+    MAX_DISPATCH_ATTEMPTS as _MAX_DISPATCH_ATTEMPTS,
+)
 from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -24,8 +27,6 @@ if TYPE_CHECKING:
     from nlp_pipeline.config import Settings
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
-_MAX_DISPATCH_ATTEMPTS = 5
 
 
 class NLPPipelineOutboxDispatcher:
@@ -60,6 +61,39 @@ class NLPPipelineOutboxDispatcher:
                 },
             )
         return self._producer
+
+    # ── Producer recovery (GAP-A / BP outbox-dispatcher-wedged-producer) ───────
+
+    @staticmethod
+    def _is_broken_producer_error(error: BaseException | None) -> bool:
+        """Return True when *error* signals the cached producer must be rebuilt.
+
+        Mirrors ``BaseOutboxDispatcher._is_broken_producer_error``: a produce/flush
+        ``TimeoutError`` (alias of ``asyncio.TimeoutError`` on 3.11+) is the
+        signature of a wedged producer that never completes.
+        """
+        return isinstance(error, TimeoutError)
+
+    def _reset_producer(self) -> None:
+        """Discard the cached producer so ``_get_producer`` rebuilds + reconnects.
+
+        This dispatcher does NOT extend ``BaseOutboxDispatcher`` (the NLP outbox
+        stores pre-serialized bytes), so the recovery helper is reimplemented
+        against this class's own ``self._producer`` attribute — which already has
+        a lazy rebuild path in ``_get_producer``.
+        """
+        producer = self._producer
+        if producer is None:
+            return
+        import contextlib
+
+        # Best-effort non-blocking drain; never let teardown block or raise.
+        with contextlib.suppress(Exception):
+            flush = getattr(producer, "flush", None)
+            if callable(flush):
+                flush(0)
+        self._producer = None
+        logger.warning("outbox_producer_reset", reason="delivery_failure")  # type: ignore[no-any-return]
 
     # ── Dispatch cycle ────────────────────────────────────────────────────────
 
@@ -113,9 +147,17 @@ class NLPPipelineOutboxDispatcher:
                     success = bool(delivered) and delivered[0]
                 except Exception as exc:
                     success = False
+                    # GAP-A: a produce/flush TimeoutError is the signature of a
+                    # wedged cached producer — discard it so the next dispatch
+                    # rebuilds + reconnects. Log type + repr because ``str`` is
+                    # EMPTY for TimeoutError (how this wedge stayed invisible).
+                    if self._is_broken_producer_error(exc):
+                        self._reset_producer()
                     logger.error(  # type: ignore[no-any-return]
                         "outbox_produce_exception",
                         event_id=str(record.event_id),
+                        error_type=type(exc).__name__,
+                        error_repr=repr(exc),
                         error=str(exc),
                     )
 
@@ -128,9 +170,15 @@ class NLPPipelineOutboxDispatcher:
                         topic=record.topic,
                     )
                 else:
-                    # Increment retry_count via mark_failed
-                    await outbox_repo.mark_failed(record.event_id)
-                    if record.retry_count + 1 >= _MAX_DISPATCH_ATTEMPTS:
+                    # BUG-3 fix: mark_failed now keeps the record ``pending``
+                    # (with a backoff anchor) while attempts remain, and only
+                    # flips it to the terminal ``failed`` status once the cap is
+                    # reached — so the retry loop below is actually reachable.
+                    # It returns the authoritative post-increment retry_count, so
+                    # the DLQ decision no longer relies on the (stale) value read
+                    # at claim time.
+                    new_retry_count = await outbox_repo.mark_failed(record.event_id)
+                    if new_retry_count >= _MAX_DISPATCH_ATTEMPTS:
                         await dlq_repo.move_to_dlq(
                             original_event_id=record.event_id,
                             topic=record.topic,
@@ -141,7 +189,7 @@ class NLPPipelineOutboxDispatcher:
                             "outbox_record_dead_lettered",
                             event_id=str(record.event_id),
                             topic=record.topic,
-                            attempts=record.retry_count + 1,
+                            attempts=new_retry_count,
                         )
 
             await session.commit()

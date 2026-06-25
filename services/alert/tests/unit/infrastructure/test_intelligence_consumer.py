@@ -341,6 +341,93 @@ class TestIntelligenceConsumerMarketImpactScore:
         assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
 
 
+# ── PLAN-0113 W3: KG_CONNECTION additive consumer branch ─────────────────────
+
+
+class TestIntelligenceConsumerKgBranch:
+    """The kg_handler branch is ADDITIVE: it runs only on graph events and must
+    never perturb the existing GRAPH_CHANGE fan-out (the spec's hard constraint).
+    """
+
+    @staticmethod
+    def _consumer_with_kg() -> tuple[IntelligenceConsumer, AsyncMock, AsyncMock]:
+        mock_fanout = AsyncMock()
+        mock_fanout.execute = AsyncMock(return_value=FanoutResult())
+        kg_handler = AsyncMock()
+        kg_handler.handle = AsyncMock(return_value=1)
+        config = ConsumerConfig(
+            group_id="alert-service-group",
+            topics=["nlp.signal.detected.v1", "graph.state.changed.v1", "intelligence.contradiction.v1"],
+        )
+        consumer = IntelligenceConsumer(config, fanout_use_case=mock_fanout, kg_handler=kg_handler)
+        return consumer, mock_fanout, kg_handler
+
+    @pytest.mark.unit
+    async def test_graph_event_invokes_kg_handler_after_fanout(self) -> None:
+        consumer, mock_fanout, kg_handler = self._consumer_with_kg()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "graph.state.changed",
+            "primary_entity_id": str(uuid4()),
+            "is_backfill": False,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        # Existing fan-out path is preserved AND the additive KG branch runs.
+        mock_fanout.execute.assert_awaited_once()
+        assert mock_fanout.execute.call_args.kwargs["topic"] == "graph.state.changed.v1"
+        kg_handler.handle.assert_awaited_once_with(value)
+
+    @pytest.mark.unit
+    async def test_non_graph_event_skips_kg_handler(self) -> None:
+        consumer, mock_fanout, kg_handler = self._consumer_with_kg()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        mock_fanout.execute.assert_awaited_once()
+        kg_handler.handle.assert_not_awaited()
+
+    @pytest.mark.unit
+    async def test_kg_handler_error_does_not_break_fanout(self) -> None:
+        """A KG-branch exception is swallowed; the fan-out result is unaffected."""
+        consumer, mock_fanout, kg_handler = self._consumer_with_kg()
+        kg_handler.handle = AsyncMock(side_effect=RuntimeError("kg branch boom"))
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "graph.state.changed",
+            "primary_entity_id": str(uuid4()),
+            "is_backfill": False,
+        }
+
+        with capture_logs() as cap:
+            await consumer.process_message(None, value, {})  # must not raise
+
+        mock_fanout.execute.assert_awaited_once()
+        assert any(e.get("event") == "intelligence_consumer.kg_branch_error" for e in cap)
+
+    @pytest.mark.unit
+    async def test_no_kg_handler_is_noop(self) -> None:
+        """Default consumer (no kg_handler) behaves exactly as before — fan-out only."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "graph.state.changed",
+            "primary_entity_id": str(uuid4()),
+            "is_backfill": False,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        mock_fanout.execute.assert_awaited_once()
+
+
 class TestAvroDeserialization:
     """PLAN-0062 Wave C: Confluent-Avro on the wire for intelligence.contradiction.v1."""
 

@@ -55,6 +55,12 @@ Usage
     python scripts/ops/replay_kg_extraction.py --dry-run
     python scripts/ops/replay_kg_extraction.py --per-ticker 100
 
+    # Re-extract the EMPTY DEEP-tier cohort (deep-routed docs that produced no
+    # narrative relation — mostly lost to the now-fixed DeepInfra 429 storm):
+    python scripts/ops/replay_kg_extraction.py --empty-cohort --dry-run
+    python scripts/ops/replay_kg_extraction.py --empty-cohort            # full run
+    python scripts/ops/replay_kg_extraction.py --empty-cohort --limit 1000  # one wave
+
 The script connects to host postgres on the docker-mapped port (5432).
 """
 
@@ -87,17 +93,20 @@ log = logging.getLogger("replay_kg_extraction")
 # ── Demo entities (PRD-0087 demo-12, currently 8 seeded) ────────────────────
 # WHY hardcoded: the seed file (scripts/seed_demo_data.py) declares the same
 # set; duplicating here keeps the script runnable without importing service
-# code. Source of truth: scripts/seed_demo_data.py:_FINNHUB_SOURCES.
+# code. Source of truth: scripts/seed_demo_data.py.
+# M-017 (2026-06-14): entity_id == the instrument id (01900000-…-00000000100X),
+# kept in lockstep with the seed. The old placeholder "11111111-000X" ids
+# existed nowhere in the KG and would no longer resolve.
 DEMO_ENTITIES: list[tuple[str, str, str]] = [
     # (entity_id, canonical_name, ticker_for_log)
-    ("11111111-0001-7000-8000-000000000001", "Apple Inc.", "AAPL"),
-    ("11111111-0002-7000-8000-000000000001", "Microsoft Corporation", "MSFT"),
-    ("11111111-0003-7000-8000-000000000001", "NVIDIA Corporation", "NVDA"),
-    ("11111111-0004-7000-8000-000000000001", "Amazon.com Inc", "AMZN"),
-    ("11111111-0005-7000-8000-000000000001", "Tesla Inc", "TSLA"),
-    ("11111111-0006-7000-8000-000000000001", "Alphabet Inc Class A", "GOOGL"),
-    ("11111111-0007-7000-8000-000000000001", "Meta Platforms Inc.", "META"),
-    ("11111111-0008-7000-8000-000000000001", "JPMorgan Chase & Co", "JPM"),
+    ("01900000-0000-7000-8000-000000001001", "Apple Inc.", "AAPL"),
+    ("01900000-0000-7000-8000-000000001002", "Microsoft Corporation", "MSFT"),
+    ("01900000-0000-7000-8000-000000001006", "NVIDIA Corporation", "NVDA"),
+    ("01900000-0000-7000-8000-000000001005", "Amazon.com Inc", "AMZN"),
+    ("01900000-0000-7000-8000-000000001004", "Tesla Inc", "TSLA"),
+    ("01900000-0000-7000-8000-000000001003", "Alphabet Inc Class A", "GOOGL"),
+    ("01900000-0000-7000-8000-000000001007", "Meta Platforms Inc.", "META"),
+    ("01900000-0000-7000-8000-000000001008", "JPMorgan Chase & Co", "JPM"),
 ]
 
 
@@ -284,6 +293,120 @@ async def _select_docs_for_entity(
     ]
 
 
+async def _select_empty_deep_cohort(
+    cs_conn: asyncpg.Connection,
+    nlp_conn: asyncpg.Connection,
+    limit: int,
+) -> list[DocRow]:
+    """Return up to *limit* EMPTY DEEP-tier docs for re-extraction.
+
+    Cohort definition (see docs/audits/2026-06-13-relation-extraction-quality-audit.md
+    and docs/audits/2026-06-14-extraction-transient-failure-investigation.md):
+    deep-routed news articles that produced NO narrative relation — most of
+    them lost to the now-fixed DeepInfra 429 ``engine_overloaded`` storm (1,003
+    of 1,013 failed docs never recovered). Re-firing them through the
+    retry-enabled consumers should finally extract their relations.
+
+    A doc qualifies when ALL of the following hold:
+
+    1. ``nlp_db.routing_decisions.final_routing_tier = 'deep'`` — it was routed
+       to the deep-extraction tier (the only tier that runs Block 9 LLM
+       extraction at full strength).
+    2. Its ``source_document_id`` has ZERO *narrative* rows in
+       ``intelligence_db.relation_evidence_raw``. "Narrative" means
+       ``canonical_type <> 'is_in_sector'``: the audit established that 62,718
+       of 76,869 raw rows are STRUCTURED ``is_in_sector`` enrichment emitted by
+       the fundamentals path (one financial_instrument -> sector per doc), NOT
+       by the news LLM. We therefore EXCLUDE those rows when deciding whether a
+       doc is "empty" — a doc whose ONLY evidence is ``is_in_sector`` still
+       counts as empty-narrative and is eligible for replay.
+    3. It still exists in ``content_store_db.documents`` WITH a
+       ``minio_silver_key`` — so the ``content.article.stored.v1`` event can be
+       rebuilt AND the consumer can re-read the cleaned silver text.
+
+    Because these are three SEPARATE physical databases (nlp_db,
+    intelligence_db, content_store_db on the same Postgres server but distinct
+    catalogs), we cannot cross-database JOIN. We fetch the three doc-id sets
+    independently and intersect them in Python, mirroring the set-difference
+    approach already used by ``_select_docs_by_source`` (which diffs against the
+    processed-id set).
+    """
+    # Set 1 — all deep-tier doc_ids (nlp_db).
+    deep_ids: set[UUID] = {
+        row["doc_id"]
+        for row in await nlp_conn.fetch(
+            "SELECT DISTINCT doc_id FROM routing_decisions WHERE final_routing_tier = 'deep'",
+        )
+    }
+    log.info("empty_cohort_deep_docs=%d", len(deep_ids))
+
+    # Set 2 — doc_ids that already have at least one NARRATIVE relation
+    # (anything other than the structured ``is_in_sector`` enrichment). These
+    # are NOT empty and must be excluded. ``IS DISTINCT FROM`` also keeps NULL
+    # ``canonical_type`` rows in the narrative set (a proposed-but-unmapped
+    # predicate still means the LLM produced *something*), so a doc with such a
+    # row is correctly treated as non-empty.
+    intel_conn = await _connect(_HOST, _PORT, "intelligence_db")
+    try:
+        narrative_ids: set[UUID] = {
+            row["source_document_id"]
+            for row in await intel_conn.fetch(
+                """
+                SELECT DISTINCT source_document_id
+                FROM relation_evidence_raw
+                WHERE canonical_type IS DISTINCT FROM 'is_in_sector'
+                """,
+            )
+        }
+    finally:
+        await intel_conn.close()
+    log.info("empty_cohort_narrative_docs=%d (excluded)", len(narrative_ids))
+
+    # Candidate doc_ids = deep AND NOT narrative. These are the empty-deep docs;
+    # we still need to confirm each is rebuildable from content_store.
+    candidate_ids = deep_ids - narrative_ids
+    log.info("empty_cohort_candidates=%d (deep minus narrative)", len(candidate_ids))
+    if not candidate_ids:
+        return []
+
+    # Set 3 — hydrate ONLY the candidates that still exist in
+    # content_store_db.documents and carry a silver key. We pass the candidate
+    # id list as a bind parameter so Postgres filters server-side; the
+    # ``minio_silver_key IS NOT NULL`` predicate enforces rebuildability. We
+    # order by recency so a partial (--limit) run replays the freshest docs
+    # first, matching the ordering convention of the other selectors.
+    rows = await cs_conn.fetch(
+        """
+        SELECT doc_id, source_type, title, content_hash, normalized_hash,
+               dedup_result, minio_silver_key, word_count, published_at,
+               is_backfill, tenant_id
+        FROM documents
+        WHERE doc_id = ANY($1)
+          AND minio_silver_key IS NOT NULL
+        ORDER BY published_at DESC NULLS LAST
+        LIMIT $2
+        """,
+        list(candidate_ids),
+        limit,
+    )
+    return [
+        DocRow(
+            doc_id=row["doc_id"],
+            source_type=row["source_type"],
+            title=row["title"],
+            content_hash=row["content_hash"],
+            normalized_hash=row["normalized_hash"],
+            dedup_result=row["dedup_result"],
+            minio_silver_key=row["minio_silver_key"],
+            word_count=row["word_count"],
+            published_at=row["published_at"],
+            is_backfill=row["is_backfill"],
+            tenant_id=row["tenant_id"],
+        )
+        for row in rows
+    ]
+
+
 def _build_stored_payload(doc: DocRow) -> dict[str, Any]:
     """Build a payload matching content.article.stored.v1 Avro schema.
 
@@ -418,6 +541,28 @@ async def main() -> int:
         help="Max docs to replay in --source-mode (default 200).",
     )
     parser.add_argument(
+        "--empty-cohort",
+        action="store_true",
+        help=(
+            "Replay the EMPTY DEEP-tier cohort: deep-routed docs "
+            "(routing_decisions.final_routing_tier='deep') that produced ZERO "
+            "narrative relation-evidence (canonical_type<>'is_in_sector') and "
+            "still exist in content_store with a silver key. Bypasses per-ticker "
+            "selection; intended for the post-429-fix re-extraction. "
+            "Respects --limit and --cluster-cap (raise the cap for a full run)."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10000,
+        help=(
+            "Max docs to replay in --empty-cohort mode (default 10000 — large "
+            "enough for the full ~6k cohort). Use a smaller value to run in "
+            "safe waves (combine with the doc ordering: most-recent first)."
+        ),
+    )
+    parser.add_argument(
         "--postgres-host",
         type=str,
         default="localhost",
@@ -444,6 +589,39 @@ async def main() -> int:
     try:
         total_enqueued = 0
         per_ticker_results: dict[str, int] = {}
+
+        # ── Empty-cohort shortcut ─────────────────────────────────────────────
+        # Highest-leverage post-429-fix path: replay the deep-routed docs that
+        # the rate-limit storm left with zero narrative relations. The bound is
+        # --limit (default 10000, i.e. the whole ~6k cohort fits); the operator
+        # can lower it to run in safe waves. --limit IS the explicit cap here,
+        # so the demo per-ticker --cluster-cap (default 600) does NOT clamp it.
+        if args.empty_cohort:
+            log.info("empty_cohort_replay limit=%d dry_run=%s", args.limit, args.dry_run)
+            docs = await _select_empty_deep_cohort(cs_conn, nlp_conn, args.limit)
+            log.info(
+                "empty_cohort_selected docs=%d (avg_words=%s)",
+                len(docs),
+                sum(d.word_count or 0 for d in docs) // max(1, len(docs)),
+            )
+            # Sample (first 5) so the operator can eyeball the selection in a
+            # dry run before authorising the live LLM spend.
+            for doc in docs[:5]:
+                log.info(
+                    "  sample doc_id=%s source=%s words=%s title=%s",
+                    doc.doc_id,
+                    doc.source_type,
+                    doc.word_count,
+                    (doc.title or "")[:70],
+                )
+            n = await _enqueue_replay(cs_conn, nlp_conn, docs, dry_run=args.dry_run)
+            log.info(
+                "empty_cohort_enqueued docs=%d dry_run=%s%s",
+                n,
+                args.dry_run,
+                " (NOTHING WRITTEN — dry run)" if args.dry_run else "",
+            )
+            return 0
 
         # ── Source-mode shortcut ──────────────────────────────────────────────
         # When operator passes --source-mode eodhd we bypass the per-ticker

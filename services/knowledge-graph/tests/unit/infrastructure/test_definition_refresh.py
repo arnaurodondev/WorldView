@@ -246,6 +246,127 @@ class TestFinancialInstrumentSkipsDescriptionClient:
 
 
 # ---------------------------------------------------------------------------
+# 2026-06-14 P1: financial_instrument with NULL source_text (RC2)
+# crypto/FX/index instruments EODHD has no description for must be LLM-generated
+# ---------------------------------------------------------------------------
+
+
+class TestFinancialInstrumentNullSourceText:
+    async def test_fi_null_source_generates_via_description_client(self) -> None:
+        """FI + source_text IS NULL → description client generates text, row gets embedded."""
+        description_client = _make_description_client("Bitcoin (BTC.USD) is a decentralized digital currency.")
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1, 0.2, 0.3])])
+
+        session_factory, session = _make_session_factory([])
+
+        emb_repo_mock = AsyncMock()
+        due_row = _make_due_row(
+            entity_type="financial_instrument",
+            canonical_name="Bitcoin",
+            source_text=None,  # EODHD has no description for crypto
+            source_hash=None,
+            ticker="BTC.USD",
+        )
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[due_row])
+        emb_repo_mock.upsert = AsyncMock()
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(session_factory, llm_client, description_client=description_client)
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        # The description client WAS called for this FI entity (RC2 fix), with the
+        # financial_instrument entity_type and the ticker context hint.
+        description_client.generate_description.assert_called_once()
+        call_kwargs = description_client.generate_description.call_args.kwargs
+        assert call_kwargs["entity_type"] == "financial_instrument"
+        assert call_kwargs["context_hints"] == {"ticker": "BTC.USD"}
+
+        # The generated text was embedded and upserted.
+        llm_client.embed.assert_called_once()
+        emb_repo_mock.upsert.assert_awaited_once()
+        upsert_kwargs = emb_repo_mock.upsert.call_args.kwargs
+        assert upsert_kwargs["source_text"] == "Bitcoin (BTC.USD) is a decentralized digital currency."
+
+    async def test_fi_null_source_empty_llm_output_is_skipped_not_persisted(self) -> None:
+        """BP-114 guard: when the LLM returns '' / whitespace for an FI null-source row,
+        the row is SKIPPED (no upsert, no degenerate text persisted)."""
+        # Description client returns whitespace — must be treated as failure.
+        description_client = AsyncMock()
+        description_client.generate_description = AsyncMock(return_value="   ")
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1])])
+
+        session_factory, _session = _make_session_factory([])
+
+        emb_repo_mock = AsyncMock()
+        due_row = _make_due_row(
+            entity_type="financial_instrument",
+            canonical_name="Dow Jones",
+            source_text=None,
+            source_hash=None,
+            ticker="DJI",
+        )
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[due_row])
+        emb_repo_mock.upsert = AsyncMock()
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(session_factory, llm_client, description_client=description_client)
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        # Client was called, but empty output → nothing embedded or persisted.
+        description_client.generate_description.assert_called_once()
+        llm_client.embed.assert_not_called()
+        emb_repo_mock.upsert.assert_not_awaited()
+
+    async def test_fi_null_source_llm_exception_is_skipped(self) -> None:
+        """When generate_description raises for an FI null-source row, the cycle does NOT
+        crash and the row is skipped (no upsert)."""
+        description_client = AsyncMock()
+        description_client.generate_description = AsyncMock(side_effect=RuntimeError("DeepInfra 500"))
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=[MagicMock(embedding=[0.1])])
+
+        session_factory, _session = _make_session_factory([])
+
+        emb_repo_mock = AsyncMock()
+        due_row = _make_due_row(
+            entity_type="financial_instrument",
+            canonical_name="GBP/USD",
+            source_text=None,
+            source_hash=None,
+            ticker="GBPUSD",
+        )
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[due_row])
+        emb_repo_mock.upsert = AsyncMock()
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        worker = DefinitionRefreshWorker(session_factory, llm_client, description_client=description_client)
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()  # must not raise
+
+        llm_client.embed.assert_not_called()
+        emb_repo_mock.upsert.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # scheduler.py — _build_description_client
 # ---------------------------------------------------------------------------
 

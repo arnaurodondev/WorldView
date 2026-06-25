@@ -26,6 +26,7 @@ from alert.infrastructure.email.scheduler import EmailScheduler
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -74,6 +75,15 @@ async def _run_loop(settings: Settings) -> None:
     )
     ap_scheduler.start()
     log.info("email_scheduler_started")  # type: ignore[no-any-return]
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "alert-email-scheduler",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "valkey_url": getattr(settings, "valkey_url", None),
+        },
+    )
 
     try:
         while True:

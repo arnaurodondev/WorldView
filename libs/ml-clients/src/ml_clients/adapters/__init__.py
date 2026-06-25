@@ -6,6 +6,7 @@ from ml_clients.adapters.chatgpt_extraction import ChatGPTExtractionAdapter
 from ml_clients.adapters.deepinfra_description import DeepInfraDescriptionAdapter
 from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
 from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
+from ml_clients.adapters.embeddinggemma_router import EmbeddingGemmaRouterAdapter
 from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
 from ml_clients.adapters.gemini_extraction import GeminiExtractionAdapter
 from ml_clients.adapters.gliner_adaptive import AdaptiveGLiNERHTTPAdapter
@@ -22,6 +23,7 @@ __all__ = [
     "DeepInfraDescriptionAdapter",
     "DeepInfraEmbeddingAdapter",
     "DeepSeekExtractionAdapter",
+    "EmbeddingGemmaRouterAdapter",
     "GLiNERLocalAdapter",
     "GeminiDescriptionAdapter",
     "GeminiExtractionAdapter",

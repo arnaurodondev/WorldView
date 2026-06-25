@@ -20,6 +20,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -85,6 +86,15 @@ async def main() -> None:
     # Only nlp_db write factory needed for outbox dispatch
     nlp_engine, _nlp_read_engine, nlp_sf, _nlp_read_sf = _build_nlp_factories(settings)
     dispatcher = NLPPipelineOutboxDispatcher(settings=settings, session_factory=nlp_sf)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-dispatcher",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+        },
+    )
 
     try:
         dispatch_task = asyncio.create_task(_supervised_run(dispatcher, stop_event))

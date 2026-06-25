@@ -142,14 +142,15 @@ class NewsHandler(ToolHandler):
         if self._entity_context is not None:
             _entity_ids.append(self._entity_context.entity_id)
         if entity_tickers:
-            for ticker in entity_tickers:
-                if not isinstance(ticker, str) or not ticker.strip():
-                    continue
-                resolved = await self._s6.resolve_entity_by_ticker(ticker)
-                if resolved is not None and resolved not in _entity_ids:
-                    _entity_ids.append(resolved)
-                elif resolved is None:
-                    log.warning("entity_ticker_unresolved", tool="search_documents", ticker=ticker)
+            valid_tickers = [t for t in entity_tickers if isinstance(t, str) and t.strip()]
+            if valid_tickers:
+                # Resolve all tickers concurrently (one NLP call per ticker, fanned out).
+                resolved_ids = await asyncio.gather(*[self._s6.resolve_entity_by_ticker(t) for t in valid_tickers])
+                for ticker, resolved in zip(valid_tickers, resolved_ids, strict=False):
+                    if resolved is not None and resolved not in _entity_ids:
+                        _entity_ids.append(resolved)
+                    elif resolved is None:
+                        log.warning("entity_ticker_unresolved", tool="search_documents", ticker=ticker)
 
         request = ChunkSearchRequest(
             query_text=query,
@@ -356,6 +357,13 @@ class NewsHandler(ToolHandler):
             return []
 
         cutoff = datetime.now(tz=UTC) - timedelta(days=capped_days)
+        # BP-670: bind the requested entity onto every item's citation_meta.
+        # The BP-605 grounding gate and the entity-name validator both read
+        # ``citation_meta.entity_name``; leaving it None forced them onto
+        # text-scan fallbacks (article titles frequently lead with OTHER
+        # companies — "AI Boom Sends TSMC Sales Soaring..." is a valid
+        # Apple-tagged article whose title never says Apple).
+        _entity_label = ticker.strip().upper() if isinstance(ticker, str) and ticker.strip() else None
         items: list[RetrievedItem] = []
         for a in raw_articles:
             if not isinstance(a, dict):
@@ -393,6 +401,14 @@ class NewsHandler(ToolHandler):
                 RetrievedItem.create(
                     item_id=f"tool:entity_news:{article_id}",
                     item_type=ItemType.chunk,
+                    # BP-670: stamp the REQUESTED entity UUID on every item.
+                    # The briefing-articles endpoint is entity-anchored by
+                    # construction; when the LLM calls this tool with
+                    # entity_id=<question entity> the BP-605 gate matches
+                    # item.entity_id against the question id set directly —
+                    # article titles often never name the company verbatim
+                    # ("Apple's AI Push..." does not contain "apple inc").
+                    entity_id=resolved_id,
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     # Use display_score directly so the orchestrator's
                     # downstream ranking sees the same number the brief uses.
@@ -408,7 +424,7 @@ class NewsHandler(ToolHandler):
                         url=url,
                         source_name=source_name,
                         published_at=published_at,
-                        entity_name=None,
+                        entity_name=_entity_label,
                     ),
                 )
             )

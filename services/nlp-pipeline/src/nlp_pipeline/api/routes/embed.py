@@ -32,11 +32,6 @@ from pydantic import BaseModel, Field
 router = APIRouter(prefix="/api/v1", tags=["embed"])
 _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-# BGE-large BERT context window = 512 tokens. Character-based truncation to match
-# OllamaEmbeddingAdapter._MAX_CHARS -- ensures query embeddings use the same
-# pre-processing as stored chunk embeddings (both 1500-char limit).
-_MAX_CHARS = 1500
-
 # Instruction prefix applied by the consumer worker (Block 7).  The API uses the same
 # prefix so query embeddings land in the same semantic space as stored chunk embeddings.
 _DEFAULT_INSTRUCTION_PREFIX = "Represent this financial document passage for retrieval: "
@@ -73,7 +68,7 @@ async def embed_text(
 
     The endpoint applies the same pre-processing as the article consumer (Block 7):
       1. Prepend the instruction prefix (same as OllamaEmbeddingAdapter / DeepInfraEmbeddingAdapter).
-      2. Truncate to _MAX_CHARS to avoid BERT context overflow.
+      2. Truncate by token budget (truncate_for_bge) to avoid BERT context overflow.
       3. Delegate to app.state.embedding_client (provider-agnostic).
       4. Return the 1024-dim float vector.
 
@@ -81,6 +76,7 @@ async def embed_text(
     """
     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
     from ml_clients.errors import FatalError, RetryableError  # type: ignore[import-not-found]
+    from ml_clients.text_budget import truncate_for_bge  # type: ignore[import-not-found]
 
     from nlp_pipeline.config import Settings
 
@@ -92,10 +88,11 @@ async def embed_text(
     # Build text with instruction prefix — must match Block 7 / consumer worker.
     full_text = f"{instruction_prefix} {body.text}" if instruction_prefix else body.text
 
-    # Truncate to character limit -- matches OllamaEmbeddingAdapter / DeepInfraEmbeddingAdapter._MAX_CHARS.
-    # 1500 chars ~= 500 tokens for financial text (2.0-2.2 tok/word); safe under 512.
-    if len(full_text) > _MAX_CHARS:
-        full_text = full_text[:_MAX_CHARS]
+    # Truncate by ESTIMATED token count -- IDENTICAL pre-processing to the ingest-side
+    # DeepInfra/Ollama adapters (both call truncate_for_bge), so a query embedding lands
+    # in the same vector space as the stored chunk embeddings it must retrieve.  The old
+    # flat 1500-char cap let dense queries 400 against BGE's 512-token limit (task #4).
+    full_text = truncate_for_bge(full_text)
 
     _log.debug("embed_request", provider=settings.embedding_provider, text_len=len(full_text))  # type: ignore[no-any-return]
 

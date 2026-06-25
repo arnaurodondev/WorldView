@@ -46,6 +46,14 @@ import { useState, useTransition } from "react";
 // unknown URL value falls back to the default instead of crashing.
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import dynamic from "next/dynamic";
+// R1 sprint: Link is used by the Analytics tab "FULL VIEW" affordance that
+// wires the standalone /portfolio/analytics route into the portfolio nav.
+import Link from "next/link";
+// R1 sprint: Plus icon for the prominent empty-portfolio CTA.
+// R3 polish: FolderPlus is the category icon for the no-portfolio EmptyState.
+// R4 hardening: AlertTriangle categorises the page-level load-error state;
+// RotateCw decorates its Retry action (the deferred R3 retry item).
+import { Plus, FolderPlus, AlertTriangle, RotateCw } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -53,6 +61,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Portfolio chrome ────────────────────────────────────────────────────────
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
+// R2 sprint: interactive sector-allocation donut beside the KPI strip.
+// Clicking a slice/legend row filters the holdings table to that sector.
+import { SectorAllocationDonut } from "@/components/portfolio/SectorAllocationDonut";
 import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
 // F-P-003 (PLAN-0051 W6): the equity-curve period state is hoisted to this
 // page so future panels can react to the same period. The type comes from
@@ -63,7 +74,12 @@ import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
 
 // ── Terminal primitives ─────────────────────────────────────────────────────
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive — the no-portfolio
+// branch renders through it (copy: portfolio.no-portfolio in the registry).
+// R4 hardening: the page-level error branch ALSO renders through it now
+// (copy: portfolio.load-error) — the legacy InlineEmptyState import is gone
+// with its last call site (it offered no retry path; users had to reload).
+import { EmptyState } from "@/components/primitives/EmptyState";
 
 // ── Lazy-loaded portfolio dialogs ───────────────────────────────────────────
 // WHY next/dynamic for dialogs: the three dialogs each pull in react-hook-form,
@@ -105,7 +121,20 @@ import { PortfolioPageHeader } from "@/features/portfolio/components/PortfolioPa
 import { PerformanceStrip } from "@/features/portfolio/components/PerformanceStrip";
 import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
 import { TransactionsTab } from "@/features/portfolio/components/TransactionsTab";
+// Wave G: AnalyticsTab is the new third tab (Holdings | Transactions | Analytics).
+// WHY static import (not dynamic): AnalyticsTab mounts charts from recharts which
+// is already in the bundle. The lazy-load savings would be minimal and would cause
+// a visible blank flash when the user first clicks Analytics.
+import { AnalyticsTab } from "@/features/portfolio/components/AnalyticsTab";
 import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
+// PRD-0114 W5 (FR-10): server-side transaction filter state. Calling this hook
+// at page level (not inside TransactionsTab) is required because:
+//   1. The backendFilterParams must be available to usePortfolioData so the
+//      transactions query key includes the active filters (cache per filter set).
+//   2. The accessToken for the ExportTransactionsButton lives at page level.
+//   3. nuqs URL params should be owned at the highest common ancestor to avoid
+//      conflicts with other hook instances reading the same URL params.
+import { useTransactionsFilterState } from "@/features/portfolio/hooks/useTransactionsFilterState";
 // PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
 import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
 
@@ -149,12 +178,38 @@ export default function PortfolioPage() {
   // transaction history for AAPL") and expect back/forward to navigate
   // between tabs. WHY clearOnDefault: omitting `?tab=holdings` from the URL
   // when Holdings is active keeps the canonical /portfolio link short.
+  // Wave G: "analytics" added as a third tab. The Watchlist tab moves here
+  // as the fourth; the tab bar now shows Holdings | Transactions | Analytics | Watchlist.
+  // WHY add to the literal union (not a separate state): nuqs parseAsStringLiteral
+  // validates the value at the URL boundary — unknown ?tab= values fall back to
+  // "holdings" automatically, so old bookmarks with ?tab=watchlist still work.
   const [activeTab, setActiveTab] = useQueryState(
     "tab",
-    parseAsStringLiteral(["holdings", "transactions", "watchlist"] as const)
+    parseAsStringLiteral(["holdings", "transactions", "analytics", "watchlist"] as const)
       .withDefault("holdings")
       .withOptions({ clearOnDefault: true }),
   );
+
+  // ── R2 sprint: sector filter (donut → holdings table) ──────────────────
+  // WHY URL state (nuqs, not useState): a filtered holdings view is a
+  // shareable artifact ("look at my Tech exposure") and back/forward should
+  // step through filter changes — exactly the rationale for ?tab= above.
+  // null = no filter. The default string parser keeps any sector name
+  // round-trippable without an enum (sector labels come from live data).
+  const [sectorFilter, setSectorFilter] = useQueryState("sector");
+
+  // ── PRD-0114 W5 FR-10: server-side transaction filters ─────────────────
+  // WHY at page level (not inside TransactionsTab): the derived backendFilterParams
+  // must feed into usePortfolioData so the transactions query key includes the
+  // active filters — each filter combination is a distinct cache entry. The hook
+  // also owns URL state (nuqs) which must be called unconditionally at the same
+  // React component level on every render (Rules of Hooks).
+  const {
+    filters: txFilters,
+    setFilters: setTxFilters,
+    resetFilters: resetTxFilters,
+    toBackendParams: txToBackendParams,
+  } = useTransactionsFilterState();
 
   // PLAN-0059 G-3: tab switches mount/unmount whole panel trees (Holdings
   // alone renders ~7 child surfaces — equity-curve chart, holdings table,
@@ -179,6 +234,8 @@ export default function PortfolioPage() {
     activeIsRoot,
     portfoliosLoading,
     portfoliosError,
+    // R4 hardening: in-place retry for the page-level error state below.
+    refetchPortfolios,
     holdingsLoading,
     txLoading,
     watchlistsLoading,
@@ -187,6 +244,11 @@ export default function PortfolioPage() {
     holdingsQuotes,
     holdingOverviews,
     transactionsResp,
+    setTxOffset,
+    exposure,
+    assetClassByInstrument,
+    sectorSegments,
+    sectorIdMap,
     watchlists,
     watchlistQuotes,
     performanceData,
@@ -219,16 +281,40 @@ export default function PortfolioPage() {
           <Skeleton className="h-7 w-36" />
         </div>
         {/* F-P-020 (PLAN-0051 W6): KPI strip skeleton mirrors the populated
-            strip's shape exactly — same 7 tiles, same `divide-x` separator,
-            same px-3/py-1.5 padding. Any mismatch causes layout shift when
-            the data resolves. */}
-        <div className="flex divide-x divide-border border-b border-border">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="flex-1 px-3 py-1.5">
-              <Skeleton className="h-3 w-16 mb-1" />
-              <Skeleton className="h-4 w-20" />
+            strip's shape exactly — same `divide-x` separator, same
+            px-3/py-1.5 padding. Any mismatch causes layout shift when
+            the data resolves.
+            R3 polish: tile count corrected 7 → 8 (PRD-0089 W2 §4.2 added
+            CASH + BUYING PWR and removed # Positions — the skeleton had
+            drifted one tile short of the real strip, so the 8th tile popped
+            in on data arrival). The donut placeholder beside it mirrors the
+            R2 header band (hidden below xl, exactly like the real donut). */}
+        <div className="flex items-stretch">
+          <div
+            data-testid="kpi-strip-skeleton"
+            className="flex min-w-0 flex-1 divide-x divide-border border-b border-border"
+          >
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex-1 px-3 py-1.5">
+                <Skeleton className="h-3 w-16 mb-1" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </div>
+          {/* Donut skeleton: circle + 3 legend lines — same shape the
+              populated SectorAllocationDonut renders while its own query
+              loads, so the whole header band paints consistently. */}
+          <div
+            data-testid="donut-skeleton"
+            className="hidden xl:flex w-[400px] shrink-0 items-center gap-2 border-l border-b border-border px-2 py-1"
+          >
+            <Skeleton className="size-[56px] rounded-full shrink-0" />
+            <div className="flex-1 space-y-1">
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-3/4" />
+              <Skeleton className="h-3 w-2/3" />
             </div>
-          ))}
+          </div>
         </div>
         <Skeleton className="h-9 w-80" />
         {/* F-P-020: row skeletons use h-[22px] to match the real holdings
@@ -243,10 +329,100 @@ export default function PortfolioPage() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────
+  // R4 hardening (the deferred R3 item): the portfolio-list failure is now a
+  // NAMED error state with an in-place Retry instead of the dead-end
+  // InlineEmptyState that told the user to reload the whole app. The title
+  // string stays "Failed to load portfolio data" — pinned by the e2e suite
+  // (qa-exhaustive "Portfolio shows error state with retry option").
+  // WHY refetchPortfolios (not router.refresh / location.reload): only the
+  // portfolio-list query failed; refetching just that query preserves every
+  // other warm cache entry and recovers in one round-trip.
   if (portfoliosError) {
     return (
-      <div className="p-3">
-        <InlineEmptyState message="Failed to load portfolio data. Check your connection and reload." />
+      <div className="p-3" data-testid="portfolio-error-state">
+        <EmptyState
+          condition="error"
+          copyKey="portfolio.load-error"
+          icon={AlertTriangle}
+          action={
+            // Terminal-style bordered action, same affordance family as the
+            // empty-portfolio "Create portfolio" CTA below — one visual
+            // language for "the page needs exactly one action from you".
+            <button
+              type="button"
+              data-testid="portfolio-error-retry"
+              aria-label="Retry loading portfolio data"
+              onClick={refetchPortfolios}
+              className="mt-1 flex h-7 items-center gap-1.5 rounded-[2px] border border-primary/60 px-3 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <RotateCw className="h-3 w-3" strokeWidth={1.5} />
+              Retry
+            </button>
+          }
+        />
+      </div>
+    );
+  }
+
+  // ── Empty-portfolio state (R1 sprint) ──────────────────────────────────
+  // WHY a dedicated branch: with zero portfolios the previous code fell
+  // through to the full tab layout — holdings showed "Connect a brokerage…"
+  // which presumes a portfolio already exists, and the page read as broken.
+  // A user with no portfolios needs exactly one action: create one. We show
+  // a named state with a prominent CTA and mount only the CreatePortfolioDialog
+  // (the other dialogs require an active portfolio).
+  // WHY check `sortedPortfolios` resolved (not just length): undefined means
+  // the query hasn't settled — that case is handled by the loading skeleton
+  // above, never by this branch.
+  if (sortedPortfolios && sortedPortfolios.length === 0) {
+    return (
+      <div
+        className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background p-3"
+        data-testid="empty-portfolio-state"
+      >
+        {/* Named heading — terminal-style ALL CAPS eyebrow above the shared
+            EmptyState. R3 polish (DS §15.12): the title/body now resolve from
+            lib/copy/empty-states.ts (portfolio.no-portfolio — title is the
+            exact "Select or create a portfolio" string the tests pin) and the
+            prominent CTA rides the primitive's `action` slot, so this state
+            renders structurally identically to every other empty surface. */}
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          Portfolio
+        </span>
+        <div className="max-w-md">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="portfolio.no-portfolio"
+            icon={FolderPlus}
+            action={
+              // Prominent CTA — primary-bordered, larger than the header
+              // buttons because it is the ONLY meaningful action here.
+              // R3: focus-visible ring for keyboard parity with hover.
+              <button
+                aria-label="Create your first portfolio"
+                onClick={() => setCreatePortfolioOpen(true)}
+                className="mt-1 flex h-8 items-center gap-1.5 rounded-[2px] border border-primary bg-primary/10 px-4 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+                Create portfolio
+              </button>
+            }
+          />
+        </div>
+
+        {/* The create dialog must be mounted inside this early-return branch —
+            the main render path below is never reached while the portfolio
+            list is empty. onSuccess routes through the same hook callback so
+            the new portfolio is auto-selected once the list refetches. */}
+        <CreatePortfolioDialog
+          open={createPortfolioOpen}
+          onOpenChange={setCreatePortfolioOpen}
+          onSuccess={(p) => {
+            setCreatePortfolioOpen(false);
+            handlePortfolioCreated(p);
+          }}
+          accessToken={accessToken}
+        />
       </div>
     );
   }
@@ -275,43 +451,80 @@ export default function PortfolioPage() {
         onDeletePortfolio={() => setDeletePortfolioOpen(true)}
       />
 
-      <PerformanceStrip
-        period={selectedPeriod}
-        performanceData={performanceData}
-        performanceLoading={performanceLoading}
-      />
+      {/* ── R2 sprint: header band — performance + KPI strip beside the
+          allocation donut. items-stretch equalizes heights so the donut's
+          border-b lines up with the KPI strip's own bottom border. */}
+      <div className="flex items-stretch">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <PerformanceStrip
+            period={selectedPeriod}
+            performanceData={performanceData}
+            performanceLoading={performanceLoading}
+          />
 
-      {/* ── KPI Strip ───────────────────────────────────────────────────── */}
-      {/* WHY conditional on holdingsResp (not isLoading): the strip makes no
-          sense before holdings load. We still render the page shell so the
-          tabs are visible immediately (preventing layout shift on data
-          arrival). */}
-      {/* PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
-          fall back to the legacy client-side approximation (kpi.realizedPnl)
-          and surface "(approx)" so traders know the value is not the FIFO
-          ground truth. */}
-      {holdingsResp &&
-        (() => {
-          const fifo = realizedPnLQuery.data;
-          const useFifo = !realizedPnLQuery.isError && fifo != null;
-          const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
-          return (
-            <PortfolioKPIStrip
-              portfolioId={activePortfolioId}
-              totalValue={kpi.totalValue}
-              dayPnl={kpi.dayPnl}
-              unrealisedPnl={kpi.unrealisedPnl}
-              unrealisedPnlPct={kpi.unrealisedPnlPct}
-              topGainer={kpi.topGainer}
-              topLoser={kpi.topLoser}
-              positionCount={kpi.positionCount}
-              realizedPnl={realizedPnl}
-              realizedPnlApprox={!useFifo}
-              realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
-              realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
-            />
-          );
-        })()}
+          {/* ── KPI Strip ─────────────────────────────────────────────────── */}
+          {/* WHY conditional on holdingsResp (not isLoading): the strip makes no
+              sense before holdings load. We still render the page shell so the
+              tabs are visible immediately (preventing layout shift on data
+              arrival). */}
+          {/* PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
+              fall back to the legacy client-side approximation (kpi.realizedPnl)
+              and surface "(approx)" so traders know the value is not the FIFO
+              ground truth. */}
+          {holdingsResp &&
+            (() => {
+              const fifo = realizedPnLQuery.data;
+              const useFifo = !realizedPnLQuery.isError && fifo != null;
+              const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
+              return (
+                <PortfolioKPIStrip
+                  portfolioId={activePortfolioId}
+                  totalValue={kpi.totalValue}
+                  dayPnl={kpi.dayPnl}
+                  unrealisedPnl={kpi.unrealisedPnl}
+                  unrealisedPnlPct={kpi.unrealisedPnlPct}
+                  topGainer={kpi.topGainer}
+                  topLoser={kpi.topLoser}
+                  positionCount={kpi.positionCount}
+                  realizedPnl={realizedPnl}
+                  realizedPnlApprox={!useFifo}
+                  realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
+                  realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+                  // R1 sprint (BP-517-class fix): cash/buyingPower were never
+                  // passed here, so the CASH and BUYING PWR tiles permanently
+                  // rendered "—". The exposure snapshot now flows from
+                  // usePortfolioData (GET /v1/portfolios/{id}/exposure).
+                  // 2026-06-10 sprint gap #5: buying_power is now an explicit
+                  // server field (v1: equals cash). Prefer it; fall back to
+                  // cash for older S9 builds that omit it.
+                  cash={exposure?.cash ?? null}
+                  buyingPower={exposure?.buying_power ?? exposure?.cash ?? null}
+                />
+              );
+            })()}
+        </div>
+
+        {/* R2 sprint: allocation donut — server-side sector breakdown
+            (GET /v1/portfolios/{id}/sector-breakdown). Clicking a slice or
+            legend row filters the holdings table; clicking again (or the
+            chip in the Holdings tab) clears.
+            WHY gated on holdingsResp: same rationale as the KPI strip — no
+            allocation exists before holdings load, and gating keeps the
+            header band collapsed to the PerformanceStrip height while
+            loading (no layout jump).
+            WHY hidden xl:flex: below 1280px the 8 KPI tiles already consume
+            the full width; squeezing a 400px donut in would crush both. The
+            sector filter remains clearable on small screens via the chip in
+            the Holdings tab (which is always visible when a filter is set). */}
+        {holdingsResp && (
+          <SectorAllocationDonut
+            portfolioId={activePortfolioId}
+            selectedSector={sectorFilter}
+            onSelectSector={(s) => void setSectorFilter(s)}
+            className="hidden xl:flex w-[400px] shrink-0 border-l border-b border-border"
+          />
+        )}
+      </div>
 
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
       {/* WHY flex-1 min-h-0: tabs must fill the remaining space below the
@@ -324,7 +537,7 @@ export default function PortfolioPage() {
           // interactive while React mounts the new TabsContent tree.
           // Inside startTransition the cast keeps TS strict-mode happy.
           startTabTransition(() => {
-            void setActiveTab(v as "holdings" | "transactions" | "watchlist");
+            void setActiveTab(v as "holdings" | "transactions" | "analytics" | "watchlist");
           });
         }}
         className="flex flex-col flex-1 min-h-0"
@@ -345,6 +558,15 @@ export default function PortfolioPage() {
             className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
           >
             Transactions
+          </TabsTrigger>
+          {/* Wave G: Analytics tab — TWR vs benchmark, drawdown chart, risk metrics,
+              period returns, and contribution-to-return attribution. Added between
+              Transactions and Watchlist per design spec §4.3. */}
+          <TabsTrigger
+            value="analytics"
+            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
+          >
+            Analytics
           </TabsTrigger>
           <TabsTrigger
             value="watchlist"
@@ -368,11 +590,42 @@ export default function PortfolioPage() {
             enrichedHoldings={enrichedHoldings}
             holdingsQuotes={holdingsQuotes}
             holdingOverviews={holdingOverviews}
+            // R1 sprint: asset-class lookup (derived from transactions in the
+            // hook) feeds the holdings table ASSET column, which previously
+            // rendered "—" for every row because the context map was empty.
+            assetClasses={assetClassByInstrument}
             kpi={kpi}
             bySector={bySector}
             byType={byType}
             equityPeriod={equityPeriod}
             setEquityPeriod={setEquityPeriod}
+            // R2 sprint: donut-driven sector filter. HoldingsTab filters the
+            // table rows and renders the dismissible chip; clearing routes
+            // back through the same URL state the donut writes.
+            sectorFilter={sectorFilter}
+            onClearSectorFilter={() => void setSectorFilter(null)}
+            // 2026-06-10 sprint gap #2: raw sector segments (with
+            // instrument_ids) for the SectorExposurePanel rows + the
+            // exact-ID sector-filter join.
+            sectorSegments={sectorSegments}
+            sectorIdMap={sectorIdMap}
+            // PRD-0114 W4 (FR-5, FR-7, FR-8): portfolio kind + dialog callback.
+            // portfolioKind drives the empty state (manual/brokerage) and the
+            // brokerage sync-status strip visibility.
+            portfolioKind={activePortfolio?.kind ?? null}
+            // onOpenAddPosition: undefined for root portfolios (S1 rejects
+            // transactions on root; the CTA would create a dead end).
+            onOpenAddPosition={
+              activeIsRoot ? undefined : () => setAddPositionOpen(true)
+            }
+            // PRD-0114 W5 (FE-003): Close Position wiring.
+            // accessToken is forwarded through HoldingsTab → SemanticHoldingsTable
+            // → ClosePositionDialog for the auth-gated POST /api/v1/transactions.
+            accessToken={accessToken}
+            // onHoldingsRefetch delegates to handlePositionAdded (same TanStack
+            // Query invalidation path as Add Position) so the table refreshes
+            // immediately after a close without a full page reload.
+            onHoldingsRefetch={handlePositionAdded}
           />
         </TabsContent>
 
@@ -386,7 +639,59 @@ export default function PortfolioPage() {
             transactionsResp={transactionsResp}
             holdingOverviews={holdingOverviews}
             onConnect={() => setConnectModalOpen(true)}
+            // R1 sprint: empty-state CTA. Root portfolios are read-only on S1
+            // (CANNOT_RECORD_TRANSACTION_ON_ROOT), so we only offer the
+            // "add first transaction" affordance on concrete portfolios.
+            onAddPosition={
+              activeIsRoot ? undefined : () => setAddPositionOpen(true)
+            }
+            // R1 sprint: server-side pager. Offset changes flow back into the
+            // usePortfolioData transactions query (key includes the offset).
+            onTxOffsetChange={setTxOffset}
+            // PRD-0114 W5 FR-10: server-side filter bar + export button.
+            // filterState/onFilterChange/onFilterReset drive the TransactionsFilterBar;
+            // backendFilterParams feeds the S9 API call so filters reach the backend
+            // (previously this was dead code — the filter bar never rendered).
+            filterState={txFilters}
+            onFilterChange={setTxFilters}
+            onFilterReset={resetTxFilters}
+            backendFilterParams={txToBackendParams()}
+            // accessToken is needed by ExportTransactionsButton for the auth-gated
+            // CSV download endpoint — S9 requires a Bearer token on GET /v1/transactions/export.
+            accessToken={accessToken}
           />
+        </TabsContent>
+
+        {/* Wave G Analytics tab */}
+        <TabsContent
+          value="analytics"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
+        >
+          {/* WHY guard on activePortfolioId: AnalyticsTab fires useQuery calls
+              that require a valid portfolioId. Rendering with null would cause
+              the queries to fire enabled=false but the component still mounts
+              its full DOM tree, including chart containers, which wastes paint. */}
+          {activePortfolioId ? (
+            <>
+              {/* R1 sprint: wire the standalone /portfolio/analytics route
+                  into the portfolio nav. The route existed but was reachable
+                  only via the "A" hotkey — this visible affordance makes the
+                  full-height analytics view discoverable with a mouse. */}
+              <div className="flex h-[24px] shrink-0 items-center justify-end border-b border-border/60 bg-card px-3">
+                <Link
+                  href="/portfolio/analytics"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground transition-colors hover:text-primary"
+                >
+                  Full view ↗
+                </Link>
+              </div>
+              <AnalyticsTab portfolioId={activePortfolioId} />
+            </>
+          ) : (
+            <div className="p-3 text-[11px] text-muted-foreground font-mono">
+              Select a portfolio to view analytics.
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent
@@ -459,6 +764,8 @@ export default function PortfolioPage() {
           }}
           portfolioId={activePortfolioId}
           accessToken={accessToken}
+          // PRD-0114 W4 (FR-8): kind-aware success toast copy.
+          portfolioKind={activePortfolio?.kind ?? null}
         />
       )}
     </div>

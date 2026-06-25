@@ -12,11 +12,11 @@
  * a clean panel-separator feel without 1px hairline seams from the previous
  * gap-px layout — Wave E spec calls for `grid grid-cols-12 gap-3`.
  *
- * WHY 4-ROW LAYOUT (PLAN-0048 E-1):
- *   Row 1 (col-12)              : Morning Brief                        — situational awareness
- *   Row 2 (col-3 · col-4 · col-5): Market Snapshot · Sector Heatmap (treemap, F-1) · Watchlist Movers
- *   Row 3 (col-4 · col-4 · col-4): Portfolio Summary · Prediction Markets · Top Movers (universe-wide, F-2)
- *   Row 4 (4 × col-3)            : Econ Calendar · Earnings · Portfolio News · Recent Alerts
+ * WHY 4-ROW LAYOUT (PLAN-0048 E-1, amended Round 2 2026-06-10):
+ *   Row 1 (col-12)                      : Morning Brief                — situational awareness
+ *   Row 2 (col-2 · col-3 · col-4 · col-3): Market Clock · Market Snapshot · Sector Heatmap · AI Signals
+ *   Row 3 (4 × col-3)                    : Portfolio Summary · Top Positions · Prediction Markets · Movers
+ *   Row 4 (4 × col-3)                    : Econ Calendar · Earnings · Portfolio News · Recent Alerts
  *
  * Rationale (matches user's "move predictions there instead" feedback):
  *  - The deprecated PortfolioGainersLosers widget is GONE — its data was a
@@ -50,6 +50,20 @@
 
 import { MorningBriefCard } from "@/components/dashboard/MorningBriefCard";
 import { MarketSnapshotWidget } from "@/components/dashboard/MarketSnapshotWidget";
+// Round 2 enhancement (2026-06-10): MarketClockWidget — US-equity session
+// state (pre/regular/after/closed) + countdown, placed in Row 2 directly
+// beside the Market Snapshot index strip so the session context sits next to
+// the quotes it qualifies ("are these prices live or last close?").
+import { MarketClockWidget } from "@/components/dashboard/MarketClockWidget";
+// W4 task 3 (user report 2026-06-12): the slimmed Market Clock now shares its
+// column with a second mini — Market Breadth — stacked directly beneath it.
+// Breadth derives advancers/decliners from the SAME cached sector-heatmap data
+// (no extra endpoint), so adding it costs zero network requests.
+import { MarketBreadthMini } from "@/components/dashboard/MarketBreadthMini";
+// Round 2 enhancement: WatchlistQuickViewWidget — top-5 positions by value
+// with live price, day P&L $ and a 5-day sparkline. Complements
+// PortfolioSummary (totals) with a per-position "what moved today" scan.
+import { WatchlistQuickViewWidget } from "@/components/dashboard/WatchlistQuickViewWidget";
 import { SectorHeatmapWidget } from "@/components/dashboard/SectorHeatmapWidget";
 // PLAN-0053 T-B-2-03: replaced direct WatchlistMoversWidget mount with the
 // MoversWidgetTabs wrapper which hosts Holdings + Watchlist movers behind a
@@ -75,6 +89,10 @@ import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
 // useDashboardSnapshot() to warm the TanStack Query cache in one round-trip.
 // Returns null — no visible UI. Individual widgets still own their own queries.
 import { DashboardSnapshotPrefetcher } from "@/components/dashboard/DashboardSnapshotPrefetcher";
+// F-2: single composite bundle hydrator — fires GET /v1/dashboard/bundle once
+// and writes the legs into the per-widget TanStack caches via setQueryData so
+// child widgets render WITHOUT firing their own initial fetches. Renders null.
+import { DashboardBundleHydrator } from "@/components/dashboard/DashboardBundleHydrator";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -126,13 +144,30 @@ export default function DashboardPage() {
         // them. Tailwind can't conditionally set inline styles, so we keep
         // the fixed template only at lg via CSS variable + media query? Easier:
         // omit the constraint here and rely on per-cell h-full/min-h-0 at lg.
+        // W4 task 2 (user report 2026-06-12 — "row 1 has too much vertical
+        // space"): Row 2 (the macro band: Clock+Breadth · Snapshot · Sector ·
+        // AI Signals) was `minmax(130px, max-content)`. The `max-content`
+        // stretched the row to the TALLEST cell — the old Sector heatmap that
+        // filled ~300px. Now that the Sector widget is a compact fixed 7+6 grid
+        // (~76px) and the Clock column is a fixed two-mini stack, we pin Row 2
+        // to a FIXED 152px. Widgets taller than that (Market Snapshot's 11
+        // ticker rows, AI Signals) scroll internally rather than dragging the
+        // whole row tall (their cells are overflow-hidden + the widgets own an
+        // overflow-y-auto list). W4 (user report 2026-06-12 "increase the
+        // height a bit"): 124px clipped the Breadth mini's "N up / N down"
+        // footer and showed only ~3 snapshot rows; 152px gives the Clock+Breadth
+        // stack full breathing room and ~6 snapshot rows before scroll, while
+        // the 7+6 sector grid (~76px) still has comfortable padding.
         gridTemplateRows:
-          "var(--dashboard-grid-rows, auto 130px minmax(220px, 1fr) minmax(200px, 1fr))",
+          "var(--dashboard-grid-rows, auto 152px minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
       {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack
           Query cache in a single round-trip. Returns null — no visible UI. */}
       <DashboardSnapshotPrefetcher />
+      {/* F-2: fires GET /v1/dashboard/bundle (newer composite) and hydrates
+          per-widget caches so children skip their initial fetches. Returns null. */}
+      <DashboardBundleHydrator />
 
       {/* ── Row 1: Morning Brief — full width ───────────────────────────── */}
       {/* WHY col-span-12: brief always spans all columns — it's the primary
@@ -153,22 +188,46 @@ export default function DashboardPage() {
         <MorningBriefCard />
       </div>
 
-      {/* ── Row 2: Market Snapshot (3) · Sector Heatmap (4) · AI Signals (5) ── */}
-      {/* WHY 3 + 4 + 5 (ISSUE-3 reshuffle):
-            - MarketSnapshot at col-3 (~230px) fits 6 ticker rows comfortably.
-            - SectorHeatmap is now a TREEMAP (Wave F-1); col-4 (~310px) gives
-              the wrapped tile grid enough horizontal room for 11 tiles.
-            - AiSignalsWidget at col-5 (~390px): ML price-impact signals are
-              compact (ticker chip + 4px score bar + percentage) and render
-              well in the fixed 130px Row 2 height. MoversWidgetTabs moved to
-              Row 3 where it gets full minmax height for list depth.
+      {/* ── Row 2: Market Clock (2) · Market Snapshot (3) · Sector Heatmap (4) · AI Signals (3) ── */}
+      {/* WHY 2 + 3 + 4 + 3 (Round 2 enhancement, was 3 + 4 + 5):
+            - MarketClockWidget at col-2 (~200px): the session clock is three
+              short lines (HH:MM:SS · state · countdown) — the narrowest cell
+              on the grid is enough, and placing it FIRST in the macro band
+              means the trader reads "is the market open?" before any quote.
+            - MarketSnapshot keeps col-3 (~290px): fits its 11 ticker rows.
+            - SectorHeatmap keeps col-4 (~390px) for the wrapped tile grid.
+            - AiSignalsWidget shrinks 5→3 (~290px): each signal row is just a
+              ticker chip + 4px score bar + percentage — comfortably fits.
           WHY min-w-0 on every cell: each widget contains a flex layout with
           truncate-able children. Without min-w-0, flex children default to
           their min-content width and break the truncate.
           WHY border border-border/40: subtle 1px panel border preserves the
           original Bloomberg-style cell-seam aesthetic while gap-3 supplies
           the breathing room. */}
-      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-w-0 border border-border/40">
+      {/* WHY NO border class on the clock cell: MarketClockWidget renders its
+          OWN border because the border COLOR is the session indicator
+          (positive=open, warning=extended hours, muted=closed) and is only
+          known client-side after mount — the server-rendered cell can't pick it. */}
+      {/* W4 task 3: the col-2 column is now a VERTICAL STACK of two minis —
+          the slimmed Market Clock (top) and the new Market Breadth gauge
+          (bottom). Both fit the reduced Row-2 height: the clock is ~2 short
+          lines, the breadth mini is a headline % + a bar + counts.
+          WHY flex-col gap-3 + min-h-0: gap-3 matches the grid's gap-3 so the
+          two minis read as separate panels (consistent with the cell seams
+          elsewhere); min-h-0 lets each mini's `h-full`/flex-1 internals respect
+          the bounded half-column height instead of overflowing.
+          WHY each mini gets flex-1 basis-0: an even 50/50 split of the column
+          height so neither mini dominates — the clock and breadth are equal-
+          weight glance signals. */}
+      <div className="col-span-1 md:col-span-2 lg:col-span-2 flex h-full min-h-0 min-w-0 flex-col gap-3">
+        <div className="min-h-0 flex-1 basis-0">
+          <MarketClockWidget />
+        </div>
+        <div className="min-h-0 flex-1 basis-0">
+          <MarketBreadthMini />
+        </div>
+      </div>
+      <div className="col-span-1 md:col-span-4 lg:col-span-3 h-full min-w-0 border border-border/40">
         <MarketSnapshotWidget />
       </div>
       <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-w-0 border border-border/40">
@@ -179,39 +238,47 @@ export default function DashboardPage() {
           row is just a ticker chip + score bar + percentage (no pagination
           needed for ≤6 signals). overflow-hidden prevents the score bars
           from bleeding outside the cell boundary. */}
-      <div className="col-span-1 md:col-span-6 lg:col-span-5 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <AiSignalsWidget />
       </div>
 
-      {/* ── Row 3: Portfolio (4) · Prediction Markets (4) · MoversWidgetTabs (4) ── */}
-      {/* WHY 4 + 4 + 4 (ISSUE-3 reshuffle from Wave E-1):
-            - Equal-weight cells: each represents a different signal stream
-              (your money · prediction-market consensus · universe-wide/
-              watchlist/holdings movers). Symmetric layout signals "no panel
-              is more important than the others — choose your view".
-            - PredictionMarkets stays at col-4 (unchanged).
-            - MoversWidgetTabs replaces the standalone PreMarketMoversWidget
-              here. The tab widget already contains a MARKET tab with universe-
-              wide top movers, plus HOLDINGS and WATCHLIST tabs — three views
-              in one cell at no extra cost. The minmax(220px, 1fr) row height
-              gives the list depth needed to show ≥8 rows without truncation.
+      {/* ── Row 3: Portfolio (3) · Top Positions (3) · Prediction Markets (3) · MoversWidgetTabs (3) ── */}
+      {/* WHY 3 + 3 + 3 + 3 (Round 2 enhancement, was 4 + 4 + 4):
+            - WatchlistQuickViewWidget joins Row 3, so the three existing
+              widgets each cede one column. Equal-weight cells: each is a
+              different signal stream (your totals · your top positions ·
+              prediction-market consensus · market movers).
+            - Top Positions sits NEXT TO PortfolioSummary deliberately — both
+              are "my money" panels; adjacency groups them Gestalt-style while
+              the totals/positions split keeps each panel single-purpose.
+            - MoversWidgetTabs at col-3 still fits its rows: ticker · name ·
+              sparkline · price · % truncate gracefully via min-w-0 children.
           WHY overflow-hidden on each cell: rows 3 + 4 are minmax(Npx, 1fr)
           (bounded height). overflow-hidden on the cell + overflow-y-auto
           inside the widget content area enables independent scrolling per
           panel without page-level overflow. */}
-      <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PortfolioSummary />
       </div>
-      <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      {/* Round 2: top-5 positions by value — live price, day P&L $, 5-day
+          sparkline. Shares the portfolios/holdings/quotes caches with
+          PortfolioSummary (identical query keys) so it adds only ONE extra
+          network request (the batched sparklines call). */}
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+        <WatchlistQuickViewWidget />
+      </div>
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PredictionMarketsWidget />
       </div>
       {/* ISSUE-3: MoversWidgetTabs moves here from Row 2 to get the full
           minmax(220px, 1fr) height budget (vs the fixed 130px in Row 2).
           This gives all three tab panes (MARKET / HOLDINGS / WATCHLIST)
           enough vertical space to show ≥8 movers without crowding.
-          The standalone PreMarketMoversWidget is removed — MARKET tab covers
-          the same universe-wide view. */}
-      <div className="col-span-1 md:col-span-6 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+          Round 1 foundation (2026-06-10): the MARKET tab now hosts the
+          redesigned TopMovers (Gainers/Losers shadcn Tabs; rows with ticker ·
+          name · 5-day sparkline · price · %chg) — PreMarketMoversWidget is
+          fully unmounted. */}
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <MoversWidgetTabs />
       </div>
 

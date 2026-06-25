@@ -33,6 +33,11 @@ export interface GraphControlsProps {
   searchQuery: string;
   layout: "force" | "hierarchical";
   edgeCount: number;
+  /** PLAN-0099 W4 FIX — edges still visible after the relation-pill + strength
+   *  filters are applied. When this is below edgeCount the toolbar shows
+   *  "X of Y edges" so the analyst sees the filter took effect (sigma only
+   *  HIDES edges, so the graph frame itself looks unchanged otherwise). */
+  visibleEdgeCount: number;
   /** Auto-applied strength floor threshold for dense graphs */
   denseGraphEdgeThreshold: number;
   onRelFilterChange: (filter: RelationFilter) => void;
@@ -49,6 +54,7 @@ export function GraphControls({
   searchQuery,
   layout,
   edgeCount,
+  visibleEdgeCount,
   denseGraphEdgeThreshold,
   onRelFilterChange,
   onMinWeightChange,
@@ -131,13 +137,29 @@ export function GraphControls({
           applied 30% strength floor. The badge makes this visible so analysts
           don't wonder why they can't see all edges by default. */}
       <div className="ml-auto flex items-center gap-1">
-        {edgeCount > denseGraphEdgeThreshold && (
+        {/* PLAN-0099 W4 FIX — live filter feedback. When the relation pill /
+            strength slider has hidden some edges, show "X of Y edges" so the
+            analyst gets immediate confirmation the filter applied (the graph
+            frame alone looks unchanged because sigma hides, not removes). When
+            nothing is filtered out we fall back to the dense-graph badge only.
+            tabular-nums keeps the count from jittering as it changes. */}
+        {visibleEdgeCount < edgeCount ? (
           <span
-            title={`Dense graph (${edgeCount} edges) — strength filter auto-applied`}
-            className="rounded-[2px] bg-warning/15 px-1.5 py-0.5 font-mono text-[9px] text-warning"
+            data-testid="visible-edge-count"
+            title={`${visibleEdgeCount} of ${edgeCount} edges shown after filters`}
+            className="rounded-[2px] bg-primary/15 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-primary"
           >
-            {edgeCount} edges
+            {visibleEdgeCount} of {edgeCount} edges
           </span>
+        ) : (
+          edgeCount > denseGraphEdgeThreshold && (
+            <span
+              title={`Dense graph (${edgeCount} edges) — strength filter auto-applied`}
+              className="rounded-[2px] bg-warning/15 px-1.5 py-0.5 font-mono text-[9px] text-warning"
+            >
+              {edgeCount} edges
+            </span>
+          )
         )}
         <button
           onClick={() => onLayoutChange("force")}

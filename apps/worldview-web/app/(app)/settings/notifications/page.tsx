@@ -170,9 +170,19 @@ export default function SettingsNotificationsPage() {
           // WHY skeleton div: avoids layout shift while the GET round-trip
           // completes (typically < 200 ms on the local stack). The fixed
           // height matches the four-row layout below.
-          <div className="space-y-4">
+          // WHY static (no animate-pulse): DESIGN_SYSTEM.md §6.2 — skeletons
+          // are STATIC bg-muted blocks; raw animate-pulse is banned. A <200ms
+          // load doesn't qualify for the slow `animate-skeleton-pulse` opt-in
+          // either (that tier is for >2s loads such as AI generation).
+          // aria-busy on the container announces one loading state to screen
+          // readers instead of N decorative divs (§6.2 a11y rule).
+          <div className="space-y-4" aria-busy="true">
             {TOGGLE_ROWS.map((row) => (
-              <div key={row.field} className="flex animate-pulse items-center justify-between gap-4">
+              <div
+                key={row.field}
+                className="flex items-center justify-between gap-4"
+                aria-hidden
+              >
                 <div className="space-y-1">
                   <div className="h-4 w-40 rounded-[2px] bg-muted/60" />
                   <div className="h-3 w-64 rounded-[2px] bg-muted/40" />

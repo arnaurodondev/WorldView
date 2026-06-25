@@ -71,12 +71,24 @@ def _target_row(industry: str | None = "Technology") -> MagicMock:
     return row
 
 
-def _make_mock_session(target_row: MagicMock | None = None, peer_rows: list[MagicMock] | None = None) -> AsyncMock:
-    """Build an AsyncSession mock that returns target_row for the first execute()
-    call and peer_rows for the second (or None / [] as defaults)."""
+def _make_mock_session(
+    target_row: MagicMock | None = None,
+    peer_rows: list[MagicMock] | None = None,
+    quote_rows: list[MagicMock] | None = None,
+    close_rows: list[MagicMock] | None = None,
+) -> AsyncMock:
+    """Build an AsyncSession mock for the peers handler's query sequence.
+
+    Call order in the handler (B-Q-1 added calls 3+4):
+      1. target instrument lookup        → .first() returns target_row
+      2. peers query                     → .all() returns peer_rows
+      3. quotes last-price query         → .all() returns quote_rows
+      4. ohlcv latest-1d-close fallback  → .all() returns close_rows
+    Calls 3/4 only happen when peer_rows is non-empty (and call 4 only when
+    some peers lack a quote row).
+    """
     session = AsyncMock()
 
-    # First execute → target instrument lookup; second → peers query.
     async def _execute(stmt, *args, **kwargs):  # type: ignore[no-untyped-def]
         result = MagicMock()
         if not hasattr(_execute, "_call_count"):
@@ -85,9 +97,15 @@ def _make_mock_session(target_row: MagicMock | None = None, peer_rows: list[Magi
         if _execute._call_count == 1:
             # Target instrument lookup: .first() returns the target_row.
             result.first.return_value = target_row
-        else:
+        elif _execute._call_count == 2:
             # Peers query: .all() returns the peer_rows list.
             result.all.return_value = peer_rows or []
+        elif _execute._call_count == 3:
+            # B-Q-1 last-price query against quotes.
+            result.all.return_value = quote_rows or []
+        else:
+            # B-Q-1 latest 1d close fallback for ids without quotes.
+            result.all.return_value = close_rows or []
         return result
 
     session.execute = _execute
@@ -187,6 +205,42 @@ def test_peers_happy_path_response_shape() -> None:
     assert peer_b["ticker"] == "GOOGL"
     assert peer_b["return_1y"] is None
     assert peer_b["change_pct"] is None
+    # B-Q-1: with no quote rows and no 1d closes in the mock, last_price is
+    # null (honest "no data" — never 0).
+    assert peer_a["last_price"] is None
+    assert peer_b["last_price"] is None
+
+
+def test_peers_last_price_from_quote_and_ohlcv_fallback() -> None:
+    """B-Q-1: last_price prefers quotes.last; falls back to latest 1d close.
+
+    Peer A has a quote row (315.20); peer B has no quote but a daily close
+    (142.55). Both must surface their respective sources.
+    """
+    peer_rows = [
+        _row(_PEER_A_UUID, ticker="MSFT", market_cap=3.0e12),
+        _row(_PEER_B_UUID, ticker="GOOGL", market_cap=2.0e12),
+    ]
+    quote_row = MagicMock()
+    quote_row.instrument_id = _PEER_A_UUID
+    quote_row.last = 315.20
+    close_row = MagicMock()
+    close_row.instrument_id = _PEER_B_UUID
+    close_row.close = 142.55
+
+    session = _make_mock_session(
+        target_row=_target_row("Technology"),
+        peer_rows=peer_rows,
+        quote_rows=[quote_row],
+        close_rows=[close_row],
+    )
+    _, client = _make_app(session)
+
+    resp = client.get(f"/api/v1/instruments/{_TARGET_UUID}/peers")
+    assert resp.status_code == 200
+    peers = resp.json()["peers"]
+    assert peers[0]["last_price"] == pytest.approx(315.20)
+    assert peers[1]["last_price"] == pytest.approx(142.55)
 
 
 def test_peers_change_pct_scaling() -> None:

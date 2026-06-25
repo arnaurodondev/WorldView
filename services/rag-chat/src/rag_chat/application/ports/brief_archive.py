@@ -126,6 +126,29 @@ class BriefArchivePort(Protocol):
         """Return a single brief by its primary key, or None if not found."""
         ...
 
+    async def get_latest_entity_brief(
+        self,
+        entity_id: UUID,
+        limit: int = 1,
+    ) -> list[UserBriefRecord]:
+        """Return the most-recent entity-scoped briefs for ``entity_id``.
+
+        WHY this exists (AI-brief-flag fix, 2026-06-19): the on-demand and
+        pre-gen instrument-brief paths need a CROSS-USER freshness/idempotency
+        check keyed by ``(brief_type='entity', entity_id)`` — the same key the
+        ``GetAiBriefFlagUseCase`` (and therefore the screener ``has_ai_brief``
+        column) queries by. ``get_latest`` keys on ``(user_id, tenant_id,
+        brief_type)`` and so cannot answer "has ANYONE generated a brief for
+        this instrument recently?". This method answers exactly that question.
+
+        Note: ``entity_id`` here is the value the flag matches on — i.e. the
+        market-data ``instrument_id`` the screener uses, NOT necessarily the KG
+        entity id (see BriefingContext.resolved_instrument_id).
+
+        Returns [] when no entity brief exists for the id.
+        """
+        ...
+
 
 class NullBriefArchive:
     """No-op implementation of BriefArchivePort.
@@ -164,3 +187,10 @@ class NullBriefArchive:
 
     async def get_by_id(self, brief_id: UUID) -> UserBriefRecord | None:
         return None
+
+    async def get_latest_entity_brief(
+        self,
+        entity_id: UUID,
+        limit: int = 1,
+    ) -> list[UserBriefRecord]:
+        return []

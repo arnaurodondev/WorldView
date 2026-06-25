@@ -10,6 +10,7 @@ import structlog
 
 from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput
 from ml_clients.errors import FatalError, RetryableError
+from ml_clients.text_budget import truncate_for_bge
 
 if TYPE_CHECKING:
     import asyncio
@@ -24,14 +25,6 @@ class OllamaEmbeddingAdapter:
 
     EXPECTED_DIMENSION = 1024
     MODEL_ID = "bge-large-en-v1.5"
-
-    # BGE-large BERT context window = 512 tokens.  Character-based truncation:
-    # financial text tokenises at 2.0-2.2 tokens/word (tickers, numbers, percentages
-    # are multi-token). The prior _MAX_WORDS=384 assumed 1.3 tok/word, which was
-    # too permissive - 280-word chunks reliably exceeded 512 tokens (626 observed).
-    # At 1500 chars / 3 chars/token = ~500 tokens -- safely under 512 with CLS/SEP.
-    # This matches the BP-121 original spec and fixes 238 silent truncations per day.
-    _MAX_CHARS = 1500
 
     def __init__(
         self,
@@ -56,11 +49,12 @@ class OllamaEmbeddingAdapter:
                     try:
                         async with httpx.AsyncClient(timeout=30.0) as client:
                             text = f"{inp.instruction_prefix} {inp.text}" if inp.instruction_prefix else inp.text
-                            # Truncate to stay within the model's 512-token context window.
-                            # Character-based (not word-based): financial text tokenises at
-                            # 2.0-2.2 tok/word; 1500 chars ~= 500 tokens (safe under 512).
-                            if len(text) > self._MAX_CHARS:
-                                text = text[: self._MAX_CHARS]
+                            # Truncate by ESTIMATED token count (ml_clients.text_budget) so
+                            # the prefixed text stays under BGE's 512-token window.  Shared
+                            # with the DeepInfra adapter + query embed endpoint so ingest and
+                            # query vectors are pre-processed identically (task #4).  Replaces
+                            # the old flat 1500-char cap, which under-truncated dense JSON text.
+                            text = truncate_for_bge(text)
                             resp = await client.post(
                                 f"{self._base_url}/api/embeddings",
                                 json={

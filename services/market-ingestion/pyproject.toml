@@ -33,6 +33,9 @@ dev = [
     "pytest-httpx>=0.30,<1",
     "ruff>=0.4,<1",
     "mypy>=1.10,<2",
+    # test_insider_universe_loader (BP-704) drives the loader SQL against an
+    # in-memory aiosqlite DB; declare it so CI's fresh `pip install [dev]` has it.
+    "aiosqlite>=0.19,<1",
 ]
 
 [tool.hatch.build.targets.wheel]

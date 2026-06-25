@@ -1,0 +1,264 @@
+/* @theme worldview-light */
+/* ================================================================== *
+ * Worldview — light, academic-tech theme for the thesis defense.
+ * Motif: signals → links → grounded answers.
+ *   - off-white background, navy ink, slate secondary
+ *   - light blue for structure/connectors, muted gold for key numbers
+ *   - green only for pass states, amber for honest limitations
+ * Components: .cards/.card, .metric(s), .badge, .pill, .flow, .twocol,
+ *   .panel, .ladder/.rung, .bars/.bar-row, .donut, .callout, graph nodes.
+ * ================================================================== */
+
+@import 'default';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+:root {
+  --bg:         #F6F8FC;   /* very light blue-gray canvas        */
+  --card:       #FFFFFF;
+  --ink:        #1B2A4A;   /* primary navy text                  */
+  --slate:      #586781;   /* secondary text                     */
+  --blue:       #2F6FB0;   /* accent 1 — structure               */
+  --blue-bright:#3B82C4;
+  --blue-soft:  #E9F1FB;   /* light-blue fills                   */
+  --connector:  #9CC3E8;   /* flow connectors                    */
+  --gold:       #A9760B;   /* accent 2 — key numbers (readable)  */
+  --gold-soft:  #FBEFCF;   /* gold highlight background          */
+  --green:      #2E9E5B;
+  --green-soft: #E4F4EA;
+  --amber:      #B5790F;
+  --amber-soft: #FBF0D8;
+  --red:        #D25450;
+  --red-soft:   #FBECEB;
+  --line:       #E4E9F2;   /* card borders, hairlines            */
+  --shadow:     0 6px 22px rgba(27,42,74,0.07);
+  --fz:         24px;
+}
+
+/* ------------------------------- base ----------------------------- */
+section {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Inter","IBM Plex Sans",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  font-size: var(--fz);
+  line-height: 1.42;
+  padding: 50px 66px;
+  letter-spacing: 0.1px;
+}
+
+h1 { font-size: 44px; font-weight: 800; color: var(--ink); margin: 0 0 14px; letter-spacing: -0.3px; }
+h2 { font-size: 36px; font-weight: 700; color: var(--ink); margin: 0 0 22px;
+     letter-spacing: -0.2px; }
+h3 { font-size: 22px; font-weight: 700; color: var(--ink); margin: 0 0 8px; }
+
+p  { margin: 10px 0; }
+strong { color: var(--gold); font-weight: 700; }      /* gold key phrase   */
+em     { color: var(--blue); font-style: normal; font-weight: 600; }  /* calm emphasis */
+a  { color: var(--blue); text-decoration: none; }
+ul,ol { margin: 8px 0; padding-left: 1.1em; }
+li { margin: 7px 0; }
+li::marker { color: var(--blue); }
+
+img { display: block; margin: 0 auto; border-radius: 10px; }
+
+/* subtle, unobtrusive footer + page number */
+section::after { color: #9AA6BC; font-size: 13px; font-weight: 500; }
+footer { color: #9AA6BC; font-size: 13px; }
+
+/* ------------------------------ headline kicker ------------------- */
+.lead { font-size: 30px; line-height: 1.3; color: var(--ink); font-weight: 600; }
+.sub  { color: var(--slate); font-size: 22px; }
+.muted{ color: var(--slate); }
+.small{ font-size: 0.82em; }
+.center{ text-align: center; }
+.gold { color: var(--gold); font-weight: 700; }
+.hl   { background: var(--gold-soft); border-radius: 5px; padding: 0 6px; color: #6f4d08; font-weight: 700; }
+
+/* ------------------------------- cards ---------------------------- */
+.cards { display: flex; gap: 20px; align-items: stretch; margin: 14px 0; }
+.cards.cols-4 .card { flex: 1 1 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 14px 0; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+  flex: 1;
+}
+.card h3 { margin: 4px 0 6px; }
+.card p  { margin: 0; color: var(--slate); font-size: 19px; }
+.card .tag { display:inline-block; font-size:14px; font-weight:600; color:var(--blue);
+             background:var(--blue-soft); border-radius:6px; padding:2px 9px; margin-bottom:8px; }
+.card.gold-top { border-top: 4px solid var(--gold); }
+.card.blue-top { border-top: 4px solid var(--blue); }
+
+/* numbered step badge for pillars / lists */
+.numbadge {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--blue-soft); color: var(--blue);
+  font-weight: 800; font-size: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* ----------------------------- metric cards ----------------------- */
+.metrics { display: flex; gap: 20px; margin: 16px 0; justify-content: center; }
+.metric {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 20px 26px; text-align: center; box-shadow: var(--shadow); flex: 1;
+}
+.metric .num { font-size: 52px; font-weight: 800; color: var(--gold); line-height: 1; letter-spacing:-1px; }
+.metric .lbl { color: var(--slate); font-size: 17px; margin-top: 8px; line-height: 1.25; }
+.metric.blue .num { color: var(--blue); }
+.metric.green .num { color: var(--green); }
+
+/* one big hero stat */
+.hero-num { font-size: 110px; font-weight: 800; color: var(--gold); line-height: 1; letter-spacing: -2px; text-align:center; }
+.hero-lbl { color: var(--slate); font-size: 20px; text-align:center; margin-top: 6px; }
+
+/* ------------------------------ pills / badges -------------------- */
+.pill {
+  font-family: "IBM Plex Mono","SF Mono",Menlo,monospace;
+  background: #EDF1F8; color: var(--ink); border: 1px solid #DCE4F0;
+  border-radius: 999px; padding: 2px 11px; font-size: 0.78em; font-weight: 500;
+  white-space: nowrap;
+}
+.badge { display:inline-block; border-radius: 999px; padding: 3px 14px; font-weight: 700; font-size: 0.82em; }
+.badge.pass    { background: var(--green-soft); color: var(--green); }
+.badge.partial { background: var(--amber-soft); color: var(--amber); }
+
+/* ------------------------------- flows ---------------------------- */
+.flow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; margin: 24px 0; }
+.flow .step {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 20px; text-align: center; box-shadow: var(--shadow);
+  font-weight: 600; font-size: 20px; min-width: 120px;
+}
+.s, .flow .step .s { display:block; font-size: 13px; color: var(--slate); font-weight: 500; margin-top: 4px; }
+.flow .step.blue { border-color: #BFD8F0; background: var(--blue-soft); }
+.flow .step.gold { border-color: #E6C98A; background: var(--gold-soft); }
+.flow .step.bad  { border-color: #EDC4C2; background: var(--red-soft); }
+.flow .arr { color: var(--connector); font-size: 26px; padding: 0 12px; font-weight: 700; }
+.flow .arr small { display:block; font-size: 12px; color: var(--slate); font-weight: 600; text-align:center; }
+
+/* mini flow used on dividers */
+.miniflow { display:flex; align-items:center; gap:10px; color: var(--slate); font-size: 18px; margin-top: 18px; }
+.miniflow .m { background: var(--card); border:1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-weight:600; color: var(--ink); }
+.miniflow .a { color: var(--connector); font-weight:700; }
+
+/* ----------------------- two-column problem/solution -------------- */
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; margin-top: 12px; }
+.panel { border-radius: 14px; padding: 22px 24px; }
+.panel h3 { margin-top: 0; }
+.panel.bad  { background: var(--red-soft);  border: 1px solid #EDCDCB; }
+.panel.bad h3  { color: var(--red); }
+.panel.good { background: var(--blue-soft); border: 1px solid #CBE0F4; }
+.panel.good h3 { color: var(--blue); }
+.panel .row { display:flex; align-items:center; gap:10px; margin: 10px 0; font-size: 20px; }
+.panel .ok  { color: var(--green); font-weight: 800; }
+.panel .no  { color: var(--red);   font-weight: 800; }
+.result { margin-top: 14px; font-weight: 700; }
+.panel.bad .result  { color: var(--red); }
+.panel.good .result { color: var(--green); }
+
+/* ------------------------------ ladder ---------------------------- */
+.ladder { margin: 6px 0; }
+.rung {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 18px; border-radius: 10px; margin: 9px 0;
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.rung .name { font-weight: 700; }
+.rung .tag  { font-size: 15px; color: var(--slate); font-family:"IBM Plex Mono",monospace; }
+.rung.l1 { border-left: 6px solid #2F6FB0; }
+.rung.l2 { border-left: 6px solid #5C93C9; }
+.rung.l3 { border-left: 6px solid #E0A93C; }
+.rung.l4 { border-left: 6px solid #D25450; }
+
+/* ------------------------------- bars ----------------------------- */
+.bars { margin: 14px 0; }
+.bar-row { margin: 16px 0; }
+.bar-head { display:flex; justify-content: space-between; font-size: 19px; margin-bottom: 6px; }
+.bar-head .v { font-weight: 800; color: var(--blue); }
+.bar-head .v.gold { color: var(--gold); }
+.bar-track { background: #E7EDF6; border-radius: 8px; height: 26px; position: relative; overflow: hidden; }
+.bar-fill  { background: var(--blue); height: 100%; border-radius: 8px; }
+.bar-fill.gold { background: linear-gradient(90deg,#C99A2E,#A9760B); }
+.bar-budget { position:absolute; top:-4px; bottom:-4px; width:2px; background: var(--slate); }
+.bar-budget span { position:absolute; top:-20px; left:6px; font-size:12px; color: var(--slate); white-space:nowrap; }
+
+/* ------------------------------- donut ---------------------------- */
+.donut-wrap { display:flex; align-items:center; gap: 30px; }
+.donut { width: 240px; height: 240px; border-radius: 50%; position: relative; flex: none; }
+.donut .hole {
+  position:absolute; inset: 58px; background: var(--bg); border-radius: 50%;
+  display:flex; align-items:center; justify-content:center; flex-direction:column;
+}
+.donut .hole b { font-size: 28px; color: var(--ink); }
+.donut .hole span { font-size: 14px; color: var(--slate); }
+.legend { font-size: 20px; }
+.legend .li { display:flex; align-items:center; gap:10px; margin: 10px 0; }
+.legend .sw { width: 16px; height: 16px; border-radius: 4px; }
+
+/* ------------------------------ callouts -------------------------- */
+.callout { border-radius: 10px; padding: 14px 18px; font-size: 19px; }
+.callout.amber { background: var(--amber-soft); border-left: 4px solid var(--amber); color: #6f4d08; }
+.callout.blue  { background: var(--blue-soft);  border-left: 4px solid var(--blue);  color: #1b3a5c; }
+
+/* -------------------------- graph node / edge --------------------- */
+.graph { display:flex; align-items:center; justify-content:center; gap: 0; margin: 18px 0; }
+.gnode {
+  display:inline-flex; flex-direction: column; align-items:center; justify-content:center;
+  padding: 16px 26px; border-radius: 22px; background: var(--card);
+  border: 2px solid var(--blue); font-weight: 800; font-size: 24px; color: var(--ink);
+  box-shadow: var(--shadow); text-align: center; line-height: 1.2;
+}
+.gnode.gold { border-color: var(--gold); background: var(--gold-soft); }
+.gedge { display:flex; flex-direction:column; align-items:center; padding: 0 6px; min-width: 150px; }
+.gedge .line { width: 100%; height: 2px; background: var(--blue); position: relative; }
+.gedge .pred { font-family:"IBM Plex Mono",monospace; color: var(--gold); font-weight:700; font-size: 18px; margin-bottom: 4px; }
+.gedge .arrowhead { color: var(--blue); font-size: 18px; margin-top: -2px; }
+
+/* stacked "evidence" cards */
+.evstack {
+  position: relative; background: var(--card); border:1px solid var(--line); border-radius: 12px;
+  padding: 18px 22px; box-shadow:
+    7px 7px 0 -1px var(--card), 7px 7px 0 0 var(--line),
+    14px 14px 0 -1px var(--card), 14px 14px 0 0 var(--line);
+  width: fit-content;
+}
+
+/* =================== special full-slide layouts =================== */
+/* TITLE */
+section.title {
+  background:
+    radial-gradient(900px 460px at 78% 12%, rgba(47,111,176,0.08), transparent 60%),
+    var(--bg);
+  justify-content: center;
+}
+section.title h1 { font-size: 96px; letter-spacing: -2px; margin-bottom: 6px; }
+section.title .accent-line { width: 64px; height: 5px; background: var(--gold); border-radius: 3px; margin: 18px 0 22px; }
+section.title .subtitle { font-size: 30px; color: var(--blue); font-weight: 600; }
+section.title .meta { color: var(--slate); font-size: 21px; margin-top: 34px; line-height: 1.5; }
+section.title .meta b, section.title .meta strong { color: var(--ink); font-weight: 700; }
+
+/* SECTION DIVIDER (light) */
+section.divider { justify-content: center; background:
+  linear-gradient(120deg, rgba(47,111,176,0.06), transparent 55%), var(--bg); }
+section.divider .kicker {
+  color: var(--blue); font-size: 18px; font-weight: 700; letter-spacing: 2px;
+  text-transform: uppercase; margin-bottom: 8px;
+}
+section.divider h1 { font-size: 60px; }
+section.divider .sub { font-size: 24px; margin-top: 6px; }
+
+/* tighten default table look in case any slide uses one */
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 21px; background: transparent; }
+th { background-color: var(--blue-soft) !important; color: var(--ink); font-weight: 700;
+     text-align: left; padding: 12px 16px; border-bottom: 2px solid #CBE0F4; }
+td { background-color: var(--card) !important; color: var(--ink); padding: 11px 16px; border-bottom: 1px solid var(--line); }
+tr.hl td { background-color: var(--blue-soft) !important; }
+tr:last-child td { border-bottom: none; }
+
+/* faint contextual screenshot */
+.ghost { opacity: 0.16; filter: grayscale(0.2); }
+.thumb { border: 1px solid var(--line); box-shadow: var(--shadow); }

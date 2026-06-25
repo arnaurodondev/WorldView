@@ -6,9 +6,12 @@
  * geopolitical events. Showing the top 3 open markets with their yes-probability
  * gives traders a quick pulse on market sentiment beyond price action.
  *
- * WHY TOP 3 ONLY (not all): The col-span-3 cell is compact. Three rows at
- * h-[22px] with a "View all" footer link is the right density — enough signal
- * to catch the user's attention without overwhelming the morning brief.
+ * INFINITE SCROLL (user request 2026-06-10, replaces "top 3 only"): the
+ * widget paginates the full open-market universe inside its own scroll area
+ * (useInfiniteQuery, 15/page, IntersectionObserver sentinel). The category
+ * pills now filter SERVER-SIDE via the documented `?category=` param — the
+ * previous client-side keyword filter used a different taxonomy than the
+ * pill counts and was the root cause of "filtering does not work".
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 3, col-span-3)
  * DATA SOURCE: S9 GET /v1/signals/prediction-markets via createGateway().getPredictionMarkets()
@@ -16,15 +19,25 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery, useAuth, useQueries, and useState for ECON filter toggle.
+// WHY "use client": uses useInfiniteQuery/useQueries (data), useState (filter),
+// useRef + useEffect (IntersectionObserver infinite-scroll sentinel).
 
 import Link from "next/link";
-import { useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQuery,
+  useQueries,
+  useInfiniteQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle } from "lucide-react";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
+// no-open-markets state (the previous copy said "data loading…" which was
+// untruthful — the query had finished with zero rows).
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { AlertTriangle, Dices } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 // HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
@@ -36,6 +49,7 @@ import {
   formatCountdown,
   type Category,
 } from "@/lib/prediction-markets";
+import type { PredictionMarketsResponse } from "@/types/api";
 
 // ── Pill configuration ─────────────────────────────────────────────────────────
 
@@ -149,23 +163,64 @@ export function PredictionMarketsWidget() {
   // null = "All" (no filter); a non-null value keeps only that category.
   const [categoryFilter, setCategoryFilter] = useState<Category | null>(null);
 
-  // PLAN-0053 T-C-3-04: dynamic limit. The previous hard-coded ``limit=8`` left
-  // most filtered category buckets empty (Polymarket's Gamma API exposes only
-  // ~300 markets total; after a category filter, 8 markets often yields 0–2
-  // matches). We bump the default to 25 (still fits in a single API page) and
-  // expand to 50 when a category filter is active so the bucket is full enough
-  // to populate the 3 visible rows even on rare categories like "macro".
-  // WHY include categoryFilter in queryKey: TanStack Query refetches when the
-  // key changes; switching from "all" to "macro" must trigger a new request
-  // with the higher limit, otherwise the cache returns the smaller list.
-  const effectiveLimit = categoryFilter ? 50 : 25;
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-prediction-markets", categoryFilter, effectiveLimit],
-    queryFn: () =>
-      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: effectiveLimit }),
+  // ── Infinite list (user request 2026-06-10) ────────────────────────────────
+  // The widget previously fetched ONE page of 25/50 markets and rendered the
+  // top 3 — the trader had to leave the dashboard for anything deeper. It now
+  // paginates the FULL universe inside the widget via useInfiniteQuery + an
+  // IntersectionObserver sentinel (same pattern as AlertHistoryTab MED-021).
+  //
+  // SERVER-SIDE CATEGORY FILTER (filtering bug fix, 2026-06-10): the previous
+  // implementation put categoryFilter in the queryKey but NEVER sent it to the
+  // API — it filtered the fetched page client-side with categorize(title)
+  // (a keyword heuristic on the question text), while the pill COUNTS came
+  // from the server's `category` column. The two taxonomies disagree (server
+  // buckets: politics/sports/crypto/null today), so a pill could show "7" yet
+  // the heuristic matched 0 of the fetched page → "broken filtering". The
+  // filter is now pushed down via the documented `?category=` param (S9 →
+  // case-insensitive equality), making the counts and the rows definitionally
+  // consistent — and pagination stays correct under a filter (offset walks
+  // the FILTERED universe, not the unfiltered one).
+  // W4 (user 2026-06-12 "blocks of 30"): page/block size 15 → 30. The
+  // server endpoint supports limit 1–200 + offset, so each scroll fetches the
+  // next 30 of the filtered universe.
+  const PAGE_SIZE = 30;
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<
+    PredictionMarketsResponse,
+    Error,
+    InfiniteData<PredictionMarketsResponse>,
+    readonly unknown[],
+    number
+  >({
+    queryKey: ["dashboard-prediction-markets-infinite", categoryFilter],
+    queryFn: ({ pageParam }) =>
+      createGateway(accessToken).getPredictionMarkets({
+        status: "open",
+        limit: PAGE_SIZE,
+        offset: pageParam,
+        // undefined → param omitted → unfiltered universe ("All").
+        category: categoryFilter ?? undefined,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      // WHY total-based: the backend returns the FILTERED total; stop once
+      // every row is loaded. Fallback: a partial page also means the end.
+      const loaded = allPages.reduce((n, p) => n + p.markets.length, 0);
+      if (lastPage.total != null) return loaded < lastPage.total ? loaded : undefined;
+      return lastPage.markets.length === PAGE_SIZE ? loaded : undefined;
+    },
     enabled: !!accessToken,
     // WHY 60_000: prediction market prices update continuously; 1-min refresh
     // keeps the probabilities reasonably fresh for dashboard context.
+    // (refetchInterval re-fetches ALL loaded pages — acceptable while the
+    // user typically loads 1-3 pages; deep scrolls age out via gcTime.)
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
@@ -183,33 +238,62 @@ export function PredictionMarketsWidget() {
     staleTime: 5 * 60_000,
   });
 
-  // PLAN-0050 T-F-6-01: filter by selected category (null = no filter).
-  // We overfetch (limit=8 vs the 3 we render) so any single bucket usually has
-  // at least one row even after filtering. If the bucket is empty we show the
-  // shared empty state below — the user can clear the filter to see everything.
-  const allMarkets = data?.markets ?? [];
-  const filteredMarkets = categoryFilter
-    ? allMarkets.filter((m) => categorize(m.title) === categoryFilter)
-    : allMarkets;
-  const topMarkets = filteredMarkets.slice(0, 3);
-  const totalMarkets = data?.total ?? 0;
+  // Flatten the loaded pages. NO client-side category filter anymore — the
+  // server already scoped the list (see the queryFn rationale above).
+  const loadedMarkets = useMemo(
+    () => data?.pages.flatMap((p) => p.markets) ?? [],
+    [data],
+  );
+  // The filtered-universe total (drives the sentinel + the footer link).
+  const totalMarkets = data?.pages[0]?.total ?? 0;
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ────────────────────────
+  // Same MED-021 pattern as AlertHistoryTab: a 1px div after the last row;
+  // when it becomes half-visible inside the widget's overflow-auto list we
+  // pull the next page. threshold 0.5 avoids a spurious fetch when the list
+  // is short and the sentinel is visible on first paint... fetching more in
+  // that case is actually DESIRED here (fill the panel), so the guard is
+  // only against duplicate in-flight fetches.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // WHY guard on !isFetchingNextPage: prevents duplicate parallel
+        // fetches if the sentinel stays in view while a fetch is in flight.
+        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          void fetchNextPage();
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    // WHY disconnect on cleanup: stops the observer firing after unmount
+    // (dashboard navigation) which would fetchNextPage a stale query.
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // ── Per-row history fetch (PLAN-0048 D-2) ──────────────────────────────────
   // WHY useQueries (not per-row useQuery in a child component): hooks must be
   // called at the top of the component, not conditionally inside a `.map()`.
   // useQueries fans out one query per market in a single hook call, returning
-  // an aligned array of results. With at most 3 rows the parallelism is
-  // bounded; staleTime=60s prevents repeated fetches when the user toggles
-  // ECON or the parent re-renders.
+  // an aligned array of results.
+  // WHY capped at the first 9 rows (HISTORY_SPARKLINE_CAP): with infinite
+  // scroll the loaded list can reach hundreds of rows — one history request
+  // per row would melt S9. The Δ24h + sparkline are a "top of the widget"
+  // scanning aid; deeper rows render without them (countdown/volume remain).
   // WHY enabled gate on accessToken: the gateway requires a token; skipping
   // until the token is present prevents 401 noise in the network panel.
   // WHY queryKey includes market_id + days: each row's history is cached
   // independently — switching the filtered set doesn't invalidate the others.
-  // WHY no refetchInterval: the parent's `data` query already polls every
-  // 60s; refetching history at the same cadence would double the request
-  // volume without meaningful UX benefit (sparkline updates daily-scale).
+  // WHY no refetchInterval: the parent's list query already polls every 60s;
+  // refetching history at the same cadence would double the request volume
+  // without meaningful UX benefit (sparkline updates daily-scale).
+  const HISTORY_SPARKLINE_CAP = 9;
+  const historyMarkets = loadedMarkets.slice(0, HISTORY_SPARKLINE_CAP);
   const historyQueries = useQueries({
-    queries: topMarkets.map((m) => ({
+    queries: historyMarkets.map((m) => ({
       queryKey: ["dashboard-prediction-market-history", m.market_id, 7],
       queryFn: () => createGateway(accessToken).getPredictionMarketHistory(m.market_id, 7),
       enabled: !!accessToken,
@@ -220,7 +304,8 @@ export function PredictionMarketsWidget() {
   return (
     // WHY bg-background: consistent with all other dashboard widgets — the
     // gap-px grid already provides panel separation via background bleed.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Prediction markets">
 
       {/* ── Section header §0.9 pattern + ECON toggle ───────────────────── */}
       {/* WHY justify-between: section label on the left, ECON toggle on the right —
@@ -281,11 +366,13 @@ export function PredictionMarketsWidget() {
                 type="button"
                 onClick={() => setCategoryFilter(value)}
                 aria-pressed={active}
+                // Round 3 (item 5): bg-muted hover convention + keyboard ring.
                 className={cn(
                   "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   active
                     ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
                 {label}
@@ -300,12 +387,26 @@ export function PredictionMarketsWidget() {
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
+      {/* Round 3 (item 3): the skeleton mirrors the loaded 2-row-per-market
+          layout (22px title row + 22px pills/volume row, 3 markets) — the
+          previous single-row placeholders made the panel visibly grow when
+          the real 44px market blocks rendered. */}
       {isLoading && (
         <div className="flex-1 divide-y divide-border/30">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
-              <Skeleton className="h-3 flex-1" style={{ animationDelay: `${i * 40}ms` }} />
-              <Skeleton className="h-3 w-[40px]" />
+            <div key={i} className="px-2">
+              {/* Title row: full-width title + category chip slot */}
+              <div className="flex h-[22px] items-center gap-1.5">
+                <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 40}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40}ms` }} />
+              </div>
+              {/* Data row: Y/N pills + countdown left, sparkline + volume right */}
+              <div className="flex h-[22px] items-center gap-1.5">
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+                <span className="flex-1" />
+                <Skeleton className="h-3 w-[60px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+              </div>
             </div>
           ))}
         </div>
@@ -337,7 +438,7 @@ export function PredictionMarketsWidget() {
           to just the header + footer and the gap between Row 3 cells is visible.
           PLAN-0053 T-C-3-05: when a category filter yields 0 results, surface
           the bucket size so the user understands WHY. */}
-      {!isError && !isLoading && topMarkets.length === 0 && (
+      {!isError && !isLoading && loadedMarkets.length === 0 && (
         <div className="flex flex-1 min-h-[88px] items-center justify-center px-2">
           {categoryFilter ? (
             (() => {
@@ -355,9 +456,16 @@ export function PredictionMarketsWidget() {
               );
             })()
           ) : (
-            <span className="text-[10px] text-muted-foreground">
-              Prediction market data loading…
-            </span>
+            // Round 3 (item 4): named empty state via the shared primitive —
+            // the old "data loading…" line rendered AFTER loading finished
+            // with zero rows, which read as a permanently stuck widget. The
+            // filter branch above keeps its inline copy because it
+            // interpolates the live bucket count (registry copy is static).
+            <EmptyState
+              condition="empty-no-data"
+              copyKey="dashboard.no-markets"
+              icon={Dices}
+            />
           )}
         </div>
       )}
@@ -369,9 +477,15 @@ export function PredictionMarketsWidget() {
           probability distribution on the second line. At 44px total height per
           market (2×22px rows), 3 markets = 132px which fits the col-span-3 cell.
           Bloomberg convention: title first, data below — same as news item rows. */}
-      {!isLoading && topMarkets.length > 0 && (
-        <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {topMarkets.map((market, idx) => {
+      {!isLoading && loadedMarkets.length > 0 && (
+        // WHY overflow-auto + data-testid: this is the infinite-scroll viewport —
+        // the IntersectionObserver sentinel lives at its bottom; scrolling to it
+        // pulls the next 15 markets from the server (filter-scoped).
+        <div
+          className="flex-1 divide-y divide-border/30 overflow-auto"
+          data-testid="prediction-markets-scroll"
+        >
+          {loadedMarkets.map((market, idx) => {
             const yesPct = Math.round(market.yes_probability * 100);
             const noPct = 100 - yesPct;
 
@@ -410,10 +524,15 @@ export function PredictionMarketsWidget() {
               : null;
 
             // ── PLAN-0048 D-2: derive category, delta, countdown, sparkline ──
-            const category = categorize(market.title);
+            // 2026-06-10: prefer the SERVER category (now mapped through the
+            // gateway) so the row chip matches the filter pills' taxonomy;
+            // the keyword heuristic remains the fallback for NULL-category
+            // rows (≈half the universe until the backfill lands).
+            const category = market.category ?? categorize(market.title);
             const countdown = formatCountdown(market.resolution_date);
 
-            // History query for THIS row (aligned by index).
+            // History query for THIS row (aligned by index — only the first
+            // HISTORY_SPARKLINE_CAP rows have one; deeper rows get []).
             const history = historyQueries[idx]?.data?.points ?? [];
 
             // 24h Δ in percentage points (pp) — find the first snapshot
@@ -450,7 +569,8 @@ export function PredictionMarketsWidget() {
               // WHY cursor-pointer + hover:bg-muted/30: standard terminal row interactivity.
               <div
                 key={market.market_id}
-                className="cursor-pointer px-2 transition-colors hover:bg-muted/30"
+                // Round 3 (item 5): inset focus-visible ring for keyboard nav.
+                className="cursor-pointer px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                 onClick={handleMarketClick}
                 role="button"
                 tabIndex={0}
@@ -488,8 +608,11 @@ export function PredictionMarketsWidget() {
                     (market activity). Each piece earns its place. */}
                 <div className="flex h-[22px] items-center gap-1.5">
                   {/* YES probability pill */}
+                  {/* Round 3 (item 1, §15.9): 9px → 10px — probabilities are
+                      financial data values; the design system sets a hard
+                      10px floor for those (9px is timestamps/labels only). */}
                   <span className={cn(
-                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "rounded-[2px] px-1 font-mono text-[10px] tabular-nums",
                     "bg-positive/10",
                     yesProbColor,
                   )}>
@@ -498,7 +621,7 @@ export function PredictionMarketsWidget() {
 
                   {/* NO probability pill */}
                   <span className={cn(
-                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "rounded-[2px] px-1 font-mono text-[10px] tabular-nums",
                     "bg-negative/10",
                     noProbColor,
                   )}>
@@ -514,8 +637,10 @@ export function PredictionMarketsWidget() {
                       without flickering on every minor poll. */}
                   {deltaPp !== null && (
                     <span
+                      // Round 3 (item 1, §15.9): 9px → 10px — the 24h delta
+                      // is a financial data value (pp change).
                       className={cn(
-                        "font-mono text-[9px] tabular-nums",
+                        "font-mono text-[10px] tabular-nums",
                         deltaPp > 0
                           ? "text-positive"
                           : deltaPp < 0
@@ -546,7 +671,7 @@ export function PredictionMarketsWidget() {
 
                   {/* Volume — right-aligned, muted (secondary info); hidden when null/0 (BP-264) */}
                   {formattedVolume && (
-                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground-dim">
                       {formattedVolume}
                     </span>
                   )}
@@ -554,25 +679,49 @@ export function PredictionMarketsWidget() {
               </div>
             );
           })}
+
+          {/* ── Infinite-scroll sentinel ─────────────────────────────────────
+              1px tall so it never affects layout, but still intersectable
+              (zero-height elements never report isIntersecting in some
+              browsers — same h-px convention as AlertHistoryTab). Rendered
+              ONLY while more pages exist so the observer naturally stops at
+              the end of the (filter-scoped) universe. */}
+          {hasNextPage && (
+            <div
+              ref={sentinelRef}
+              data-testid="prediction-markets-sentinel"
+              className="h-px"
+              aria-hidden
+            />
+          )}
+
+          {/* In-flight indicator for the next page — keeps the bottom edge
+              truthful while rows stream in (no spinner: §6.2 static rule). */}
+          {isFetchingNextPage && (
+            <div className="flex h-[22px] items-center justify-center">
+              <span className="text-[10px] text-muted-foreground-dim">loading more…</span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Footer: View all link if more markets exist ─────────────────────
-          PLAN-0053 T-C-3-05: wrap the previously-static text in a real
-          ``<Link>`` to the dedicated /prediction-markets page so the trader
-          can drill into the full universe. The page is a stub today (route
-          owner is the parent merge) but the link is present as a forward-
-          compatible affordance — Next.js renders it as a normal anchor and
-          the page exists when the parent merge brings in the route file. */}
+      {/* ── Footer: progress + View all link ─────────────────────────────────
+          PLAN-0053 T-C-3-05: real ``<Link>`` to the /prediction-markets page.
+          2026-06-10: with infinite scroll in-widget, the footer also shows
+          the loaded/total progress so the trader knows how deep they are in
+          the (filter-scoped) universe. */}
       {!isLoading && totalMarkets > 3 && (
-        <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
+        <div className="flex shrink-0 items-center justify-between border-t border-border/30 px-2 py-0.5">
           <Link
             href="/prediction-markets"
-            className="font-mono text-[10px] tabular-nums text-primary/70 hover:text-primary"
+            className="font-mono text-[10px] tabular-nums text-primary/70 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label={`View all ${totalMarkets} prediction markets`}
           >
             → View all ({totalMarkets})
           </Link>
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground-dim">
+            {loadedMarkets.length}/{totalMarkets}
+          </span>
         </div>
       )}
 

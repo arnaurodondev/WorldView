@@ -12,6 +12,7 @@ Security invariants:
 AGE session requirements (enforced in ``_setup_age_session``):
   1. LOAD 'age'
   2. SET search_path = ag_catalog, public
+  3. SET LOCAL max_parallel_workers_per_gather = 0  (PLAN-0112 T-1-04)
 
 Design note — BP-SA5-003 (2026-05-10):
   asyncpg's extended-query (prepared-statement) protocol fails for AGE Cypher
@@ -31,17 +32,25 @@ Design note — BP-SA5-003 (2026-05-10):
 from __future__ import annotations
 
 import asyncio
+import os
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import text
 
+# ``RawPath`` moved to the application port (``application/ports/graph_path_engine.py``)
+# in PLAN-0112 W2 so the port can reference its own return type without the
+# application layer importing infrastructure (R12).  Re-exported from this module
+# for backward compatibility with call sites/tests that import it here.  The
+# canonical definition now carries the additional ``rel_ids`` field.
+from knowledge_graph.application.ports.graph_path_engine import RawPath
 from knowledge_graph.domain.errors import KnowledgeGraphError
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # UUID validation pattern — guards entity_id before it is embedded in Cypher.
@@ -50,12 +59,32 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# Statement timeout for the AGE multi-hop query — 60s per design spec (T-E1-03).
+# Overall discovery budget — 60s per design spec (T-E1-03).  Each of the two
+# per-query asyncio.wait_for() guards uses half of this (30s).
 _DISCOVERY_TIMEOUT_SECONDS = 60.0
-_STATEMENT_TIMEOUT_MS = "60000"
+
+# DB-side statement_timeout for each AGE query.  MUST be STRICTLY LESS than the
+# per-query wait_for budget (_DISCOVERY_TIMEOUT_SECONDS / 2 = 30s) so Postgres
+# cancels the query itself BEFORE the client gives up (PLAN-0111 A-3).  The
+# previous value (60000ms = 60s) inverted this: the client wait_for fired at
+# 30s and abandoned the connection while the DB kept executing to 60s, leaving
+# an orphaned query that logged "could not send data to client: Broken pipe" /
+# "connection to client lost" (1,172 failed path_insight_jobs).  At 25s the DB
+# raises a clean ``canceling statement due to statement timeout`` that is caught
+# and mapped to PathDiscoveryTimeoutError — no orphaned connection, no spam.
+_STATEMENT_TIMEOUT_MS = "25000"
 
 # Hard cap on returned paths per hop-length query.
 _PATH_LIMIT = 200
+
+# PLAN-0112 W1 (T-1-04, §AD-5): hard ceiling on hop length.  The discovery query
+# never exceeds this many hops — at 3 (the default) the 3-hop query runs; if an
+# operator lowers it to 2 (env ``KNOWLEDGE_GRAPH_PATH_MAX_HOPS``) only the 2-hop
+# query runs.  This is the W1 belt-and-suspenders cap; W2's pruned engine raises
+# it once the membership-pruning spike proves higher hops stay within budget.
+# Read at module load to mirror the seeder's ``_HUB_MIN_RELATIONS`` env pattern;
+# clamped to >= 2 since discovery is only meaningful from 2 hops.
+_PATH_MAX_HOPS = max(2, int(os.environ.get("KNOWLEDGE_GRAPH_PATH_MAX_HOPS", "3")))
 
 
 class PathDiscoveryTimeoutError(KnowledgeGraphError):
@@ -66,30 +95,6 @@ class PathDiscoveryTimeoutError(KnowledgeGraphError):
         self.entity_id = entity_id
 
 
-@dataclass(frozen=True)
-class RawPath:
-    """A single multi-hop path returned by the AGE Cypher query.
-
-    All data required for scoring is pre-extracted so Python code never
-    needs to re-query the DB.
-    """
-
-    # entity_id values for each node in order (start → ... → end)
-    node_ids: tuple[str, ...]
-    # canonical_name of each node (same order as node_ids)
-    node_names: tuple[str, ...]
-    # entity_type of each node
-    node_types: tuple[str, ...]
-    # relation_type label of each edge (len = len(node_ids) - 1)
-    rel_types: tuple[str, ...]
-    # confidence of each edge (same order as rel_types)
-    edge_confs: tuple[float, ...]
-
-    @property
-    def hop_count(self) -> int:
-        return len(self.rel_types)
-
-
 # ── AGE session setup ─────────────────────────────────────────────────────────
 
 
@@ -98,9 +103,18 @@ async def _setup_age_session(session: AsyncSession) -> None:
 
     Must be called before any AGE Cypher query on a fresh connection.
     Mirrors the pattern in AgeSyncWorker and CypherPathUseCase.
+
+    PLAN-0112 T-1-04 (NFR-2): also disables intra-query parallelism for this
+    session.  AGE's edge-expansion under a parallel Gather spawns background
+    workers that frequently die mid-traversal, spamming the Postgres log with
+    ``FATAL: parallel worker failed to initialize`` / ``terminating connection
+    because of crash of another server process``.  Forcing a serial plan with
+    ``max_parallel_workers_per_gather = 0`` eliminates that noise with no
+    measurable latency cost on the tiny KG graph.
     """
     await session.execute(text("LOAD 'age'"))
     await session.execute(text("SET search_path = ag_catalog, public"))
+    await session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
 
 
 # ── Scalar-based Cypher SQL builders ─────────────────────────────────────────
@@ -122,7 +136,14 @@ async def _setup_age_session(session: AsyncSession) -> None:
 
 
 def _build_2hop_sql(entity_id: str) -> str:
-    """Build the 2-hop undirected path query returning scalar columns."""
+    """Build the 2-hop undirected path query returning scalar columns.
+
+    .. deprecated:: PLAN-0112 W2 (T-2-02)
+        Superseded by ``AgeGraphPathEngine`` (typed staged-VLE, BP-689 fix).
+        This untyped-explicit-edge form expands every edge (including huge
+        membership relations) at every hop — the hub blow-up.  Retained only
+        until the deprecated ``PathDiscovery`` shim is removed in W6.
+    """
     return (
         "SELECT "  # noqa: S608 — only UUID-validated hex literal embedded; no user input
         "  n0_id::text, n0_name::text, n0_type::text,"
@@ -151,7 +172,12 @@ def _build_2hop_sql(entity_id: str) -> str:
 
 
 def _build_3hop_sql(entity_id: str) -> str:
-    """Build the 3-hop undirected path query returning scalar columns."""
+    """Build the 3-hop undirected path query returning scalar columns.
+
+    .. deprecated:: PLAN-0112 W2 (T-2-02)
+        Superseded by ``AgeGraphPathEngine`` (typed staged-VLE, BP-689 fix).
+        See :func:`_build_2hop_sql`.
+    """
     # Use a smaller LIMIT for 3-hop to stay under the total 200 path cap.
     limit_3hop = _PATH_LIMIT // 2
     return (
@@ -303,6 +329,12 @@ def _parse_3hop_row(row: Any) -> RawPath | None:
 class PathDiscovery:
     """Discover multi-hop paths from an anchor entity via Apache AGE.
 
+    .. deprecated:: PLAN-0112 W2 (T-2-04)
+        Replaced by ``AgeGraphPathEngine`` (typed staged-VLE + membership
+        pruning).  ``PathInsightWorker`` now depends on the ``GraphPathEngine``
+        port.  This class is kept as a thin deprecated shim until W6 so the
+        worker can fall back if needed; new code MUST use the port.
+
     Runs two separate Cypher queries (2-hop and 3-hop) using explicit scalar
     column returns to avoid the asyncpg agtype list protocol incompatibility
     (BP-SA5-003).  Results are assembled into :class:`RawPath` objects.
@@ -335,6 +367,10 @@ class PathDiscovery:
         sql_2hop = _build_2hop_sql(eid_str)
         sql_3hop = _build_3hop_sql(eid_str)
 
+        # PLAN-0112 T-1-04: honour the hop ceiling.  The 3-hop query only runs
+        # when the cap allows 3+ hops (default 3); a lowered cap of 2 skips it.
+        run_3hop = _PATH_MAX_HOPS >= 3
+
         raw_paths: list[RawPath] = []
         seen: set[tuple[str, ...]] = set()
 
@@ -350,11 +386,13 @@ class PathDiscovery:
                 )
                 rows_2 = result_2.fetchall()
 
-                result_3 = await asyncio.wait_for(
-                    session.execute(text(sql_3hop)),
-                    timeout=_DISCOVERY_TIMEOUT_SECONDS / 2,
-                )
-                rows_3 = result_3.fetchall()
+                rows_3: Sequence[Any] = ()
+                if run_3hop:
+                    result_3 = await asyncio.wait_for(
+                        session.execute(text(sql_3hop)),
+                        timeout=_DISCOVERY_TIMEOUT_SECONDS / 2,
+                    )
+                    rows_3 = result_3.fetchall()
 
             except TimeoutError as exc:
                 logger.warning(  # type: ignore[no-any-return]

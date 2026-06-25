@@ -15,14 +15,16 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.application.services.resolver_gates import TICKER_SHAPE_RE as _TICKER_SHAPE_RE
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
 from .base import ToolHandler
 
 if TYPE_CHECKING:
+    from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
     from rag_chat.application.pipeline.tool_executor import EntityContext, ToolUseBlock
-    from rag_chat.application.ports.upstream_clients import S7IntelligencePort
+    from rag_chat.application.ports.upstream_clients import S6Port, S7IntelligencePort
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -36,7 +38,14 @@ class NarrativeHandler(ToolHandler):
     """
 
     _HANDLED_TOOLS = frozenset(
-        {"get_entity_narrative", "get_entity_paths", "get_entity_health", "get_entity_intelligence"}
+        {
+            "get_entity_narrative",
+            "get_entity_paths",
+            "get_entity_health",
+            "get_entity_intelligence",
+            # PLAN-0112 W4: on-demand two-entity pairwise pathfinding.
+            "get_path_between",
+        }
     )
 
     def __init__(
@@ -44,10 +53,21 @@ class NarrativeHandler(ToolHandler):
         s7_intel: S7IntelligencePort | None = None,
         entity_context: EntityContext | None = None,
         timeout: float = 5.0,
+        # BP-661: optional resolvers so a non-UUID ``entity_id`` from the LLM
+        # ("AAPL", "Apple Inc.") can be resolved tool-side instead of being
+        # dropped on the floor by UUID() parsing. ``s6`` resolves tickers;
+        # ``name_resolver`` (the sibling IntelligenceHandler, which owns the
+        # S7 alias-search + tiebreaker pipeline) resolves free-text names.
+        # Both default to None so existing tests / minimal harnesses keep
+        # the legacy UUID-only behaviour.
+        s6: S6Port | None = None,
+        name_resolver: IntelligenceHandler | None = None,
     ) -> None:
         self._s7_intel = s7_intel
         self._entity_context = entity_context
         self._timeout = timeout
+        self._s6 = s6
+        self._name_resolver = name_resolver
 
     def can_handle(self, tool_name: str) -> bool:
         return tool_name in self._HANDLED_TOOLS
@@ -64,6 +84,7 @@ class NarrativeHandler(ToolHandler):
             "get_entity_paths": self._handle_get_entity_paths,
             "get_entity_health": self._handle_get_entity_health,
             "get_entity_intelligence": self._handle_get_entity_intelligence,
+            "get_path_between": self._handle_get_path_between,
         }
         target = dispatch.get(tool_name)
         if target is None:
@@ -73,29 +94,106 @@ class NarrativeHandler(ToolHandler):
 
     # ── Entity ID resolver (M-1: EntityContext scope enforcement) ──────────────
 
-    def _resolve_intel_entity_id(self, tool_name: str, llm_entity_id: str | None) -> UUID | None:
+    async def _resolve_intel_entity_id(self, tool_name: str, llm_entity_id: str | None) -> UUID | None:
         """Resolve entity_id, enforcing EntityContext scope (M-1).
 
-        When the executor is bound to an entity scope, all intelligence tools MUST
-        use that entity_id regardless of what the LLM passes. Prevents cross-entity
-        data leakage in entity-first queries.
+        PINNED scope (``entity_context.pinned is True`` — the
+        ``/chat/entity-context`` surfaces): all intelligence tools MUST use the
+        scoped entity_id regardless of what the LLM passes. Prevents
+        cross-entity data leakage in entity-first queries.
+
+        INFERRED scope (``entity_context.pinned is False`` — the regular
+        ``/chat`` path, where the scope is just ``entities[0]`` from the S6
+        resolve): BP-661 P/E→Pandora (2026-06-12). S6's ``entities[0]`` ranking
+        is fragile for relationship/comparison questions — it ranked Alexandria
+        Real Estate #1 for "Apple's competitors" and Pandora #1 for "AAPL's
+        P/E". The old code blindly returned the scoped id, DISCARDING the LLM's
+        correct ``entity_id: "AAPL"`` and loading the wrong company's bundle.
+        For inferred scope we now PREFER a VALID, resolvable LLM-supplied
+        ``entity_id`` and only fall back to the scoped id when the LLM arg is
+        missing or unresolvable.
+
+        BP-661 (the "what is AAPL?" empty-answer bug): the LLM frequently
+        passes a TICKER or a COMPANY NAME in ``entity_id`` when no entity map
+        was injected into the prompt (the orchestrator's resolver gate bailed
+        as ambiguous). The old implementation did ``UUID("AAPL")`` →
+        ``ValueError`` → empty tool result → "I cannot find a matching
+        entity" answer, even though the entity exists. We now resolve
+        non-UUID identifiers tool-side:
+
+          1. UUID parse — fast path, unchanged behaviour.
+          2. Ticker-shaped string ("AAPL", "BRK.B") → S6 ticker resolution
+             (phantom-twin aware, see S6Client.resolve_entity_by_ticker).
+          3. Anything else (and ticker misses) → S7 alias name resolution
+             via the sibling IntelligenceHandler (stop-words + similarity
+             floor + delta gate + tiebreakers).
         """
-        if self._entity_context is not None:
-            if llm_entity_id is not None and llm_entity_id != str(self._entity_context.entity_id):
+        _ctx = self._entity_context
+        _ctx_pinned = bool(getattr(_ctx, "pinned", True)) if _ctx is not None else False
+
+        if _ctx is not None and _ctx_pinned:
+            # Pinned entity-context surface — hard override is intentional.
+            if llm_entity_id is not None and llm_entity_id != str(_ctx.entity_id):
                 log.warning(
                     "entity_context_override",
                     tool=tool_name,
                     llm_entity_id=llm_entity_id,
-                    scoped_entity_id=str(self._entity_context.entity_id),
+                    scoped_entity_id=str(_ctx.entity_id),
                 )
-            return self._entity_context.entity_id
-        if llm_entity_id is not None:
+            return _ctx.entity_id
+
+        if llm_entity_id is None:
+            # No LLM id — fall back to the inferred scope when present.
+            if _ctx is not None:
+                return _ctx.entity_id
+            log.warning("tool_no_entity_id", tool=tool_name)
+            return None
+
+        try:
+            return UUID(llm_entity_id)
+        except ValueError:
+            pass
+
+        identifier = llm_entity_id.strip()
+        # ── Step 2: ticker-shaped → S6 ticker resolution ──────────────────────
+        if self._s6 is not None and _TICKER_SHAPE_RE.match(identifier):
             try:
-                return UUID(llm_entity_id)
-            except ValueError:
-                log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=llm_entity_id)
-                return None
-        log.warning("tool_no_entity_id", tool=tool_name)
+                resolved = await asyncio.wait_for(
+                    self._s6.resolve_entity_by_ticker(identifier),
+                    timeout=self._timeout,
+                )
+            except Exception as e:
+                log.warning("tool_ticker_resolution_failed", tool=tool_name, ticker=identifier, error=str(e))
+                resolved = None
+            if resolved is not None:
+                log.info(
+                    "tool_entity_resolved_by_ticker",
+                    tool=tool_name,
+                    ticker=identifier,
+                    resolved_entity_id=str(resolved),
+                )
+                return resolved
+
+        # ── Step 3: free-text name → S7 alias resolution ──────────────────────
+        if self._name_resolver is not None:
+            resolved = await self._name_resolver.resolve_name(tool_name, identifier)
+            if resolved is not None:
+                return resolved
+
+        # The LLM id was non-empty but unresolvable. For an INFERRED scope fall
+        # back to the question-level entity so the user still gets an answer
+        # about the entity they most likely meant (BP-661 P/E→Pandora: better
+        # to answer about the inferred entity than to drop to []).
+        if _ctx is not None:
+            log.info(
+                "tool_entity_id_fallback_to_context",
+                tool=tool_name,
+                llm_entity_id=llm_entity_id,
+                scoped_entity_id=str(_ctx.entity_id),
+            )
+            return _ctx.entity_id
+
+        log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=llm_entity_id)
         return None
 
     # ── Handlers ───────────────────────────────────────────────────────────────
@@ -110,7 +208,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_narrative", port="s7_intel")
             return []
 
-        resolved_id = self._resolve_intel_entity_id("get_entity_narrative", entity_id)
+        resolved_id = await self._resolve_intel_entity_id("get_entity_narrative", entity_id)
         if resolved_id is None:
             return []
 
@@ -127,7 +225,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_no_data", tool="get_entity_narrative", entity_id=str(resolved_id))
             return []
 
-        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        entity_name = self._entity_context.name if self._entity_context else (entity_id or str(resolved_id))
         item = RetrievedItem.create(
             item_id=f"tool:narrative:{resolved_id}",
             item_type=ItemType.financial,
@@ -155,7 +253,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_paths", port="s7_intel")
             return []
 
-        resolved_id = self._resolve_intel_entity_id("get_entity_paths", entity_id)
+        resolved_id = await self._resolve_intel_entity_id("get_entity_paths", entity_id)
         if resolved_id is None:
             return []
 
@@ -174,7 +272,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_no_data", tool="get_entity_paths", entity_id=str(resolved_id))
             return []
 
-        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        entity_name = self._entity_context.name if self._entity_context else (entity_id or str(resolved_id))
         lines = [f"Top {len(result.paths)} relationship paths for {entity_name}:"]
         for i, path in enumerate(result.paths, 1):
             path_str = str(path)[:200]
@@ -197,6 +295,117 @@ class NarrativeHandler(ToolHandler):
         )
         return [item]
 
+    # ── Pairwise resolver (M-1: NO context-pin override for two-entity tools) ──
+
+    async def _resolve_pairwise_entity_id(self, tool_name: str, raw_id: str | None) -> UUID | None:
+        """Resolve a single endpoint id for ``get_path_between`` (UUID / ticker / name).
+
+        Unlike :meth:`_resolve_intel_entity_id`, this deliberately does NOT apply
+        the EntityContext PINNED override: a pairwise query names TWO distinct
+        entities, so forcing either to the scoped entity_id would collapse the
+        query to "A connected to A" (always disconnected) — the very bug the
+        same-entity guard rejects. We resolve each supplied identifier on its own
+        merits (UUID fast-path → S6 ticker → S7 alias name).
+        """
+        if raw_id is None:
+            return None
+        try:
+            return UUID(raw_id)
+        except ValueError:
+            pass
+
+        identifier = raw_id.strip()
+        # Ticker-shaped → S6 ticker resolution (phantom-twin aware).
+        if self._s6 is not None and _TICKER_SHAPE_RE.match(identifier):
+            try:
+                resolved = await asyncio.wait_for(
+                    self._s6.resolve_entity_by_ticker(identifier),
+                    timeout=self._timeout,
+                )
+            except Exception as e:
+                log.warning("tool_ticker_resolution_failed", tool=tool_name, ticker=identifier, error=str(e))
+                resolved = None
+            if resolved is not None:
+                return resolved
+
+        # Free-text name → S7 alias resolution.
+        if self._name_resolver is not None:
+            resolved = await self._name_resolver.resolve_name(tool_name, identifier)
+            if resolved is not None:
+                return resolved
+
+        log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=raw_id)
+        return None
+
+    async def _handle_get_path_between(
+        self,
+        tool_call: ToolUseBlock,
+        source_entity: str | None = None,
+        target_entity: str | None = None,
+        max_hops: int = 3,
+    ) -> list[RetrievedItem]:
+        """On-demand pairwise pathfinding between two entities via S9 (PLAN-0112 W4).
+
+        Calls ``S7IntelligencePort.get_path_between`` (S9-proxied, R14). Both
+        endpoints are resolved independently (no context pinning). Returns a
+        single ``RetrievedItem`` summarising connectivity + the ranked paths;
+        an empty list when a port/endpoint is missing or the entities are not
+        connected (R9 safe degradation).
+        """
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_path_between", port="s7_intel")
+            return []
+
+        source_id = await self._resolve_pairwise_entity_id("get_path_between", source_entity)
+        target_id = await self._resolve_pairwise_entity_id("get_path_between", target_entity)
+        if source_id is None or target_id is None:
+            log.warning("tool_no_data", tool="get_path_between", source=source_entity, target=target_entity)
+            return []
+        if source_id == target_id:
+            log.warning("tool_same_entity", tool="get_path_between", entity_id=str(source_id))
+            return []
+
+        max_hops_clamped = max(1, min(int(max_hops), 3))
+
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_path_between(source_id, target_id, max_hops=max_hops_clamped),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_path_between", error=str(e))
+            return []
+
+        src_label = source_entity or str(source_id)
+        tgt_label = target_entity or str(target_id)
+
+        if not result.connected:
+            text = f"No connection found between {src_label} and {tgt_label} " f"within {max_hops_clamped} hops."
+        else:
+            lines = [
+                f"{src_label} IS connected to {tgt_label} "
+                f"(shortest path: {result.shortest_hops} hop(s)). Top paths:"
+            ]
+            for i, path in enumerate(result.paths, 1):
+                lines.append(f"  {i}. {str(path)[:240]}")
+            text = "\n".join(lines)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:pathbetween:{source_id}:{target_id}",
+            item_type=ItemType.relation,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.86,
+            trust_weight=0.82,
+            citation_meta=CitationMeta(
+                title=f"Connection: {src_label} ↔ {tgt_label}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=src_label,
+            ),
+        )
+        return [item]
+
     async def _handle_get_entity_health(
         self,
         tool_call: ToolUseBlock,
@@ -207,7 +416,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_health", port="s7_intel")
             return []
 
-        resolved_id = self._resolve_intel_entity_id("get_entity_health", entity_id)
+        resolved_id = await self._resolve_intel_entity_id("get_entity_health", entity_id)
         if resolved_id is None:
             return []
 
@@ -224,7 +433,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_no_data", tool="get_entity_health", entity_id=str(resolved_id))
             return []
 
-        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        entity_name = self._entity_context.name if self._entity_context else (entity_id or str(resolved_id))
         lines = [f"Health data for {entity_name}:"]
         if result.health_score is not None:
             lines.append(f"  Health score: {result.health_score:.2f}")
@@ -260,7 +469,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="get_entity_intelligence", port="s7_intel")
             return []
 
-        resolved_id = self._resolve_intel_entity_id("get_entity_intelligence", entity_id)
+        resolved_id = await self._resolve_intel_entity_id("get_entity_intelligence", entity_id)
         if resolved_id is None:
             return []
 
@@ -277,7 +486,7 @@ class NarrativeHandler(ToolHandler):
             log.warning("tool_no_data", tool="get_entity_intelligence", entity_id=str(resolved_id))
             return []
 
-        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        entity_name = self._entity_context.name if self._entity_context else (entity_id or str(resolved_id))
         sections = [f"Intelligence bundle for {entity_name}:"]
         if result.narrative:
             sections.append(f"\n## Narrative\n{result.narrative}")

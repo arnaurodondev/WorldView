@@ -41,7 +41,11 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.dispatcher_batch_size == 50
     assert s.dispatcher_poll_interval_seconds == 1.0
     assert s.dispatcher_lease_seconds == 60
-    assert s.dispatcher_max_attempts == 5
+    # BP-612: raised 5 → 20 (config default) so a transient broker blip cannot
+    # burn the retry budget in minutes and permanently dead-letter rows. This
+    # assertion was stale against the committed default until the BUG-4/BUG-5
+    # reliability follow-ups; aligned here to the intended value.
+    assert s.dispatcher_max_attempts == 20
     assert s.otlp_endpoint == ""
     assert s.log_level == "INFO"
     assert s.api_gateway_url == "http://api-gateway:8000"

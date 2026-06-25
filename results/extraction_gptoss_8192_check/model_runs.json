@@ -1,0 +1,305 @@
+[
+  {
+    "doc_id": "019ecfc0-b1d8-7ee1-a697-1d9d895a67dd",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 12.82,
+    "tokens_in": 3094,
+    "tokens_out": 661,
+    "raw_response": "{\n  \"events\": [],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Private Equity\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Private Equity’s Push Into 401(k)s Has a Big PR Problem\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [],
+      "claims": [
+        {
+          "entity_ref": "Private Equity",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "Private Equity’s Push Into 401(k)s Has a Big PR Problem"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 0,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0af-3b6a-7445-83cc-d719dc588ad4",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 18.38,
+    "tokens_in": 5289,
+    "tokens_out": 807,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Disclosure under Chapter 9 Section 5 of the Securities Market Act regarding BlackRock, Inc.'s shareholding falling below 5% of Orion Corporation's total shares\",\n      \"entity_refs\": [\"BlackRock, Inc.\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Orion Corporation has received a disclosure under Chapter 9, Section 5 of the Securities Market Act, according to which the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Disclosure under Chapter 9 Section 5 of the Securities Market Act regarding BlackRock, Inc.'s shareholding falling below 5% of Orion Corporation's total shares",
+          "entity_refs": [
+            "BlackRock, Inc."
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Orion Corporation has received a disclosure under Chapter 9, Section 5 of the Securities Market Act, according to which the total number of Orion shares owned directly and indirectly by BlackRock, Inc. and its funds ... decreased on 15 June 2026 below five (5) per cent of Orion Corporation's total shares.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfac-fafd-773b-9ce4-99a5a7d36ca3",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 26.867,
+    "tokens_in": 4964,
+    "tokens_out": 1490,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Oil steadied after the biggest drop in more than two weeks\",\n      \"entity_refs\": [\"Oil\", \"Strait of Hormuz\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"(Bloomberg) -- Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Interim agreement to be signed in Switzerland\",\n      \"entity_refs\": [\"Switzerland\", \"Washington\", \"Tehran\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The interim agreement is due to be signed by both sides in Switzerland on Friday, although Washington and Tehran have yet to release the text of the memorandum of understanding.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Donald Trump insisted the Strait of Hormuz would be clear\",\n      \"entity_refs\": [\"Donald Trump\", \"Strait of Hormuz\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"President Donald Trump insisted that the strait would be clear on Friday.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Oil drop eases inflationary pressures as Federal Reserve assesses rates\",\n      \"entity_refs\": [\"Oil\", \"Federal Reserve\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.\",\n      \"confidence\": 0.94\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Oil steadied after the biggest drop in more than two weeks",
+          "entity_refs": [
+            "Oil",
+            "Strait of Hormuz"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "(Bloomberg) -- Oil steadied after the biggest drop in more than two weeks as traders, shippers and producers waited for details of a US-Iran deal that's intended to pave the way for the full reopening of the Strait of Hormuz.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "OTHER",
+          "description": "Interim agreement to be signed in Switzerland",
+          "entity_refs": [
+            "Switzerland",
+            "Washington",
+            "Tehran"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The interim agreement is due to be signed by both sides in Switzerland on Friday, although Washington and Tehran have yet to release the text of the memorandum of understanding.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "OTHER",
+          "description": "Donald Trump insisted the Strait of Hormuz would be clear",
+          "entity_refs": [
+            "Donald Trump",
+            "Strait of Hormuz"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "President Donald Trump insisted that the strait would be clear on Friday.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "Oil drop eases inflationary pressures as Federal Reserve assesses rates",
+          "entity_refs": [
+            "Oil",
+            "Federal Reserve"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Oil's drop to the lowest since early March has erased the bulk of the gains seen during the conflict, easing inflationary pressures just as policymakers at the Federal Reserve assess interest rates this week.",
+          "confidence": 0.94
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 4,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfec-a4e8-7da3-aadc-29e7af547f3f",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 21.72,
+    "tokens_in": 4167,
+    "tokens_out": 1205,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Trump Administration announced a new peace deal leading to the reopening of the Strait of Hormuz\",\n      \"entity_refs\": [\"Amphenol\", \"Strait of Hormuz\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Shares of electrical connector manufacturer Amphenol (NYSE:APH) jumped 3.3% in the afternoon session after yields tumbled as the Trump Administration announced a new peace deal that would lead to the reopening of the Strait of Hormuz.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Amphenol\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Amphenol is up 13.7% since the beginning of the year\"\n    },\n    {\n      \"entity_ref\": \"Amphenol\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Shares of electrical connector manufacturer Amphenol (NYSE:APH) jumped 3.3% in the afternoon session\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Trump Administration announced a new peace deal leading to the reopening of the Strait of Hormuz",
+          "entity_refs": [
+            "Amphenol",
+            "Strait of Hormuz"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Shares of electrical connector manufacturer Amphenol (NYSE:APH) jumped 3.3% in the afternoon session after yields tumbled as the Trump Administration announced a new peace deal that would lead to the reopening of the Strait of Hormuz.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Amphenol",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Amphenol is up 13.7% since the beginning of the year"
+        },
+        {
+          "entity_ref": "Amphenol",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Shares of electrical connector manufacturer Amphenol (NYSE:APH) jumped 3.3% in the afternoon session"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 2,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf97-d54e-7454-a5b0-706d94031382",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 34.495,
+    "tokens_in": 4853,
+    "tokens_out": 2080,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"Tenet Healthcare ended the recent trading session at $179.11, demonstrating a +2.55% change from the preceding day's closing price.\",\n      \"entity_refs\": [\"Tenet Healthcare\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Tenet Healthcare (THC) ended the recent trading session at $179.11, demonstrating a +2.55% change from the preceding day's closing price.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"The Dow gained 0.92%.\",\n      \"entity_refs\": [\"Dow\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"Meanwhile, the Dow gained 0.92%,\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"The Nasdaq added 3.07%.\",\n      \"entity_refs\": [\"Nasdaq\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"and the Nasdaq, a tech-heavy index, added 3.07%.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"The S&P 500 registered a daily gain of 1.65%.\",\n      \"entity_refs\": [\"S&P 500\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The stock outperformed the S&P 500, which registered a daily gain of 1.65%.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"The S&P 500's gain of 0.48%.\",\n      \"entity_refs\": [\"S&P 500\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"and the S&P 500's gain of 0.48%.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"analysts expect Tenet Healthcare to post earnings of $4.08 per share. This would mark year-over-year growth of 1.49%.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"our most recent consensus estimate is anticipating revenue of $5.39 billion, indicating a 2.27% upward movement from the same quarter last year.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"GUIDANCE_RAISE\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"analysts are expecting earnings of $17.61 per share ... these totals would mark changes of +4.95%.\"\n    },\n    {\n      \"entity_ref\": \"Tenet Healthcare\",\n      \"claim_type\": \"REVENUE_GROWTH\",\n      \"polarity\": \"positive\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"analysts are expecting ... revenue of $22.02 billion. These totals would mark changes of ... +3.32%.\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Tenet Healthcare ended the recent trading session at $179.11, demonstrating a +2.55% change from the preceding day's closing price.",
+          "entity_refs": [
+            "Tenet Healthcare"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Tenet Healthcare (THC) ended the recent trading session at $179.11, demonstrating a +2.55% change from the preceding day's closing price.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "MACRO",
+          "description": "The Dow gained 0.92%.",
+          "entity_refs": [
+            "Dow"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Meanwhile, the Dow gained 0.92%,",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "The Nasdaq added 3.07%.",
+          "entity_refs": [
+            "Nasdaq"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "and the Nasdaq, a tech-heavy index, added 3.07%.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "The S&P 500 registered a daily gain of 1.65%.",
+          "entity_refs": [
+            "S&P 500"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The stock outperformed the S&P 500, which registered a daily gain of 1.65%.",
+          "confidence": 0.95
+        },
+        {
+          "event_type": "MACRO",
+          "description": "The S&P 500's gain of 0.48%.",
+          "entity_refs": [
+            "S&P 500"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "and the S&P 500's gain of 0.48%.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "analysts expect Tenet Healthcare to post earnings of $4.08 per share. This would mark year-over-year growth of 1.49%."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.96,
+          "evidence_text": "our most recent consensus estimate is anticipating revenue of $5.39 billion, indicating a 2.27% upward movement from the same quarter last year."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "GUIDANCE_RAISE",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "analysts are expecting earnings of $17.61 per share ... these totals would mark changes of +4.95%."
+        },
+        {
+          "entity_ref": "Tenet Healthcare",
+          "claim_type": "REVENUE_GROWTH",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "analysts are expecting ... revenue of $22.02 billion. These totals would mark changes of ... +3.32%."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 5,
+    "n_claims": 4,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9d-864f-7747-ae96-ea1b40061244",
+    "model_id": "openai/gpt-oss-120b@medium",
+    "status": "ok",
+    "latency_s": 15.716,
+    "tokens_in": 3146,
+    "tokens_out": 867,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"ANALYST_RATING\",\n      \"description\": \"Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says\",\n      \"entity_refs\": [\"RBC\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "ANALYST_RATING",
+          "description": "Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says",
+          "entity_refs": [
+            "RBC"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  }
+]

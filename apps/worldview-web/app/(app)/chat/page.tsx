@@ -59,12 +59,16 @@ import {
   useRef,
   useState,
 } from "react";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Download,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
+  RotateCcw,
   Search,
   Send,
 } from "lucide-react";
@@ -81,6 +85,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+// Round 3 Polish: shared empty-state primitive (DS §15.12) for the
+// no-history sidebar + the empty-conversation welcome. Copy lives in
+// lib/copy/empty-states.ts under the chat.* keys.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 3 Polish: canonical focus-ring class strings (PRD-0089 F1 §3.2) —
+// Tier-2 input ring for the search box + composer textarea.
+import { FocusRing } from "@/components/primitives/FocusRing";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { downloadThread } from "@/lib/chat/export-thread";
 import type { Thread, Message } from "@/types/api";
@@ -100,7 +111,6 @@ import { ThreadItem } from "@/features/chat/components/ThreadItem";
 import {
   PLACEHOLDER_THREAD_TITLE,
   STARTER_QUESTIONS,
-  PORTFOLIO_STARTER_QUESTIONS,
   entityStarters,
 } from "@/features/chat/lib/starters";
 import { MarketContextBanner } from "@/components/chat/MarketContextBanner";
@@ -111,6 +121,40 @@ import { useChatStream } from "@/features/chat/hooks/useChatStream";
 // `clearPendingAction` values from `useChatStream`. Both live at this page
 // level, so the modal is wired here rather than inside a sub-component.
 import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModal";
+// PLAN-0099 W4: right-side context rail — entity card, citations, contradictions,
+// related tickers. Collapsed by Cmd+\ keyboard shortcut (wired below).
+import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
+// Round 1 Foundation: date-bucketed sidebar groups (Today / Yesterday / …).
+import { groupThreadsByDate } from "@/features/chat/lib/group-threads";
+// Round 2 Enhancement / Wave 2 update: suggested follow-up chips under the
+// latest completed assistant answer. FollowUpChips is the pure presenter.
+// The backend NOW emits a `suggestions` SSE event after the final token
+// (Wave-1 backend change) — useChatStream surfaces it as serverSuggestions
+// and the memo below PREFERS it; generateFollowUps remains the deterministic
+// client-side fallback (legacy backends + history-reloaded turns).
+import { FollowUpChips } from "@/features/chat/components/FollowUpChips";
+// Round 3 Polish: welcomeStarterPrompts draws the empty-conversation welcome
+// chips from the SAME generic pool generateFollowUps pads with, so pre-first-
+// message suggestions and post-answer suggestions speak one language.
+import {
+  generateFollowUps,
+  welcomeStarterPrompts,
+} from "@/features/chat/lib/follow-ups";
+// Round 2 Enhancement: shared conversation ticker extractor — the same
+// detection the ChatContextRail uses, so the chips' entity substitutions
+// always agree with the cards the analyst sees in the rail.
+import { extractTickers } from "@/features/chat/lib/ticker-extract";
+// Round 1 Foundation (PRD-0089 Q-8): debug-only tool trace drawer. The
+// useDebugFlag gate means the drawer code path is completely inert (no
+// listeners, no render) unless ?debug=1 is in the URL.
+import { ToolTraceDrawer } from "@/features/chat/components/ToolTraceDrawer";
+// Phase-1 Part C: the always-visible, human-readable agent-step trace. Shown
+// in the StreamingBubble during the stream and as a collapsed one-line summary
+// after it settles. UNLIKE ToolTraceDrawer (above), this is NOT gated behind
+// ?debug=1 — it is a first-class part of the chat surface for every user.
+import { ResearchTimeline } from "@/features/chat/components/ResearchTimeline";
+import { useDebugFlag } from "@/features/chat/hooks/useDebugFlag";
+import { useToolTraceChord } from "@/features/chat/hooks/useToolTraceChord";
 
 // ── Main page component ───────────────────────────────────────────────────────
 
@@ -123,6 +167,13 @@ export default function ChatPage() {
   // PLAN-0052 platform-QA round 5: router for the 401 re-auth CTA below.
   const router = useRouter();
   const entityIdFromUrl = searchParams.get("entity_id");
+  // Round 2 Enhancement: ?thread=<id> deep-link support. The command palette
+  // (Round 1) navigates to /chat?thread=<id> when the user picks a recent
+  // conversation — until now the param was silently ignored and the page
+  // landed on the empty state. Consumed by the effect below (after the
+  // useChatStream hook is initialised, because applying the param must abort
+  // any in-flight stream via resetForThread).
+  const threadIdFromUrl = searchParams.get("thread");
 
   // QA-iter1 MAJ-5: ?entity_id= carries a UUID, not a ticker. The earlier
   // draft displayed it verbatim, producing strings like "What's the latest
@@ -159,9 +210,36 @@ export default function ChatPage() {
     return entityIdFromUrl;
   }, [entityIdFromUrl, looksLikeUuid, resolvedEntity]);
 
+  // ── Context rail collapse state ───────────────────────────────────────────
+  // WHY default false (open): the rail is the primary added value of this
+  // layout. Analysts who don't want it can collapse with Cmd+\. Starting
+  // collapsed would hide the feature entirely on first load.
+  const [isContextRailCollapsed, setIsContextRailCollapsed] = useState(false);
+
   // ── Thread list state ──────────────────────────────────────────────────────
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+
+  // Round 1 Foundation: collapsible history sidebar. Default OPEN — history
+  // is core navigation; collapsing is an opt-in to maximise the message
+  // column on small screens. When collapsed we render a slim 36px rail with
+  // just the expand affordance (full unmount would lose the user's mental
+  // anchor of "the history lives on the left").
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Round 1 Foundation (PRD-0089 Q-8): ?debug=1 gate + ⌘D chord for the
+  // ToolTraceDrawer. With debug off the chord hook registers nothing.
+  const isDebug = useDebugFlag();
+  const { isOpen: isTraceOpen, close: closeTrace } = useToolTraceChord(isDebug);
+
+  // Wave 2: href for the context rail's "Inspect per-call trace" link when
+  // debug mode is OFF. Built HERE (the page owns next/navigation concerns;
+  // the rail stays router-free) and carries the active thread id so the
+  // full-page navigation to ?debug=1 re-lands on the same conversation via
+  // the existing ?thread= deep-link effect above.
+  const debugHref = activeThreadId
+    ? `/chat?thread=${encodeURIComponent(activeThreadId)}&debug=1`
+    : "/chat?debug=1";
 
   // PLAN-0103 W3: ephemeral thread ids — client-minted UUIDs that don't yet
   // exist on the backend. When the user clicks "New chat" we mint a UUID for
@@ -190,7 +268,10 @@ export default function ChatPage() {
   // sidebar springs back to the top — disorienting when the user has
   // scrolled to find an older thread. We capture scrollTop just before
   // the refetch invalidation and restore it once the new list is mounted.
-  const sidebarScrollRef = useRef<HTMLDivElement>(null);
+  // Round 4 a11y: typed HTMLElement (was HTMLDivElement) — the scroll
+  // container is now a <nav> landmark so screen-reader users can jump to
+  // the thread history with landmark navigation.
+  const sidebarScrollRef = useRef<HTMLElement>(null);
   const savedScrollTopRef = useRef<number>(0);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
@@ -216,6 +297,16 @@ export default function ChatPage() {
   const {
     data: activeThread,
     isLoading: threadLoading,
+    // Round 4 hardening (error recovery 1c): a failed thread load previously
+    // fell through to the EMPTY-conversation render (starter-question grid) —
+    // the user clicked a thread (or followed a ?thread= deep link), the GET
+    // 404'd/500'd, and the page silently presented a blank "new" conversation
+    // as if the history never existed. We now read the error + refetch handle
+    // and render an explicit error state with a Retry CTA (see the message
+    // area below). The composer stays usable throughout — sending a message
+    // into the thread is still valid even when history retrieval failed.
+    error: threadLoadError,
+    refetch: refetchActiveThread,
   } = useQuery<Thread>({
     // WHY qk.chat.thread(id) (was ["thread", id, accessToken]):
     // Same accessToken-in-key anti-pattern as above. Also: staleTime was 0,
@@ -254,7 +345,25 @@ export default function ChatPage() {
     // AgentIterationProgress strip inside the StreamingBubble. Eliminates the
     // perceived hang between tool batches on multi-iteration research queries.
     iterationEvent,
+    // Round 1 Foundation: per-turn debug tool trace (args/result/latency)
+    // for the ?debug=1 ToolTraceDrawer below. Phase-1 Part C ALSO feeds it to
+    // the always-visible ResearchTimeline inside the StreamingBubble + the
+    // collapsed "Researched N sources" summary after the answer settles.
+    toolTrace,
+    // Phase-1 Part C: TRUE during the post-synthesis grounding-validation
+    // phase — drives the ResearchTimeline's "Verifying answer…" line.
+    verifying,
+    // Wave 2 (frontend-rework sprint): server-generated follow-up
+    // suggestions from the `suggestions` SSE event — PREFERRED over the
+    // client-side generateFollowUps fallback (see followUpSuggestions memo).
+    serverSuggestions,
+    // Wave 2: conversation-level tool usage samples — feeds the context
+    // rail's "Tools Used" section (count + avg server latency per tool).
+    toolUsage,
     send,
+    // Round 1 Foundation: resubmits the last failed question without
+    // duplicating its user bubble — wired to the error banner's Retry button.
+    retry,
     cancel: handleCancelStream,
     resetForThread,
   } = useChatStream({
@@ -267,6 +376,33 @@ export default function ChatPage() {
   });
 
   // ── Effects ────────────────────────────────────────────────────────────────
+
+  // Round 2 Enhancement: consume the ?thread=<id> URL param.
+  //
+  // WHY a "last applied" ref (not a one-shot mount flag): the command palette
+  // can fire /chat?thread=B while the user is ALREADY on /chat?thread=A — the
+  // page doesn't remount, only searchParams changes, so the effect must
+  // re-apply for every NEW param value. But it must apply each value exactly
+  // ONCE: after the user manually selects a different thread in the sidebar,
+  // the stale ?thread= param is still in the URL, and re-applying it on the
+  // next render would yank the user back to the deep-linked thread (a
+  // fight-the-user loop). The ref records which param value was already
+  // honoured so subsequent renders leave the user's manual selection alone.
+  const appliedThreadParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!threadIdFromUrl) return;
+    if (appliedThreadParamRef.current === threadIdFromUrl) return;
+    appliedThreadParamRef.current = threadIdFromUrl;
+    // No-op when the deep-linked thread is already active (e.g. the user
+    // refreshed the page and React re-ran the effect after hydration).
+    if (threadIdFromUrl === activeThreadId) return;
+    // Same sequence as handleSelectThread: abort any in-flight stream first
+    // so its tokens can't bleed into the deep-linked thread's log, then
+    // activate. The per-thread useQuery (keyed on activeThreadId) fetches the
+    // full message history automatically once the id is set.
+    resetForThread();
+    setActiveThreadId(threadIdFromUrl);
+  }, [threadIdFromUrl, activeThreadId, resetForThread]);
 
   // Sync activeThread messages into localMessages when the thread query succeeds.
   // STAYS AT PAGE LEVEL: this depends on TanStack Query data (`activeThread`)
@@ -302,9 +438,20 @@ export default function ChatPage() {
   }, [threads, ephemeralThreadIds]);
 
   // Auto-scroll to bottom on new tokens / messages.
+  //
+  // Round 3 transition polish: behaviour is INSTANT ("auto") while a stream
+  // is in flight and SMOOTH only for settled-message changes. WHY: smooth
+  // scrolling is an ~300ms animated glide — SSE tokens arrive every ~20-50ms,
+  // so each new token kicked off a fresh glide before the previous one
+  // finished. The animations fought each other, producing a rubber-banding
+  // viewport that lagged behind the text. Instant keeps the cursor pinned
+  // frame-perfect during streams; the smooth glide remains for the rarer,
+  // discrete events (user bubble appended, thread history loaded).
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [localMessages, streaming?.text]);
+    messagesEndRef.current?.scrollIntoView({
+      behavior: streaming ? "auto" : "smooth",
+    });
+  }, [localMessages, streaming?.text, streaming]);
 
   // Debounce searchInput → searchQuery (200ms per task spec).
   useEffect(() => {
@@ -350,6 +497,49 @@ export default function ChatPage() {
     }
   }, [threads]);
 
+  // ── Cmd+\ context rail toggle ─────────────────────────────────────────────
+  //
+  // WHY document-level listener (not a button's onKeyDown):
+  // Cmd+\ is a global shortcut — it fires regardless of which element has
+  // keyboard focus. document.addEventListener is the correct mechanism.
+  // WHY cleanup in return: prevents the listener from accumulating if this
+  // component re-mounts (e.g. hot-reload in dev).
+  // WHY no animation: design spec mandates no transitions; the rail snaps to
+  // 0 width or full width instantly.
+  useEffect(() => {
+    function handleContextRailToggle(e: KeyboardEvent) {
+      // Cmd+\ on macOS (metaKey + Backslash) or Ctrl+\ on Windows/Linux.
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        setIsContextRailCollapsed((prev) => !prev);
+      }
+    }
+    document.addEventListener("keydown", handleContextRailToggle);
+    return () => document.removeEventListener("keydown", handleContextRailToggle);
+  }, []);
+
+  // ── Round 1 Foundation: restore composer focus when a stream ends ─────────
+  //
+  // WHY: the textarea is disabled while streaming (prevents double-send).
+  // Disabling a focused element BLURS it, so after every answer the analyst
+  // had to click back into the input before typing the follow-up — a
+  // terminal-grade chat must keep the keyboard flow unbroken. When
+  // isStreaming transitions true→false we re-focus the textarea.
+  //
+  // WHY track the previous value in a ref: focusing on EVERY render where
+  // isStreaming === false would steal focus from the search box / rename
+  // input every time anything re-renders. We only act on the transition.
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) {
+      // requestAnimationFrame: the textarea re-enables in the SAME commit
+      // that flips isStreaming — focusing immediately can race the disabled
+      // attribute removal in some browsers. One frame later is always safe.
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   // ── Derived: filtered threads ─────────────────────────────────────────────
 
   /**
@@ -376,6 +566,17 @@ export default function ChatPage() {
     });
   }, [threads, searchQuery]);
 
+  /**
+   * groupedThreads — date buckets (Today / Yesterday / Previous 7 days /
+   * Older) over the SEARCH-FILTERED list, so searching narrows within the
+   * same grouped layout instead of switching to a different flat view.
+   * Round 1 Foundation — chat history sidebar.
+   */
+  const groupedThreads = useMemo(
+    () => (filteredThreads ? groupThreadsByDate(filteredThreads) : undefined),
+    [filteredThreads],
+  );
+
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleNewChat = useCallback(() => {
@@ -394,6 +595,33 @@ export default function ChatPage() {
     setInput("");
     setTimeout(() => textareaRef.current?.focus(), 50);
   }, [resetForThread]);
+
+  // ── Round 3: welcome-state starter prompts ────────────────────────────────
+  //
+  // Drawn from the follow-ups generator's GENERIC pool (welcomeStarterPrompts)
+  // so the "what can I ask?" chips an analyst sees before their first message
+  // use the exact same phrasing as the post-answer follow-up chips — one
+  // suggestion vocabulary across the whole surface. Deterministic slice (no
+  // hash), so the welcome never reshuffles between visits.
+  const welcomeStarters = useMemo(() => welcomeStarterPrompts(4), []);
+
+  /**
+   * handlePickWelcomeStarter — welcome chip click → new thread + pre-filled
+   * composer.
+   *
+   * ORDER MATTERS (Round 3 bug fix): the previous welcome cards called
+   * `setInput(prompt)` BEFORE `handleNewChat()` — but handleNewChat ends with
+   * `setInput("")`, so React applied prompt-then-empty in the same commit and
+   * the composer always came up BLANK. Calling handleNewChat first makes the
+   * clear happen before the pre-fill, so the prompt survives.
+   */
+  const handlePickWelcomeStarter = useCallback(
+    (prompt: string) => {
+      handleNewChat();
+      setInput(prompt);
+    },
+    [handleNewChat],
+  );
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
@@ -510,6 +738,17 @@ export default function ChatPage() {
   }, [input, send]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Round 1 Foundation: ⌘+Enter / Ctrl+Enter is an EXPLICIT submit chord —
+    // the power-user convention shared with code editors and Slack. Checked
+    // FIRST (before the plain-Enter branch) so the modifier path is
+    // guaranteed even if the plain-Enter behaviour ever changes.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void handleSend();
+      return;
+    }
+    // Plain Enter submits; Shift+Enter inserts a newline (legacy behaviour,
+    // documented in the placeholder text).
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -586,6 +825,111 @@ export default function ChatPage() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   }, []);
 
+  // ── Round 2: suggested follow-up chips ────────────────────────────────────
+  //
+  // Shown under the LATEST assistant answer only, and only while the
+  // conversation is at rest. The "disappear once the next message is sent"
+  // requirement falls out of the derivation for free: the moment the user
+  // sends anything, the optimistic user bubble becomes the last log entry,
+  // the `last.role === "assistant"` guard fails, and the chips vanish — no
+  // separate dismissed-state bookkeeping to leak across threads.
+  //
+  // Wave 2 (frontend-rework sprint): the backend NOW emits a `suggestions`
+  // SSE event after the final token (verified live — bare string array).
+  // We PREFER those: the server sees the retrieval context and entity
+  // resolution the client can't, so its follow-ups are better targeted.
+  // generateFollowUps stays as the fallback for empty/absent server
+  // suggestions (legacy backends, suggestion-generation failures) and for
+  // HISTORICAL turns reloaded from the thread (the event is stream-only).
+  const followUpSuggestions = useMemo<string[]>(() => {
+    // At-rest guards: never show "what next?" chips while an answer is still
+    // streaming (they'd suggest follow-ups to an answer the user can't read
+    // yet) or under an error banner (Retry is the only sensible next action).
+    if (isStreaming || chatError) return [];
+    const last = localMessages[localMessages.length - 1];
+    // Slash turns ("kind" in entry) render structured cards, not prose —
+    // template follow-ups make no sense under a /quote table.
+    if (!last || "kind" in last || last.role !== "assistant" || !last.content) {
+      return [];
+    }
+    // Server suggestions win when present. They are per-turn state in the
+    // hook (cleared at every send + thread switch), so they can only ever
+    // describe THIS settled answer — no staleness check needed here.
+    if (serverSuggestions.length > 0) return serverSuggestions;
+    return generateFollowUps({
+      answerText: last.content,
+      // Same extractor (and therefore the same blocklist + recency order) as
+      // the context rail, so chip entities always match the rail's cards.
+      tickers: extractTickers(
+        localMessages.filter((e) => !("kind" in e)) as Message[],
+      ).tickers,
+      citationTitles: (last.citations ?? []).map((c) => c.title),
+      // toolTrace survives stream completion precisely so post-hoc consumers
+      // like this one can see WHICH tools produced the settled answer.
+      toolsUsed: toolTrace.map((t) => t.tool),
+    });
+  }, [localMessages, isStreaming, chatError, toolTrace, serverSuggestions]);
+
+  /**
+   * handlePickFollowUp — chip click submits the suggestion as the next user
+   * message immediately (TradingView/Perplexity pattern: click = send, no
+   * intermediate "fill the composer and wait" step — the chip text is
+   * already a complete question).
+   */
+  const handlePickFollowUp = useCallback(
+    (suggestion: string) => {
+      void send(suggestion);
+    },
+    [send],
+  );
+
+  // ── Round 4 perf: isolate per-token re-renders from the settled log ──────
+  //
+  // Every SSE token fires setStreaming() in useChatStream → this whole page
+  // re-renders at token cadence (~20-50ms). Two derived values were being
+  // rebuilt inside that hot loop even though they depend ONLY on the settled
+  // localMessages array (which changes per MESSAGE, not per token):
+  //
+  //   1. messageNodes — the rendered MessageBubble/SlashTurnBlock elements.
+  //      Re-creating the element array per token forced React to reconcile
+  //      every settled bubble (and its markdown tree) on every token. Memoising
+  //      on localMessages keeps the ELEMENT IDENTITIES stable across token
+  //      renders, so React bails out of the entire settled list (same-element
+  //      fast path) and only the StreamingBubble subtree updates per token.
+  //
+  //   2. railMessages — the Message[] passed to ChatContextRail. The previous
+  //      inline `.filter()` minted a NEW array identity on every render, which
+  //      thrashed the rail's useMemo deps (extractTickers + citation dedup +
+  //      contradiction regex re-ran per token — pure waste, since tickers can
+  //      only change when a message settles). A stable identity means the
+  //      rail's derivations now run on settled-message changes only.
+  //
+  // The EntityMiniCard queries inside the rail were already dedup-safe (stable
+  // qk.chat.tickerMini(ticker) keys → TanStack collapses re-renders into one
+  // cache entry), but the memo also stops their subscription churn per token.
+  const messageNodes = useMemo(
+    () =>
+      localMessages.map((entry) => {
+        if ("kind" in entry && entry.kind === "slash") {
+          return <SlashTurnBlock key={entry.message_id} turn={entry} />;
+        }
+        const msg = entry as Message;
+        return <MessageBubble key={msg.message_id} message={msg} />;
+      }),
+    [localMessages],
+  );
+
+  const railMessages = useMemo(
+    () =>
+      localMessages.filter(
+        // WHY filter: localMessages is LogEntry[] (Message | SlashTurn).
+        // ChatContextRail expects Message[] only. Slash turns have
+        // `kind: "slash"` — we drop them here so the prop type is clean.
+        (entry): entry is Message => !("kind" in entry),
+      ),
+    [localMessages],
+  );
+
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const isSendDisabled = !input.trim() || isStreaming || !accessToken;
@@ -602,10 +946,53 @@ export default function ChatPage() {
           deserves the extra 56px of horizontal real estate. 224px still fits
           the "New chat" button + search box + 11px thread title without
           truncating the dev seed titles. */}
+      {/* Round 1 Foundation: collapsed variant — a slim 36px rail keeping the
+          expand affordance (and a quick New-chat) visible. WHY render a rail
+          instead of unmounting: zero-width removal makes the history feel
+          "gone" and the only way back would be a floating button over the
+          messages — the rail preserves the spatial anchor. */}
+      {/* Round 3 transition polish: ONE <aside> whose WIDTH animates between
+          the expanded 224px panel and the slim 36px rail (150ms ease-out per
+          the sprint spec — the only sanctioned structural transition on this
+          surface; motion-reduce disables it). The previous implementation
+          swapped two separate <aside> elements, which snapped instantly and
+          yanked the message column sideways. The inner content still swaps
+          per-state (the slim rail shows only icons), but the container width
+          interpolates so the layout reflow reads as a deliberate slide.
+          overflow-hidden clips the expanded content during the shrink. */}
       <aside
-        className="flex w-[224px] shrink-0 flex-col border-r border-border bg-background"
-        aria-label="Chat thread list"
+        className={cn(
+          "flex shrink-0 flex-col overflow-hidden border-r border-border bg-background",
+          "transition-[width] duration-150 ease-out motion-reduce:transition-none",
+          isSidebarCollapsed ? "w-9" : "w-[224px]",
+        )}
+        aria-label={
+          isSidebarCollapsed ? "Chat thread list (collapsed)" : "Chat thread list"
+        }
       >
+      {isSidebarCollapsed ? (
+        <div className="flex flex-col items-center gap-1 py-2">
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed(false)}
+            aria-label="Expand thread list"
+            // Round 3 focus polish: chrome icon buttons get a keyboard ring.
+            className="rounded-[2px] p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+          >
+            <PanelLeftOpen className="h-4 w-4" strokeWidth={1.5} />
+          </button>
+          <button
+            type="button"
+            onClick={handleNewChat}
+            aria-label="Start new chat"
+            title="New chat"
+            className="rounded-[2px] p-1 text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.5} />
+          </button>
+        </div>
+      ) : (
+      <>
         {/* PLAN-0071 P2C-1: market session status strip — grounds the
             intelligence panel in real market context so analysts know
             at a glance whether they're in live-session or planning mode. */}
@@ -617,8 +1004,23 @@ export default function ChatPage() {
             the platform's terminal section labels (e.g. WatchlistPanel, Alerts). */}
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div className="flex items-center gap-1.5">
+            {/* Round 1 Foundation: collapse toggle lives where the user's eye
+                already rests (panel header) — same pattern as IDE side panels. */}
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed(true)}
+              aria-label="Collapse thread list"
+              // Round 3 focus polish: keyboard ring on the chrome button.
+              className="rounded-[2px] p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
             <MessageSquare className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
+            {/* Round 3 typography: panel heading aligned to the app-wide
+                widget-header pattern (10px sans uppercase tracking-[0.08em]
+                muted — cf. dashboard widgets + the context rail's "Context"
+                header) so the two chat side panels share one heading scale. */}
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Threads
             </span>
           </div>
@@ -648,7 +1050,10 @@ export default function ChatPage() {
                 "w-full rounded-[2px] border border-border bg-muted",
                 "pl-7 pr-2 py-1.5 text-xs text-foreground",
                 "placeholder:text-muted-foreground",
-                "focus:outline-none focus:ring-1 focus:ring-primary",
+                // Round 3 focus polish: canonical Tier-2 input ring (adds the
+                // :focus-visible variant the inline classes were missing).
+                "focus:outline-none",
+                FocusRing.T2_INPUT,
               )}
             />
           </div>
@@ -662,11 +1067,39 @@ export default function ChatPage() {
             ref on the content gives a stable handle without forking
             scroll-area.tsx. */}
         <ScrollArea className="flex-1">
-          <div ref={sidebarScrollRef} className="space-y-0.5 p-2">
+          {/* Round 4 a11y: the thread list is a <nav> LANDMARK (was a plain
+              div) — "Chat history" appears in the screen-reader landmark
+              rotor, so keyboard users can jump straight to their threads
+              without tabbing through the whole sidebar chrome. The scroll
+              capture/restore refs work unchanged (closest() walks up to the
+              Radix viewport from any HTMLElement). */}
+          <nav
+            ref={sidebarScrollRef}
+            aria-label="Chat history"
+            className="space-y-0.5 p-2"
+          >
             {threadsLoading && (
-              <div className="space-y-1.5 p-1" aria-label="Loading threads">
+              // Round 3 skeleton polish: each placeholder mirrors the real
+              // ThreadItem anatomy (11px title line + 10px mono timestamp
+              // line, px-2 py-1.5 row padding) instead of a featureless h-8
+              // block — the list "develops" in place rather than morphing
+              // from grey slabs into two-line rows. Title widths alternate
+              // so the column doesn't look like a barcode.
+              <div className="space-y-0.5" aria-label="Loading threads">
                 {[...Array(5)].map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full rounded-[2px]" />
+                  <div
+                    key={i}
+                    data-testid="thread-skeleton-row"
+                    className="space-y-1 rounded-[2px] px-2 py-1.5"
+                  >
+                    <Skeleton
+                      className={cn(
+                        "h-3 rounded-[2px]",
+                        i % 2 === 0 ? "w-3/4" : "w-1/2",
+                      )}
+                    />
+                    <Skeleton className="h-2.5 w-2/5 rounded-[2px]" />
+                  </div>
                 ))}
               </div>
             )}
@@ -693,7 +1126,9 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => router.push("/login?redirect_to=/chat")}
-                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                        // Round 3 focus polish: destructive-context ring (a
+                        // primary/amber ring inside a red banner would clash).
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                       >
                         Sign in
                       </button>
@@ -704,7 +1139,8 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => void refetchThreads()}
-                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                        // Round 3 focus polish: destructive-context ring.
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                       >
                         Retry
                       </button>
@@ -714,10 +1150,18 @@ export default function ChatPage() {
               </div>
             )}
 
+            {/* Round 3 empty-state migration: the bare <p> becomes the shared
+                EmptyState primitive (DS §15.12) so the no-history sidebar
+                renders identically to every other cold-start surface. Copy
+                key chat.no-threads keeps the "No conversations yet" title the
+                existing test pins. condition=empty-cold-start: the user has
+                an account but hasn't produced data yet (FU-10.11 taxonomy). */}
             {!threadsLoading && !threadsError && (!threads || threads.length === 0) && (
-              <p className="px-3 py-3 text-xs text-muted-foreground">
-                No conversations yet. Click &ldquo;New chat&rdquo; to begin.
-              </p>
+              <EmptyState
+                condition="empty-cold-start"
+                copyKey="chat.no-threads"
+                icon={MessageSquare}
+              />
             )}
 
             {/* WHY filteredThreads (was threads): the search box narrows the
@@ -728,18 +1172,43 @@ export default function ChatPage() {
               </p>
             )}
 
-            {filteredThreads?.map((thread) => (
-              <ThreadItem
-                key={thread.thread_id}
-                thread={thread}
-                isActive={thread.thread_id === activeThreadId}
-                onSelect={handleSelectThread}
-                onDelete={handleDeleteThread}
-                onRename={handleRenameThread}
-              />
+            {/* Round 1 Foundation: date-bucketed history. Each group renders a
+                sticky-feeling section header (Today / Yesterday / …) above its
+                rows. Empty groups are omitted by groupThreadsByDate, so a new
+                user with 2 threads sees at most 2 headers — no scaffolding. */}
+            {groupedThreads?.map((group) => (
+              <div key={group.label}>
+                <p
+                  // Round 3 typography: date-bucket headers join the app-wide
+                  // widget-header pattern (sans, tracking-[0.08em]) — they are
+                  // category labels, not numeric data, so ADR-F-15's mono rule
+                  // doesn't apply. 9px is sanctioned for list-section labels
+                  // (§15.9 metadata exception); /70 keeps them sub-ordinate to
+                  // the 10px "Threads" panel heading above.
+                  className="px-2 pb-0.5 pt-2 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70"
+                  // WHY role=heading: lets screen-reader users jump between
+                  // date buckets the same way sighted users scan the headers.
+                  role="heading"
+                  aria-level={3}
+                >
+                  {group.label}
+                </p>
+                {group.threads.map((thread) => (
+                  <ThreadItem
+                    key={thread.thread_id}
+                    thread={thread}
+                    isActive={thread.thread_id === activeThreadId}
+                    onSelect={handleSelectThread}
+                    onDelete={handleDeleteThread}
+                    onRename={handleRenameThread}
+                  />
+                ))}
+              </div>
             ))}
-          </div>
+          </nav>
         </ScrollArea>
+      </>
+      )}
       </aside>
 
       {/* ════════════════ PLAN-0082 Wave B — Action Confirm Modal ════════════ */}
@@ -754,59 +1223,63 @@ export default function ChatPage() {
         onDismiss={clearPendingAction}
       />
 
+      {/* ════════════════ CENTRE + RIGHT — Chat Area + Context Rail ════════════ */}
+      {/*
+       * WHY this wrapper div: we need the message column and the context rail
+       * to sit side-by-side inside the outer flex. The message column is
+       * flex-1 (grows to fill remaining space); the rail is w-[320px] shrink-0.
+       * Without this wrapper div, ActionConfirmModal would separate them in
+       * the outer flex row. The wrapper is purely structural — no visual effect.
+       *
+       * WHY overflow-hidden on wrapper: the rail and message column each have
+       * their own overflow-y-auto / ScrollArea. The wrapper must NOT scroll
+       * itself (overflow-hidden prevents a double-scrollbar).
+       */}
+      <div className="flex flex-1 overflow-hidden">
       {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Welcome / empty state — PLAN-0071 P2C-4: analyst-specific copy
-            replaces the generic chatbot welcome. The two-line hierarchy
-            (label + description) mirrors Bloomberg COMMAND BAR prompt
-            style — short imperative, then scope clarification. */}
+        {/* Welcome / empty-conversation state — Round 3 polish.
+            Migrated onto the shared EmptyState primitive (DS §15.12): icon
+            category signal (MessageSquare), one-line value prop from the
+            chat.welcome copy key, then a single action slot stacking the
+            starter chips + the New-conversation CTA. WHY the primitive now
+            (Wave K's ChatEmptyState deliberately skipped it): the Round-2
+            icon/action API additions cover exactly what the welcome needs,
+            so a hand-rolled layout is no longer justified.
+            The 6-card portfolio starter grid is replaced by 3-4 chips drawn
+            from the follow-ups generator's generic pool (sprint spec §4) —
+            the richer entity/portfolio starter cards still appear INSIDE a
+            new empty thread (STARTER_QUESTIONS grid below), so discovery is
+            deferred one click, not lost. */}
         {!activeThreadId && (
-          // WHY p-3 (was p-4): the empty-state welcome is rendered inside an
-          // already-bounded panel; 12px padding keeps the welcome text close
-          // to the surrounding panel chrome instead of floating in 16px ports.
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-3 text-center">
-            <div className="space-y-1">
-              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
-                Analyst Intelligence
-              </p>
-              <p className="max-w-[280px] text-[11px] leading-relaxed text-muted-foreground">
-                Research-grade Q&A on earnings, SEC filings, macro, and your
-                portfolio — grounded in real source documents, not hallucination.
-              </p>
-            </div>
-
-            {/* PLAN-0071 P2C-2: portfolio-scoped starter questions shown in
-                the no-thread-selected panel. Analysts landing here have no
-                active entity context — portfolio-level questions surface the
-                most immediately useful research directions. */}
-            <div className="mt-1 grid w-full max-w-[440px] grid-cols-2 gap-1.5">
-              {PORTFOLIO_STARTER_QUESTIONS.map((q, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => {
-                    // Pre-fill the input state first — the textarea is not
-                    // mounted yet (activeThreadId is null), but setInput just
-                    // sets React state. When handleNewChat() sets activeThreadId
-                    // and the input area mounts, it will read the already-set value.
-                    setInput(q);
-                    handleNewChat();
-                  }}
-                  className="rounded-[2px] border border-border bg-card p-2.5 text-left text-[10px] leading-relaxed text-foreground hover:border-primary/40 hover:bg-muted/40 transition-colors duration-0"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-
-            <Button
-              size="sm"
-              onClick={handleNewChat}
-              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
-            >
-              <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-              New conversation
-            </Button>
+          <div className="flex flex-1 flex-col items-center justify-center bg-background p-3">
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="chat.welcome"
+              icon={MessageSquare}
+              action={
+                <div className="mt-1 flex max-w-[440px] flex-col items-center gap-3">
+                  {/* Reusing the FollowUpChips presenter keeps welcome chips
+                      pixel-identical to post-answer follow-up chips (same
+                      mono 10px chrome, hover, focus ring). ariaLabel swaps
+                      so screen readers announce "Starter prompts", not
+                      follow-ups to a nonexistent answer. */}
+                  <FollowUpChips
+                    suggestions={welcomeStarters}
+                    onPick={handlePickWelcomeStarter}
+                    ariaLabel="Starter prompts"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleNewChat}
+                    className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+                    New conversation
+                  </Button>
+                </div>
+              }
+            />
           </div>
         )}
 
@@ -847,24 +1320,96 @@ export default function ChatPage() {
                 without losing message-boundary clarity (each bubble has its
                 own bg + rounded corners). */}
             <ScrollArea className="flex-1 bg-background">
-              <div className="flex flex-col gap-2 p-3">
+              {/* Wave 2 layout contract: the conversation column is capped at
+                  a readable measure (max-w-[860px], centred). On a 1920px+
+                  display the previous full-bleed layout stretched 70%-width
+                  bubbles to ~900px line lengths — far beyond the ~75ch
+                  readable ceiling — and made the page read as empty space
+                  with text pushed to the left edge. The cap centres the
+                  conversation between the thread sidebar and the context
+                  rail; below ~1460px viewport width it is a no-op. */}
+              <div
+                data-testid="chat-message-column"
+                className="mx-auto flex w-full max-w-[860px] flex-col gap-2 p-3"
+              >
                 {/* WHY p-3 (was p-4): terminal-density reading area; matches
                     the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
                 {threadLoading && (
-                  <div className="space-y-4" aria-label="Loading messages">
-                    {[...Array(3)].map((_, i) => (
-                      <Skeleton
-                        key={i}
-                        className={`h-16 w-2/3 rounded-[2px] ${
-                          i % 2 === 0 ? "self-end" : "self-start"
-                        }`}
-                      />
-                    ))}
+                  // Round 3 skeleton polish: bubble-SHAPED placeholders for
+                  // the thread-switch loading window. Two fixes over the old
+                  // version: (1) the wrapper was `space-y-4` (block layout),
+                  // so the `self-end`/`self-start` alternation NEVER applied
+                  // — flex-col makes the user/assistant alternation real;
+                  // (2) assistant-side rows now carry the 28px avatar square
+                  // so the silhouette matches MessageBubble exactly and the
+                  // real conversation materialises without a layout pop.
+                  <div
+                    className="flex flex-col gap-3"
+                    aria-label="Loading messages"
+                  >
+                    {[...Array(3)].map((_, i) =>
+                      i % 2 === 0 ? (
+                        // Even rows: user bubble silhouette (right-aligned).
+                        <Skeleton
+                          key={i}
+                          data-testid="message-skeleton-user"
+                          className="h-12 w-1/2 self-end rounded-[2px]"
+                        />
+                      ) : (
+                        // Odd rows: assistant silhouette — avatar square +
+                        // wider bubble, left-aligned like MessageBubble.
+                        <div
+                          key={i}
+                          data-testid="message-skeleton-assistant"
+                          className="flex items-end gap-2 self-start"
+                        >
+                          <Skeleton className="h-7 w-7 shrink-0 rounded-[2px]" />
+                          <Skeleton className="h-16 w-[260px] rounded-[2px]" />
+                        </div>
+                      ),
+                    )}
                   </div>
                 )}
 
-                {/* Starter questions — entity-aware (T-E-5-05) */}
-                {!threadLoading && localMessages.length === 0 && !streaming && (
+                {/* Round 4 hardening (1c): thread-load failure state. Renders
+                    INSTEAD of the starter grid (the starter grid's condition
+                    below excludes the error case) so a failed history fetch
+                    never masquerades as a fresh empty conversation. role=alert
+                    announces the failure immediately to screen readers; the
+                    Retry button re-fires the TanStack query. The composer
+                    below stays fully usable — error recovery must not lock
+                    the user out of sending into the thread. */}
+                {!!threadLoadError && !threadLoading && (
+                  <div
+                    role="alert"
+                    data-testid="thread-load-error"
+                    className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    <p className="font-medium">
+                      Couldn&rsquo;t load this conversation.
+                    </p>
+                    <p className="mt-1">
+                      The thread history failed to load. You can retry, or send
+                      a new message below.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void refetchActiveThread()}
+                      // Destructive-context ring — same treatment as the
+                      // sidebar thread-list error and the stream error banner.
+                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                    >
+                      <RotateCcw className="h-3 w-3" strokeWidth={1.5} />
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {/* Starter questions — entity-aware (T-E-5-05).
+                    Round 4: also gated on !threadLoadError — when the history
+                    fetch failed we show the error state above, NOT a grid that
+                    implies "this is a brand-new conversation". */}
+                {!threadLoading && !threadLoadError && localMessages.length === 0 && !streaming && (
                   <div
                     className={cn(
                       "grid gap-2 p-3",
@@ -889,7 +1434,10 @@ export default function ChatPage() {
                             className={cn(
                               "rounded-[2px] border border-border bg-card",
                               "cursor-pointer p-3 text-left",
-                              "hover:border-primary/40 hover:bg-muted/40",
+                              // Round 3 hover/focus polish: hover bg-muted
+                              // (sprint-canonical) + keyboard focus ring.
+                              "hover:border-primary/40 hover:bg-muted",
+                              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
                               "text-[11px] leading-relaxed text-foreground",
                               "transition-colors duration-0",
                             )}
@@ -903,14 +1451,53 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* Render messages + slash turns */}
-                {localMessages.map((entry) => {
-                  if ("kind" in entry && entry.kind === "slash") {
-                    return <SlashTurnBlock key={entry.message_id} turn={entry} />;
-                  }
-                  const msg = entry as Message;
-                  return <MessageBubble key={msg.message_id} message={msg} />;
-                })}
+                {/* Render messages + slash turns.
+                    Round 4 a11y: the SETTLED conversation is a live log region.
+                    - role="log" + aria-live="polite": new entries are announced
+                      when they are APPENDED to this container. The in-flight
+                      StreamingBubble deliberately lives OUTSIDE this region
+                      (below), so SSE tokens are NOT announced one-by-one —
+                      the assistant turn is announced exactly once, when the
+                      stream finalises and the complete message lands here.
+                      This is the announce-on-completion live-region strategy:
+                      per-token announcements would make a 400-token answer
+                      unusable under a screen reader.
+                    - aria-relevant defaults to "additions text" which is what
+                      we want (messages are only ever appended or back-filled).
+                    Round 4 perf: messageNodes is memoised on localMessages —
+                    element identities are stable across per-token re-renders,
+                    so React skips reconciling every settled bubble while the
+                    StreamingBubble updates (see the messageNodes memo above). */}
+                <div
+                  role="log"
+                  aria-live="polite"
+                  aria-label="Conversation messages"
+                  className="flex flex-col gap-2"
+                >
+                  {messageNodes}
+                </div>
+
+                {/* Round 2: suggested follow-ups under the latest settled
+                    assistant answer. followUpSuggestions is [] while
+                    streaming / on error / when the last entry isn't an
+                    assistant message, so this renders nothing in all those
+                    states (FollowUpChips additionally requires >=2 chips).
+                    WHY pl-9: indents the chips to align with the assistant
+                    bubble text (28px avatar + 8px gap), reading as "options
+                    attached to this answer" rather than a free-floating row. */}
+                {/* Round 3 transition polish: min-h matches the spacer
+                    reserved below the StreamingBubble while the answer is in
+                    flight — when the stream settles, the chips slot replaces
+                    the spacer 1:1 so the column's bottom edge doesn't move
+                    (no layout jump, no scroll fight). */}
+                {followUpSuggestions.length > 0 && (
+                  <div className="min-h-[26px] pl-9">
+                    <FollowUpChips
+                      suggestions={followUpSuggestions}
+                      onPick={handlePickFollowUp}
+                    />
+                  </div>
+                )}
 
                 {/* In-flight SSE stream */}
                 {/* FR-5.5 (MED-012): always render StreamingBubble when streaming is
@@ -933,12 +1520,67 @@ export default function ChatPage() {
                      * stream completes — the strip handles its own visibility.
                      */
                     iterationEvent={iterationEvent}
+                    /*
+                     * Phase-1 Part C: feed the per-turn tool trace + verify
+                     * flag so the always-visible ResearchTimeline renders the
+                     * human-readable agent-step list (NOT behind ?debug=1) in
+                     * place of the bare iteration strip once tools start.
+                     */
+                    toolTrace={toolTrace}
+                    verifying={verifying}
                   />
                 ) : null}
 
+                {/*
+                 * Phase-1 Part C: collapse-to-summary. The instant the stream
+                 * settles, StreamingBubble unmounts (streaming → null) and the
+                 * final MessageBubble renders. We then show a ONE-LINE
+                 * "Researched N sources across M steps" summary derived from the
+                 * same toolTrace (which deliberately survives stream completion).
+                 * Clicking it re-expands the full step list. Rendered only when
+                 * the last turn actually used tools — plain Q&A shows nothing.
+                 * Hidden while ?debug=1 is on, because the ToolTraceDrawer
+                 * already gives the power-user the (richer) raw view there. */}
+                {!streaming && !isDebug && toolTrace.length > 0 ? (
+                  <ResearchTimeline trace={toolTrace} verifying={false} mode="done" />
+                ) : null}
+
+                {/* Round 3 transition polish: reserve the follow-up chips'
+                    row height (26px ≈ chip 22px + mt-1) while the answer is
+                    streaming. When the stream settles, the StreamingBubble is
+                    replaced by the final MessageBubble AND the chips render —
+                    in the SAME commit (the chips memo derives synchronously
+                    from localMessages). With this spacer the chips occupy
+                    already-reserved space instead of growing the column,
+                    so the settled answer doesn't "jump" down a line. */}
+                {streaming ? (
+                  <div className="min-h-[26px]" aria-hidden="true" />
+                ) : null}
+
                 {chatError && (
-                  <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    {chatError}
+                  // Round 1 Foundation: failed sends now surface a Retry CTA.
+                  // WHY role=alert: error text must be announced by screen
+                  // readers the moment it appears, not on next focus.
+                  <div
+                    role="alert"
+                    className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    <p>{chatError}</p>
+                    <button
+                      type="button"
+                      // retry() resends the last failed question WITHOUT
+                      // duplicating its user bubble (skipUserEcho inside the
+                      // hook) and clears this banner eagerly so the user sees
+                      // the new attempt start immediately.
+                      onClick={() => void retry()}
+                      // Round 3 focus polish: keyboard-visible ring on the
+                      // Retry CTA — destructive-context ring colour so the
+                      // focus visual stays inside the banner's palette.
+                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                    >
+                      <RotateCcw className="h-3 w-3" strokeWidth={1.5} />
+                      Retry
+                    </button>
                   </div>
                 )}
 
@@ -948,6 +1590,12 @@ export default function ChatPage() {
 
             {/* ── Input area ─────────────────────────────────────────────── */}
             <div className="border-t border-border bg-background p-3">
+              {/* Wave 2: composer shares the message column's max-w-[860px]
+                  centred measure so the textarea sits flush under the
+                  conversation instead of stretching wall-to-wall while the
+                  messages above are capped — a misalignment that read as a
+                  layout bug on wide displays. */}
+              <div className="mx-auto w-full max-w-[860px]">
               {entityIdFromUrl && (
                 <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
                   <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
@@ -1000,7 +1648,9 @@ export default function ChatPage() {
                       // WHY tabular-nums: ticker characters are numbers/letters at
                       // a uniform width — tabular-nums prevents layout shift when
                       // the chip content changes (e.g. on thread switch).
-                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                      // Round 3 focus polish: keyboard ring matching the
+                      // context rail's ticker chips (same chip species).
+                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                     >
                       {ticker}
                     </button>
@@ -1028,14 +1678,39 @@ export default function ChatPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask about markets, companies, news…  Type / for commands. (Enter to send, Shift+Enter for newline)"
+                  // Round 3 input polish: lead with WHAT to ask (the sprint's
+                  // canonical helpful prompt), keep the / discovery hint, and
+                  // drop the Enter/Shift+Enter legend — key behaviour is
+                  // muscle-memory by now and the legend made the placeholder
+                  // a wall of text. While streaming, the placeholder explains
+                  // WHY the input is disabled instead of going silent —
+                  // "visually clear but not jarring": the user reads intent,
+                  // not just greyed-out chrome.
+                  placeholder={
+                    isStreaming
+                      ? "Generating — use Stop to interrupt…"
+                      : "Ask about any company, sector, or your portfolio…  Type / for commands."
+                  }
                   rows={2}
                   disabled={isStreaming}
+                  // Round 3: aria-busy tells assistive tech the input is
+                  // temporarily unavailable (not broken) during the stream.
+                  aria-busy={isStreaming}
                   maxLength={2000}
                   // Density bundle 2026-05-09: textarea text-sm (14px) →
                   // text-[12px] to align with the rest of the chat surface
                   // density. The 14px size felt like a consumer-app input.
-                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+                  // Round 3 focus polish: FocusRing.T2_INPUT adds the
+                  // :focus-visible variant alongside the existing :focus ring
+                  // (the composer keeps its ring on plain click-focus too —
+                  // sprint spec §5). Disabled state keeps the platform's
+                  // disabled-* tokens (consistent with every other input).
+                  className={cn(
+                    "flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground",
+                    "focus:outline-none",
+                    FocusRing.T2_INPUT,
+                    "disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]",
+                  )}
                   aria-label="Chat message input"
                 />
 
@@ -1049,15 +1724,92 @@ export default function ChatPage() {
                 </Button>
               </div>
 
-              {input.length > 1500 && (
-                <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {/* Round 1 Foundation: counter now appears from 800 chars (was
+                  1500). WHY 800: at 1500 the user was 75% of the way to the
+                  2000 hard cap before getting ANY feedback — long research
+                  prompts hit the maxLength wall by surprise. 800 gives the
+                  warning at 40%, early enough to restructure the question.
+                  WHY font-mono: numeric — ADR-F-15 mandates mono for all
+                  numerics. aria-live so screen readers hear the count appear. */}
+              {input.length >= 800 && (
+                <p
+                  aria-live="polite"
+                  className="mt-1 font-mono text-[10px] text-muted-foreground"
+                >
                   {input.length} / 2000
                 </p>
               )}
+              </div>{/* end composer max-width wrapper (Wave 2) */}
             </div>
           </>
         )}
       </div>
+
+      {/* ════════════════ CONTEXT RAIL — Entity / Citations / Tickers ════════ */}
+      {/*
+       * WHY conditional render (not CSS width=0):
+       * When collapsed we unmount entirely rather than setting w-0 + overflow-hidden.
+       * Unmounting avoids an invisible TanStack Query subscription (the EntityCard
+       * inside fires a useQuery). CSS-only hide keeps the query alive, wastes a
+       * background refetch every staleTime interval, and would require w-0 on the
+       * border-l to avoid a ghost 1px line. Full unmount is simpler and cheaper.
+       *
+       * WHY border-l: the visual separator between the message column and the
+       * context rail. Matches the border-r on the thread list sidebar for
+       * symmetry (both panels separated from the centre by a 1px border).
+       */}
+      {!isContextRailCollapsed && (
+        // Wave 2 layout contract: the rail is ALWAYS visible at ≥1280px
+        // (Tailwind xl) — it is the surface that answers the user's explicit
+        // ask ("show me what the conversation is about"). Below 1280px the
+        // three-pane layout can't give the message column its minimum
+        // readable width, so the rail yields via CSS (hidden xl:block)
+        // rather than crushing the conversation. Cmd+\ / the × button stay
+        // available as the explicit power-user opt-out at any width.
+        <div
+          data-testid="chat-context-rail-container"
+          className="hidden w-[320px] shrink-0 overflow-hidden border-l border-border xl:block"
+        >
+          <ChatContextRail
+            entityId={entityIdFromUrl}
+            // Round 4 perf: railMessages is memoised on localMessages (see the
+            // memo above) — the previous inline .filter() minted a fresh array
+            // identity on EVERY render, so each streaming token invalidated
+            // the rail's useMemo derivations (ticker extraction, citation
+            // dedup, contradiction regex). Now they recompute only when a
+            // message actually settles.
+            messages={railMessages}
+            // Wave 2: conversation-level tool usage (count + avg latency per
+            // tool) for the rail's TOOLS USED section — accumulated by
+            // useChatStream across turns, reset on thread switch.
+            toolUsage={toolUsage}
+            // Wave 2: tools-used footer routing — with debug ON the rail
+            // shows the ⌘D hint; with it OFF it links to debugHref (same
+            // thread, ?debug=1 appended) to enable the trace surface.
+            isDebug={isDebug}
+            debugHref={debugHref}
+            isCollapsed={isContextRailCollapsed}
+            onClose={() => setIsContextRailCollapsed(true)}
+            onTickerClick={(ticker) => appendToInput(` $${ticker}`)}
+            // Round 2: clicking an Entity Overview mini-card pivots straight
+            // to the instrument detail page. The rail passes the RESOLVED
+            // ticker (canonical symbol from instrument search), and the
+            // /instruments/[ticker] route accepts raw tickers (same pattern
+            // as the screener's row click).
+            onCardClick={(ticker) => router.push(`/instruments/${ticker}`)}
+          />
+        </div>
+      )}
+      </div>{/* end centre+right wrapper */}
+
+      {/* ════════════════ DEBUG — Tool Trace Drawer (?debug=1 + ⌘D) ═══════════ */}
+      {/* WHY double gate (isDebug && isTraceOpen): isTraceOpen can only become
+          true while isDebug is set (the chord hook is inert otherwise), but the
+          explicit isDebug check makes the security invariant local and obvious:
+          this surface NEVER renders without ?debug=1 (PRD-0089 Q-8). */}
+      {isDebug && isTraceOpen && (
+        <ToolTraceDrawer trace={toolTrace} onClose={closeTrace} />
+      )}
     </div>
   );
 }

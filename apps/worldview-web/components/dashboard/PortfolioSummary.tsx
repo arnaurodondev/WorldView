@@ -24,10 +24,18 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, Briefcase } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) replaces the
+// bespoke "No portfolio yet" two-liner — named copy key + icon + action CTA.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): named error state + Retry. Pre-Round-4 this widget had
+// NO error branch — a failed /v1/portfolios or /v1/holdings fetch fell
+// through to the "No portfolio yet" empty state, telling the trader their
+// portfolio doesn't exist when the request simply failed.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
 // QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
@@ -54,7 +62,16 @@ export function PortfolioSummary() {
   const [period, setPeriod] = useState<Period>("1D");
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
-  const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
+  // Round 4 (item 1): isError/refetch/isFetching destructured so a failed
+  // list fetch renders a NAMED error state with Retry instead of the
+  // misleading "No portfolio yet" empty state.
+  const {
+    data: portfolios,
+    isLoading: portfoliosLoading,
+    isError: portfoliosError,
+    refetch: refetchPortfolios,
+    isFetching: portfoliosFetching,
+  } = useQuery({
     queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
@@ -71,7 +88,14 @@ export function PortfolioSummary() {
   );
 
   // ── Query 2: holdings for first portfolio ─────────────────────────────────
-  const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
+  // Round 4 (item 1): error flags destructured (same rationale as Query 1).
+  const {
+    data: holdingsResp,
+    isLoading: holdingsLoading,
+    isError: holdingsError,
+    refetch: refetchHoldings,
+    isFetching: holdingsFetching,
+  } = useQuery({
     queryKey: ["holdings", firstPortfolio?.portfolio_id],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolio!.portfolio_id),
@@ -103,21 +127,26 @@ export function PortfolioSummary() {
   // already does this; mirror it here so the dashboard widget matches.
   // WHY 5min staleTime: ticker/name/sector are effectively immutable per
   // instrument — refetching them aggressively burns S9 quota for no signal.
+  // FIX F-1 (2026-06-05): replaced N sequential getCompanyOverview calls with
+  // a single POST /v1/companies/overviews:batch. The widget previously fired
+  // Promise.all of N individual /v1/companies/{id}/overview round-trips just
+  // to look up ticker + name fields; now S9 fans out server-side.
+  // WHY 5min staleTime: ticker/name are effectively immutable per instrument —
+  // refetching them aggressively burns S9 quota for no signal.
   const { data: holdingOverviews } = useQuery({
-    queryKey: ["dashboard-holdings-overviews", instrumentIds],
+    queryKey: qk.instruments.overviewsBatch(instrumentIds),
     queryFn: async () => {
       const gw = createGateway(accessToken);
-      const results = await Promise.all(
-        instrumentIds.map((id) =>
-          gw.getCompanyOverview(id).catch(() => null),
-        ),
-      );
+      const map = await gw.getCompanyOverviewsBatch(instrumentIds);
+      // Project to the {ticker, name} shape consumers expect. A failing leg
+      // (null in the map) gracefully degrades to {ticker:null, name:null} —
+      // the original Promise.all pattern did the same via `.catch(() => null)`.
       return Object.fromEntries(
-        instrumentIds.map((id, i) => [
+        instrumentIds.map((id) => [
           id,
           {
-            ticker: results[i]?.instrument?.ticker ?? null,
-            name: results[i]?.instrument?.name ?? null,
+            ticker: map[id]?.instrument?.ticker ?? null,
+            name: map[id]?.instrument?.name ?? null,
           },
         ]),
       ) as Record<string, { ticker: string | null; name: string | null }>;
@@ -153,26 +182,69 @@ export function PortfolioSummary() {
   // container shape so Row 3 grid cell doesn't collapse/expand on data arrival.
   if (isLoading && !holdingsResp) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      // Round 4 (item 2): role="region" + aria-label on every return branch —
+      // the landmark must exist from first paint for SR panel navigation.
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
         {/* Section header placeholder (matches the real h-6 header) */}
         <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
           <Skeleton className="h-3 w-28" />
         </div>
-        <div className="flex-1 space-y-2 px-2 py-1">
-        <div className="flex justify-between">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-6 w-20" />
+        {/* Round 3 (item 3): the skeleton now mirrors the LOADED layout —
+            portfolio-name line, value+P&L baseline row, then 22px holding
+            rows with the real column slots (ticker 40 · name flex · qty ·
+            price 48 · value 80 · pnl 40). The previous grid-cols-2 "stat
+            card" placeholders matched nothing in the loaded view and caused
+            a visible re-layout when data arrived. */}
+        <div className="flex-1 overflow-hidden px-2 py-1">
+          {/* Portfolio-name sub-header slot (mb-2 matches loaded view) */}
+          <div className="mb-2 pt-0.5">
+            <Skeleton className="h-3 w-24" />
+          </div>
+          {/* Total value (20px line) + P&L cluster on one baseline row */}
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-4 w-28" />
+          </div>
+          {/* Holding rows — 22px tall, column widths mirror the loaded row */}
+          <div className="space-y-1">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex h-[22px] items-center gap-1 px-1">
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[48px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[80px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Skeleton className="h-14" />
-          <Skeleton className="h-14" />
+      </div>
+    );
+  }
+
+  // ── Error state (Round 4, item 1) ──────────────────────────────────────────
+  // MUST come BEFORE the empty-state check: a failed fetch leaves
+  // portfolios/holdingsResp undefined, which the empty branch would
+  // misread as "user has no portfolio". Retry targets ONLY the failed
+  // query — retrying the holdings query when the LIST failed would call
+  // its queryFn with `firstPortfolio!` still undefined (refetch ignores
+  // `enabled`), crashing on the non-null assertion.
+  if (portfoliosError || holdingsError) {
+    return (
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
+        <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            PORTFOLIO
+          </span>
         </div>
-        <div className="space-y-1">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-6 w-full" style={{ animationDelay: `${i * 50}ms` }} />
-          ))}
-        </div>
-        </div>
+        <WidgetErrorState
+          copyKey="dashboard.portfolio-error"
+          icon={Briefcase}
+          onRetry={() =>
+            void (portfoliosError ? refetchPortfolios() : refetchHoldings())
+          }
+          retrying={portfoliosFetching || holdingsFetching}
+        />
       </div>
     );
   }
@@ -183,18 +255,30 @@ export function PortfolioSummary() {
     // way the loaded widget does — prevents layout shift / height collapse when
     // no portfolio exists.
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
         <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
             PORTFOLIO
           </span>
         </div>
-        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          <p className="text-[10px] text-muted-foreground">No portfolio yet.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            <Link href="/portfolio" className="text-primary">Create a portfolio</Link>
-            {" "}to track your holdings here.
-          </p>
+        {/* Round 3 (item 4): shared EmptyState primitive — icon gives the
+            "my money" category cue; action slot carries the create-CTA Link
+            (real navigation, so a Link, not a Button). Copy key
+            dashboard.no-portfolio keeps the "No portfolio yet" title. */}
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="dashboard.no-portfolio"
+            icon={Briefcase}
+            action={
+              <Link
+                href="/portfolio"
+                className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                Create a portfolio →
+              </Link>
+            }
+          />
         </div>
       </div>
     );
@@ -262,7 +346,7 @@ export function PortfolioSummary() {
     // "slightly raised card" vs "flat background" mismatch that was visible before.
     // WHY flex-col h-full: fills the grid cell height so the section header and
     // period selector pattern is consistent across Row 3.
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       {/* WHY period buttons restored (C-3): the previous code disabled them
           because no period-based S9 endpoint existed; getPortfolioPerformance
@@ -280,11 +364,15 @@ export function PortfolioSummary() {
               key={p}
               onClick={() => setPeriod(p)}
               aria-pressed={period === p}
+              // Round 3 (item 5): bg-muted hover convention + keyboard
+              // focus-visible ring (the text-color-only hover was invisible
+              // in peripheral vision on the dark panel).
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
               {p}
@@ -304,7 +392,12 @@ export function PortfolioSummary() {
           this line shows the ACTUAL portfolio name (e.g. "Tech Growth") so the trader
           knows which portfolio they're looking at without navigating to the portfolio page. */}
       <div className="mb-2">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {/* Round 3 (item 1): aligned to the dominant widget-label treatment —
+            text-[10px] uppercase tracking-[0.08em] (was the outlier
+            text-xs/tracking-wider, the only 12px tracked label on the
+            dashboard). Same size/tracking as every section header keeps the
+            chrome rhythm consistent across all 13 widgets. */}
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           {firstPortfolio.name}
         </span>
       </div>
@@ -433,7 +526,7 @@ export function PortfolioSummary() {
                 {displayName}
               </span>
               {/* Qty — compact shares count */}
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground-dim">
                 {h.quantity % 1 === 0
                   ? h.quantity.toLocaleString()
                   : h.quantity.toFixed(2)}×
@@ -468,7 +561,9 @@ export function PortfolioSummary() {
       {/* Link to full portfolio page */}
       <Link
         href="/portfolio"
-        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 hover:text-foreground"
+        // Round 3 (item 5): focus-visible ring so the footer link is
+        // keyboard-discoverable; transition-colors keeps the hover ≤150ms.
+        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground-dim transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       >
         View portfolio →
       </Link>

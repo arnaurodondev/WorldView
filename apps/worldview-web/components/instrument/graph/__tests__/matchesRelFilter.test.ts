@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { matchesRelFilter } from "@/components/instrument/graph/graphFilterUtils";
+import { matchesRelFilter, isEdgeVisible } from "@/components/instrument/graph/graphFilterUtils";
 
 describe("matchesRelFilter", () => {
   // ── "all" ─────────────────────────────────────────────────────────────────
@@ -52,6 +52,30 @@ describe("matchesRelFilter", () => {
     expect(matchesRelFilter("COMPETES_WITH", "investor")).toBe(false);
   });
 
+  // ── PLAN-0099 W4 regression: canonical KG labels seen LIVE on AAPL ─────────
+  // These are the exact labels S7 emits (confirmed via the live graph endpoint
+  // 2026-06-12). The pre-W4 patterns MISSED owns_stake_in / investment_in for
+  // the "investor" pill — the headline "filters don't fully work" bug.
+
+  it('matches the canonical OWNS_STAKE_IN + INVESTMENT_IN for "investor"', () => {
+    expect(matchesRelFilter("OWNS_STAKE_IN", "investor")).toBe(true);
+    expect(matchesRelFilter("INVESTMENT_IN", "investor")).toBe(true);
+  });
+
+  it('matches the canonical HAS_EXECUTIVE + EMPLOYS for "executive"', () => {
+    expect(matchesRelFilter("HAS_EXECUTIVE", "executive")).toBe(true);
+    expect(matchesRelFilter("EMPLOYS", "executive")).toBe(true);
+  });
+
+  it('matches the canonical SUPPLIER_OF + PARTNER_OF for "supplier"', () => {
+    expect(matchesRelFilter("SUPPLIER_OF", "supplier")).toBe(true);
+    expect(matchesRelFilter("PARTNER_OF", "supplier")).toBe(true);
+  });
+
+  it('matches the canonical COMPETES_WITH for "competitor"', () => {
+    expect(matchesRelFilter("COMPETES_WITH", "competitor")).toBe(true);
+  });
+
   // ── "supplier" ────────────────────────────────────────────────────────────
 
   it('matches SUPPLIER_OF, MANUFACTURES, PRODUCES for "supplier"', () => {
@@ -93,5 +117,31 @@ describe("matchesRelFilter", () => {
     expect(matchesRelFilter("ceo_of", "executive")).toBe(true);
     expect(matchesRelFilter("competes_with", "competitor")).toBe(true);
     expect(matchesRelFilter("invests_in", "investor")).toBe(true);
+  });
+});
+
+// ── isEdgeVisible — shared edge-visibility predicate (KG filter bug fix) ──────
+// WHY: extracted so the visible-edge-count badge, the sigma edgeReducer, and the
+// orphan-node hiding logic all agree on which edges survive the filters.
+describe("isEdgeVisible", () => {
+  it('matches every relation type under the "all" filter', () => {
+    expect(isEdgeVisible("RANDOM_LABEL", 0.9, "all", 0)).toBe(true);
+    expect(isEdgeVisible("HAS_EXECUTIVE", 0.9, "all", 0)).toBe(true);
+  });
+
+  it("applies the strength floor (minWeight is in percent, weight in 0–1)", () => {
+    // weight 0.2 vs minWeight 30% (=0.30) → below floor → hidden.
+    expect(isEdgeVisible("HAS_EXECUTIVE", 0.2, "all", 30)).toBe(false);
+    // weight 0.4 vs minWeight 30% → above floor → visible.
+    expect(isEdgeVisible("HAS_EXECUTIVE", 0.4, "all", 30)).toBe(true);
+  });
+
+  it("combines the strength floor with the relation pill", () => {
+    // Matches the executive pill AND clears the strength floor → visible.
+    expect(isEdgeVisible("HAS_EXECUTIVE", 0.9, "executive", 30)).toBe(true);
+    // Clears the floor but does NOT match the executive pill → hidden.
+    expect(isEdgeVisible("SUPPLIER_OF", 0.9, "executive", 30)).toBe(false);
+    // Matches the pill but BELOW the floor → hidden.
+    expect(isEdgeVisible("HAS_EXECUTIVE", 0.1, "executive", 30)).toBe(false);
   });
 });

@@ -533,11 +533,14 @@ describe("renderWithCitations", () => {
     expect(Array.isArray(result)).toBe(true);
   });
 
-  it("produces sup elements for each [N] marker", () => {
+  it("produces InlineCitationAnchor elements for each [N] marker", () => {
     const result = renderWithCitations("See [1] and [2].") as unknown[];
     // Filter to only the object (ReactElement) entries — strings are the text segments.
-    const supElements = result.filter((r) => typeof r === "object");
-    expect(supElements).toHaveLength(2);
+    // WHY typeof r === "object" (not instanceof check): ReactElements are plain objects
+    // at this level. The F1 primitive (InlineCitationAnchor) renders role="link" spans
+    // at runtime — here we just verify two non-string nodes are in the array.
+    const citationElements = result.filter((r) => typeof r === "object");
+    expect(citationElements).toHaveLength(2);
   });
 });
 
@@ -549,11 +552,15 @@ describe("AskAiPanel — P2B-1 citation rendering", () => {
     vi.clearAllMocks();
   });
 
-  it("renders [N] markers as <sup> elements after stream completes", async () => {
+  it("renders [N] markers as InlineCitationAnchor elements after stream completes", async () => {
     // WHY full response with [1] marker: tests that the post-stream parsing
-    // triggers renderWithCitations, which converts [1] into a <sup> element
-    // with className containing 'font-mono'. The streaming blinking cursor
-    // is NOT present, confirming this is the settled (post-stream) state.
+    // triggers renderWithCitations, which converts [1] into an InlineCitationAnchor
+    // (F1 primitive, role="link") chip. The streaming blinking cursor is NOT
+    // present, confirming this is the settled (post-stream) state.
+    // WHY role="link" (was `sup`): W1 §4.7 replaced the hand-rolled <sup>
+    // renderer with InlineCitationAnchor (F1), which renders a <span role="link">.
+    // The test adapts to the new element without weakening the assertion — we
+    // still verify that citation markers produce interactive, identifiable nodes.
     mockFetch([
       'data: {"token":"See analysis [1] for details."}\n\n',
       "data: [DONE]\n\n",
@@ -566,10 +573,9 @@ describe("AskAiPanel — P2B-1 citation rendering", () => {
 
     // Wait for stream to complete and citation parsing to fire
     await waitFor(() => {
-      // WHY query sup: renderWithCitations wraps [1] in a <sup> element.
-      // The text "for details." appears outside the sup as a text node.
-      const sups = document.querySelectorAll("sup");
-      expect(sups.length).toBeGreaterThan(0);
+      // InlineCitationAnchor renders role="link" spans with the citation label.
+      const citations = document.querySelectorAll('[role="link"]');
+      expect(citations.length).toBeGreaterThan(0);
     });
   });
 

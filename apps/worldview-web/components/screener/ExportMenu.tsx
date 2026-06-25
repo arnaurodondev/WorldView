@@ -46,6 +46,9 @@ import {
 import { exportToCsv, type CsvColumn } from "@/lib/csv-export";
 import type { XlsxColumn } from "@/lib/xlsx-export";
 import type { PdfColumn } from "@/lib/pdf-export";
+// ROUND-4 (item 1 — zero-row export hardening): toast for the graceful no-op
+// path. Same sonner instance the screener page already uses (watch/alert stubs).
+import { toast } from "sonner";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -64,6 +67,19 @@ export interface ExportColumn<T> {
 export interface ExportMenuProps<T> {
   /** Already-filtered, already-sorted rows. We export verbatim. */
   rows: readonly T[];
+  /**
+   * Round 2 — sort-aware export: when provided, called AT CLICK TIME to fetch
+   * the rows, taking precedence over `rows`.
+   *
+   * WHY a function (not just better `rows`): AG Grid owns its sort state
+   * internally — the parent's `rows` prop is the PRE-sort base array and goes
+   * stale the moment the user clicks a header. A getter lets the parent pull
+   * the grid's post-filter-post-sort row order (via
+   * api.forEachNodeAfterFilterAndSort) at the moment of export, so the file
+   * matches exactly what the user sees on screen. `rows` remains as the
+   * fallback (and powers the disabled state, which needs a render-time count).
+   */
+  getRows?: () => readonly T[];
   /** Visible columns only — see file-level WHY. */
   columns: ReadonlyArray<ExportColumn<T>>;
   /** Filename stem WITHOUT extension or timestamp. We append both. */
@@ -96,6 +112,7 @@ function timestampStem(now: Date = new Date()): string {
 
 export function ExportMenu<T>({
   rows,
+  getRows,
   columns,
   filenameBase,
   pdfTitle,
@@ -105,15 +122,63 @@ export function ExportMenu<T>({
   // recognisable as siblings on disk (".csv", ".xlsx", ".pdf" of "screener-...").
   const stem = `${filenameBase}-${timestampStem()}`;
 
+  /**
+   * resolveRows — pick the export row source AT CLICK TIME.
+   * getRows (grid-sorted snapshot) wins over the render-time rows prop —
+   * see the getRows prop doc for why. Falls back to `rows` if the getter
+   * returns an empty array (e.g. grid not mounted yet) so an export click
+   * never silently produces an empty file when data is visibly on screen.
+   */
+  function resolveRows(): readonly T[] {
+    if (getRows) {
+      const fresh = getRows();
+      if (fresh.length > 0) return fresh;
+    }
+    return rows;
+  }
+
+  /**
+   * resolveRowsOrNotify — ROUND-4 (item 1): zero-row export hardening.
+   *
+   * The screener page already disables the trigger at `rows.length === 0`,
+   * but this guard is DEFENSE-IN-DEPTH for two real gaps:
+   *   1. Other call sites may forget the `disabled` wiring — ExportMenu is a
+   *      generic component, not screener-private.
+   *   2. A race: the menu can be open while a background refetch empties the
+   *      grid (e.g. filters applied from another control) — the click then
+   *      resolves zero rows even though the trigger was enabled at open time.
+   * Exporting an empty set would produce a header-only CSV / corrupt-looking
+   * XLSX — confusing artifacts users report as bugs. A toast + no-op tells
+   * them WHY nothing downloaded instead of failing silently (or crashing in
+   * the exporters, which assume ≥1 row for column-width measurement).
+   * Returns null when there is nothing to export.
+   */
+  function resolveRowsOrNotify(): readonly T[] | null {
+    const resolved = resolveRows();
+    if (resolved.length === 0) {
+      toast.info("Nothing to export", {
+        description: "The table has no rows — adjust filters and try again.",
+      });
+      return null;
+    }
+    return resolved;
+  }
+
   function handleCsv() {
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return; // zero rows — graceful no-op (toast already shown)
     const csvColumns: CsvColumn<T>[] = columns.map((c) => ({
       header: c.header,
       accessor: c.accessor,
     }));
-    exportToCsv({ rows, columns: csvColumns, filenameStem: stem });
+    exportToCsv({ rows: exportRows, columns: csvColumns, filenameStem: stem });
   }
 
   async function handleXlsx() {
+    // WHY guard BEFORE the dynamic import: no point downloading the ~120KB
+    // write-excel-file chunk just to export nothing.
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return;
     // QA-iter1 MIN-3: dynamic-import write-excel-file only when the user
     // actually clicks Excel — keeps the eager bundle CSV-only.
     const { exportToXlsx } = await import("@/lib/xlsx-export");
@@ -121,10 +186,13 @@ export function ExportMenu<T>({
       header: c.header,
       accessor: c.accessor,
     }));
-    await exportToXlsx({ rows, columns: xlsxColumns, filenameStem: stem });
+    await exportToXlsx({ rows: exportRows, columns: xlsxColumns, filenameStem: stem });
   }
 
   async function handlePdf() {
+    // WHY guard BEFORE the dynamic import: see handleXlsx — jspdf is ~600KB.
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return;
     // QA-iter1 MIN-3: jspdf + autotable is the largest export dep (~600KB).
     // Dynamic-import on click means CSV-only users never download it.
     const { exportToPdf } = await import("@/lib/pdf-export");
@@ -134,7 +202,7 @@ export function ExportMenu<T>({
     }));
     // WHY await: exportToPdf is now async (it dynamic-imports jspdf + autotable
     // inside the function body so those heavy deps form a separate chunk).
-    await exportToPdf({ rows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
+    await exportToPdf({ rows: exportRows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
   }
 
   return (
@@ -144,7 +212,9 @@ export function ExportMenu<T>({
           type="button"
           disabled={disabled}
           aria-label="Export results"
-          className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
+          // ROUND-3 item 6: shared focus-visible ring on the export trigger
+          // (matches Saved Screens / Filters / gear — full toolbar parity).
+          className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
         >
           <Download className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           Export

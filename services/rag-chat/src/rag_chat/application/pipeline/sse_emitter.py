@@ -10,21 +10,43 @@ new input_summary param), updated emit_tool_result (item_count param).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+import os
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
+
+import structlog
+
+from rag_chat.application.pipeline.sse_events import (
+    PROTOCOL_VERSION_KEY,
+    SSE_PROTOCOL_VERSION,
+    SSEEventType,
+)
 
 if TYPE_CHECKING:
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef
+
+# Module-level structlog logger (R12 — never stdlib logging). Used for the
+# ``grounding_sample_truncated`` observability event (PRD-0091 §13.2).
+_log = structlog.get_logger(__name__)
 
 # ── Tool label map ─────────────────────────────────────────────────────────────
 # Maps tool names (from capability_manifest.yaml) to human-readable UI labels.
 # WHY here: the SSEEmitter is the only layer that emits tool_call events, so
 # co-locating the label map avoids a separate lookup on every call site.
+#
+# Phase-1 split: each entry is a (verb_template) — a base label used when the
+# tool's input carries no useful identifier. When the input DOES carry one
+# (ticker / entity / symbol), ``_human_tool_label`` weaves it in to produce a
+# specific line ("Searching news for NVIDIA") instead of the generic one. This
+# is DETERMINISTIC string templating only — NO extra LLM call (respects the
+# DeepSeek-judge-budget cost rule).
 _TOOL_LABELS: dict[str, str] = {
     "search_documents": "Searching documents...",
+    "get_entity_news": "Searching news...",
     "get_entity_graph": "Building entity map...",
     "traverse_graph": "Traversing knowledge graph...",
     "search_entity_relations": "Mapping relationships...",
+    "get_relations": "Querying the knowledge graph...",
     "search_claims": "Checking analyst claims...",
     "search_events": "Looking up corporate events...",
     "get_contradictions": "Detecting contradictions...",
@@ -33,8 +55,12 @@ _TOOL_LABELS: dict[str, str] = {
     "get_fundamentals_history": "Fetching fundamentals...",
     "get_entity_narrative": "Loading narrative...",
     "get_entity_paths": "Tracing entity paths...",
+    "get_path_between": "Querying the knowledge graph...",
     "get_entity_health": "Computing health score...",
     "get_entity_intelligence": "Loading intelligence bundle...",
+    # Risk-metrics family — templated, no LLM.
+    "get_risk_metrics": "Computing risk metrics...",
+    "compute_risk_metrics": "Computing risk metrics...",
     # PLAN-0081 Wave A: catalog tools
     "get_morning_brief": "Loading morning brief...",
     "compare_entities": "Comparing entities...",
@@ -48,13 +74,144 @@ _TOOL_LABELS: dict[str, str] = {
     "create_alert": "Creating alert...",
 }
 
+# Per-tool template for the INPUT-AWARE label (Phase-1). When the tool's input
+# carries a recognised identifier, the matching template here produces a
+# specific line. ``{subject}`` is filled with the resolved identifier. Tools
+# absent from this map fall back to their static ``_TOOL_LABELS`` entry even
+# when an identifier is present (e.g. "Screening universe..." reads better
+# without a subject). Keep templates short and present-progressive to match the
+# rest of the chat chrome.
+_TOOL_LABEL_TEMPLATES: dict[str, str] = {
+    "get_entity_news": "Searching news for {subject}",
+    "search_documents": "Searching documents for {subject}",
+    "search_entity_relations": "Mapping relationships for {subject}",
+    "get_relations": "Querying the knowledge graph for {subject}",
+    "get_entity_graph": "Building entity map for {subject}",
+    "search_claims": "Checking analyst claims on {subject}",
+    "get_contradictions": "Detecting contradictions for {subject}",
+    "get_price_history": "Fetching price history for {subject}",
+    "get_fundamentals_history": "Fetching fundamentals for {subject}",
+    "get_entity_narrative": "Loading narrative for {subject}",
+    "get_entity_paths": "Tracing entity paths for {subject}",
+    "get_entity_health": "Computing health score for {subject}",
+    "get_entity_intelligence": "Loading intelligence for {subject}",
+    "get_risk_metrics": "Computing risk metrics for {subject}",
+    "compute_risk_metrics": "Computing risk metrics for {subject}",
+    "compare_entities": "Comparing {subject}",
+    "create_alert": "Creating alert for {subject}",
+}
+
+# Input keys probed (in order) to find the human "subject" of a tool call. The
+# FIRST present, non-empty, string-coercible value wins. These are the safe,
+# display-only identifier fields tool inputs carry — NEVER queries / free text
+# (those are excluded from the SSE input_summary upstream anyway).
+_SUBJECT_INPUT_KEYS: tuple[str, ...] = (
+    "ticker",
+    "symbol",
+    "entity_name",
+    "entity",
+    "entity_id",
+    "name",
+    "source_entity",
+)
+
+# Optional ticker→display-name map so common symbols render as the recognisable
+# company name ("NVDA" → "NVIDIA") rather than the bare ticker. Unknown tickers
+# fall through to the raw symbol — correct and never wrong, just less polished.
+# Intentionally small + deterministic (NO lookup service / LLM): this is pure
+# display sugar on the hot streaming path.
+_TICKER_DISPLAY_NAMES: dict[str, str] = {
+    "NVDA": "NVIDIA",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "GOOGL": "Alphabet",
+    "GOOG": "Alphabet",
+    "AMZN": "Amazon",
+    "META": "Meta",
+    "TSLA": "Tesla",
+    "MSTR": "MicroStrategy",
+    "AMD": "AMD",
+    "INTC": "Intel",
+    "NFLX": "Netflix",
+}
+
+
+def _resolve_subject(input_summary: dict[str, Any]) -> str | None:
+    """Extract a short, human display subject from a tool's input summary.
+
+    Deterministic + best-effort: probes :data:`_SUBJECT_INPUT_KEYS` in order,
+    str-coerces the first present non-empty value, maps known tickers to their
+    company name, and bounds the length. Returns ``None`` when no usable subject
+    is present (caller then uses the static base label). NEVER raises — an odd
+    input shape degrades to ``None`` rather than breaking the stream.
+    """
+    if not isinstance(input_summary, dict):
+        return None
+    for key in _SUBJECT_INPUT_KEYS:
+        raw = input_summary.get(key)
+        if raw is None:
+            continue
+        # Lists (e.g. compare_entities tickers=["NVDA","AMD"]) → join the first
+        # few so the label stays short.
+        if isinstance(raw, list | tuple):
+            parts = [str(p).strip() for p in raw if str(p).strip()]
+            if not parts:
+                continue
+            mapped = [_TICKER_DISPLAY_NAMES.get(p.upper(), p) for p in parts[:3]]
+            return ", ".join(mapped)[:48]
+        text = str(raw).strip()
+        if not text:
+            continue
+        # Ticker-shaped tokens (all caps, ≤5 chars) get the display-name map.
+        if text.upper() in _TICKER_DISPLAY_NAMES:
+            return _TICKER_DISPLAY_NAMES[text.upper()]
+        return text[:48]
+    return None
+
+
+def _human_tool_label(tool_name: str, input_summary: dict[str, Any]) -> str:
+    """Build the deterministic, input-aware human label for a tool_call.
+
+    Resolution order:
+      1. If the tool has an input-aware template AND a subject is present →
+         "Searching news for NVIDIA".
+      2. Else the static base label from :data:`_TOOL_LABELS`.
+      3. Else a final fallback of ``"{tool_name}..."`` so an unknown tool never
+         raises and still shows *something* legible.
+
+    Pure templating — NO LLM call, NO network. Safe to run on every tool_call.
+    """
+    subject = _resolve_subject(input_summary)
+    template = _TOOL_LABEL_TEMPLATES.get(tool_name)
+    if template and subject:
+        return template.format(subject=subject)
+    return _TOOL_LABELS.get(tool_name, f"{tool_name}...")
+
 
 class SSEEmitter:
     """Convert RAG pipeline events into SSE wire format dictionaries."""
 
+    @staticmethod
+    def human_tool_label(tool_name: str, input_summary: dict[str, Any]) -> str:
+        """Public accessor for the deterministic input-aware tool label.
+
+        WHY exposed: the orchestrator builds the SAME label for the matching
+        ``tool_result`` event (so the Research timeline's completion line keeps
+        the subject from the call line). Delegating to the module-level helper
+        keeps the label logic in ONE place — there is exactly one definition of
+        "Searching news for NVIDIA".
+        """
+        return _human_tool_label(tool_name, input_summary)
+
     def emit_status(self, step: str) -> dict[str, str]:
-        """Emit a pipeline step progress event."""
-        return {"event": "status", "data": json.dumps({"step": step})}
+        """Emit a pipeline step progress event.
+
+        ``step`` is a free-form token the frontend maps to a human label. Known
+        cross-cutting values are enumerated in
+        :class:`rag_chat.application.pipeline.sse_events.SSEStatusStep` (e.g.
+        ``"verifying"`` — the post-synthesis grounding-validation phase).
+        """
+        return {"event": SSEEventType.STATUS.value, "data": json.dumps({"step": step})}
 
     def emit_token(self, text: str) -> dict[str, str]:
         """Emit a single LLM token chunk."""
@@ -105,6 +262,21 @@ class SSEEmitter:
             ),
         }
 
+    def emit_suggestions(self, suggestions: list[str]) -> dict[str, str]:
+        """Emit server-derived follow-up suggestions after the final answer.
+
+        Wire shape (forward-compatible — the frontend prefers server-sent
+        suggestions over its client-templated ones when this event arrives):
+
+            event: suggestions
+            data: ["question 1", "question 2", "question 3"]
+
+        Derivation is deterministic (no extra LLM call) — see
+        ``rag_chat.application.services.suggestions``. Toggled by
+        ``RAG_CHAT_SUGGESTIONS_ENABLED`` (default true).
+        """
+        return {"event": "suggestions", "data": json.dumps(suggestions)}
+
     def emit_contradictions(self, contradictions: list[ContradictionRef]) -> dict[str, str]:
         """Emit contradiction references detected during retrieval."""
         return {
@@ -131,7 +303,7 @@ class SSEEmitter:
     ) -> dict[str, str]:
         """Emit final response metadata (thread/message IDs, latency, provider)."""
         return {
-            "event": "metadata",
+            "event": SSEEventType.METADATA.value,
             "data": json.dumps(
                 {
                     "thread_id": str(thread_id),
@@ -139,6 +311,10 @@ class SSEEmitter:
                     "intent": intent,
                     "provider": provider,
                     "latency_ms": latency_ms,
+                    # Phase-1: surface the SSE protocol version on metadata too
+                    # (additive). The frontend reads it from whichever of
+                    # metadata/done it sees first.
+                    PROTOCOL_VERSION_KEY: SSE_PROTOCOL_VERSION,
                 }
             ),
         }
@@ -163,10 +339,17 @@ class SSEEmitter:
         or None it is omitted to preserve byte-for-byte backwards
         compatibility for callers that did not opt in.
         """
-        payload: dict[str, Any] = {"type": "done"}
+        # Phase-1: surface the SSE protocol version on the terminal frame so the
+        # frontend can read the contract version it just consumed without an
+        # out-of-band negotiation. ``type`` and ``phase_timings_ms`` keep their
+        # exact prior shapes — this is purely additive.
+        payload: dict[str, Any] = {
+            "type": SSEEventType.DONE.value,
+            PROTOCOL_VERSION_KEY: SSE_PROTOCOL_VERSION,
+        }
         if phase_timings_ms:
             payload["phase_timings_ms"] = phase_timings_ms
-        return {"event": "done", "data": json.dumps(payload)}
+        return {"event": SSEEventType.DONE.value, "data": json.dumps(payload)}
 
     def emit_agent_iteration(
         self,
@@ -282,9 +465,11 @@ class SSEEmitter:
             fallback_of:   Name of the originally-failed tool when is_fallback=True;
                            ignored otherwise.
         """
-        label = _TOOL_LABELS.get(tool_name, f"{tool_name}...")
+        # Phase-1: build the input-aware human label deterministically (no LLM).
+        # ``get_entity_news({"ticker": "NVDA"})`` → "Searching news for NVIDIA".
+        label = _human_tool_label(tool_name, input_summary)
         payload: dict[str, Any] = {
-            "type": "tool_call",
+            "type": SSEEventType.TOOL_CALL.value,
             "tool": tool_name,
             "label": label,
             "input": input_summary,
@@ -393,6 +578,243 @@ class SSEEmitter:
             ),
         }
 
+    # ── result_preview bounds (tool_result SSE enrichment) ────────────────────
+    # Hard caps so the tool_result SSE frame stays small regardless of how many
+    # items / how large the titles a tool returns. 3 items x ~80 chars title +
+    # ~64 chars id keeps the preview well under ~500 bytes of JSON.
+    _PREVIEW_MAX_ITEMS = 3
+    _PREVIEW_TITLE_MAX_CHARS = 80
+    _PREVIEW_ID_MAX_CHARS = 64
+
+    @classmethod
+    def build_result_preview(cls, items: list[Any]) -> list[dict[str, str | None]]:
+        """Build a small, bounded preview of tool-result items for the SSE frame.
+
+        Each entry carries the item's ``item_id`` and its citation title when
+        present. Inputs are duck-typed (RetrievedItem or anything with
+        ``item_id`` / ``citation_meta.title``) so handler-specific result
+        shapes never crash the emitter — unknown shapes degrade to id-only
+        entries, never to an exception.
+        """
+        preview: list[dict[str, str | None]] = []
+        for item in items[: cls._PREVIEW_MAX_ITEMS]:
+            raw_id = getattr(item, "item_id", None)
+            title = getattr(getattr(item, "citation_meta", None), "title", None)
+            preview.append(
+                {
+                    "id": str(raw_id)[: cls._PREVIEW_ID_MAX_CHARS] if raw_id is not None else None,
+                    "title": str(title)[: cls._PREVIEW_TITLE_MAX_CHARS] if title else None,
+                }
+            )
+        return preview
+
+    # ── grounding_sample bounds (PRD-0091 FR-5 / FR-8 / §6.3) ─────────────────
+    # The grounding sample carries a few REDACTED, allow-listed *values* from
+    # the tool result (not just {id,title}) so a downstream judge (W3) can
+    # cross-check numeric claims in the answer against what the tool actually
+    # returned. These hard caps keep the serialized sample tiny (≤1 KB, NFR-1)
+    # regardless of how many rows / how large the values a tool produced.
+    #   - MAX_ROWS:        at most this many result rows are sampled.
+    #   - MAX_FIELDS:      at most this many allow-listed fields per row.
+    #   - VALUE_MAX_CHARS: each value is str-coerced then truncated to this.
+    #   - SAMPLE_MAX_BYTES:the whole serialized sample is bounded; over → cut +
+    #                      ``truncated=true``.
+    GROUNDING_MAX_ROWS = 3
+    GROUNDING_MAX_FIELDS_PER_ROW = 8
+    GROUNDING_VALUE_MAX_CHARS = 32
+    GROUNDING_SAMPLE_MAX_BYTES = 1024
+
+    # Per-tool field allow-list (FR-8). ONLY numeric / short-identifier fields
+    # appear here — NEVER document bodies, narrative text, or any
+    # portfolio/account identifiers. A tool NOT listed here yields NO sample at
+    # all (degrades to the id/title result_preview only); this is the
+    # fail-closed default that prevents raw-payload leakage from unknown shapes.
+    #
+    # NOTE: field names are matched duck-typed against each result item
+    # (``getattr`` on the item, then its ``citation_meta``, then dict-style
+    # ``get``) — the same robustness contract as ``build_result_preview``. When
+    # a handler does not (yet) surface a structured field, it simply does not
+    # survive into the sample; the builder never raises on a missing field.
+    _GROUNDING_FIELD_ALLOWLIST: ClassVar[dict[str, tuple[str, ...]]] = {
+        # Market / fundamentals tools — numeric financial fields + identifiers.
+        "get_fundamentals_history": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        "get_fundamentals_history_batch": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "pe_ratio",
+            "market_cap",
+        ),
+        "compare_entities": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
+        "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),
+        "get_market_movers": ("ticker", "change_pct", "price"),
+        # Knowledge / intelligence tools — short identifiers + confidence only.
+        "search_claims": ("ticker", "confidence", "polarity", "period"),
+        "search_entity_relations": ("ticker", "confidence", "relation_type"),
+        "get_contradictions": ("ticker", "confidence", "claim_type"),
+        "get_entity_health": ("ticker", "confidence", "health_score"),
+    }
+
+    # Substrings that, if present in a *surviving* field NAME, force redaction
+    # of that field (defence-in-depth on top of the allow-list — FR-8 / §8). A
+    # portfolio/account identifier must NEVER reach an eval artefact or log.
+    _GROUNDING_REDACT_NAME_SUBSTRINGS: tuple[str, ...] = (
+        "portfolio",
+        "account",
+        "holding",
+        "position_id",
+        "user_id",
+        "tenant",
+    )
+
+    @classmethod
+    def _grounding_field_value(cls, item: Any, field: str) -> Any | None:  # — duck-typed
+        """Best-effort extraction of one allow-listed field from a result item.
+
+        Probes, in order: a direct attribute on the item, the item's
+        ``citation_meta`` (where ``ticker`` is often surfaced as
+        ``entity_name``), then dict-style ``.get`` for handlers that return
+        plain dicts. Returns ``None`` when the field is absent — NEVER raises,
+        so an unexpected item shape degrades to a smaller sample rather than a
+        500 mid-stream.
+        """
+        # 1. Direct attribute on the item (e.g. a structured RetrievedItem-like
+        #    object that already exposes ``revenue`` / ``confidence``).
+        val = getattr(item, field, None)
+        if val is not None:
+            return val
+        # 2. citation_meta fallback — ``ticker`` is frequently carried as the
+        #    citation's ``entity_name``; surface it so financial tool rows still
+        #    get an identifier in the sample.
+        meta = getattr(item, "citation_meta", None)
+        if meta is not None:
+            mval = getattr(meta, field, None)
+            if mval is not None:
+                return mval
+            if field == "ticker":
+                ent = getattr(meta, "entity_name", None)
+                if ent is not None:
+                    return ent
+        # 3. dict-style item (some handlers return plain dicts).
+        if isinstance(item, dict):
+            return item.get(field)
+        return None
+
+    @classmethod
+    def build_grounding_sample(cls, tool_name: str, items: list[Any]) -> dict[str, Any] | None:
+        """Build a bounded, redacted, allow-list-only sample of tool-result values.
+
+        PRD-0091 FR-5 / FR-8 / §6.3. This is the *opt-in* counterpart to
+        :meth:`build_result_preview`: where the preview carries only
+        ``{id, title}`` for the UI, the grounding sample carries a few
+        allow-listed numeric / identifier VALUES so the W3 judge can verify (not
+        presume) grounding — e.g. cross-check a "$271,474" claim against the
+        revenue the tool actually returned.
+
+        Hard guarantees (all enforced here, server-side):
+          * Only fields in ``_GROUNDING_FIELD_ALLOWLIST[tool_name]`` are read;
+            an unknown tool → ``None`` (no sample, never a raw-payload leak).
+          * Each value is ``str``-coerced and truncated to
+            ``GROUNDING_VALUE_MAX_CHARS``.
+          * At most ``GROUNDING_MAX_ROWS`` rows and
+            ``GROUNDING_MAX_FIELDS_PER_ROW`` fields per row.
+          * Any field whose name matches a portfolio/account redaction
+            substring is dropped (defence-in-depth).
+          * The serialized sample is capped at ``GROUNDING_SAMPLE_MAX_BYTES``;
+            when the cap forces fields out, ``truncated=true``.
+
+        Returns the ``{fields, sampled_rows, total_rows, truncated}`` shape
+        (§6.3), or ``None`` when the tool is not allow-listed or no allow-listed
+        field survived (caller then emits no ``grounding_sample`` at all).
+        """
+        allow = cls._GROUNDING_FIELD_ALLOWLIST.get(tool_name)
+        if not allow:
+            # Unknown / not-allow-listed tool → fail closed: no sample.
+            return None
+
+        total_rows = len(items)
+        truncated = False
+
+        # ``fields`` is a flat {field_name: value} map sampled across the first
+        # few rows. We key by field name (not by row index) because the judge
+        # cross-checks claim numbers against the *set* of returned values; a
+        # per-row matrix would blow the byte budget for marginal benefit. When
+        # multiple sampled rows carry the same field, later rows are appended
+        # under suffixed keys (``revenue``, ``revenue_2``) so distinct values
+        # survive without collisions — still bounded by the field/byte caps.
+        fields: dict[str, str] = {}
+        sampled_rows = 0
+        for item in items[: cls.GROUNDING_MAX_ROWS]:
+            row_field_count = 0
+            row_contributed = False
+            for field in allow:
+                if row_field_count >= cls.GROUNDING_MAX_FIELDS_PER_ROW:
+                    break
+                # Defence-in-depth redaction on the field NAME (FR-8 / §8): a
+                # portfolio/account identifier must never be emitted even if it
+                # somehow appears in an allow-list (it does not today, but this
+                # guard makes the leak structurally impossible).
+                lname = field.lower()
+                if any(sub in lname for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                    continue
+                raw = cls._grounding_field_value(item, field)
+                if raw is None:
+                    continue
+                value = str(raw)[: cls.GROUNDING_VALUE_MAX_CHARS]
+                # First occurrence keeps the bare field name; subsequent rows
+                # get a numeric suffix so distinct values from different rows
+                # are not silently overwritten.
+                key = field if field not in fields else f"{field}_{sampled_rows + 1}"
+                fields[key] = value
+                row_field_count += 1
+                row_contributed = True
+            if row_contributed:
+                sampled_rows += 1
+
+        if not fields:
+            # No allow-listed field survived (e.g. the handler renders numbers
+            # into ``text`` only) → no sample, judge falls back to "presumed".
+            return None
+
+        sample: dict[str, Any] = {
+            "fields": fields,
+            "sampled_rows": sampled_rows,
+            "total_rows": total_rows,
+            "truncated": truncated,
+        }
+
+        # Enforce the byte cap LAST: drop the least-recently-added fields until
+        # the serialized sample fits, flipping ``truncated`` so the judge knows
+        # the values are partial. We re-serialize after each drop because JSON
+        # length is not a simple sum of value lengths.
+        while len(json.dumps(sample).encode("utf-8")) > cls.GROUNDING_SAMPLE_MAX_BYTES and fields:
+            # Remove the last-inserted field (dicts preserve insertion order).
+            drop_key = next(reversed(fields))
+            del fields[drop_key]
+            truncated = True
+            sample["fields"] = fields
+            sample["truncated"] = truncated
+
+        if not fields:
+            # Byte cap removed everything — degrade to no sample rather than an
+            # empty-fields object the judge cannot use.
+            return None
+
+        if truncated:
+            # PRD-0091 §13.2 observability: surface that the cap fired so the
+            # cap can be tuned from telemetry (R12 — structlog only).
+            _log.info(
+                "grounding_sample_truncated",
+                tool=tool_name,
+                total_rows=total_rows,
+                sampled_rows=sampled_rows,
+            )
+
+        return sample
+
     def emit_tool_result(
         self,
         tool_name: str,
@@ -402,6 +824,10 @@ class SSEEmitter:
         reason: str | None = None,
         status_code: int | None = None,
         elapsed_ms: int | None = None,
+        duration_ms: int | None = None,
+        result_preview: list[dict[str, str | None]] | None = None,
+        grounding_sample: dict[str, Any] | None = None,
+        label: str | None = None,
     ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
 
@@ -428,23 +854,73 @@ class SSEEmitter:
             reason:     transport_error reason code (None for non-transport statuses).
             status_code:upstream HTTP status (5xx only; None otherwise).
             elapsed_ms: wall-clock ms spent on the failing call (transport_error only).
+            duration_ms: server-measured wall-clock ms for this tool execution
+                         (set for ALL statuses, unlike elapsed_ms). The
+                         frontend prefers duration_ms when present and falls
+                         back to its own client-side measurement otherwise.
+            result_preview: bounded preview (≤3 entries of {id, title}) built
+                         via :meth:`build_result_preview`. Omitted when None
+                         or empty so the legacy SSE shape is preserved for
+                         error/empty results.
+            grounding_sample: bounded, redacted, allow-list-only sample of
+                         tool-result VALUES built via
+                         :meth:`build_grounding_sample` (PRD-0091 FR-5). Attached
+                         to the payload ONLY when the ``CHAT_EVAL_GROUNDING_SAMPLES``
+                         env flag is on AND ``status == "ok"`` AND the sample is
+                         non-empty. Default OFF (NFR-2) — when off, the legacy
+                         4-key payload stays byte-identical, so the frontend and
+                         the chat-eval harness pattern-match unchanged (AD-4).
         """
         payload: dict[str, object] = {
-            "type": "tool_result",
+            "type": SSEEventType.TOOL_RESULT.value,
             "tool": tool_name,
             "status": status,
             "item_count": item_count,
         }
-        # Only attach the optional transport-error fields when populated so
-        # the legacy SSE shape stays byte-identical for non-error tool_results
-        # (frontend snapshot tests and the chat-eval harness both pattern-match
-        # on the existing 4-key payload).
+        # Phase-1: carry the SAME human label as the matching tool_call so the
+        # Research timeline can render a completion line ("✓ Searching news for
+        # NVIDIA") without re-deriving the label client-side. Omitted when None
+        # so the legacy payload stays byte-identical for callers that don't pass
+        # it (forward-compatible, additive).
+        if label:
+            payload["label"] = label
+        # Only attach the optional fields when populated so the legacy SSE
+        # shape stays byte-identical for callers that did not opt in
+        # (frontend snapshot tests and the chat-eval harness both
+        # pattern-match on the existing 4-key payload).
         if reason is not None:
             payload["reason"] = reason
         if status_code is not None:
             payload["status_code"] = status_code
         if elapsed_ms is not None:
             payload["elapsed_ms"] = elapsed_ms
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        if result_preview:
+            payload["result_preview"] = result_preview
+        # ── grounding_sample (PRD-0091 FR-5 / AD-4 / NFR-2) ──────────────────
+        # Opt-in, omit-when-empty — mirrors the ``result_preview`` pattern above
+        # so the legacy 4-key payload is byte-identical when off. THREE
+        # conditions must ALL hold before the sample is attached:
+        #   1. status == "ok"            — never sample error/empty/transport
+        #      results (BP-623: a downed upstream has no values to verify).
+        #   2. grounding_sample is non-empty — the builder returned a real
+        #      sample (not None / not {}).
+        #   3. CHAT_EVAL_GROUNDING_SAMPLES env flag is truthy — read per-call so
+        #      ops can flip it without a restart (same hot-toggle pattern as
+        #      RAG_COMPLETION_CACHE_DISABLED / RAG_CHAT_SUGGESTIONS_ENABLED).
+        #      Default OFF in prod (NFR-2) keeps eval-only data out of normal
+        #      traffic. NOTE: the var is intentionally UN-prefixed
+        #      (CHAT_EVAL_*, not RAG_CHAT_*) per PRD-0091 §6.3 — it is an
+        #      eval-harness toggle, not a service config knob, so it is read
+        #      directly from os.environ rather than via the RAG_CHAT_-prefixed
+        #      pydantic Settings.
+        if (
+            status == "ok"
+            and grounding_sample
+            and os.environ.get("CHAT_EVAL_GROUNDING_SAMPLES", "").strip().lower() == "true"
+        ):
+            payload["grounding_sample"] = grounding_sample
         return {
             "event": "tool_result",
             "data": json.dumps(payload),

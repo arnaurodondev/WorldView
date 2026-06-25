@@ -62,3 +62,66 @@ class EntityPathsResponse(BaseModel):
     paths: list[PathInsightPublic]
     total: int
     freshness_ts: datetime | None = None
+
+
+# ── Pairwise pathfinding (PLAN-0112 W4 — mirrors KG paths/between, PRD §6.2) ──
+
+
+class PathBetweenPublic(BaseModel):
+    """A single ranked path between two bound endpoints (PRD §6.2).
+
+    Mirrors ``knowledge_graph.api.schemas.paths.PathBetweenPublic`` so S9 can
+    declare a typed ``response_model`` without importing the backend package
+    (R14).  ``extra="allow"`` keeps the proxy forward-compatible with additive
+    KG fields.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    path_nodes: list[PathNodePublic]
+    path_edges: list[PathEdgePublic]
+    hop_count: int
+    reliability: float
+    unexpectedness: float
+    semantic_distance: float
+    novelty: float
+    weirdness: float
+
+
+class PathsBetweenResponse(BaseModel):
+    """Top-level response for GET /v1/paths/between (PRD §6.2)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    source_entity_id: UUID
+    target_entity_id: UUID
+    connected: bool
+    shortest_hops: int | None = None
+    paths: list[PathBetweenPublic]
+    computed_at: datetime
+
+
+# ── Global weird-connections feed (PLAN-0112 W5 — mirrors KG, PRD §6.2) ───────
+
+
+class WeirdConnectionPublic(PathBetweenPublic):
+    """One ranked global weird connection (PRD §6.2).
+
+    Mirrors ``knowledge_graph.api.schemas.paths.WeirdConnectionPublic`` so S9 can
+    declare a typed ``response_model`` without importing the backend package
+    (R14).  = ``PathBetweenPublic`` + the path endpoints + ``computed_at``.
+    """
+
+    src_entity_id: UUID
+    dst_entity_id: UUID
+    computed_at: datetime
+
+
+class WeirdConnectionsResponse(BaseModel):
+    """Top-level response for GET /v1/connections/weird (PRD §6.2)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    connections: list[WeirdConnectionPublic]
+    total: int
+    freshness_ts: datetime | None = None

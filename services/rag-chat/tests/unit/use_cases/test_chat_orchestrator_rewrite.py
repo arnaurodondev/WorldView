@@ -75,6 +75,26 @@ def _make_budget() -> Any:
     return b
 
 
+def _nonempty_pool() -> list[Any]:
+    """A tool-item list with at least one structured numeric value.
+
+    These tests patch ``NumericGroundingValidator`` to control the validate()
+    verdicts, so the item content is irrelevant to the validator. But the
+    2026-06-12 Theme-A empty-pool refusal gate runs the REAL flatten helper on
+    ``tool_items`` BEFORE the validator — so the pool must be non-empty, else the
+    gate refuses up front and the rewrite-guard branches under test never run.
+    """
+    from rag_chat.application.services.numeric_grounding import FieldKind
+
+    item = MagicMock()
+    item.text = "tool row"
+    item.value = 181.5e9
+    item.field_kind = FieldKind.REVENUE
+    item.citation_meta = None
+    item.item_id = "tool:fundamentals:AAPL"
+    return [item]
+
+
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 
@@ -115,7 +135,7 @@ class TestRewriteSkippedForSingleDigitRevenue:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -162,7 +182,7 @@ class TestDefeatistRewriteRejected:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -207,7 +227,7 @@ class TestDefeatistRewriteRejected:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -314,7 +334,7 @@ class TestW50BannerSuppressionOnFullCoverage:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -357,7 +377,7 @@ class TestW50BannerSuppressionOnFullCoverage:
                 orch._run_grounding_validation(
                     p=pipeline,
                     response=original_response,
-                    tool_items=[],
+                    tool_items=_nonempty_pool(),
                     messages=[],
                     budget=_make_budget(),
                 )
@@ -367,3 +387,104 @@ class TestW50BannerSuppressionOnFullCoverage:
         assert passed is False
         assert "could not be verified" in text
         assert partially_cited_rewrite in text
+
+
+# ── PLAN-0107 follow-up Bug 1 — rewrite history filter ───────────────────────
+
+
+class TestRewriteHistoryFiltersPriorAssistantDraft:
+    """PLAN-0107 follow-up Bug 1 — the rewrite path must NOT show the LLM its
+    prior failed prose draft. Showing the draft trained the LLM to emit
+    visible self-correction preambles ("You're right - I need to correct
+    this. Let me re-examine the data...") because the rewrite text is the
+    user-visible answer.
+
+    Fix: strip prose assistant turns from the history before the corrective
+    user turn, and do NOT re-inject ``{role: assistant, content: response}``.
+    Assistant turns carrying ``tool_calls`` (no prose) are preserved so the
+    tool-call/tool-result pairing remains valid for providers that check it.
+    """
+
+    def _capture_rewrite_messages(self, rewrite_text: str) -> tuple[Any, list]:
+        """Return (pipeline_mock, captured_messages_holder).
+
+        ``captured_messages_holder[0]`` will be populated with the first
+        positional arg passed to ``stream_chat`` once the rewrite runs.
+        """
+        captured: list = []
+        p = MagicMock()
+        p.llm_chain = MagicMock()
+
+        async def _stream(messages, *_a: Any, **_kw: Any):
+            captured.append(messages)
+            yield rewrite_text
+
+        p.llm_chain.stream_chat = _stream
+        return p, captured
+
+    def test_prior_prose_assistant_turn_is_filtered_from_rewrite_history(self) -> None:
+        from rag_chat.application.services.numeric_grounding import FieldKind
+
+        # Build a history containing: user, assistant tool_calls (no prose),
+        # tool result, AND a leftover prose assistant draft. Only the prose
+        # assistant turn must be filtered; the tool-calls assistant turn
+        # must survive so the tool/result pairing is intact.
+        prose_draft = "Apple Q3 revenue was $999B [hallucinated]."
+        history = [
+            {"role": "user", "content": "What is Apple's revenue?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "c1", "function": {"name": "get_fundamentals_history"}}],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "revenue: $94.9B"},
+            # The prose assistant turn that must be stripped.
+            {"role": "assistant", "content": prose_draft},
+        ]
+
+        unsupported = (
+            _FakeUnsupported(value=181.5e9, field_kind=FieldKind.REVENUE, closest_tool_value=94.9e9),
+            _FakeUnsupported(value=7.14, field_kind=FieldKind.EPS, closest_tool_value=1.20),
+        )
+        first = _FakeResult(passed=False, unsupported=unsupported)
+        second = _FakeResult(passed=True, unsupported=())
+
+        orch = _make_orchestrator()
+        pipeline, captured = self._capture_rewrite_messages(
+            rewrite_text="Apple Q3 revenue was $94.9B [get_fundamentals_history row 0]."
+        )
+
+        with patch(
+            "rag_chat.application.services.numeric_grounding.NumericGroundingValidator",
+        ) as v_cls:
+            v_inst = v_cls.return_value
+            v_inst.validate.side_effect = [first, second]
+
+            _text, _passed = asyncio.run(
+                orch._run_grounding_validation(
+                    p=pipeline,
+                    response=prose_draft,
+                    tool_items=_nonempty_pool(),
+                    messages=history,
+                    budget=_make_budget(),
+                )
+            )
+
+        assert captured, "stream_chat was not invoked"
+        sent = captured[0]
+        # 1. The prose assistant draft text must NOT appear anywhere in the
+        #    sent message list — that is the whole point of the filter.
+        for m in sent:
+            assert m.get("content") != prose_draft, f"Prose assistant draft leaked into rewrite history: {m!r}"
+        # 2. The tool-calls assistant turn must survive (preserves pairing).
+        assert any(
+            m.get("role") == "assistant" and m.get("tool_calls") for m in sent
+        ), "tool_calls assistant turn was incorrectly filtered out"
+        # 3. The user-turn corrective payload must be present and must NOT
+        #    contain self-correction preamble phrasing — the prompt explicitly
+        #    forbids the rewrite from starting with "You're right" etc.
+        last = sent[-1]
+        assert last.get("role") == "user"
+        assert "You're right" in last["content"] or "Let me re-examine" in last["content"], (
+            "Corrective user turn should reference forbidden preamble phrases so the LLM " "knows not to use them"
+        )

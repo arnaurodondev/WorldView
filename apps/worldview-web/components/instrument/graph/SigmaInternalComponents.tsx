@@ -26,35 +26,25 @@ import { useRouter } from "next/navigation";
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 import type { RelationFilter } from "./GraphControls";
+// PLAN-0099 W4 FIX: import matchesRelFilter from graphFilterUtils — the SINGLE
+// source of truth. This file previously kept its OWN copy of matchesRelFilter,
+// so the FilterController (which gates which edges sigma renders) used the stale
+// duplicate while the unit tests + GraphStats counting used the canonical one.
+// Two divergent copies meant a fix in graphFilterUtils.ts (e.g. the investor /
+// owns_stake_in miss) silently did NOT reach the canvas. Re-export it so the few
+// external importers of `matchesRelFilter` from this module keep working.
+// KG FILTER BUG FIX (2026-06-23): also import isEdgeVisible — the shared
+// predicate that decides whether an edge survives the relation-pill + strength
+// filters. Both the visible-edge-count effect AND the new orphan-node hiding
+// logic call it, so the "X of Y edges" badge and the painted canvas can never
+// disagree about which edges (and therefore which nodes) are visible.
+import { matchesRelFilter, isEdgeVisible } from "./graphFilterUtils";
+
+export { matchesRelFilter };
 
 // WHY hex literal (not Tailwind): sigma WebGL reads hex/rgb from node attributes;
 // CSS classes never reach the canvas. Mirrors --muted-foreground (#83838A) from globals.css.
 const NODE_DEFAULT_COLOR = "#83838A";
-
-// ── matchesRelFilter ──────────────────────────────────────────────────────────
-// WHY pattern-based (not exact-match): relation labels vary by data source.
-// "CEO_OF", "EXECUTIVE_CHAIR", "CHIEF_EXEC" all map to "executive".
-export function matchesRelFilter(label: string, filter: RelationFilter): boolean {
-  const upper = label.toUpperCase();
-  switch (filter) {
-    case "all": return true;
-    case "executive":
-      return upper.includes("CEO") || upper.includes("CFO") || upper.includes("CTO") ||
-        upper.includes("COO") || upper.includes("CHAIR") || upper.includes("EXEC") ||
-        upper.includes("OFFICER") || upper.includes("DIRECTOR");
-    case "investor":
-      return upper.includes("INVEST") || upper.includes("SHAREHOLDER") ||
-        upper.includes("HOLDS") || upper.includes("OWNED");
-    case "supplier":
-      return upper.includes("SUPPL") || upper.includes("MANUFACTUR") || upper.includes("PRODUCES");
-    case "customer":
-      return upper.includes("CUSTOMER") || upper.includes("CLIENT") || upper.includes("USES");
-    case "competitor":
-      return upper.includes("COMPET") || upper.includes("RIVAL");
-    default:
-      return true;
-  }
-}
 
 // ── NodeTooltip / EdgeTooltip types (shared with EntityGraph.tsx) ─────────────
 
@@ -83,9 +73,13 @@ interface GraphEventsProps {
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
   onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number,
     edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
+  /** Block I T-27: fires when the user clicks a graph edge.
+   *  edgeId is the graphology internal edge key (same as GraphEdge.id from the
+   *  API response — GraphLoader sets it via graph.addEdgeWithKey(edge.id, …)). */
+  onEdgeClick?: (edgeId: string) => void;
 }
 
-export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick }: GraphEventsProps) {
+export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick }: GraphEventsProps) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
   const router = useRouter();
@@ -122,8 +116,16 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           router.push(`/instruments/${node}`);
         }
       },
+      // WHY clickEdge (Block I T-27): edge clicks open EdgeDetailCard in the
+      // right rail. The edge key in graphology is set to edge.id from the API
+      // payload (see GraphLoader.addEdgeWithKey), so sigma's edge key == API edge id.
+      clickEdge: ({ edge }) => {
+        if (onEdgeClick) {
+          onEdgeClick(edge);
+        }
+      },
     });
-  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick]);
+  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick]);
 
   return null;
 }
@@ -167,8 +169,16 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
     for (const edge of data.edges) {
       if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && edge.source !== edge.target) {
         if (!graph.hasEdge(edge.source, edge.target)) {
-          graph.addEdge(edge.source, edge.target, {
-            id: edge.id, label: edge.label, weight: edge.weight,
+          // BUG FIX (PLAN-0099 Wave 2): use addEdgeWithKey(edge.id, …) — NOT
+          // addEdge(). graphology's addEdge() auto-generates an internal key
+          // ("geid_…"), so sigma's clickEdge handler was emitting that synthetic
+          // key while the GraphEvents docstring (and every consumer) assumed
+          // the key WAS the API-level GraphEdge.id. Result: edge clicks could
+          // never be resolved back to a KG relation_id and the edge inspector
+          // always fell into its "not found" branch. With addEdgeWithKey the
+          // graphology key == GraphEdge.id == KG relation_id end-to-end.
+          graph.addEdgeWithKey(edge.id, edge.source, edge.target, {
+            label: edge.label, weight: edge.weight,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -210,17 +220,114 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
 // WHY dedicated child: sigma.setSettings() avoids destroying/recreating SigmaContainer
 // (which would re-initialize WebGL). O(edges) per change — fast for interactive controls.
 
+// WHY hex literals for the selection accent: sigma's WebGL pipeline reads node/
+// edge colors from graph attributes — CSS variables and Tailwind classes never
+// reach the canvas. #FFD60A mirrors --primary (Terminal Dark trading yellow,
+// globals.css line ~109); if the design system retunes --primary this constant
+// must follow (same contract as NODE_DEFAULT_COLOR above).
+const SELECTION_ACCENT_HEX = "#FFD60A";
+
 interface FilterControllerProps {
   activeRelFilter: RelationFilter;
   minWeight: number;
   searchQuery: string;
   graphData: EntityGraphData;
+  /** KG FILTER BUG FIX (2026-06-23): the centre (focused) entity of the graph.
+   *  When a relation pill is active and the centre node would otherwise be
+   *  orphaned (all its edges hidden), we still keep it visible — hiding the very
+   *  entity the analyst is inspecting would be confusing. Always rendered. */
+  centerEntityId: string;
+  /** PLAN-0099 Wave 2 — the node selected in the inspector (highlighted on canvas). */
+  selectedNodeId?: string | null;
+  /** PLAN-0099 Wave 2 — the edge selected in the inspector. Key == GraphEdge.id
+   *  (guaranteed by the addEdgeWithKey fix in GraphLoader). */
+  selectedEdgeId?: string | null;
+  /** PLAN-0099 W4 FIX — reports how many edges remain visible after the
+   *  pill/strength filters are applied, so the toolbar can show "X of Y edges".
+   *  WHY: previously the relation pills + strength slider only HID edges inside
+   *  sigma's reducer; the GraphStats strip (rendered by the parent column from
+   *  the unfiltered graphData) never changed, so analysts perceived the pills as
+   *  no-ops. Surfacing the post-filter count is the visible proof the filter
+   *  applied. The search box only DIMS nodes (never hides), so it does not
+   *  affect this edge count by design. */
+  onVisibleEdgeCountChange?: (visible: number, total: number) => void;
 }
 
-export function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
+export function FilterController({
+  activeRelFilter,
+  minWeight,
+  searchQuery,
+  centerEntityId,
+  selectedNodeId = null,
+  selectedEdgeId = null,
+  onVisibleEdgeCountChange,
+}: FilterControllerProps) {
   const sigma = useSigma();
 
+  // ── Report visible-edge count to the parent (pill/strength filter feedback) ──
+  // WHY a separate effect (not folded into the reducer effect): the reducer is a
+  // pure render-time function sigma calls per edge — calling setState from inside
+  // it would fire on every frame. Here we count once per filter change. We count
+  // an edge "visible" using the SAME predicate the edgeReducer uses below
+  // (weight >= minWeight/100 AND matches the active relation filter) so the
+  // toolbar count and the canvas can never disagree.
   useEffect(() => {
+    if (!onVisibleEdgeCountChange) return;
+    const graph = sigma.getGraph();
+    let visible = 0;
+    let total = 0;
+    graph.forEachEdge((_edge, attrs) => {
+      total += 1;
+      const label = (attrs.label as string) ?? "";
+      const weight = (attrs.weight as number) ?? 0;
+      // KG FILTER BUG FIX: use the shared isEdgeVisible predicate (was an inline
+      // copy of the same weight + matchesRelFilter logic). The orphan-node
+      // computation in the reducer effect below uses the SAME helper, so the
+      // badge count and the set of nodes we hide can never drift apart.
+      if (isEdgeVisible(label, weight, activeRelFilter, minWeight)) visible += 1;
+    });
+    onVisibleEdgeCountChange(visible, total);
+    // graphData identity changes when a new graph loads (depth/type filter), so
+    // include sigma in deps to recount after GraphLoader swaps the graph.
+  }, [sigma, activeRelFilter, minWeight, onVisibleEdgeCountChange]);
+
+  useEffect(() => {
+    // ── KG FILTER BUG FIX (2026-06-23): hide orphaned nodes ──────────────────
+    // BUG: the relation pills only hid EDGES in edgeReducer; nodes left with
+    // zero surviving edges stayed painted as disconnected dots, so the analyst
+    // perceived "the filter does nothing to the nodes."
+    //
+    // FIX: before building the reducers, compute the set of node ids that still
+    // have at least one VISIBLE edge under the active relation filter + strength
+    // floor (using the SAME isEdgeVisible predicate as the edgeReducer and the
+    // edge-count badge). The nodeReducer then hides any node NOT in this set.
+    //
+    // SAFE re: dangling edges — sigma only errors on an edge whose endpoint is
+    // hidden when the EDGE itself is still visible. We add a node to keptNodeIds
+    // the moment ANY of its edges is visible, so a node is hidden only when ALL
+    // its edges are already hidden by the edgeReducer. No visible edge can ever
+    // point at a hidden node.
+    const graph = sigma.getGraph();
+    const keptNodeIds = new Set<string>();
+    // When no relation pill is active we keep every node — skip the walk so the
+    // canvas matches the pre-fix behaviour (only edges dim via the strength
+    // slider in "all" mode; nodes never hide).
+    if (activeRelFilter !== "all") {
+      graph.forEachEdge((_edge, attrs, source, target) => {
+        const label = (attrs.label as string) ?? "";
+        const weight = (attrs.weight as number) ?? 0;
+        if (isEdgeVisible(label, weight, activeRelFilter, minWeight)) {
+          keptNodeIds.add(source);
+          keptNodeIds.add(target);
+        }
+      });
+    }
+
+    // WHY selection lives INSIDE the same reducers as the filters (not a second
+    // controller): sigma.setSettings replaces the whole reducer — two sibling
+    // components each calling setSettings would silently clobber each other's
+    // reducer (last-write-wins). Folding both concerns into one reducer keeps
+    // a single source of truth for per-element render overrides.
     sigma.setSettings({
       edgeReducer: (edge: string, data: Record<string, unknown>) => {
         const label = (data.label as string ?? "").toUpperCase();
@@ -230,9 +337,54 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
         if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) {
           return { ...data, hidden: true };
         }
+        // ── Selected-edge highlight (PLAN-0099 Wave 2) ──────────────────────
+        // Accent color + a 2px-min size bump so the selected relation is
+        // findable even in a dense hairball. zIndex lifts it above siblings.
+        if (selectedEdgeId && edge === selectedEdgeId) {
+          return {
+            ...data,
+            hidden: false,
+            color: SELECTION_ACCENT_HEX,
+            size: Math.max(2, ((data.size as number) ?? 1) * 1.5),
+            zIndex: 10,
+          };
+        }
         return { ...data, hidden: false };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
+        // ── Orphan-node hiding (KG FILTER BUG FIX, 2026-06-23) ──────────────
+        // Checked FIRST so it runs before the selection-highlight / search-dim
+        // branches. When a relation pill is active, hide any node that has no
+        // surviving edge (not in keptNodeIds) — UNLESS it is the centre entity
+        // (always shown so the analyst never loses the node they're inspecting)
+        // or the explicitly selected node (it stays highlighted below). In "all"
+        // mode keptNodeIds is empty, but we never reach the hide because the
+        // guard short-circuits on activeRelFilter === "all".
+        if (
+          activeRelFilter !== "all" &&
+          node !== centerEntityId &&
+          node !== selectedNodeId &&
+          !keptNodeIds.has(node)
+        ) {
+          return { ...data, hidden: true };
+        }
+        // ── Selected-node highlight (PLAN-0099 Wave 2) ──────────────────────
+        // WHY checked BEFORE the search dim: an explicitly selected node must
+        // stay visible even if the analyst's search box would otherwise dim it.
+        // highlighted:true gives sigma's label a contrasting background;
+        // forceLabel guarantees the label paints regardless of the
+        // labelRenderedSizeThreshold; the size bump (+40%) makes the selection
+        // visible in peripheral vision without re-running the layout.
+        if (selectedNodeId && node === selectedNodeId) {
+          return {
+            ...data,
+            color: SELECTION_ACCENT_HEX,
+            highlighted: true,
+            forceLabel: true,
+            size: ((data.size as number) ?? 7) * 1.4,
+            zIndex: 11,
+          };
+        }
         if (!searchQuery) return data;
         const label = (data.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
@@ -244,7 +396,47 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
       },
     });
     sigma.refresh();
-  }, [sigma, activeRelFilter, minWeight, searchQuery]);
+    // KG FILTER BUG FIX: centerEntityId added — the orphan-node branch reads it
+    // to keep the centre node visible. keptNodeIds is recomputed inside the
+    // effect from (sigma, activeRelFilter, minWeight), all already deps, so it
+    // does not need its own entry. graphData identity changes also reload the
+    // graph (GraphLoader), and the visible-edge-count effect's sigma dep covers
+    // the post-load recount; this reducer re-runs on the same trigger set.
+  }, [sigma, activeRelFilter, minWeight, searchQuery, centerEntityId, selectedNodeId, selectedEdgeId]);
+
+  return null;
+}
+
+// ── FocusNodeController ───────────────────────────────────────────────────────
+// PLAN-0099 Wave 2 — "Focus graph here" action from the node inspector.
+// Animates the camera to centre on the requested node at a closer zoom ratio.
+
+interface FocusNodeControllerProps {
+  /** Node to centre the camera on, or null when no focus is requested. */
+  focusNodeId: string | null;
+  /** Monotonic counter — bumping it re-fires the focus animation even when the
+   *  SAME node is focused twice in a row (useEffect dep on the id alone would
+   *  no-op the second click after the analyst panned away). */
+  focusNonce: number;
+}
+
+export function FocusNodeController({ focusNodeId, focusNonce }: FocusNodeControllerProps) {
+  const sigma = useSigma();
+
+  useEffect(() => {
+    if (!focusNodeId) return;
+    const graph = sigma.getGraph();
+    if (!graph.hasNode(focusNodeId)) return;
+    // WHY graph coords → camera state: sigma's camera works in normalised
+    // graph space; getNodeAttributes x/y are the layout coordinates that
+    // sigma normalises internally. viewportToFramedGraph round-trips are not
+    // needed — sigma.getNodeDisplayData returns the framed position directly.
+    const display = sigma.getNodeDisplayData(focusNodeId);
+    if (!display) return;
+    // ratio 0.4 ≈ "zoomed into the neighbourhood" — close enough to read the
+    // node's local edges, far enough to keep 1-hop context on screen.
+    sigma.getCamera().animate({ x: display.x, y: display.y, ratio: 0.4 }, { duration: 350 });
+  }, [sigma, focusNodeId, focusNonce]);
 
   return null;
 }

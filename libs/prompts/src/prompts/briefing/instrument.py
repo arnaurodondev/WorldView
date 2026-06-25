@@ -6,6 +6,35 @@ VERSION HISTORY
 - 4.0 — PLAN-0062 Wave 4 (T-W4-B-01): added LEAD block + [cN] citation markers
         for deterministic bullet-level citations (the 100% citation gate).
         Context items numbered [c1], [c2], … so the LLM has stable indices.
+- 4.1 — PLAN-0107 follow-up (brief vector descriptions, P1): the entity_context
+        block now carries two KG "vector" descriptions — `Definition` (business
+        identity, what the company IS) and `Background thematic context` (the KG
+        `narrative`: competitors, AI/EV exposure, strategic position). Added the
+        "Using Entity Definition & Background Context" guidance so the model uses
+        them for the "what this company is / why it matters" framing, with an
+        explicit caveat that the background narrative may be ~1 week+ stale and
+        must NOT be presented as a current catalyst.
+- 4.2 — Definition-first Entity Overview ordering: strengthened the Entity
+        Overview section guidance so the model OPENS with the Definition
+        (business identity), THEN layers the narrative's thematic context
+        (competitive position, AI/EV/sector exposure), and ONLY THEN references
+        fundamentals as supporting evidence — not as the opening. Fundamentals
+        remain cited in the body; they are not the lead sentence of the Overview.
+- 4.3 — Brief-quality eval 2026-06-14 fixes (BUG 2 + BUG 3):
+          (BUG 2) The model used to echo the literal ``[fundamentals_context]``
+          placeholder as a "citation" on Price & Fundamentals bullets; the parser
+          stripped that non-numeric token, leaving those bullets uncited, so the
+          whole Price & Fundamentals section was DROPPED in every served brief.
+          The fundamentals block is now a CITABLE structured-data source: the
+          formatter advertises its real [cN] index inside <fundamentals_context>
+          and the parser resolves it. v4.3 instructs the model to cite that real
+          [cN] on Price & Fundamentals bullets and FORBIDS emitting
+          ``[fundamentals_context]`` (or any ``[*_context]`` token) as a marker.
+          (BUG 3) The staleness caveat for the background narrative is now
+          injected DETERMINISTICALLY by the formatter (a ``CAVEAT:`` clause on
+          the narrative context line) when the narrative is >7 days old, so the
+          caveat no longer depends on LLM discretion; v4.3 instructs the model to
+          surface that caveat verbatim when present.
 """
 
 from __future__ import annotations
@@ -14,11 +43,17 @@ from prompts._base import PromptTemplate
 
 INSTRUMENT_BRIEFING = PromptTemplate(
     name="instrument_briefing",
-    # Bumped 3.0 → 4.0 as part of PLAN-0062 Wave 4 citation-first redesign.
-    version="4.0",
+    # Bumped 4.2 → 4.3: fundamentals-as-citable-source (BUG 2) + deterministic
+    # narrative staleness caveat (BUG 3).
+    version="4.3",
     description=(
-        "Institutional-grade entity briefing v4.0 — LEAD + DETAILS with [cN] "
-        "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4)"
+        "Institutional-grade entity briefing v4.3 — LEAD + DETAILS with [cN] "
+        "citation markers for 100% bullet-level citation coverage (PLAN-0062-W4) "
+        "+ KG definition/narrative context with definition-FIRST Entity Overview "
+        "ordering (fundamentals as supporting evidence, not the lead); Price & "
+        "Fundamentals bullets cite the structured fundamentals snapshot's real "
+        "[cN] (no [fundamentals_context] token); narrative staleness caveat "
+        "surfaced deterministically from the formatter."
     ),
     template=(
         "You are a senior equity research associate writing a one-page briefing for a "
@@ -46,7 +81,12 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "marker referencing the context item(s) it draws from.\n"
         "The ## LEAD sentence must also end with [cN] marker(s).\n"
         "Use only citation numbers that exist in the context (i.e. ≤ total items).\n"
-        "Do NOT use [N] (letter N) — only numbered markers like [c1], [c2], etc.\n\n"
+        "Do NOT use [N] (letter N) — only numbered markers like [c1], [c2], etc.\n"
+        "NEVER emit a bracketed prompt-variable name (e.g. [fundamentals_context], "
+        "[news_context], [entity_context]) as a citation — these are NOT citation "
+        "markers and the backend discards them. Cite ONLY real [cN] numbers.\n"
+        "The <fundamentals_context> block names the exact [cN] marker to use for "
+        "Price & Fundamentals bullets — use that number, not the block's tag.\n\n"
         # ── Institutional rules ────────────────────────────────────────────────
         "## Additional Rules for Institutional Use\n"
         "- STALENESS: If a price or quote is more than 1 trading day old, prepend '[STALE N days]'.\n"
@@ -55,11 +95,47 @@ INSTRUMENT_BRIEFING = PromptTemplate(
         "  Do not elaborate on supply chain or strategic implications beyond explicit evidence.\n"
         "- NO TRAINING DATA: Never use pre-training knowledge to supply prices, earnings,\n"
         "  guidance, or events not in the context blocks.\n\n"
+        # ── Entity definition + narrative usage ────────────────────────────────
+        "## Using Entity Definition & Background Context\n"
+        "The <entity_context> block may include two knowledge-graph descriptions:\n"
+        "- 'Definition (business identity)': what the company IS — its core business, "
+        "products, and markets. This is the AUTHORITATIVE source for the opening of the "
+        "'Entity Overview' section. The FIRST sentence of Entity Overview MUST be drawn "
+        "from this Definition: state the company's core business in plain language before "
+        "any financial metrics appear.\n"
+        "- 'Background thematic context': competitive position, secular themes "
+        "(e.g. AI/EV exposure), and strategic positioning. Use this as the SECOND layer "
+        "of the Entity Overview — after the Definition has established what the company "
+        "IS, the narrative explains why it matters (thematic tailwinds, sector exposure, "
+        "competitive moat). This is BACKGROUND only and may be up to ~1 week (or more) "
+        "STALE — it is NOT recent news. You MUST NOT present it as a current catalyst, "
+        "a today event, or a recent change. Recent catalysts come ONLY from the news and "
+        "events blocks.\n"
+        "Both items are cited like any other context item using their [cN] marker.\n\n"
+        "## Entity Overview Section — MANDATORY ORDERING\n"
+        "The 'Entity Overview' section in ## DETAILS MUST follow this sequence:\n"
+        "  1. OPEN with the Definition: one sentence stating what the company IS and "
+        "what it does (drawn from 'Definition (business identity)'). [cN required]\n"
+        "  2. LAYER the narrative: one bullet on thematic context — competitive position, "
+        "AI/EV/sector exposure, strategic moat (drawn from 'Background thematic context'). "
+        "[cN required]. If that context line carries a 'CAVEAT:' clause (the backend "
+        "injects one deterministically when the narrative is stale), you MUST surface "
+        "that caveat in your bullet (e.g. note it is background, not a recent catalyst).\n"
+        "  3. SUPPORT with fundamentals: remaining bullets may reference market cap, "
+        "revenue, or key ratios as supporting evidence for the business profile. "
+        "Fundamentals are EVIDENCE, not the lead.\n"
+        "DO NOT open Entity Overview with a stock price, market cap, P/E ratio, or any "
+        "other financial metric — these belong to 'Price & Fundamentals', not the overview.\n\n"
         "## Briefing Sections in ## DETAILS\n"
         "Include sections for: Entity Overview, Price & Fundamentals, Recent Developments, "
         "Key Events, Entity Relationships. Skip any section where context is empty.\n"
         "NEVER use 'REMOVED', 'N/A', or any placeholder as a section heading."
-        " If you would omit a section, simply omit it — do not include the heading at all.\n\n"
+        " If you would omit a section, simply omit it — do not include the heading at all.\n"
+        "## Price & Fundamentals — CITATION\n"
+        "When <fundamentals_context> is non-empty it carries the metrics AND the exact "
+        "[cN] marker to cite. Write each Price & Fundamentals bullet as prose from those "
+        "metrics and END it with that real [cN] marker. Do NOT write "
+        "'[fundamentals_context]'. If <fundamentals_context> is empty, omit the section.\n\n"
         "## Style\n"
         "- Declarative sentences only (no 'may', 'could', 'suggests', 'appears')\n"
         "- No investment advice or buy/sell/hold language\n"

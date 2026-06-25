@@ -559,6 +559,24 @@ class EntityPathsResult:
 
 
 @dataclass
+class PathBetweenResult:
+    """On-demand pairwise pathfinding result (PLAN-0112 W4 / S9 /v1/paths/between).
+
+    ``connected`` answers "is A linked to B within max_hops?"; ``shortest_hops``
+    is the length of the shortest such path (None when disconnected); ``paths``
+    are the ranked ``PathBetweenPublic`` dicts (weirdness desc, hop_count asc) as
+    returned by S9 — left as raw dicts so the handler can render them without a
+    second schema mirror.
+    """
+
+    source_entity_id: str
+    target_entity_id: str
+    connected: bool = False
+    shortest_hops: int | None = None
+    paths: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class EntityIntelligenceResult:
     """Full intelligence bundle for an entity returned by S7/S9."""
 
@@ -585,6 +603,15 @@ class S7IntelligencePort(Protocol):
 
     async def get_entity_paths(self, entity_id: UUID, top_n: int = 5) -> EntityPathsResult:
         """GET /api/v1/entities/{id}/paths → top-N pre-computed paths."""
+        ...
+
+    async def get_path_between(
+        self,
+        source: UUID,
+        target: UUID,
+        max_hops: int = 3,
+    ) -> PathBetweenResult:
+        """GET /v1/paths/between → on-demand pairwise paths between two entities."""
         ...
 
     async def get_entity_intelligence(self, entity_id: UUID) -> EntityIntelligenceResult | None:

@@ -19,8 +19,12 @@ from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.messaging.dispatcher import (
     build_market_ingestion_dispatcher,
 )
-from observability import start_metrics_server  # type: ignore[import-untyped]
-from observability.logging import get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    log_runtime_banner,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)
 
@@ -46,30 +50,52 @@ class DispatcherProcess:
 
     async def run(self) -> None:
         """Run the dispatcher until ``stop()`` is called."""
-        logger.info("dispatcher_starting")
         await self._dispatcher.run()
-        logger.info("dispatcher_stopped")
 
 
 async def _run_dispatcher() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
     settings = Settings()  # type: ignore[call-arg]
-    process = DispatcherProcess(settings=settings)
 
-    # Phase 2 worker-metrics: expose Prometheus /metrics endpoint.
-    metrics_handle = start_metrics_server(
+    # PLAN-0107 B-4 — full logging lifecycle (worst-6 fix).
+    configure_logging(
         service_name="market-ingestion-dispatcher",
-        port=int(os.environ.get("METRICS_PORT", "9100")),
+        level=getattr(settings, "log_level", "INFO"),
+        json=getattr(settings, "log_json", True),
     )
-
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, process.stop)
+    log = get_logger("market_ingestion.dispatcher_main")  # type: ignore[no-any-return]
+    log.info("market_ingestion_dispatcher_starting")
 
     try:
-        await process.run()
+        process = DispatcherProcess(settings=settings)
+
+        # Phase 2 worker-metrics: expose Prometheus /metrics endpoint.
+        metrics_handle = start_metrics_server(
+            service_name="market-ingestion-dispatcher",
+            port=int(os.environ.get("METRICS_PORT", "9100")),
+        )
+
+        log_runtime_banner(
+            "market-ingestion-dispatcher",
+            dependencies={
+                "postgres_dsn": str(settings.database_url),
+                "kafka_brokers": settings.kafka_bootstrap_servers,
+            },
+        )
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, process.stop)
+
+        try:
+            await process.run()
+        finally:
+            await metrics_handle.aclose()
+    except Exception:
+        log.exception("market_ingestion_dispatcher_startup_failed")
+        raise
     finally:
-        await metrics_handle.aclose()
+        log.info("market_ingestion_dispatcher_stopped")
 
 
 def main() -> None:

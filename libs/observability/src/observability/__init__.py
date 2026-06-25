@@ -2,6 +2,7 @@
 
 from observability.error_capture import register_error_handlers
 from observability.internal_jwt import InternalJWTMiddleware
+from observability.liveness import ConsumerLivenessProbe, make_liveness_probe
 from observability.logging import configure_logging, get_logger
 from observability.metrics import (
     KAFKA_CONSUMER_MESSAGES,
@@ -19,6 +20,7 @@ from observability.tracing import add_otel_middleware, configure_tracing, get_tr
 
 __all__ = [
     "KAFKA_CONSUMER_MESSAGES",
+    "ConsumerLivenessProbe",
     "InternalJWTMiddleware",
     "MLMetrics",
     "MetricsServerHandle",
@@ -35,6 +37,7 @@ __all__ = [
     "get_tracer",
     "init_sentry",
     "log_runtime_banner",
+    "make_liveness_probe",
     "register_error_handlers",
     "start_metrics_server",
 ]

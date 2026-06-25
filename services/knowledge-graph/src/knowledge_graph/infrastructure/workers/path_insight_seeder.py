@@ -17,6 +17,20 @@ entity).  The pre-demo KG has ~3 relations per subject and 8 distinct
 subjects, so the seeder found 0 hubs and ``/paths`` stayed permanently empty.
 Lowered default to 2; production should override via the
 ``PATH_INSIGHT_HUB_MIN_RELATIONS`` env var once depth grows.
+
+PLAN-0112 W1 (T-1-02, 2026-06-12): the demo-era default of 2 over-qualified
+hubs once the KG grew, so the seeder enqueued far more anchors than the slow
+discovery engine could drain.  Default raised 2 → 5 (still env-overridable
+via ``PATH_INSIGHT_HUB_MIN_RELATIONS``).  This is advisory belt-and-suspenders;
+W2's fast engine is the real volume fix.
+
+PLAN-0112 W1 (T-1-01 / BP-690, 2026-06-12): the seeder previously skipped only
+anchors with a *fresh* ``path_insights`` row.  An anchor whose discovery job
+times out forever (``failed`` at ``retry_count >= max_retries``) never produces
+a ``path_insights`` row, so it was re-enqueued every night — flooding Postgres
+with statement-timeout cancellations.  A ``NOT EXISTS`` guard now excludes any
+anchor with a terminally-``failed`` job, and each skip increments
+``path_jobs_requeued_skipped_total`` (T-1-03, FR-1 proof).
 """
 
 from __future__ import annotations
@@ -27,6 +41,9 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.infrastructure.metrics.prometheus import (
+    path_jobs_requeued_skipped_total,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -36,10 +53,16 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # Minimum outgoing relation count to qualify as a hub entity.
 # D-R3-005 (2026-05-09): lowered from 10 → 2 default; env-overridable.
-_HUB_MIN_RELATIONS = int(os.environ.get("PATH_INSIGHT_HUB_MIN_RELATIONS", "2"))
+# PLAN-0112 T-1-02 (2026-06-12): raised 2 → 5 (production value); env-overridable.
+_HUB_MIN_RELATIONS = int(os.environ.get("PATH_INSIGHT_HUB_MIN_RELATIONS", "5"))
 
 # Skip seeding a job if the hub already has fresh insights younger than this.
 _FRESHNESS_HOURS = 23
+
+# PLAN-0112 T-1-01 (BP-690): an anchor with a ``failed`` job at this many (or
+# more) retries is terminally failed — the discovery engine has given up on it,
+# so re-enqueuing only floods Postgres.  Mirrors the worker's max-retry ceiling.
+_MAX_RETRIES = 3
 
 
 class PathInsightSeeder:
@@ -74,7 +97,15 @@ class PathInsightSeeder:
             # entities that were never promoted to canonical_entities (provisional
             # enrichment, deleted entities, etc.), causing IntegrityError on INSERT.
             # Filter to only canonical entities to prevent FK violations.
-            hub_result = await session.execute(
+            #
+            # BP-690 (PLAN-0112 T-1-01): also exclude anchors with a terminally
+            # ``failed`` discovery job (``retry_count >= :max_retries``).  Such
+            # jobs never complete (the slow engine always times out), produce no
+            # ``path_insights`` row, and so slipped past the freshness guard and
+            # were re-enqueued nightly forever, flooding Postgres.  Two queries
+            # are issued (qualifying hubs, then terminally-failed-excluded hubs)
+            # so we can emit the skip count for the FR-1 metric/log.
+            qualifying_result = await session.execute(
                 text("""
 SELECT r.subject_entity_id AS entity_id
 FROM relations r
@@ -87,13 +118,46 @@ HAVING COUNT(*) > :min_relations
 """),
                 {"min_relations": _HUB_MIN_RELATIONS},
             )
+            qualifying_ids = {UUID(str(row[0])) for row in qualifying_result.fetchall()}
+
+            hub_result = await session.execute(
+                text("""
+SELECT r.subject_entity_id AS entity_id
+FROM relations r
+WHERE EXISTS (
+    SELECT 1 FROM canonical_entities ce
+    WHERE ce.entity_id = r.subject_entity_id
+)
+AND NOT EXISTS (
+    SELECT 1 FROM path_insight_jobs j
+    WHERE j.entity_id = r.subject_entity_id
+      AND j.status = 'failed'
+      AND j.retry_count >= :max_retries
+)
+GROUP BY r.subject_entity_id
+HAVING COUNT(*) > :min_relations
+"""),
+                {"min_relations": _HUB_MIN_RELATIONS, "max_retries": _MAX_RETRIES},
+            )
             hub_rows = hub_result.fetchall()
+
+        hub_ids = [UUID(str(row[0])) for row in hub_rows]
+
+        # BP-690: count anchors that qualified by relation-count but were skipped
+        # because they are terminally failed.  Emitted as a metric + structlog so
+        # the "flood is gone" guarantee (FR-1, NFR-3) is observable.
+        skipped_terminally_failed = len(qualifying_ids - set(hub_ids))
+        if skipped_terminally_failed:
+            path_jobs_requeued_skipped_total.inc(skipped_terminally_failed)
+            logger.info(  # type: ignore[no-any-return]
+                "path_insight_seeder_skipped_terminally_failed",
+                skipped=skipped_terminally_failed,
+            )
 
         if not hub_rows:
             logger.info("path_insight_seeder_no_hubs_found")  # type: ignore[no-any-return]
             return 0
 
-        hub_ids = [UUID(str(row[0])) for row in hub_rows]
         inserted = 0
 
         # Step 2: insert jobs idempotently — one batch session.

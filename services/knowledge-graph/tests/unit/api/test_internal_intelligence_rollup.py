@@ -89,6 +89,35 @@ async def test_use_case_zero_count_explicit() -> None:
     assert out.recent_contradiction_count == 0
 
 
+async def test_use_case_joins_claims_not_relation_evidence_raw() -> None:
+    """Regression (2026-06-16 data-pipeline-gaps Gap 1 — the keystone bug).
+
+    ``relation_contradiction_links.relation_evidence_id`` holds a
+    ``claims.claim_id`` (not a ``relation_evidence_raw.raw_id``), so the rollup
+    MUST join ``claims`` and filter on ``claims.subject_entity_id``. The old
+    ``rer.raw_id = rcl.relation_evidence_id`` join returned 0 for EVERY
+    instrument, which emptied the "Live Catalysts" screener universe-wide. Pin
+    the correct join + a positive count so this can't silently revert.
+    """
+    entity_id = uuid.uuid4()
+    session = _mock_session(4)
+    out = await GetIntelligenceRollup7dUseCase().execute(session, entity_id)
+
+    # The fix unlocks real signal (count > 0) for entities with contradictions.
+    assert out.recent_contradiction_count == 4
+
+    sql_text: str = str(session.execute.call_args[0][0].text).lower()
+    # MUST resolve the subject by joining claims on the stored value.
+    assert "join claims c" in sql_text
+    assert "c.claim_id = rcl.relation_evidence_id" in sql_text
+    assert "c.subject_entity_id = :entity_id" in sql_text
+    # MUST NOT reintroduce the broken relation_evidence_raw join.
+    assert "relation_evidence_raw" not in sql_text
+    assert "rer.raw_id = rcl.relation_evidence_id" not in sql_text
+    # The bound entity_id is the subject filter value.
+    assert session.execute.call_args[0][1]["entity_id"] == str(entity_id)
+
+
 # ── Route tests ───────────────────────────────────────────────────────────────
 
 

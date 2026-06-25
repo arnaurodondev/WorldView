@@ -136,12 +136,14 @@ export function PositionBarHeat({
                 }}
                 className={cn(!positive && "bg-negative/60")}
               />
-              {/* Tiny ticker label below each bar. Truncates to 4 chars to
-                  keep a row of 12 positions readable; full ticker is in the
-                  hover tooltip. */}
-              <div className="text-[8px] font-mono text-muted-foreground mt-px tabular-nums leading-none">
-                {bar.ticker.slice(0, 4)}
-              </div>
+              {/* WHY w >= 18 guard: at 8–17px a 4-char label overflows into adjacent
+                  bars. Only render when the bar is wide enough to contain the text.
+                  The hover tooltip (title=) always shows the full ticker. */}
+              {w >= 18 && (
+                <div className="text-[8px] font-mono text-muted-foreground mt-px tabular-nums leading-none overflow-hidden whitespace-nowrap" style={{ maxWidth: w }}>
+                  {bar.ticker.slice(0, 4)}
+                </div>
+              )}
             </div>
           );
         })}

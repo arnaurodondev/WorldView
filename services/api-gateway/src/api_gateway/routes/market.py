@@ -1,14 +1,16 @@
 """Market data routes for the API Gateway.
 
 Handles /v1/ohlcv/*, /v1/quotes/*, /v1/market/*, /v1/fundamentals/* (screener + timeseries
-+ section endpoints), /v1/signals/ai — proxies to S3 Market Data and S7 KG.
-Split from proxy.py (PLAN-0089 B-3).
++ section endpoints) — proxies to S3 Market Data and S7 KG.
+Split from proxy.py (PLAN-0089 B-3). (The legacy /v1/signals/ai handler lived here too;
+it was removed once routes/signals.py superseded it — see routes/__init__.py.)
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -19,14 +21,20 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import (
     DownstreamError,
     get_market_heatmap,
     get_top_movers,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
+from api_gateway.resolution import (
+    InstrumentNotFoundError,
+    resolve_security_id,
+)
+from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers, proxy_json_response
 from api_gateway.schemas import (
     EarningsCalendarResponse,
+    FinancialsBundleResponse,
     FundamentalsResponse,
     NLScreenerRequest,
     NLScreenerResponse,
@@ -35,6 +43,7 @@ from api_gateway.schemas import (
     YieldCurveResponse,
     YieldPoint,
 )
+from common.time import utc_now  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -58,26 +67,38 @@ def _flatten_screener_result(item: dict[str, Any]) -> dict[str, Any]:
     every frontend component that reads screener data.
 
     Mapping table (S3 metric key → frontend field name):
-      market_capitalization → market_cap
-      pe_ratio              → pe_ratio          (same)
-      daily_return          → daily_return       (same)
-      beta                  → beta               (same)
-      dividend_yield        → dividend_yield     (same)
+      market_capitalization        → market_cap
+      pe_ratio                     → pe_ratio          (same)
+      forward_pe                   → forward_pe         (same)
+      daily_return                 → daily_return       (same)
+      beta                         → beta               (same)
+      dividend_yield               → dividend_yield     (same)
       quarterly_revenue_growth_yoy → revenue_growth_yoy
-      roe_ttm               → roe
-      profit_margin         → net_margin (not in ScreenerResult yet; forwarded raw)
-      sector (top-level)    → gics_sector
+      roe_ttm                      → roe
+      revenue_ttm                  → revenue
+      operating_margin_ttm         → operating_margin
+      current_price                → current_price      (same, from quotes JOIN)
+      profit_margin                → profit_margin      (same; forwarded raw)
+      sector (top-level)           → gics_sector
 
     Any metric key not listed above is forwarded under its original name so new
     S3 metrics are surfaced without a gateway schema change.
     """
     metrics: dict[str, float | None] = item.get("metrics") or {}
 
-    # Rename specific metric keys to match TypeScript ScreenerResult
+    # Rename specific metric keys to match TypeScript ScreenerResult.
+    # WHY these renames: the metric_extractor uses canonical EODHD-derived
+    # names (e.g. ``revenue_ttm``, ``roe_ttm``) while the frontend TS
+    # ScreenerResult interface uses shorter display names (``revenue``, ``roe``).
+    # Applying the mapping here keeps S3 names stable and the TS interface clean.
     _renames: dict[str, str] = {
         "market_capitalization": "market_cap",
         "quarterly_revenue_growth_yoy": "revenue_growth_yoy",
         "roe_ttm": "roe",
+        # PRD-0099: revenue_ttm → revenue (replaces the old revenue_usd placeholder)
+        "revenue_ttm": "revenue",
+        # PRD-0099: operating_margin_ttm → operating_margin (shorter display name)
+        "operating_margin_ttm": "operating_margin",
     }
 
     flat: dict[str, Any] = {
@@ -99,6 +120,9 @@ def _flatten_screener_result(item: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+_SCREENER_CACHE_TTL_S = 60  # 60-second result cache; warm hit avoids full table scan
+
+
 @router.post("/fundamentals/screen")
 async def screen_instruments(request: Request) -> Any:
     """Proxy POST /api/v1/fundamentals/screen → S3 Market Data with response transform.
@@ -109,18 +133,61 @@ async def screen_instruments(request: Request) -> Any:
     _flatten_screener_result() applies the mapping at the BFF layer so the frontend
     reads `row.market_cap` rather than `row.metrics?.market_capitalization`.
 
+    WHY Valkey read-through cache (60 s TTL): the screener aggregates fundamentals
+    + quotes at query time with no DB-side cache. Cold queries run a full table scan
+    that takes 2-5 s; warm hits return the pre-serialised JSON in < 5 ms.  The
+    cache key is a SHA-256 digest of the raw request body so identical filter sets
+    share the same entry.  Cache failures are fail-open — a Valkey error falls
+    through to the upstream S3 call so the screener never degrades to 5xx because
+    of a cache outage (architecture rule: "fail-open on Valkey unavailable").
+
     Pass-through on error: S3 400/422/500 are forwarded unchanged so the frontend
     can display the correct error message (e.g. "invalid metric name").
     """
     body = await request.body()
+
+    # ── Valkey read-through ────────────────────────────────────────────────────
+    # Build a stable, tenant-neutral cache key from the raw request body bytes.
+    # WHY first 16 hex chars (8 bytes): collision probability ≈ 2⁻⁶⁴ over the
+    # expected screener key-space (~100 distinct filter combos) — sufficient for
+    # a 60-second BFF cache with no security-critical data behind it.
+    cache_key = f"screener:v1:{hashlib.sha256(body).hexdigest()[:16]}"
+    valkey = request.app.state.valkey  # None when Valkey is unavailable (fail-open)
+
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                # Serve pre-transformed JSON directly; skip S3 round-trip entirely.
+                return Response(cached, media_type="application/json")
+        except Exception:
+            # Valkey read failure → fall through to S3 (fail-open)
+            logger.warning("screener_cache_read_failed", cache_key=cache_key)
+
+    # ── Upstream S3 call ───────────────────────────────────────────────────────
     clients = _clients(request)
-    resp = await clients.market_data.post(
-        "/api/v1/fundamentals/screen",
-        content=body,
-        headers={"Content-Type": "application/json", **_system_headers(request)},
-    )
+    try:
+        resp = await clients.market_data.post(
+            "/api/v1/fundamentals/screen",
+            content=body,
+            headers={"Content-Type": "application/json", **_system_headers(request)},
+            # WHY timeout=15.0: the screener runs N correlated subqueries over large
+            # tables with a DB-side statement_timeout of 8 s. httpx timeout must be
+            # > 8 s to let S3 receive the DB cancellation and return a clean error
+            # before the gateway aborts. Previous value was 10 s but under concurrent
+            # load httpx starts counting from request dispatch (before TCP handshake +
+            # TLS + S3 connection queue), so the 2 s headroom was insufficient —
+            # httpx fired first, triggering the Starlette BaseHTTPMiddleware
+            # cancellation bug (PLAN-0099 W4 investigation). 15 s gives a 7 s buffer
+            # above the DB deadline, absorbing connection-pool wait + S3 startup lag.
+            # BP-235: always set httpx.Timeout on latency-sensitive downstream calls.
+            timeout=15.0,
+        )
+    except httpx.TimeoutException:
+        logger.warning("screener_upstream_timeout")
+        raise HTTPException(status_code=504, detail="Screener upstream timeout")  # noqa: B904
     if resp.status_code >= 400:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     raw = json.loads(resp.content)
     transformed = {
@@ -130,7 +197,17 @@ async def screen_instruments(request: Request) -> Any:
         "offset": raw.get("offset", 0),
         "limit": raw.get("limit", 50),
     }
-    return JSONResponse(transformed)
+    transformed_bytes = json.dumps(transformed).encode()
+
+    # ── Populate cache with successful response ────────────────────────────────
+    if valkey is not None:
+        try:
+            await valkey.set(cache_key, transformed_bytes.decode(), ex=_SCREENER_CACHE_TTL_S)
+        except Exception:
+            # Cache write failure is non-fatal — response is still returned correctly.
+            logger.warning("screener_cache_write_failed", cache_key=cache_key)
+
+    return Response(transformed_bytes, media_type="application/json")
 
 
 @router.get("/fundamentals/screen/fields")
@@ -145,7 +222,7 @@ async def get_screen_fields(request: Request) -> Any:
         "/api/v1/fundamentals/screen/fields",
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/timeseries")
@@ -161,7 +238,7 @@ async def get_fundamentals_timeseries(request: Request) -> Any:
         params=dict(request.query_params),
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: /fundamentals/economic-calendar MUST be registered before /fundamentals/{instrument_id}
@@ -189,7 +266,7 @@ async def economic_calendar(request: Request) -> Any:
         params={"event_type": "macro", **{k: v for k, v in dict(request.query_params).items() if k != "event_type"}},
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: /fundamentals/earnings-calendar MUST be registered before /fundamentals/{instrument_id}
@@ -236,7 +313,7 @@ async def earnings_calendar(request: Request) -> Any:
         },
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # NOTE: Section routes MUST be registered before /fundamentals/{instrument_id}
@@ -294,7 +371,7 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     - 20 daily bars (ATR-14, RSI-14, GAP%)
     - technicals_snapshot (short interest)
 
-    Returns a flat dict with 6 fields:
+    Returns a flat dict with 8 fields:
     - vwap        float | null — volume-weighted average price (intraday 5m bars)
     - atr_14      float | null — 14-bar ATR from daily bars (True Range avg)
     - rsi_14      float | null — 14-bar RSI from daily bars
@@ -303,6 +380,8 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     - premarket_low   float | null — min(low) from 5m bars before 09:30 ET
     - short_interest_pct  float | null — from technicals_snapshot.ShortPercent
     - short_interest_delta float | null — change from prior snapshot (null if unavailable)
+    - day_open    float | null — today's opening price (first intraday bar open, else daily bar open)
+    - rel_volume  float | null — today cumulative vol / avg_volume_30d (null if no volume data)
 
     All fields are null when insufficient data exists — no 404 is raised.
     Requires authentication.
@@ -328,7 +407,10 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     )
     daily_resp_fut = clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": daily_start},
+        # WHY limit=30: ATR(14) + RSI(14) need 15 bars minimum; 30 bars covers
+        # the 30-calendar-day window already fetched and is well under the 200
+        # default, so the DB materialises only what is consumed.
+        params={"timeframe": "1d", "start": daily_start, "limit": 30},
         headers=headers,
     )
     tech_resp_fut = clients.market_data.get(
@@ -436,6 +518,49 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     # Return null for now — the UI renders "—" for null values.
     short_interest_delta: float | None = None
 
+    # ── day_open (B-Q-2 requirement) ─────────────────────────────────────────
+    # Prefer the first intraday bar's open (most accurate for the current session).
+    # Fall back to the last daily bar's open when intraday data is unavailable.
+    # WHY: BottomTripleStrip needs the open to display day change from open.
+    day_open: float | None = None
+    if intraday_bars:
+        day_open = intraday_bars[0]["open"]
+    elif daily_bars:
+        day_open = daily_bars[-1]["open"]
+
+    # ── rel_volume (B-Q-2 requirement) ───────────────────────────────────────
+    # Relative volume = today's cumulative volume / avg_volume_30d.
+    # avg_volume_30d is derived from the daily bars already fetched (30-day window).
+    # WHY from daily bars: avoids an extra S3 round-trip; the 30 bars we fetch
+    # for ATR/RSI already cover the same rolling window used in the snapshot table.
+    # WHY null guard: division by zero or missing data must not crash the endpoint.
+    #
+    # today_volume source priority:
+    #   1. Sum of intraday (5m) bar volumes — most precise during market hours.
+    #   2. Last daily bar's volume — fallback for weekends / dev environment
+    #      where the market is closed and no intraday bars have been ingested.
+    #      The ratio is dimensionally consistent: both numerator and denominator
+    #      use completed daily-bar volumes from the same S3 response.
+    rel_volume: float | None = None
+    if daily_bars:
+        # Exclude the last daily bar (today) from the 30-day baseline; it is
+        # incomplete intraday and would artificially deflate the average.
+        baseline_bars = daily_bars[:-1] if len(daily_bars) > 1 else []
+        if baseline_bars:
+            avg_volume_30d = sum(b["volume"] for b in baseline_bars[-30:]) / len(baseline_bars[-30:])
+            if avg_volume_30d > 0:
+                if intraday_bars:
+                    # Preferred path: live cumulative intraday volume.
+                    today_vol: int | None = sum(b["volume"] for b in intraday_bars)
+                else:
+                    # Fallback: today's daily bar volume (may be 0 on a
+                    # non-trading day — treat 0 as missing to avoid rel=0.0).
+                    # WHY daily_bars[-1]: S3 returns bars sorted oldest→newest.
+                    _last_daily_vol = daily_bars[-1]["volume"]
+                    today_vol = _last_daily_vol if _last_daily_vol > 0 else None
+                if today_vol is not None:
+                    rel_volume = today_vol / avg_volume_30d
+
     return JSONResponse(
         content={
             "instrument_id": str(instrument_id),
@@ -447,6 +572,8 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
             "premarket_low": round(premarket_low, 4) if premarket_low is not None else None,
             "short_interest_pct": round(short_interest_pct, 2) if short_interest_pct is not None else None,
             "short_interest_delta": short_interest_delta,
+            "day_open": round(day_open, 4) if day_open is not None else None,
+            "rel_volume": round(rel_volume, 4) if rel_volume is not None else None,
         },
     )
 
@@ -478,7 +605,11 @@ async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any
 
     resp = await clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": start_str},
+        # WHY limit=390: 252 trading days (1Y) + ~138 calendar-day buffer for
+        # weekends/holidays within a 550-day window.  Without an explicit limit
+        # the S3 router default (200) silently caps the result, making the 1Y
+        # return always null.  390 is safely below the router's max of 1000.
+        params={"timeframe": "1d", "start": start_str, "limit": 390},
         headers=headers,
     )
 
@@ -559,7 +690,12 @@ async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
 
     resp = await clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": start_str},
+        # WHY limit=210: MA200 needs 200 bars + 1 buffer bar for the pivot
+        # calculation (bars[-2]).  The 310-day calendar window is wide enough to
+        # cover 200 trading days; limit=210 caps the materialised result at the
+        # DB layer rather than fetching up to 220 bars and discarding extras in
+        # the use case's Python slice.
+        params={"timeframe": "1d", "start": start_str, "limit": 210},
         headers=headers,
     )
 
@@ -621,6 +757,127 @@ async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
     )
 
 
+# ── B-Q Quote-tab statistics proxies (B-Q-1..4, 2026-06-10) ──────────────────
+#
+# S3 now computes the Quote-tab strips server-side from market_data_db
+# (use cases in market_data/application/use_cases/query_quote_stats.py).
+# These S9 routes are thin auth-gating proxies — no S9-side math, unlike the
+# older /v1/fundamentals/{id}/intraday-stats family above which composes raw
+# OHLCV in the gateway. The /v1/instruments/{id}/* namespace is the canonical
+# home for these going forward (peers already lives there).
+#
+# WHY resolve_security_id: matches the sibling peers proxy — the frontend may
+# pass a ticker slug ("AAPL") instead of a UUID; S3 only accepts UUIDs.
+
+
+async def _proxy_instrument_stat(path_suffix: str, identifier: str, request: Request) -> Response:
+    """Shared proxy body for the three /instruments/{id}/<stat> routes."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            identifier,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/instruments/{resolved.instrument_id}/{path_suffix}",
+        headers=_auth_headers(request),
+    )
+    return proxy_json_response(request, resp)
+
+
+@router.get("/instruments/{instrument_id}/intraday-stats")
+async def get_instrument_intraday_stats(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/intraday-stats → S3 (B-Q-2).
+
+    Returns {open, prev_close, day_high, day_low, vwap, vwap_source, volume,
+    volume_vs_30d_ratio, session_date} — all nullable (null = no data, never 0).
+    """
+    return await _proxy_instrument_stat("intraday-stats", instrument_id, request)
+
+
+@router.get("/instruments/{instrument_id}/returns")
+async def get_instrument_returns(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/returns → S3 (B-Q-3).
+
+    Returns {as_of, returns: {1D,1W,1M,3M,6M,YTD,1Y,3Y,5Y}} — % returns from
+    daily closes; null per period when history is insufficient (never faked).
+    """
+    return await _proxy_instrument_stat("returns", instrument_id, request)
+
+
+@router.get("/instruments/{instrument_id}/price-levels")
+async def get_instrument_price_levels(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/price-levels → S3 (B-Q-4).
+
+    Returns 52w range + % distances, MA50/MA200, prior-session H/L and simple
+    fractal swing-point support/resistance (method documented in `sr_method`).
+    """
+    return await _proxy_instrument_stat("price-levels", instrument_id, request)
+
+
+# ── Ticker-direct company overview (B-Q task 6, 2026-06-10) ──────────────────
+#
+# WHY a dedicated by-ticker GET instead of extending POST /companies/
+# overviews:batch to accept tickers:
+#   1. The batch contract keys its response on the EXACT input id strings —
+#      mixing tickers and UUIDs in one request would force every consumer to
+#      handle two key types, a permanent contract complication for a one-call
+#      saving.
+#   2. The chat entity cards (the motivating consumer) resolve ONE ticker at a
+#      time; a single cacheable GET matches that access pattern, and the
+#      ticker→UUID step reuses resolve_security_id's 1h in-process TTL cache,
+#      so repeat hits skip the S3 lookup entirely.
+#   3. Zero new downstream surface: this is resolve_security_id +
+#      CompanyOverviewUseCase, both already battle-tested by
+#      /v1/companies/{company_id}/overview in routes/instruments.py.
+#
+# Path shape: /companies/by-ticker/{ticker}/overview is 4 segments, so it can
+# never collide with the 3-segment /companies/{company_id}/overview route.
+
+
+@router.get("/companies/by-ticker/{ticker}/overview")
+async def company_overview_by_ticker(ticker: str, request: Request) -> dict[str, Any]:
+    """Resolve a ticker and return the composed company overview in ONE call.
+
+    Replaces the frontend's search→overview two-request dance for chat entity
+    cards. 404 when the ticker matches no instrument (S3 lookup + KG alias
+    fallback both miss).
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        resolved = await resolve_security_id(
+            ticker,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+
+    # WHY lazy import: mirrors routes/instruments.py::company_overview — the
+    # use case pulls in the composition stack only when the route is hit.
+    from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
+
+    use_case = CompanyOverviewUseCase(
+        http_client=_clients(request).market_data,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
+    try:
+        return await use_case.execute(
+            company_id=str(resolved.instrument_id),
+            make_headers=lambda: _auth_headers(request),
+        )
+    except DownstreamError as e:
+        raise downstream_to_http(e) from e
+
+
 @router.get("/fundamentals/{instrument_id}/technicals")
 async def get_technicals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot.
@@ -637,7 +894,7 @@ async def get_technicals(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/share-statistics")
@@ -655,7 +912,7 @@ async def get_share_statistics(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/share-statistics",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/insider-transactions")
@@ -673,7 +930,7 @@ async def get_insider_transactions(instrument_id: UUID, request: Request) -> Any
         f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/institutional-holders")
@@ -691,7 +948,7 @@ async def get_institutional_holders(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/institutional-holders",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/fund-holders")
@@ -709,7 +966,7 @@ async def get_fund_holders(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/fund-holders",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-trend")
@@ -727,7 +984,7 @@ async def get_earnings_trend(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/earnings-trend",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-annual-trend")
@@ -745,7 +1002,7 @@ async def get_earnings_annual_trend(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/earnings-annual-trend",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/splits-dividends")
@@ -763,7 +1020,7 @@ async def get_splits_dividends(instrument_id: UUID, request: Request) -> Any:
         f"/api/v1/fundamentals/{instrument_id}/splits-dividends",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/fundamentals/{instrument_id}/income-statement")
@@ -780,11 +1037,198 @@ async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params so the new S3
+    # ``period_type`` filter (quarterly|annual) reaches the section endpoint.
     resp = await clients.market_data.get(
         f"/api/v1/fundamentals/{instrument_id}/income-statement",
+        params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+@router.get("/fundamentals/{instrument_id}/balance-sheet")
+async def get_balance_sheet(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/balance-sheet → S3 /balance-sheet.
+
+    WHY (B-Q task 7): S3 has exposed this section since the fundamentals
+    router landed, but S9 never proxied it — the Financials tab could only
+    reach it through the financials-bundle composite. Quarterly records by
+    default (S3 repo layer, BP-546); most-recent-first.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params — ``period_type=annual``
+    # unlocks the ANNUAL statement rows (previously pinned to QUARTERLY by BP-546).
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/balance-sheet",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+@router.get("/fundamentals/{instrument_id}/cash-flow")
+async def get_cash_flow(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/cash-flow → S3 /cash-flow.
+
+    WHY (B-Q task 7): same gap as balance-sheet — the S3 section existed with
+    no S9 passthrough. Quarterly records by default (BP-546).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    # 2026-06-11 (backend-gaps wave 3): forward query params (see balance-sheet note).
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/cash-flow",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+# ── Financials Tab bundle (PLAN-0099 follow-up E) ───────────────────────────
+#
+# WHY THIS EXISTS:
+#   The /instruments/[id] Financials tab fired ~8 unique S9 round-trips on
+#   cold-start (fundamentals, snapshot, income statement, earnings history,
+#   technicals, share statistics, splits/dividends, plus per-panel
+#   beat-miss-history + fundamentals-timeseries). Each is gated by S9 auth
+#   + internal-JWT issuance so the page was wave-serialized by the slowest
+#   leg. This endpoint fans them out in parallel server-side via
+#   asyncio.gather and returns a single composite response. The frontend
+#   then hydrates each per-widget TanStack cache key via
+#   queryClient.setQueryData so existing child components hit warm cache.
+#
+# WHY POST (not GET):
+#   Symmetric with /v1/companies/overviews:batch — the bundle endpoint is
+#   resource-composition (not a simple resource fetch). POST also sidesteps
+#   any chance of FastAPI's path-param matcher confusing "financials-bundle"
+#   with an instrument_id segment.
+#
+# WHY make_headers (factory, not a captured dict): each parallel downstream
+# leg needs a fresh JWT with a unique JTI so InternalJWTMiddleware's replay
+# detection accepts the fan-out (same rationale as /v1/dashboard/bundle and
+# /v1/companies/overviews:batch).
+
+
+@router.post(
+    "/fundamentals/{instrument_id}/financials-bundle",
+    response_model=FinancialsBundleResponse,
+    response_model_exclude_none=False,
+)
+async def get_financials_bundle(instrument_id: UUID, request: Request) -> dict[str, Any]:
+    """Composite endpoint for the Financials tab — collapses 8 RTTs into 1.
+
+    Each leg is fetched in parallel (asyncio.gather with return_exceptions=True).
+    A failed leg degrades to ``None`` rather than failing the whole bundle.
+
+    Auth: standard ``request.state.user`` guard — unauthenticated callers receive
+    401 and no downstream traffic.
+
+    Returns a ``FinancialsBundleResponse``-shaped dict with the legs:
+      - fundamentals             (S3 /fundamentals/{id})
+      - fundamentals_snapshot    (S3 /fundamentals/{id}/snapshot)
+      - income_statement         (S3 /fundamentals/{id}/income-statement)
+      - earnings_history         (S3 /fundamentals/{id}/earnings-annual-trend)
+      - share_statistics         (S3 /fundamentals/{id}/share-statistics)
+      - splits_dividends         (S3 /fundamentals/{id}/splits-dividends)
+      - beat_miss_history        (alias of earnings_history — see schema docstring)
+      - fundamentals_timeseries  (always None today — see schema docstring)
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clients = _clients(request)
+
+    # WHY a fresh make_headers per leg: InternalJWTMiddleware on each downstream
+    # service enforces JTI replay detection. Sharing one JWT across N parallel
+    # legs would cause all but one to be rejected.
+    def _h() -> dict[str, str]:
+        return _auth_headers(request)
+
+    iid = str(instrument_id)
+
+    async def _fetch_json(path: str) -> dict[str, Any] | None:
+        """Fetch ``path`` from S3 market-data; return JSON dict or None on failure.
+
+        Failure modes coalesced to None:
+          - non-2xx status (404 missing, 5xx downstream sick, etc.)
+          - httpx transport error (connect, read, timeout)
+          - JSON parse error (downstream returned non-JSON)
+        """
+        try:
+            resp = await clients.market_data.get(path, headers=_h())
+        except (httpx.HTTPError, OSError) as exc:
+            logger.warning(
+                "financials_bundle_leg_failed",
+                path=path,
+                instrument_id=iid,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "financials_bundle_leg_non_200",
+                path=path,
+                instrument_id=iid,
+                status=resp.status_code,
+            )
+            return None
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            logger.warning(
+                "financials_bundle_leg_decode_failed",
+                path=path,
+                instrument_id=iid,
+                error=str(exc),
+            )
+            return None
+        # Defensive: legs are typed as dict[str, Any] in the schema. If a leg
+        # somehow returned a list or scalar, coerce to None so the response
+        # model validates cleanly.
+        return data if isinstance(data, dict) else None
+
+    (
+        fundamentals_data,
+        snapshot_data,
+        income_statement_data,
+        earnings_history_data,
+        share_statistics_data,
+        splits_dividends_data,
+    ) = await asyncio.gather(
+        _fetch_json(f"/api/v1/fundamentals/{iid}"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/snapshot"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/income-statement"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/earnings-annual-trend"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/share-statistics"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/splits-dividends"),
+        return_exceptions=False,
+    )
+
+    return {
+        "fundamentals": fundamentals_data,
+        "fundamentals_snapshot": snapshot_data,
+        "income_statement": income_statement_data,
+        "earnings_history": earnings_history_data,
+        "share_statistics": share_statistics_data,
+        "splits_dividends": splits_dividends_data,
+        # WHY alias: BeatMissHistoryPanel re-uses the earnings-history cache
+        # key already, but the bundle exposes a distinct field so a future
+        # rename of the panel's query key does not silently break the
+        # cold-start path. Today this field is the same object as earnings_history.
+        "beat_miss_history": earnings_history_data,
+        # WHY None: the FundamentalsTimeseriesChart panel has a metric/period
+        # selector — the bundle endpoint cannot prefetch a specific metric+period
+        # because the active selection lives in client state. The panel keeps
+        # its own self-fetch; the bundle reserves the field for a future
+        # default-metric prefetch without breaking the response shape.
+        "fundamentals_timeseries": None,
+    }
 
 
 # NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI
@@ -814,7 +1258,7 @@ async def get_fundamentals_snapshot(instrument_id: UUID, request: Request) -> An
         f"/api/v1/fundamentals/{instrument_id}/snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -842,7 +1286,7 @@ async def get_fundamentals(instrument_id: UUID, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── OHLCV + Quotes + Fundamentals (PRD-0028 Wave S9-1) ──────────────────────
@@ -895,7 +1339,7 @@ async def get_ohlcv(instrument_id: UUID, request: Request) -> Any:
         params=params,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Batch OHLCV (PLAN-0049 T-A-1-05) ─────────────────────────────────────────
@@ -1083,14 +1527,40 @@ def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> di
     except (ValueError, TypeError):
         change_pct = 0.0
 
+    # 2026-06-11 (backend-gaps wave 3): expose previous_close explicitly.
+    # S3 computes price_change = price - prev_close in PriceSnapshotResolver,
+    # so prev_close is recoverable exactly as price - change — deriving it
+    # here avoids widening the canonical PriceSnapshot contract for a value
+    # that is a pure linear combination of two fields it already carries.
+    # None when price_change is unknown (single-session instruments) so the
+    # frontend can distinguish "unknown" from a real value — mirrors the
+    # price_change=None semantics rather than fabricating prev_close=price.
+    previous_close: float | None = None
+    if change_str is not None and price > 0:
+        previous_close = price - change
+
+    # bid/ask (B-Q plumbing, 2026-06-10): S3 serialises Decimal → str; coerce
+    # to float for the frontend Quote shape. None whenever the snapshot was not
+    # quote-sourced (bars carry no order-book context) or the value is missing.
+    def _opt_float(raw: Any) -> float | None:
+        try:
+            return float(raw) if raw is not None else None
+        except (ValueError, TypeError):
+            return None
+
     return {
         "instrument_id": snap.get("instrument_id", instrument_id),
         "ticker": snap.get("symbol", ""),
         "price": price,
         "change": change,
         "change_pct": change_pct,
+        # 2026-06-11 (backend-gaps wave 3): previous session close — see the
+        # derivation comment above. Nullable: None means "unknown".
+        "previous_close": previous_close,
         "timestamp": snap.get("timestamp", ""),
         "volume": None,  # PriceSnapshot does not carry volume — that's in OHLCV
+        "bid": _opt_float(snap.get("bid")),
+        "ask": _opt_float(snap.get("ask")),
         # Freshness fields (PLAN-0036 Wave 1 — optional on older clients)
         "freshness_status": snap.get("freshness_status"),
         "source": snap.get("source"),
@@ -1267,7 +1737,7 @@ async def market_heatmap(
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── Top Movers (PRD-0028 Wave S9-3, OQ-03) ──────────────────────────────────
@@ -1277,7 +1747,8 @@ async def market_heatmap(
 async def top_movers(
     request: Request,
     mover_type: str = Query("gainers", alias="type", description="gainers or losers"),
-    limit: int = Query(10, ge=1, le=20),
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=500, description="Pagination offset"),
     period: str = Query("1D", description="Period: 1D, 1W, or 1M"),
 ) -> dict[str, Any]:
     """Top gainers or losers — screener sorted by daily_return (1D) or OHLCV bars (1W/1M).
@@ -1285,6 +1756,7 @@ async def top_movers(
     For 1D: single S3 screener call with sort_by=daily_return.
     For 1W/1M: delegates to S3 /api/v1/market/period-movers (OHLCV-based).
     Auth required. Forwards X-Internal-JWT to the downstream call.
+    Supports ``offset`` for paginating through the universe leaderboard.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1298,160 +1770,12 @@ async def top_movers(
             mover_type=mover_type,
             limit=limit,
             period=period,
+            offset=offset,
             # T-A-1-02: pass factory so each downstream call issues a fresh JWT.
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
-
-
-# ── AI Signals (PRD-0028 Wave S9-3 → real proxy to S6) ────────────────────
-
-# Maps S6 claim_type values to frontend AiSignal label.
-# Positive events: mergers, beats, upgrades, capital allocation, strategic growth.
-# Negative events: misses, downgrades, regulatory/legal risk, distress.
-_POSITIVE_SIGNAL_TYPES = frozenset(
-    {
-        # Legacy broker-event labels (kept for backward compatibility)
-        "M_AND_A",
-        "EARNINGS_BEAT",
-        "UPGRADE",
-        "BUYBACK",
-        "ACQUISITION",
-        "DIVIDEND",
-        "EXPANSION",
-        "PARTNERSHIP",
-        "JOINT_VENTURE",
-        "IPO",
-        "REVENUE_BEAT",
-        "GUIDANCE_RAISE",
-        "CONTRACT_WIN",
-        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
-        "PRODUCT_LAUNCH",
-        "CAPITAL_RAISE",
-    },
-)
-_NEGATIVE_SIGNAL_TYPES = frozenset(
-    {
-        # Legacy broker-event labels (kept for backward compatibility)
-        "EARNINGS_MISS",
-        "DOWNGRADE",
-        "REGULATORY_ACTION",
-        "LAWSUIT",
-        "BANKRUPTCY",
-        "RESTRUCTURING",
-        "GUIDANCE_CUT",
-        "REVENUE_MISS",
-        "INVESTIGATION",
-        "FINE",
-        "RECALL",
-        "LAYOFF",
-        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
-        "LEGAL",
-        "NATURAL_DISASTER",
-        "GEOPOLITICAL",
-        "SANCTIONS",
-    },
-)
-
-
-def _signal_type_to_label(signal_type: str) -> str:
-    st = signal_type.upper()
-    if st in _POSITIVE_SIGNAL_TYPES:
-        return "POSITIVE"
-    if st in _NEGATIVE_SIGNAL_TYPES:
-        return "NEGATIVE"
-    return "NEUTRAL"
-
-
-@router.get("/signals/ai")
-async def ai_signals(request: Request) -> Any:
-    """Proxy GET /api/v1/signals → S6 NLP Pipeline, transforming to frontend shape.
-
-    S6 returns {items: [...], total, limit, offset} with signal_type/confidence/detected_at.
-    The frontend expects {signals: [...]} with label/score/article_title/created_at.
-    This transform bridges the two without changing the S6 contract.
-    """
-    if not getattr(request.state, "user", None):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    headers = _auth_headers(request)
-    clients = _clients(request)
-    resp = await clients.nlp_pipeline.get(
-        "/api/v1/signals",
-        params=dict(request.query_params),
-        headers=headers,
-    )
-    if resp.status_code != 200:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
-
-    try:
-        body = json.loads(resp.content)
-        items = body.get("items", [])
-
-        # Batch-resolve entity_ids → tickers from KG to show "AAPL" instead of entity_id prefix.
-        ticker_map: dict[str, str | None] = {}
-        entity_ids = list({str(item.get("entity_id", "")) for item in items if item.get("entity_id")})
-        if entity_ids:
-            try:
-                kg_batch_resp = await clients.knowledge_graph.post(
-                    "/api/v1/entities/batch",
-                    json={"entity_ids": entity_ids},
-                    headers=headers,
-                )
-                if kg_batch_resp.status_code == 200:
-                    kg_body = json.loads(kg_batch_resp.content)
-                    for ent in kg_body.get("entities", []):
-                        ticker_map[str(ent["entity_id"])] = ent.get("ticker")
-            except Exception:
-                logger.warning("ai_signals_ticker_enrichment_failed", exc_info=True)
-
-        # Batch-resolve doc_ids → article titles via content-store.
-        # S6 includes doc_id in every signal; content-store /documents/batch returns
-        # title, url, published_at, source_name per doc_id in a single query.
-        article_map: dict[str, dict[str, str | None]] = {}
-        doc_ids = list({str(item.get("doc_id", "")) for item in items if item.get("doc_id")})
-        if doc_ids:
-            try:
-                cs_resp = await clients.content_store.post(
-                    "/api/v1/documents/batch",
-                    json={"doc_ids": doc_ids},
-                    headers=headers,
-                )
-                if cs_resp.status_code == 200:
-                    cs_body = json.loads(cs_resp.content)
-                    for doc in cs_body.get("documents", []):
-                        article_map[str(doc["doc_id"])] = {
-                            "title": doc.get("title"),
-                            "url": doc.get("url"),
-                            "source_name": doc.get("source_name"),
-                            "published_at": doc.get("published_at"),
-                        }
-            except Exception:
-                logger.warning("ai_signals_article_enrichment_failed", exc_info=True)
-
-        signals = [
-            {
-                "signal_id": str(item.get("signal_id", "")),
-                "entity_id": str(item.get("entity_id", "")),
-                "ticker": ticker_map.get(str(item.get("entity_id", ""))),
-                # Map signal_type (LLM event_type enum: PRODUCT_LAUNCH, LEGAL, etc.)
-                # to POSITIVE/NEGATIVE/NEUTRAL via _signal_type_to_label which covers
-                # both the legacy broker-event types and the NLP deep-extraction enum.
-                # This works for both existing and new outbox rows, unlike the polarity
-                # field which was hardcoded to "neutral" in earlier outbox writers.
-                "label": _signal_type_to_label(str(item.get("signal_type", ""))),
-                "score": float(item.get("confidence", 0.0)),
-                "article_title": article_map.get(str(item.get("doc_id", "")), {}).get("title"),
-                "article_url": article_map.get(str(item.get("doc_id", "")), {}).get("url"),
-                "source_name": article_map.get(str(item.get("doc_id", "")), {}).get("source_name"),
-                "created_at": str(item.get("detected_at", "")),
-            }
-            for item in items
-        ]
-        return {"signals": signals}
-    except Exception:
-        logger.warning("ai_signals_transform_failed", exc_info=True)
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        raise downstream_to_http(e) from e
 
 
 # ── Yield Curve (PLAN-0091 Wave A-2, T-A-2-04 / Wave E-2, T-E-2-02) ─────────
@@ -1592,6 +1916,207 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
         spread_2s10s_inverted=inverted,
         source=source,
     )
+
+
+# ── Sparklines batch endpoint (PLAN-0108 Wave 2 / T-2-01) ────────────────────
+#
+# WHY: SemanticHoldingsTable needs a 14-day closing-price sparkline per holding
+# row. Per-row OHLCV fetches would be O(N) serial calls each hitting S3. This
+# endpoint fans out in parallel via asyncio.gather (same pattern as /ohlcv/batch)
+# and caches the full batch in Valkey so repeat callers (e.g. re-renders, tab
+# switches) pay for cold fetch only once every 15 minutes.
+#
+# Key design decisions:
+# - instrument_ids are UUIDs passed directly to S3 /api/v1/ohlcv/{id} — no
+#   ticker resolution step required; the S3 OHLCV endpoint accepts UUIDs.
+# - max 50 instruments per call prevents gateway abuse (mirrors /ohlcv/batch cap).
+# - fail-open on Valkey errors so a cache outage never breaks the endpoint.
+# - return_exceptions=True on gather so one slow/failing S3 call never blocks
+#   the rest; missing instruments are reported in meta.missing.
+
+_SPARKLINES_CACHE_TTL_S = 900  # 15 minutes — sparklines rarely change intraday
+_SPARKLINES_MAX_IDS = 50
+
+
+async def _fetch_sparkline_closes(
+    market_data_client: Any,
+    instrument_id: str,
+    days: int,
+    headers: dict[str, str],
+) -> tuple[str, list[float]]:
+    """Fetch closing prices for one instrument from S3 OHLCV.
+
+    Returns (instrument_id, closes_list). On any failure returns an empty list
+    so the caller can classify the instrument as missing rather than propagating
+    an exception through the gather fan-out.
+
+    WHY tuple return: asyncio.gather collects results in order but we need to
+    map each result back to its instrument_id. A tuple is cheapest here — no
+    extra dataclass allocation, easy to destructure at the call-site.
+    """
+    try:
+        start = (datetime.now(tz=UTC) - timedelta(days=days)).date().isoformat()
+        resp = await market_data_client.get(
+            f"/api/v1/ohlcv/{instrument_id}",
+            params={"timeframe": "1d", "start": start, "limit": days + 5},
+            headers=headers,
+        )
+        if resp.status_code != 200:
+            return instrument_id, []
+        body = resp.json()
+        # S3 returns {"items": [...]} or {"bars": [...]} depending on endpoint version.
+        # Each bar has a "close" field (string or float) — cast to float defensively.
+        raw_items: list[dict[str, Any]] = body.get("items") or body.get("bars") or []
+        closes: list[float] = []
+        for bar in raw_items:
+            if not isinstance(bar, dict):
+                continue
+            raw_close = bar.get("close")
+            if raw_close is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    closes.append(float(raw_close))
+    except Exception:
+        return instrument_id, []
+    else:
+        return instrument_id, closes
+    return instrument_id, []  # unreachable; satisfies mypy
+
+
+@router.get("/market/sparklines")
+async def get_market_sparklines(
+    request: Request,
+    instrument_ids: str = Query(..., description="Comma-separated UUID instrument IDs (max 50)"),
+    days: int = Query(default=14, ge=1, le=90),
+) -> Response:
+    """Batch 14-day closing-price arrays for the SPARK column.
+
+    WHY: SemanticHoldingsTable needs a sparkline per holding row. Per-row OHLCV
+    fetches would be O(N) serial calls. This endpoint fans out in parallel and
+    caches the full batch in Valkey (TTL 900s) so repeat callers get a fast hit.
+    Max 50 instruments prevents gateway abuse.
+
+    Auth: required (OIDCAuthMiddleware validates the token upstream).
+    Valkey: fail-open — a cache outage degrades to a cold S3 fan-out, not a 5xx.
+
+    Response shape::
+
+        {
+          "data": {"<instrument_id>": [<close>, ...], ...},
+          "meta": {
+            "days_requested": 14,
+            "fetched_at": "2026-06-08T12:34:56+00:00",
+            "missing": ["<instrument_id>", ...]
+          }
+        }
+
+    ``meta.missing`` lists IDs whose S3 fetch returned an error or empty bars
+    (no data yet seeded, invalid ID, etc.) — the frontend renders those rows
+    without a sparkline rather than erroring the whole request.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # 1. Parse and deduplicate IDs (preserve insertion order via dict.fromkeys).
+    raw_ids = [i.strip() for i in instrument_ids.split(",") if i.strip()]
+    ids = list(dict.fromkeys(raw_ids))  # deduplicate while preserving order
+
+    if not ids:
+        raise HTTPException(status_code=400, detail="instrument_ids required")
+    if len(ids) > _SPARKLINES_MAX_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max {_SPARKLINES_MAX_IDS} instrument_ids per request",
+        )
+
+    # 2. Validate each ID is a well-formed UUID (prevents injection into S3 path).
+    for iid in ids:
+        try:
+            UUID(iid)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid UUID: {iid}")  # noqa: B904
+
+    # 3. Valkey read-through — fail-open: any Valkey error falls through to S3.
+    # WHY sorted(ids) in cache key: ensures the same logical set always maps to
+    # the same key regardless of request ordering (e.g. ["A","B"] == ["B","A"]).
+    cache_key = f"sparklines:v1:{':'.join(sorted(ids))}:{days}"
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                # Return the pre-serialised JSON blob directly (bytes or str).
+                content = cached if isinstance(cached, bytes) else cached.encode()
+                logger.info(
+                    "sparklines_cache_hit",
+                    instrument_count=len(ids),
+                    days=days,
+                )
+                return Response(content=content, media_type="application/json")
+        except Exception:  # noqa: S110 — fail-open: Valkey unavailable → cold path
+            pass
+
+    # 4. Fan-out to S3 OHLCV in parallel — one call per instrument_id.
+    # WHY _auth_headers (not _system_headers): OHLCV data is tenant-agnostic but
+    # the InternalJWTMiddleware on S3 requires a valid JWT. User headers work
+    # here because the requesting user is already authenticated; this also avoids
+    # minting an extra system JWT per batch call.
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    gather_results: list[tuple[str, list[float]] | BaseException] = list(
+        await asyncio.gather(
+            *[_fetch_sparkline_closes(clients.market_data, iid, days, headers) for iid in ids],
+            return_exceptions=True,
+        ),
+    )
+
+    # 5. Build response maps.
+    data_map: dict[str, list[float]] = {}
+    missing: list[str] = []
+    for result in gather_results:
+        if isinstance(result, BaseException):
+            # Unexpected exception escaped _fetch_sparkline_closes — shouldn't happen
+            # because that function catches broadly, but be safe.
+            # We can't directly identify which instrument_id this corresponds to since
+            # gather results are positional; log and skip.
+            logger.warning("sparklines_gather_unexpected_exception", exc_info=result)
+            continue
+        iid, closes = result
+        if closes:
+            data_map[iid] = closes
+        else:
+            missing.append(iid)
+
+    # Any IDs not in data_map AND not yet in missing (edge case: gather returned
+    # fewer results than inputs due to an unhandled exception) go to missing too.
+    accounted = set(data_map) | set(missing)
+    missing.extend(iid for iid in ids if iid not in accounted)
+
+    payload: dict[str, Any] = {
+        "data": data_map,
+        "meta": {
+            "days_requested": days,
+            "fetched_at": utc_now().isoformat(),
+            "missing": missing,
+        },
+    }
+    json_bytes = json.dumps(payload).encode()
+
+    # 6. Populate Valkey cache — fail-open.
+    if valkey is not None:
+        try:  # noqa: SIM105 — await inside try/except; contextlib.suppress() cannot wrap an await
+            await valkey.set(cache_key, json_bytes, ex=_SPARKLINES_CACHE_TTL_S)
+        except Exception:  # noqa: S110 — fail-open: cache write error is non-fatal
+            pass
+
+    logger.info(
+        "sparklines_fetched",
+        instrument_count=len(ids),
+        missing_count=len(missing),
+        days=days,
+        cache_hit=False,
+    )
+    return Response(content=json_bytes, media_type="application/json")
 
 
 # ── NL Screener Translation (PLAN-0091 Wave E-1, T-E-1-01) ───────────────────

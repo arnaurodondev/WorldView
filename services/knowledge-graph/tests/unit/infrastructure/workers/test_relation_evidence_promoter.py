@@ -73,10 +73,12 @@ def _make_session_factory(
     session1.__aenter__ = AsyncMock(return_value=session1)
     session1.__aexit__ = AsyncMock(return_value=False)
     session1.commit = AsyncMock()
-    # First execute() returns the fetch result; subsequent execute() calls
-    # (inserts) return a dummy result.
+    # First execute() returns the fetch result; each promoted row then triggers
+    # TWO execute() calls: the INSERT into relation_evidence followed by the
+    # UPDATE that stamps relation_evidence_raw.promoted_at.  So the per-row
+    # execute count is 2 * len(fetch_rows), all returning a dummy result.
     insert_result = MagicMock()
-    session1.execute = AsyncMock(side_effect=[fetch_result] + [insert_result] * len(fetch_rows))
+    session1.execute = AsyncMock(side_effect=[fetch_result] + [insert_result] * (2 * len(fetch_rows)))
 
     # --- Session 2: provisional count ---
     prov_result = MagicMock()
@@ -126,9 +128,8 @@ class TestRelationEvidencePromoterHappyPath:
         worker = RelationEvidencePromoterWorker(sf)
         asyncio.run(worker.run())
 
-        # Session 1 should have been called with 1 fetch + 3 inserts = 4 executes total.
-        # First execute was the SELECT, next 3 were INSERTs.
-        assert session1.execute.await_count == 4
+        # Session 1: 1 SELECT + 3 rows x (INSERT + promoted_at UPDATE) = 7 executes.
+        assert session1.execute.await_count == 7
         session1.commit.assert_awaited_once()
 
     def test_promoted_count_logged(self) -> None:
@@ -346,7 +347,8 @@ class TestRelationEvidencePromoterQualityGate:
         sf2, session1_check, *_ = _make_session_factory(high_conf_rows, gated_quality_count=0)
         worker2 = RelationEvidencePromoterWorker(sf2)
         asyncio.run(worker2.run())
-        assert session1_check.execute.await_count == 4  # 1 SELECT + 3 INSERTs
+        # 1 SELECT + 3 rows x (INSERT + promoted_at UPDATE) = 7.
+        assert session1_check.execute.await_count == 7
 
     def test_high_confidence_rows_logged_as_promoted(self) -> None:
         """High-confidence rows are logged with promoted == count."""
@@ -510,6 +512,57 @@ class TestRelationEvidencePromoterQualityGate:
             asyncio.run(RelationEvidencePromoterWorker(sf).run())
 
         mock_counter.inc.assert_not_called()
+
+    def test_fetch_sql_filters_unpromoted_only(self) -> None:
+        """_FETCH_SQL filters ``promoted_at IS NULL`` so already-promoted rows are
+        not re-scanned every run (UI-timeout incident regression guard).
+
+        Without this filter the worker re-scanned the entire already-promoted
+        backlog (81,769 rows on live dev) on every 5-min run, promoting 0 rows
+        and pinning Postgres for 7.5-12+ minutes.
+        """
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import _FETCH_SQL
+
+        assert "promoted_at IS NULL" in _FETCH_SQL, "_FETCH_SQL must filter promoted_at IS NULL"
+
+    def test_gated_quality_sql_filters_unpromoted_only(self) -> None:
+        """The gated-quality diagnostic count also restricts to unpromoted rows so
+        it does not re-scan the already-promoted backlog.
+        """
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import (
+            _COUNT_GATED_QUALITY_SQL,
+        )
+
+        assert "promoted_at IS NULL" in _COUNT_GATED_QUALITY_SQL
+
+    def test_promoted_rows_are_marked(self) -> None:
+        """Each promoted row triggers a promoted_at UPDATE in the same session.
+
+        Verifies the marking statement fires once per row (so the next run skips
+        it) — checked via the per-row execute count: 1 SELECT + N x 2.
+        """
+        from knowledge_graph.infrastructure.workers.relation_evidence_promoter import (
+            _MARK_PROMOTED_SQL,
+            RelationEvidencePromoterWorker,
+        )
+
+        # _MARK_PROMOTED_SQL must update promoted_at keyed on raw_id.
+        assert "promoted_at = now()" in _MARK_PROMOTED_SQL
+        assert "raw_id = :raw_id" in _MARK_PROMOTED_SQL
+
+        rows = [_make_fetch_row(i) for i in range(2)]
+        sf, session1, *_ = _make_session_factory(rows)
+        asyncio.run(RelationEvidencePromoterWorker(sf).run())
+
+        # 1 SELECT + 2 rows x (INSERT + UPDATE) = 5 executes.
+        assert session1.execute.await_count == 5
+        # The mark-promoted UPDATE must have been bound with each row's raw_id.
+        bound_raw_ids = {
+            call[0][1]["raw_id"]
+            for call in session1.execute.call_args_list
+            if len(call[0]) > 1 and isinstance(call[0][1], dict) and "raw_id" in call[0][1]
+        }
+        assert bound_raw_ids == {"raw-id-0", "raw-id-1"}
 
     def test_fetch_sql_passes_threshold_params(self) -> None:
         """run() passes conf_threshold and density_threshold to the fetch execute call."""

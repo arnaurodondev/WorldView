@@ -10,7 +10,7 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
-from portfolio.application.messaging.mapper import transaction_recorded_to_dict
+from portfolio.application.messaging.mapper import holding_recompute_requested_to_dict, transaction_recorded_to_dict
 from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.repositories import OutboxRecord
 from portfolio.domain.entities.transaction import Transaction
@@ -25,11 +25,11 @@ from portfolio.domain.errors import (
     TenantInactiveError,
     UserInactiveError,
 )
-from portfolio.domain.events import TransactionRecorded
+from portfolio.domain.events import PortfolioHoldingRecomputeRequested, TransactionRecorded
 
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
-    from portfolio.domain.enums import TransactionDirection, TransactionType
+    from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
 
 # Imported eagerly (not under TYPE_CHECKING) because PortfolioKind is referenced
 # at runtime in the ROOT-rejection guard below.
@@ -61,6 +61,10 @@ class RecordTransactionCommand:
     # P2-E: broker-supplied description and settlement date (optional, SnapTrade-sourced).
     description: str | None = None
     settlement_date: date | None = None
+    # PLAN-0108: BUY or SELL side for TRADE-type transactions. Derived from the
+    # frontend "Add Position" dialog — route handler sets this from body.trade_side
+    # and also derives direction (BUY → INFLOW, SELL → OUTFLOW). None for non-TRADE.
+    trade_side: TradeSide | None = None
 
 
 @dataclass
@@ -169,6 +173,8 @@ class RecordTransactionUseCase:
             # P2-E: pass through broker description and settlement_date when provided.
             description=cmd.description,
             settlement_date=cmd.settlement_date,
+            # PLAN-0108: BUY/SELL side for TRADE-type rows; None for all others.
+            trade_side=cmd.trade_side,
         )
 
         # ── BP-264 (PLAN-0046 T-46-1-03) ─────────────────────────────────────
@@ -220,16 +226,37 @@ class RecordTransactionUseCase:
             ),
         )
 
-        # Catch IntegrityError from concurrent same-key commits (TOCTOU race post-BP-035).
-        # Both requests passed create_if_not_exists (neither had committed yet), then one
-        # wins the commit race and the other hits a unique constraint violation.
-        # Import is at call-site to keep the infrastructure detail contained (sqlalchemy
-        # is a dependency of the infrastructure layer; use case tolerates this boundary cross).
-        from sqlalchemy.exc import IntegrityError
+        # PLAN-0114 W1: for MANUAL portfolios emit a recompute event atomically.
+        if portfolio.kind == PortfolioKind.MANUAL:
+            recompute_event = PortfolioHoldingRecomputeRequested(
+                tenant_id=cmd.tenant_id,
+                portfolio_id=cmd.portfolio_id,
+                owner_id=cmd.owner_id,
+                correlation_id=cmd.correlation_id,
+            )
+            await uow.outbox.save(
+                OutboxRecord(
+                    id=new_uuid(),
+                    tenant_id=cmd.tenant_id,
+                    event_type=PortfolioHoldingRecomputeRequested.EVENT_TYPE,
+                    topic=EVENT_TOPIC_MAP[PortfolioHoldingRecomputeRequested.EVENT_TYPE],
+                    payload=holding_recompute_requested_to_dict(recompute_event),
+                    status="pending",
+                    attempt_count=0,
+                    lease_owner=None,
+                    lease_expires=None,
+                ),
+            )
 
+        # Catch IdempotencyConflictError from concurrent same-key commits (TOCTOU race
+        # post-BP-035). Both requests passed create_if_not_exists (neither had committed yet),
+        # then one wins the commit race and the other hits a unique constraint violation.
+        # ARCH-001 fix: SqlAlchemyUnitOfWork.commit() now translates SQLAlchemy IntegrityError
+        # → IdempotencyConflictError (a pure domain type), keeping the application layer free
+        # of infrastructure imports (R25 / IG-LAYER-002).
         try:
             await uow.commit()
-        except IntegrityError as exc:
+        except IdempotencyConflictError as exc:
             await uow.rollback()
             if cmd.idempotency_key is not None:
                 existing = await uow.transactions.find_by_external_ref(

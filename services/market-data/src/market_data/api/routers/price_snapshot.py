@@ -51,10 +51,12 @@ router = APIRouter(tags=["price-snapshot"])
 # How far back to look for intraday OHLCV bars when resolving price.
 # 5m bars: look back 2 hours (enough to find the latest bar).
 # 1h bars: look back 48 hours.
-# 1d bars: look back 7 days (covers weekends + holidays).
+# 1d bars: look back 60 days — VIX/TLT/ETFs may have bars weeks old in dev.
+# WHY 60 (not 7): a 7-day window rejects any ticker whose last ingested bar
+# is older than a trading week (e.g. VIX last bar 31 days ago → returns $0).
 _5M_LOOKBACK_HOURS = 2
 _1H_LOOKBACK_HOURS = 48
-_1D_LOOKBACK_DAYS = 7
+_1D_LOOKBACK_DAYS = 60
 
 
 def _snapshot_to_response(snapshot: object) -> PriceSnapshotResponse:
@@ -77,6 +79,9 @@ def _snapshot_to_response(snapshot: object) -> PriceSnapshotResponse:
         stale_reason=snapshot.stale_reason,
         refresh_available=snapshot.refresh_available,
         refresh_cooldown_remaining_sec=snapshot.refresh_cooldown_remaining_sec,
+        # B-Q bid/ask plumbing (2026-06-10): Decimal → str like the price fields.
+        bid=str(snapshot.bid) if snapshot.bid is not None else None,
+        ask=str(snapshot.ask) if snapshot.ask is not None else None,
     )
 
 

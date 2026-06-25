@@ -27,6 +27,8 @@ class Holding:
     average_cost: Decimal = Decimal(0)
     id: UUID = field(default_factory=new_uuid)
     updated_at: datetime = field(default_factory=utc_now)
+    cost_basis_per_unit: Decimal | None = None
+    total_cost_basis: Decimal | None = None
 
     def apply_delta(self, quantity_delta: Decimal, price: Decimal) -> None:
         """Update quantity and recalculate weighted-average cost.

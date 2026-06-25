@@ -129,6 +129,35 @@ Page (--background / #09090B)
               └── Input fields, tooltips, borders (--surface-3 / #27272A)
 ```
 
+### 2.4 Core Token Contrast Ratios (Round-4 hardening audit, 2026-06-10)
+
+WCAG 2.1 contrast ratios computed from the **live HSL tokens** in
+`app/globals.css` (not the approximate hex comments next to them). The
+platform's text-size floor is **10px** (§3.2 lists the narrow 9px exceptions);
+WCAG's relaxed "large text" threshold (3:1) only applies at ≥24px / ≥18.66px
+bold — nothing at our densities qualifies, so **4.5:1 (AA normal text) is the
+bar for every text size we ship**.
+
+| Foreground token | On `--background` #09090B | On `--card` #111113 | AA (4.5:1) | Approved down to |
+|---|---|---|---|---|
+| `--foreground` (240 5% 90%, ≈#E4E4E7) | **15.7 : 1** | **14.9 : 1** | PASS | 9px (the §3.2 exception floor) |
+| `--primary` (48 100% 52%, ≈#FFD60A) | **13.3 : 1** | **12.6 : 1** | PASS | 9px |
+| `--muted-foreground` (240 4% 55%, ≈#888891) | **5.7 : 1** | **5.4 : 1** | PASS | 10px floor (and the 9px §3.2 label exceptions) |
+
+Notes:
+
+- **`--muted-foreground` passes AA only because of the F-VISUAL-NEW-M sync**
+  that lifted `.dark --muted-foreground` from 46% → 55% lightness. The old
+  46% value (zinc-500 #71717A) measures **4.1:1 on background / 3.9:1 on
+  card — an AA FAILURE for normal text**. Do not "restore" 46% for aesthetic
+  dimming: if a surface needs dimmer-than-muted text, it must be
+  non-essential/decorative content (e.g. `text-muted-foreground/50` digest
+  lines, watermarks) that carries no information a user must read.
+- Opacity modifiers (`text-muted-foreground/60` etc.) drop below AA by
+  construction — reserve them for decorative/redundant text only.
+- Methodology: WCAG 2.1 relative-luminance formula over the HSL→sRGB
+  conversion of each token; ratios rounded to one decimal.
+
 ---
 
 ## 3. Typography — IBM Plex Sans + IBM Plex Mono (ADR-F-15)
@@ -240,6 +269,7 @@ These are the **only** pre-built components allowed. Install via `pnpm dlx shadc
 | `ScrollArea` | Bounded-height scrollable regions |
 | `Alert` | Non-critical notifications, warnings |
 | `Avatar` | User avatar in TopBar |
+| `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandGroup`, `CommandItem` | cmdk keyboard-navigable search/palette surfaces (GlobalSearch inline, CommandPalette dialog — see §6.15) |
 
 ### 5.2 Custom Domain Components
 
@@ -277,8 +307,9 @@ Purpose-built components for financial data. Implement these consistently:
 | Component | File path | Notes |
 |-----------|-----------|-------|
 | `Sidebar` | `components/shell/Sidebar.tsx` | 56px icon-only nav rail, watchlist prices, keyboard hint strip |
-| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + IndexTicker + alerts badge + avatar |
-| `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
+| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + ⌘K hint chip + IndexTicker + alerts badge + avatar |
+| `GlobalSearch` | `components/shell/GlobalSearch.tsx` | Inline instrument search dropdown (cmdk); click/focus-driven — ⌘K now opens CommandPalette |
+| `CommandPalette` | `components/shell/CommandPalette.tsx` | Global ⌘K dialog: Navigate / Instruments / Recent Conversations (§6.15) |
 | `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
 | `IndexTicker` | `components/shell/IndexTicker.tsx` | Center-bar market index prices |
 | `MarketStatusPill` | `components/shell/MarketStatusPill.tsx` | OPEN/CLOSED/PRE status badge |
@@ -295,7 +326,7 @@ Every component that fetches data MUST implement all three states:
 function DataPanel({ id }: { id: string }) {
   const { data, isLoading, error, refetch } = useMyData(id)
 
-  if (isLoading) return <DataPanelSkeleton />           // skeleton shimmer
+  if (isLoading) return <DataPanelSkeleton />           // static skeleton (see §6.2)
   if (error)    return <ErrorCard message="..." onRetry={refetch} /> // error + retry
   if (!data)    return <EmptyState message="..." />     // empty with guidance
 
@@ -307,19 +338,54 @@ function DataPanel({ id }: { id: string }) {
 
 ### 6.2 Skeleton Pattern
 
-Skeletons must match the shape of the loaded content:
+> **Updated 2026-06-10 (Round-3 polish)** — codified the no-animation rule and the
+> shape-matching convention.
+
+**Animation rule — skeletons are STATIC by default.** `components/ui/skeleton.tsx`
+renders a static `bg-muted` block with NO `animate-pulse` — Bloomberg-style terminals
+use static loading bars; finance users read animation as "something is happening"
+(streaming, thinking), so an animated skeleton reads as broken streaming. Two tiers:
+
+| Tier | Class | When |
+|------|-------|------|
+| Default | `<Skeleton />` (static `bg-muted`, no animation) | All loading states |
+| Opt-in | `animate-skeleton-pulse` (slow 2s opacity 1→0.4 fade, `tailwind.config.ts`) | Long loads (>2s expected, e.g. AI generation) where "still working" feedback matters |
+| **Banned** | Tailwind's raw `animate-pulse` | Never for skeletons — fast consumer-app pulse, and it bypasses the reduced-motion override in `globals.css` semantics we maintain |
+
+**Shape-matching convention.** A skeleton must pre-allocate the same geometry the
+loaded content will occupy — same heights, widths, column structure, and count —
+so hydration causes zero layout shift and the user's eye already knows where the
+data will land.
+
 ```tsx
-// Use shadcn Skeleton — same layout as content, grey shimmer
+// DO — mirror the loaded layout: 5 rows × row height, table rhythm preserved
 function DataTableSkeleton() {
   return (
     <div className="space-y-2">
       {Array.from({ length: 5 }).map((_, i) => (
-        <Skeleton key={i} className="h-10 w-full rounded" />
+        <Skeleton key={i} className="h-10 w-full rounded-[2px]" />
       ))}
     </div>
   )
 }
+
+// DO — match exact cell dimensions when the real content has fixed geometry
+// (e.g. IndexStrip pre-allocates ten 22×60px cells so the TopBar never shifts)
+<div className="h-[22px] w-[60px] shrink-0 rounded-[2px] bg-muted/30" aria-hidden />
+
+// DON'T — one amorphous blob where a table will appear (layout shifts on load,
+// user can't anticipate the structure)
+<Skeleton className="h-64 w-full" />
+
+// DON'T — animate-pulse (banned), rounded/rounded-md (violates 2px-radius rule)
+<Skeleton className="h-10 w-full rounded-md animate-pulse" />
 ```
+
+Rules of thumb:
+- **Count matches reality**: if the panel shows ~10 rows, render ~10 skeleton rows (cap at one viewport's worth — never render 200 skeleton rows).
+- **Text skeletons are shorter than their container**: `w-3/4` / `w-1/2` varied widths read as "text loading"; full-width bars read as "table loading".
+- **`rounded-[2px]` always** (Terminal Sharp radius rule, §13.3).
+- **`aria-hidden` on decorative cells + `aria-busy="true"` on the container** so screen readers announce one loading state, not N divs.
 
 ### 6.3 Financial Number Formatting
 
@@ -453,15 +519,24 @@ Use in: StrategyCards (5-day portfolio trend), Holdings rows (5-day price), Top 
 
 ### 6.11 LivePriceBadge Pattern (NEW)
 
+> **Sample corrected (Round-4 hardening, 2026-06-10)**: the original snippet
+> used `animate-pulse` on the freshness dot and raw `bg-green-500`-style
+> classes. Both are banned: status dots are STATIC (Bloomberg terminal
+> convention — see `components/shell/MarketStatusPill.tsx`, the canonical
+> implementation), and raw Tailwind palette colors violate the semantic-token
+> rule (§15.11 + the `.eslintrc.json` lint ban). Freshness is encoded by
+> COLOR alone, never by motion.
+
 ```tsx
 function LivePriceBadge({ price, updatedAt }: { price: string; updatedAt: Date }) {
   const ageMs = Date.now() - updatedAt.getTime()
-  const dotColor = ageMs < 30_000 ? 'bg-green-500 animate-pulse'
-                 : ageMs < 300_000 ? 'bg-amber-500'
-                 : 'bg-red-500'
+  // Static dot — color encodes freshness; no animation (status dots never pulse).
+  const dotColor = ageMs < 30_000 ? 'bg-positive'
+                 : ageMs < 300_000 ? 'bg-warning'
+                 : 'bg-negative'
   return (
     <span className="flex items-center gap-1.5">
-      <span className={cn('inline-block w-1.5 h-1.5 rounded-full', dotColor)} />
+      <span className={cn('inline-block w-1.5 h-1.5 rounded-full', dotColor)} aria-hidden />
       <span className="font-mono tabular-nums">{price}</span>
     </span>
   )
@@ -555,23 +630,137 @@ Live examples:
 
 WHY this matters: ~8% of male users have a form of colour-vision deficiency (deuteranopia / protanopia / achromatopsia). A finance terminal that hides positions behind colour alone is hostile to those users. The pattern + label approach is also robust against future theme switches and printing (greyscale).
 
-### 6.12 Keyboard Navigation (NEW)
+### 6.12 Keyboard Navigation
 
-Global shortcut registration via `react-hotkeys-hook` in root layout:
+> **Updated 2026-06-10** — table synced to the actual `GlobalHotkeyBindings` registrations.
+> Chords are registered in `lib/hotkey-registry.ts` (custom scope-stack registry, NOT
+> react-hotkeys-hook) and dispatched by `hooks/useChordHotkeys`. The StatusBar and the
+> `?` cheat sheet render hints FROM the registry, so they cannot advertise an unwired chord.
 
 | Shortcut | Action | Notes |
 |----------|--------|-------|
-| `g d` | Navigate /dashboard | Sequence: press g, then d within 500ms |
-| `g w` | Navigate /workspace | |
-| `g c` | Navigate /companies | |
-| `g p` | Navigate /portfolio | |
-| `g n` | Navigate /news | |
+| `g d` | Navigate /dashboard | Sequence: press g, then the letter |
 | `g s` | Navigate /screener | |
-| `g h` | Navigate /chat | |
-| `Cmd+K` / `Ctrl+K` | Open CommandPalette | |
+| `g i` | Navigate /instruments | |
+| `g p` | Navigate /portfolio | |
+| `g w` | Navigate /workspace | |
+| `g a` | Navigate /alerts | |
+| `g n` | Navigate /news | |
+| `g c` | Navigate /chat | |
+| `g ,` | Navigate /settings | |
+| `g h` | Open keyboard cheat sheet | Alias for `?` |
+| `⌘B` / `Ctrl+B` | Toggle sidebar | |
+| `⌘K` / `Ctrl+K` | Toggle CommandPalette | Registered as `shell.command.palette` (Round-3, 2026-06-10) — see §6.15 |
+| `/` | Focus global search | Registered only when the layout supplies the handler |
+| `?` | Toggle cheat-sheet overlay | Registered by `HotkeyCheatSheet` |
 | `Escape` | Close active modal/overlay | |
 
-Display in AppSidebar bottom strip: `g+d Dashboard  g+w Workspace  ⌘K Search` (text-[10px] muted).
+**Spec conformance (Round-3 audit, 2026-06-10)**: the product-spec chords
+`G→D /dashboard`, `G→S /screener`, `G→P /portfolio`, `G→C /chat` were all already
+registered — no remaps were needed; the table above is the live registration list
+(pinned by `__tests__/global-hotkey-bindings.test.tsx`).
+
+**Input suspension rule**: modifier-less chords (`g d`, `?`, `/`) are suspended while
+focus is in an `<input>`, `<textarea>`, or `[contenteditable]` — typing a literal `?`
+never opens the cheat sheet. Modifier-bearing chords (`⌘K`, `⌘B`) bypass suspension and
+fire even mid-typing (e.g. ⌘K from the chat composer). Both behaviors are pinned in
+`__tests__/use-chord-hotkeys.test.tsx` and `__tests__/hotkey-cheat-sheet.test.tsx`.
+
+**`?` cheat-sheet overlay** (`components/shell/HotkeyCheatSheet.tsx`, mounted once in
+`app/(app)/layout.tsx`): renders `registry.all()` verbatim, grouped by the binding's
+`group` field (Navigation → Symbol → Action → View → Editing) with a filter input.
+Esc, `?` again, `g h`, or backdrop click closes. Page-scoped bindings (e.g. instrument
+D/F/N/I mnemonics) are shown only on their route. Because the rendered list IS the
+binding list, it is structurally impossible for the overlay to advertise an unwired
+shortcut (the no-lying invariant). Known gap: the chat tool-trace debug chord
+(`features/chat/hooks/useToolTraceChord`) still uses a raw document listener and is
+therefore invisible to the overlay — migrating it into the registry is chat-surface
+work (Round-4).
+
+### 6.15 Command Palette Pattern (NEW — 2026-06-10)
+
+**Component**: `components/shell/CommandPalette.tsx`, mounted ONCE in `app/(app)/layout.tsx`
+(available on every authenticated route). Built on the shadcn `CommandDialog`
+(`components/ui/command.tsx`, cmdk under the hood).
+
+**Trigger** (three paths, one open state):
+1. `⌘K` / `Ctrl+K` — registered in `lib/hotkey-registry` as `shell.command.palette`
+   (group `Symbol`) by the palette itself; dispatched by the single `useChordHotkeys`
+   document listener. **Round-3 change (2026-06-10)**: the previous raw document
+   listener was removed — its "registry suspends chords in inputs" rationale was wrong
+   (only modifier-LESS chords are suspended; `mod+k` always passes through). Registry
+   routing makes ⌘K appear in the `?` cheat sheet automatically and keeps exactly one
+   keydown listener dispatching every chord. Toggle goes through `handleOpenChange`
+   so closing via ⌘K resets the query like Escape does.
+2. `worldview:open-command-palette` CustomEvent — dispatched by the TopBar "⌘K" hint chip
+   (exported constant `OPEN_COMMAND_PALETTE_EVENT`). Same decoupling pattern as
+   `worldview:open-ai-panel`.
+3. `Escape` / overlay click closes (Radix Dialog); closing resets the query.
+
+**Groups** (in render order):
+
+| Group | Source | Behaviour |
+|-------|--------|-----------|
+| Navigate | static `NAV_ITEMS` (enumerated from `app/(app)/`) | substring filter on label + keywords; chord hints rendered via `formatChordForDisplay` (no-lying invariant) |
+| Recent Instruments | `lib/recent-instruments.ts` localStorage stack | shown only while the query is empty (Bloomberg "last 5 visited") |
+| Instruments | S9 `GET /v1/search/instruments` (debounced 250ms, shared `["instrument-search", q]` cache key with GlobalSearch) | shown only while a query is typed |
+| Recent Conversations | S9 `GET /v1/threads` via `qk.chat.threads()` (read-only, shared cache with /chat) | top-5 newest by `updated_at`; title substring filter |
+
+**Ranking** (pure functions in `lib/command-palette.ts`, unit-tested):
+exact ticker match → ticker-prefix match → server order; recently-visited instruments
+float within each tier. Conversations sort newest-first.
+
+**Styling tokens** (Terminal Dark):
+- `CommandDialog` props: `contentClassName="top-[20%] max-w-xl translate-y-0 rounded-[2px] …"`
+  (top-anchored so the list grows downward; 2px radius rule; built-in X button hidden via
+  `[&>button]:hidden` — Escape is the close affordance)
+- `commandClassName` overrides cmdk's consumer-scale defaults to terminal density:
+  36px input @ 12px, `py-1.5` items, 14px icons, 10px uppercase group headings
+- Rows: 11px primary text, 10px muted secondary, `font-mono tabular-nums` tickers,
+  `ml-auto` muted hints (chord / exchange / "recent")
+- Footer hint strip: `↑↓ Navigate · ↵ Open · ⎋ Close` at 9px (same as GlobalSearch dropdown)
+
+**Selection**: every `CommandItem` wires BOTH `onSelect` (keyboard Enter) and `onClick`
+(mouse) — the SEARCH-001 dual-handler rule. Instrument selection persists to the shared
+recents stack (`saveRecentInstrument`) before `router.push(/instruments/<entity_id>)`
+(ADR-F-12: route by entity_id). Conversations push `/chat?thread=<id>` — the chat page
+does not consume the param yet (forward-compatible contract; chat surface wires it).
+
+**A11y**: sr-only `DialogTitle`/`DialogDescription` (Radix requirement), sr-only
+`aria-live` region announcing instrument result counts, `aria-hidden` icons.
+
+**Reuse rule**: any future palette-like surface MUST use `CommandDialog` with
+`shouldFilter={false}` when it performs its own filtering — cmdk's built-in fuzzy filter
+matches against item `value` strings (namespaced ids like `inst:<uuid>`) and silently
+hides everything otherwise.
+
+### 6.16 Toast Pattern (Round-3 polish — 2026-06-10)
+
+**One library, one mount, one config.** All transient notifications use **sonner**
+(`import { toast } from "sonner"`). The single `<Toaster>` is mounted in
+`app/providers.tsx` — never mount a second one (every toast would render twice).
+Pinned by the source-contract test `__tests__/toast-config.test.ts`.
+
+**Locked configuration** (set once on the Toaster, NOT per call):
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `position` | `top-right` | FU-10.3 locked decision; above shell chrome (z-60), below FlashOverlay |
+| `visibleToasts` | `3` | More overlapped the TopBar content row on 768px laptops; older toasts collapse into the stack |
+| `duration` | `4000` ms | Auto-dismiss 4s — explicit, so a sonner upgrade can't silently change UX |
+| `theme` / styling | `dark`, `richColors`, `font-mono text-[11px] tabular-nums` | Terminal Dark density — toasts match StatusBar/row rhythm |
+| `closeButton` + `expand` | on | Manual dismiss affordance; hover expands the stack |
+
+**Call-site rules**:
+- Use the semantic helpers: `toast.success(msg)` / `toast.error(msg)` / `toast.info(msg)` /
+  bare `toast(msg)` for neutral notices. Optional `{ description }` for a second line,
+  `{ action: { label, onClick } }` for one inline action.
+- **Never** pass `duration`, `position`, `className`, or style overrides at the call
+  site — behavior is centralized on the provider. Sole sanctioned exception:
+  `hooks/useConfirmable.tsx` sets `duration: undoWindowMs` because the toast lifetime
+  IS the undo window (a functional timer, not styling).
+- Errors that block a workflow belong in inline `<ErrorCard>` / form errors, not toasts;
+  toasts are for fire-and-forget outcomes (saved, queued, dismissed, undone).
 
 ### 6.6 Empty State Pattern
 
@@ -600,6 +789,57 @@ function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void 
   )
 }
 ```
+
+#### 6.7.1 Route Error Boundaries (`error.tsx`) — Round-4 hardening, 2026-06-10
+
+The ErrorCard above handles **query-level** failures (a panel's fetch failed).
+**Render-level** failures (a component threw during render) are handled by the
+App Router `error.tsx` boundary chain. Nearest boundary wins:
+
+```
+per-route error.tsx (e.g. app/(app)/news/error.tsx)
+  → app/(app)/error.tsx          # group fallback — keeps the shell chrome
+    → app/error.tsx              # root — renders OUTSIDE the shell
+      → app/global-error.tsx     # last resort — replaces <html>/<body> itself
+        → Sentry.ErrorBoundary   # app/providers.tsx (also reports to Sentry)
+```
+
+**The shared body is `components/primitives/RouteErrorFallback.tsx`.** Every
+NEW per-route `error.tsx` must be a thin wrapper around it (don't hand-roll a
+variant — that's how the pre-Round-4 drift happened):
+
+```tsx
+"use client";                                   // mandatory for error.tsx
+import { RouteErrorFallback } from "@/components/primitives/RouteErrorFallback";
+
+export default function NewsError({ error, reset }: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  return <RouteErrorFallback error={error} reset={reset} routeLabel="News" />;
+}
+```
+
+The primitive's contract (pinned by
+`components/primitives/__tests__/RouteErrorFallback.test.tsx`):
+
+1. **Named state** — `routeLabel` renders as the uppercase mono micro-label so
+   the broken surface is identifiable in a screenshot.
+2. **Icon** — `AlertTriangle` in warning tone (route errors are recoverable;
+   the red `XCircle` is reserved for the fatal `app/error.tsx` /
+   `global-error.tsx` tiers).
+3. **"Try again"** — `<button>` wired to the Next.js `reset()` callback
+   (segment re-render, NOT navigation).
+4. **Digest, small** — `error.digest` in 9px mono at 50% opacity when present
+   (debug correlation handle); **`error.message` is never rendered** —
+   generic copy only, real error goes to `console.error` (Sentry capture
+   happens upstream in `Sentry.ErrorBoundary`; don't double-report).
+5. **Escape hatch** — "Back to dashboard" link for the reset-keeps-failing case.
+
+`app/global-error.tsx` intentionally does NOT use the primitive: the
+last-resort path keeps its dependency graph minimal (plain elements, inline
+SVG, `<a href>` full reload) because the crash may have come from a shared
+module — importing one back would crash the boundary too.
 
 ### 6.8 Real-Time UI Patterns
 
@@ -1030,6 +1270,29 @@ The sanctioned cautionary colour is **`text-warning`** — period.
 
 ## 9. TanStack Query Conventions
 
+### Global QueryClient Defaults (Round-4 hardening, 2026-06-10)
+
+The platform-wide cache policy lives in `makeQueryClient()` in
+`app/providers.tsx` and is pinned by `__tests__/query-client-defaults.test.ts`
+(source-contract test — see the file docstring for why it greps instead of
+importing the provider tree):
+
+| Option | Value | Why |
+|---|---|---|
+| `queries.staleTime` | `30_000` | No refetch storm on every mount; per-hook overrides below handle hot/cold data |
+| `queries.retry` | `1` | Fail fast — TanStack's default 3 exponential retries hides an outage for 3+ seconds, unacceptable for a terminal |
+| `queries.refetchOnWindowFocus` | `true` | Prices refresh when the user returns to the tab |
+| `queries.gcTime` | library default (5 min, deliberate) | Unmounted data survives tab-switching; don't raise globally (quote-data memory footprint) |
+| `mutations.retry` | `0` (explicit) | **Writes are never auto-retried** — a retried mutation that partially succeeded can duplicate orders/alerts/watchlist entries. Pinned explicitly so a library default change can't silently introduce write retries. Per-call override allowed only for provably idempotent mutations |
+
+All data fetching MUST go through TanStack Query (`lib/api/*` + hooks).
+Sanctioned raw-`fetch()` exceptions: SSE/streaming consumers
+(`features/chat/hooks/useChatStream.ts`, `components/shell/AskAiPanel.tsx`),
+the pre-auth login POST (`app/login/page.tsx`), server-side route handlers
+(`app/(public)/status/api/uptime/route.ts`), and the deploy-detection poll
+(`components/shell/ForceUpdateBanner.tsx`, `cache: "no-store"` by design).
+Anything else bypassing the cache is a defect.
+
 ### staleTime Per Data Type (set at hook level, not globally)
 
 | Data type | staleTime | Rationale |
@@ -1097,6 +1360,17 @@ For full implementation from a design, use `/scaffold-frontend`.
 - [ ] Form inputs have associated `<label>` elements (shadcn handles this via Radix)
 - [ ] Error messages announced to screen readers (use `role="alert"` or `aria-live="polite"`)
 - [ ] Loading states communicated (`aria-busy="true"`, `aria-label` on spinners)
+
+**Focus-ring audit (Round-3, 2026-06-10)** — all `components/ui/` interactive primitives
+show the `--ring` (yellow) focus indicator: Button, Tabs (trigger + content), Checkbox,
+Switch, Input (`ring-1`), Slider thumb (`ring-1`), Select trigger (`focus:ring-1`),
+Dialog close button (`focus:ring-2`). Intentional exceptions (do NOT "fix" these):
+- `command.tsx` input (`outline-none`) — inside `CommandDialog` the input is the only
+  focusable element and is always focused; the dialog border is the focus indicator
+  (cmdk/Linear/Raycast convention). List items are highlighted via `aria-selected`,
+  not DOM focus.
+- `popover.tsx` / `select.tsx` content panels (`outline-none`) — non-interactive
+  containers; the interactive children inside carry their own rings.
 
 ---
 
@@ -1575,3 +1849,108 @@ above while reaffirming that financial data values are excluded.
 > W0 adds the chart/entity tokens without touching the topbar value to avoid
 > unintended layout breakage.
 
+### 15.10 AG Grid 22px row-height adoption path (Round-2 enhancement sprint)
+
+**Path**: `components/ui/ag-grid/AgGridBase.tsx`
+
+`AgGridBase` accepts optional `rowHeight` / `headerHeight` props (both default
+**28** — the previously hardcoded value), so grids can adopt the
+`--data-row-height: 22px` token (§2.1, PRD-0031) per surface:
+
+```tsx
+<AgGridBase rowData={rows} columnDefs={cols} rowHeight={22} headerHeight={22} />
+```
+
+Rules of adoption:
+
+1. **Opt-in per call site** — the default stays 28, so no grid reflows until
+   its owning surface adopts deliberately. Audit row content first: cell
+   renderers with sparklines, badges, or 2-line layouts may clip at 22px.
+2. **Numbers, not the CSS var** — AG Grid virtualises rows with JS math and
+   needs a concrete px value at construction; it cannot read
+   `var(--data-row-height)`. The token's value (22) is mirrored in the prop.
+   If PRD-0031 ever changes the token, grep `rowHeight={22}` call sites.
+3. **Header matches rows** — pass `headerHeight={22}` together with
+   `rowHeight={22}` (Bloomberg keeps them equal; a 28px header over 22px rows
+   reads as misalignment).
+
+Prop passthrough + defaults are pinned by
+`components/ui/ag-grid/__tests__/AgGridBase.test.tsx`.
+
+> **Round-4 note — reconciling the screener's 20px exception with this 22px
+> path.** The screener grid runs `rowHeight={20}` / `headerHeight={20}` —
+> tighter than the `--data-row-height: 22px` token — as a deliberate
+> PRD-0089 Wave I-A density decision, **locked by the T-IA-14 architecture
+> guard** (`__tests__/architecture/screener-row-height.test.ts` +
+> `__tests__/screener-density.test.tsx`; the skeleton pitch is pinned in
+> `components/screener/__tests__/ScreenerTableSkeleton.test.tsx`). Its cell
+> renderers are tuned to that pitch (18px HeatCell pills, RowHoverToolbar
+> sizing), so "migrating the screener to 22" is a regression, not a cleanup —
+> the guard tests will fail any such attempt by design. Precedence when
+> adopting density on a grid: **(1)** a surface-specific guarded value
+> (screener 20px) wins; **(2)** otherwise adopt the 22px token via the rules
+> above; **(3)** the 28px default remains for grids whose row content hasn't
+> been audited for clipping. The 22px token is the generic adoption target;
+> T-IA-14 is the only sanctioned tighter exception — adding another requires
+> its own architecture guard + an entry here.
+
+### 15.11 Sentiment color tokens — canonical consumption (Round-2 decision)
+
+**Decision (Round-2 enhancement sprint)**: the platform does **NOT** define
+`--color-positive` / `--color-negative` / `--color-warning` CSS variables, and
+they must never be referenced. That `--color-*` prefix is Tailwind **v4**'s
+`@theme` convention; we are on Tailwind v3 with HSL-triplet tokens
+(`--positive: 150 100% 41%`) consumed through `tailwind.config.ts` mappings.
+Referencing an undefined variable (`text-[color:var(--color-positive)]`)
+compiles silently and **paints nothing** — the no-paint bug class that hit the
+portfolio sparkline (R1 sprint) and the instrument AI-brief chips/peer table
+(fixed Round 2). Option (b) — fix usages — was chosen over option (a) —
+aliasing — to avoid a second, parallel full-color token convention.
+
+Canonical consumption per context:
+
+| Context | Use | Example |
+|---------|-----|---------|
+| Text / background / border in JSX | Semantic Tailwind utilities | `text-positive`, `text-negative`, `text-warning`, `bg-positive/10` |
+| Canvas / SVG / chart JS constants | `hsl(var(--chart-*))` | `hsl(var(--chart-positive))` (sparklines, OHLCV) |
+| Raw CSS files | `hsl(var(--positive))` | ag-grid-theme.css overrides |
+
+A naming-guard comment now sits next to the financial-domain tokens in
+`app/globals.css`. The lint rule banning raw `text-green-*`-style classes
+(`.eslintrc.json`, PLAN-0071 P1-4) already points at the same utilities.
+
+### 15.12 `EmptyState` primitive API (Round-2 enhancement sprint)
+
+**Path**: `components/primitives/EmptyState.tsx`
+**Copy registry**: `lib/copy/empty-states.ts`
+
+```tsx
+<EmptyState
+  condition="empty-no-data"          // loading | empty-cold-start | empty-no-data | error | permission | coming-soon
+  copyKey="instrument.no-articles"   // resolves via lib/copy/empty-states.ts; falls back to generic.<condition>
+  icon={Newspaper}                   // NEW (optional) — lucide COMPONENT, rendered muted 16px above the title
+  action={<Button onClick={retry}>Retry</Button>}  // NEW (optional) — interactive CTA slot
+/>
+```
+
+- **`icon`** — pass the lucide component (not an element); the primitive owns
+  size/color (`size-4 text-muted-foreground/60`, strokeWidth 1.5, aria-hidden)
+  so every surface renders identically. Matches the treatment of
+  `components/instrument/shared/EmptyState.tsx`, which becomes a thin wrapper
+  (or is deleted) in the Round-3 consolidation.
+- **`action`** — ReactNode CTA slot below the body; supports real onClick
+  buttons (retry/regenerate), not just href Links. Supersedes the legacy
+  `cta` prop (kept, `@deprecated`); when both are passed, `action` wins —
+  single-slot invariant, never two stacked CTAs.
+- **Copy keys** — Round 2 reserved the `instrument.*` keys
+  (`no-articles`, `no-contradictions`, `graph-timeout`,
+  `graph-no-filter-matches`, `no-connections`, `no-entity-context`) mirroring
+  the strings hardcoded in the instrument intelligence tab, so the Round-3
+  call-site migration is a mechanical swap.
+- **Round-3 deferrals**: (1) migrate `components/instrument/shared/EmptyState.tsx`
+  call sites (NewsColumn, GraphColumn, ContextPanel, ContradictionsBlock) onto
+  this primitive; (2) `components/ui/dashboard-empty-state.tsx`
+  (DashboardEmptyState) consolidation — skipped in Round 2 because
+  `components/dashboard` was owned by the dashboard surface agent.
+
+API contracts pinned by `components/primitives/__tests__/EmptyState.test.tsx`.

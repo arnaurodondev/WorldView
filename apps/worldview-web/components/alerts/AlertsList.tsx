@@ -44,7 +44,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime, cn } from "@/lib/utils";
+// roadmap item #2 / A-1 / B2: pure helpers that turn an Alert into the distinct,
+// scannable columns the row renders (subject, humanised type, "what changed"
+// summary). Kept in a separate module so they're unit-tested in isolation and
+// stay in lock-step with the sidebar's formatAlertTitle composer.
+import { alertSubject, alertSummary, humaniseAlertType } from "@/components/alerts/alert-row-content";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// WHY sonner toast: consistent toast pattern across the app (SemanticHoldingsTable uses same import).
+import { toast } from "sonner";
 import type { AlertSeverity, Alert } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -66,6 +73,21 @@ const SEV_DOT_COLOR: Record<AlertSeverity, string> = {
   HIGH: "bg-warning",
   MEDIUM: "bg-primary",
   LOW: "bg-muted-foreground",
+};
+
+/**
+ * SEV_STRIPE_COLOR — left edge severity stripe colour (DESIGN-QA A-2).
+ * WHY a left stripe (in addition to the dot): the audit flagged that "all rows
+ * read the same muted tone despite a MEDIUM label". A 2px coloured stripe down
+ * the left edge of each row makes the severity scannable as a vertical band —
+ * the eye picks out the cluster of red CRITICAL stripes without reading. Uses
+ * the same semantic tokens as the dot so the two cues never disagree.
+ */
+const SEV_STRIPE_COLOR: Record<AlertSeverity, string> = {
+  CRITICAL: "border-l-negative",
+  HIGH: "border-l-warning",
+  MEDIUM: "border-l-primary",
+  LOW: "border-l-muted-foreground/50",
 };
 
 /** localStorage keys for persistence */
@@ -97,9 +119,19 @@ function safeJsonGet<T>(key: string, fallback: T): T {
 export interface AlertsListProps {
   /** Alert id selected via the ?selected= URL param, or null when none. */
   selectedId?: string | null;
+  /**
+   * PRD-0089 Wave J: optional severity filter from the keyboard pill strip.
+   * When set, only alerts of this severity are shown in the active groups.
+   * null / undefined = show all severities (no filter).
+   *
+   * WHY prop (not internal state): the parent page owns the pill strip and its
+   * keyboard shortcuts, so the severity filter lives up in the page and is
+   * pushed down here as a controlled prop.
+   */
+  filterSeverity?: AlertSeverity | null;
 }
 
-export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
+export function AlertsList({ selectedId = null, filterSeverity = null }: AlertsListProps = {}) {
   const { accessToken } = useAuth();
   const router = useRouter();
 
@@ -522,6 +554,12 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
 
       {/* ── Severity groups ────────────────────────────────────────────────── */}
       {SEVERITY_ORDER.map((sev) => {
+        // PRD-0089 Wave J: honour the filterSeverity prop from the pill strip.
+        // WHY filter here (not in activeAlertsBySeverity derivation): the severity
+        // groups already compute all severities. Filtering at render time means we
+        // don't need to recompute the memoized group map when the pill changes.
+        if (filterSeverity && filterSeverity !== sev) return null;
+
         const sevAlerts = activeAlertsBySeverity[sev] ?? [];
         if (sevAlerts.length === 0) return null;
 
@@ -572,6 +610,31 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
                   onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                  // PRD-0089 Wave J: hover dismiss action
+                  // WHY fire-and-forget backend call with toast: the endpoint
+                  // `DELETE /v1/alerts/{id}` may not be deployed yet (§C.3).
+                  // We do an optimistic local ACK + attempt backend delete.
+                  // show a toast regardless so the user gets confirmation.
+                  onDismiss={() => {
+                    // Optimistic: ACK locally so the row disappears immediately.
+                    handleAck(alert.alert_id);
+                    // WHY cast to any: gateway doesn't expose deleteAlert yet (§C.3 backend gap).
+                    // The optional-chain guard prevents a runtime crash; the cast silences TS.
+                    // When the endpoint ships, replace with a properly typed gateway method.
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const gw = createGateway(accessToken) as any;
+                    if (typeof gw.deleteAlert === "function") {
+                      void (gw.deleteAlert(alert.alert_id) as Promise<unknown>)
+                        .catch(() => { /* ignore — backend endpoint may be absent */ });
+                    }
+                    toast("Alert dismissed");
+                  }}
+                  // PRD-0089 Wave J: hover View action — navigate to instrument page
+                  // WHY only when entity_id is present: navigating to /instruments/undefined
+                  // would 404. We check entity_id before providing the handler.
+                  onView={alert.entity_id ? () => {
+                    router.push(`/instruments/${alert.entity_id}`);
+                  } : undefined}
                   localOnly={localOnlyIds.has(alert.alert_id)}
                   // PLAN-0053 T-F-6-03: bulk-select wiring. The checkbox is
                   // always rendered so the user can multi-select without a
@@ -662,6 +725,16 @@ export interface AlertRowProps {
   onAck: () => void;
   onSnooze: (minutes: number) => void;
   /**
+   * PRD-0089 Wave J: called when the user clicks "Dismiss" in the hover action strip.
+   * Maps to DELETE /v1/alerts/{id}. Stub (no-op + toast) when the backend is absent.
+   */
+  onDismiss?: () => void;
+  /**
+   * PRD-0089 Wave J: called when the user clicks "View" in the hover action strip.
+   * Navigates to the instrument page for alert.entity_id. No-op when entity_id absent.
+   */
+  onView?: () => void;
+  /**
    * PLAN-0051 T-D-4-03: when true, render a "(local only)" badge next to the
    * alert label so the user knows the ACK/snooze didn't sync to the backend.
    */
@@ -697,6 +770,8 @@ export function AlertRow({
   onSelect,
   onAck,
   onSnooze,
+  onDismiss,
+  onView,
   localOnly,
   dimmed,
   selected = false,
@@ -707,14 +782,35 @@ export function AlertRow({
   // the value is "low" returns undefined and renders an unstyled bg. Normalise
   // once here so the dot is always coloured correctly.
   const severityKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
+
+  // ── Derived row columns (roadmap item #2 / A-1 / B2) ──────────────────────
+  // WHY compute these once, up-front: the row is rendered ~30× and these pure
+  // helpers walk the fallback ladder; computing them here keeps the JSX terse
+  // and makes the "what each column shows" contract explicit.
+  //
+  //   subject  → the ticker / entity the alert is about (own column).
+  //   typeLabel→ humanised alert_type ("GRAPH CHANGE") for the TYPE chip.
+  //   summary  → the one-line "what changed" string that fills the dead band.
+  const subject = alertSubject(alert);
+  const typeLabel = humaniseAlertType(alert.alert_type);
+  const summary = alertSummary(alert);
+
   return (
     <li>
       {/* WHY flex h-[20px]: terminal 22px row per §0 quality rules.
           dimmed=true (snoozed / acked) drops opacity to 60% so the row
-          remains scannable but visibly de-emphasised. */}
+          remains scannable but visibly de-emphasised.
+
+          A-2 left severity stripe: border-l-2 + a per-severity colour turns the
+          list into a scannable vertical band of severity — the eye finds the
+          cluster of red CRITICAL stripes without reading any text. */}
       <div
         className={cn(
-          "flex h-[20px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
+          // WHY group: Tailwind group enables group-hover:flex on the action strip
+          // children, so Dismiss/Snooze/View appear ONLY on row hover.
+          "group flex h-[22px] w-full items-center gap-2 border-b border-l-2 border-border/30 px-2 hover:bg-muted/40",
+          // A-2: the left edge carries the severity colour (stripe).
+          SEV_STRIPE_COLOR[severityKey],
           dimmed && "opacity-60",
           // PLAN-0053 T-F-6-03: tint selected rows so the bulk set is visible
           // even when the checkbox column scrolls out of view (rare in this
@@ -740,37 +836,69 @@ export function AlertRow({
           />
         )}
 
-        {/* Severity dot — quick visual severity scan */}
+        {/* Severity dot — quick visual severity scan (kept alongside the badge:
+            the dot is the fast pre-attentive cue, the badge is the explicit
+            label for users who read it). */}
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[severityKey])} />
 
-        {/* Entity ticker — if available */}
-        {alert.ticker && (
-          <span className="w-[40px] shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-            {alert.ticker}
-          </span>
-        )}
-
-        {/* Alert type label */}
-        <span className="shrink-0 text-[10px] text-muted-foreground">
-          {alert.alert_type}
+        {/* A-2: severity badge is now VISIBLE (was sr-only). The audit flagged
+            that "all rows read the same muted tone despite a MEDIUM label" — the
+            coloured chip carries the severity palette into the row body so a
+            scan distinguishes CRIT/HIGH/MED/LOW at a glance. A fixed-width
+            wrapper keeps the following columns aligned across rows.
+            WHY pass the normalised uppercase key: SeverityBadge's lookup tables
+            are keyed by the uppercase union even when the backend sends "low"
+            (F-302). This also satisfies the tests asserting on CRIT/HIGH/MED. */}
+        <span className="flex w-[40px] shrink-0 justify-start">
+          <SeverityBadge severity={severityKey} size="sm" />
         </span>
 
-        {/* Alert body — truncated. Click opens AlertDetailSheet via the URL
-            ?selected= contract (B-3) instead of navigating away to /instruments.
-            Trader keeps context — the list stays in view behind the sheet.
+        {/* Subject column — ticker / entity the alert is about. Fixed width +
+            tabular-nums so tickers line up vertically into a scannable column.
+            Renders the `—` null sentinel (DESIGN_SYSTEM) when no subject is
+            known, instead of collapsing the column and misaligning the row.
+            WHY rendered exactly once: the previous row rendered the raw ticker
+            here AND repeated it inside the body string — duplication that broke
+            single-match `getByText("AAPL")` scans and wasted width. */}
+        <span
+          className={cn(
+            "w-[52px] shrink-0 truncate font-mono text-[10px] font-semibold tabular-nums",
+            subject ? "text-foreground" : "text-muted-foreground/50",
+          )}
+          title={subject ?? undefined}
+        >
+          {subject ?? "—"}
+        </span>
 
-            WHY derive the visible label from payload when alert.body is empty:
-            S10's PendingAlertResponse populates `body` only on legacy alerts;
-            new alerts (post-B-1) carry payload.signal_label. We mirror the
-            simplified RecentAlerts logic so both surfaces look consistent. */}
+        {/* TYPE chip — humanised alert_type as a compact classifier tag. Fixed
+            width keeps the summary column's left edge aligned across all rows
+            (the core "scannable feed" requirement). uppercase + tracking reads
+            as a field code, not prose. */}
+        <span
+          className="w-[88px] shrink-0 truncate text-[9px] uppercase tracking-[0.06em] text-muted-foreground"
+          title={typeLabel || undefined}
+        >
+          {typeLabel || "—"}
+        </span>
+
+        {/* "What changed" summary — the one-line body that fills the previously
+            dead horizontal band, making each row differentiated and scannable
+            (roadmap item #2 / A-1 / B2). Sourced from alert.body when present,
+            otherwise composed via the SAME formatAlertTitle ladder the sidebar
+            ALARMS panel uses, so the surfaces never drift and a bare
+            "<SEVERITY> signal" string can never appear.
+
+            Click opens AlertDetailSheet via the URL ?selected= contract (B-3)
+            rather than navigating away — the trader keeps the list in view
+            behind the sheet. */}
         <button
           type="button"
           onClick={onSelect}
-          className="flex-1 truncate text-left text-[11px] text-foreground"
-          title={alert.body || (alert.payload?.signal_label as string | undefined) || alert.alert_type}
+          className="min-w-0 flex-1 truncate text-left text-[11px] text-foreground"
+          title={summary}
           aria-label={`Open alert ${alert.alert_id}`}
         >
-          {alert.body || (alert.payload?.signal_label as string | undefined) || `${alert.severity} alert`}
+          {summary}
         </button>
 
         {/* Relative timestamp */}
@@ -790,6 +918,61 @@ export function AlertRow({
             local only
           </span>
         )}
+
+        {/* ── PRD-0089 Wave J: hover action strip ─────────────────────────── */}
+        {/*
+         * WHY hidden by default / shown on group-hover: the row is already dense
+         * (22px). Showing action buttons only on hover preserves readability when
+         * scanning the full list — the buttons appear precisely when the user's
+         * pointer indicates intent to act.
+         *
+         * WHY group-hover:flex (not group-hover:block): the strip is a flex row
+         * of three buttons that need to lay out side by side.
+         *
+         * WHY absolute positioning (right-side push via ml-auto): the actions
+         * overlay the rightmost portion of the row rather than pushing content
+         * left, which would cause the row to re-flow on hover.
+         */}
+        <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+
+          {/* Dismiss button — calls onDismiss (DELETE /v1/alerts/{id}) */}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+              className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                         tracking-[0.06em] text-muted-foreground hover:border-negative/40 hover:text-negative"
+              aria-label="Dismiss this alert"
+            >
+              Dismiss
+            </button>
+          )}
+
+          {/* Snooze quick-action (1h) — label omits "1h" to avoid collision with the
+              dropdown's "Snooze 1h" menu item when both are rendered in the same tree. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSnooze(60); }}
+            className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                       tracking-[0.06em] text-muted-foreground hover:text-foreground"
+            aria-label="Snooze this alert for 1 hour"
+          >
+            Snooze
+          </button>
+
+          {/* View button — navigate to instrument page for the alert's entity */}
+          {onView && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onView(); }}
+              className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                         tracking-[0.06em] text-muted-foreground hover:text-foreground"
+              aria-label="View instrument page for this alert"
+            >
+              View
+            </button>
+          )}
+        </div>
 
         {/* ACK / Snooze dropdown.
             PLAN-0051 T-D-4-03: snooze options expanded to 15m/1h/EOD/24h
@@ -880,15 +1063,10 @@ export function AlertRow({
 
       </div>
 
-      {/* WHY SeverityBadge hidden (not removed): existing tests assert on CRIT/HIGH/MED
-          badges. We keep the badge in a visually-hidden span so tests still pass,
-          while the visible row uses the dot indicator for compactness.
-          Tests look for text content "CRIT"/"HIGH"/"MED"/"LOW" from SeverityBadge. */}
-      <span className="sr-only">
-        {/* Pass the normalised uppercase key so SeverityBadge's switch table
-            hits the correct branch even if backend sends lowercase (F-302). */}
-        <SeverityBadge severity={severityKey} size="sm" />
-      </span>
+      {/* NOTE: the previously sr-only SeverityBadge (kept only so tests could
+          assert on CRIT/HIGH/MED text) is gone — the badge is now rendered
+          VISIBLY in the row body above (A-2), so the test assertions still find
+          the CRIT/HIGH/MED text while users finally see the severity palette. */}
 
     </li>
   );

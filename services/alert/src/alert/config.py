@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     kafka_schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "alert-service-group"
     kafka_watchlist_consumer_group: str = "alert-service-watchlist-group"
+    # PLAN-0113 FIX-2: opt-in static-membership instance ids (KIP-345/BP-703).
+    # Empty default = dynamic membership (no-op); set per-replica to pin identity.
+    kafka_intelligence_consumer_instance_id: str = ""
+    kafka_watchlist_consumer_instance_id: str = ""
 
     # Consumed topics
     kafka_topic_signal: str = "nlp.signal.detected.v1"
@@ -85,6 +89,17 @@ class Settings(BaseSettings):
     # ── Outbox dispatcher ──────────────────────────────────────────────────
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50
+    # BUG-A2: a transiently-failed event is retried up to ``max_attempts`` times
+    # (resetting FAILED→PENDING with an exponential back-off window between
+    # attempts) before it is moved to the dead-letter queue. Mirrors the shared
+    # ``DispatcherConfig.max_attempts`` default so S10 matches portfolio/
+    # market-data behaviour (at-least-once delivery, no silent drops).
+    dispatcher_max_attempts: int = 5
+    # Back-off between retries grows as ``base * 2**(retry_count-1)`` capped at
+    # ``max``; a failed row is only re-fetched once ``failed_at + backoff`` has
+    # elapsed, so a wedged broker does not spin the dispatcher.
+    dispatcher_retry_backoff_base_s: float = 2.0
+    dispatcher_retry_backoff_max_s: float = 60.0
 
     # ── Email provider ─────────────────────────────────────────────────────
     email_provider: str = "resend"  # resend | sendgrid | smtp
@@ -106,6 +121,8 @@ class Settings(BaseSettings):
     # Set this to a pre-signed long-lived service JWT (valid ~1 year for dev).
     s1_internal_jwt: str = ""
     s3_market_data_base_url: str = "http://market-data:8003"
+    # PRD-0025: S3 internal endpoints (price batch, fundamentals) require X-Internal-JWT.
+    s3_internal_jwt: str = ""
 
     # ── S7 Knowledge Graph dependency (PLAN-0048 Wave B-1) ─────────────────
     # WHY: alert fan-out enriches payloads with (entity_name, ticker) for
@@ -119,6 +136,30 @@ class Settings(BaseSettings):
     # under burst alert load (a single signal can fan out to 100s of alerts
     # for the same entity). Aligned with PLAN-0048 §B-1 spec.
     entity_resolver_cache_ttl_seconds: int = 900
+
+    # ── S6 NLP-pipeline dependency (PLAN-0113 — news-count/momentum reads) ──
+    # NEW: no S6 client existed before the rule engine. Read-only via REST.
+    s6_nlp_base_url: str = "http://nlp-pipeline:8006"
+    # PRD-0025: S6 also requires X-Internal-JWT. Same pattern as S1/S3/S7.
+    s6_internal_jwt: str = ""
+
+    # ── Alert rule engine (PLAN-0113) ──────────────────────────────────────
+    # Master switch — when False the poller boots but performs no evaluation
+    # (instant rollback; CRUD/UI keep working with dormant rules).
+    alert_rule_poller_enabled: bool = True
+    # Base poller tick — how often the loop wakes; per-type cadence throttles
+    # which rules are actually due each tick (via AlertRule.is_due).
+    alert_rule_poll_tick_seconds: int = 60
+    # Per-type poll cadences (seconds) — how often a rule of each type is read.
+    alert_rule_cadence_price_seconds: int = 60
+    alert_rule_cadence_news_count_seconds: int = 3600
+    alert_rule_cadence_news_momentum_seconds: int = 3600
+    alert_rule_cadence_fundamental_seconds: int = 21600
+    # Per-user rule cap (PRD §9).
+    alert_rule_max_per_user: int = 200
+    # Watchdog: if no successful poller cycle within this many seconds, the
+    # liveness gauge is considered stale (BP-705 staleness alert threshold).
+    alert_rule_poller_watchdog_seconds: int = 180
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
     service_name: str = "alert"

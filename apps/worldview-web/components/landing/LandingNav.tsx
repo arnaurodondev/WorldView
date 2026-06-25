@@ -12,10 +12,13 @@
 
 import Link from "next/link";
 
+// Anchor order mirrors the redesigned section flow (§1): Features ·
+// Intelligence (KG spotlight) · Chat · Workflow · Compare · Pricing · FAQ.
 const NAV_ITEMS: Array<{ label: string; href: string }> = [
-  { label: "Differentiators", href: "/#differentiators" },
+  { label: "Features", href: "/#features" },
+  { label: "Intelligence", href: "/#intelligence" },
+  { label: "Chat", href: "/#ai" },
   { label: "Workflow", href: "/#workflow" },
-  { label: "AI", href: "/#ai" },
   { label: "Compare", href: "/#compare" },
   { label: "Pricing", href: "/#pricing" },
   { label: "FAQ", href: "/#faq" },

@@ -62,7 +62,7 @@ async def cache_client(postgres_container: str):  # type: ignore[no-untyped-def]
                 id=UUID(INTEGRATION_USER_ID),
                 tenant_id=UUID(INTEGRATION_TENANT_ID),
                 email="integration@test.com",
-            )
+            ),
         )
         await session.commit()
 

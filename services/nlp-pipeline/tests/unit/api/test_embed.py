@@ -167,6 +167,31 @@ class TestEmbedEndpoint:
         assert "Represent this financial document" in inputs[0].text
 
     @pytest.mark.asyncio
+    async def test_long_query_truncated_to_token_budget(self) -> None:
+        """A dense/long query is truncated by token budget before hitting the provider.
+
+        Task #4: the query path uses the SAME ``truncate_for_bge`` as ingest, so a
+        long query can never overflow BGE's 512-token window (the old flat 1500-char
+        cap let dense queries 400).  We assert the text the client receives keeps the
+        estimated token count under the shared budget.
+        """
+        from ml_clients.text_budget import MAX_TOKENS, estimate_bert_tokens
+
+        mock_client = _make_mock_embedding_client()
+        app = _make_app(embedding_client=mock_client)
+
+        # Dense JSON-ish query — token-heavy per char (worst case for the 512 limit).
+        dense_query = '{"ticker":"AAPL","revenue":383285000000,"eps":6.13}' * 60
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": dense_query})
+
+        assert resp.status_code == 200
+        inputs: list[EmbeddingInput] = mock_client.embed.call_args[0][0]
+        assert len(inputs) == 1
+        assert estimate_bert_tokens(inputs[0].text) <= MAX_TOKENS
+
+    @pytest.mark.asyncio
     async def test_empty_output_from_client_returns_503(self) -> None:
         """Empty outputs list from provider → 503 (defensive guard)."""
         mock_client = MagicMock()

@@ -135,14 +135,14 @@ class TestGetHoldingLotsUseCase:
         assert len(result.lots) == 2
         # Oldest-first ordering preserved by the FIFO walk.
         assert result.lots[0].open_date == datetime(2026, 1, 1, tzinfo=UTC).date()
-        assert result.lots[0].qty == Decimal("10")
-        assert result.lots[0].cost_per_share == Decimal("100")
+        assert result.lots[0].qty == Decimal(10)
+        assert result.lots[0].cost_per_share == Decimal(100)
         assert result.lots[1].open_date == datetime(2026, 2, 1, tzinfo=UTC).date()
-        assert result.lots[1].qty == Decimal("5")
-        assert result.lots[1].cost_per_share == Decimal("110")
-        assert result.total_qty == Decimal("15")
+        assert result.lots[1].qty == Decimal(5)
+        assert result.lots[1].cost_per_share == Decimal(110)
+        assert result.total_qty == Decimal(15)
         # Total cost = 10*100 + 5*110 = 1550
-        assert result.total_cost == Decimal("1550")
+        assert result.total_cost == Decimal(1550)
         # No current_price supplied → unrealised stays None on every lot.
         assert all(lot.unrealised_pnl is None for lot in result.lots)
 
@@ -182,7 +182,7 @@ class TestGetHoldingLotsUseCase:
 
         assert len(result.lots) == 1
         assert result.lots[0].cost_per_share == Decimal("100.5")
-        assert result.total_cost == Decimal("1005")  # 10 * 100.5
+        assert result.total_cost == Decimal(1005)  # 10 * 100.5
 
     async def test_partial_sell_drains_first_lot(self) -> None:
         """Two BUYs of 10 each, then SELL 12 → first lot consumed, second has 8 left."""
@@ -241,9 +241,9 @@ class TestGetHoldingLotsUseCase:
 
         # First lot (10@100) fully consumed; second lot has 8 remaining (10-2).
         assert len(result.lots) == 1
-        assert result.lots[0].qty == Decimal("8")
-        assert result.lots[0].cost_per_share == Decimal("120")
-        assert result.total_qty == Decimal("8")
+        assert result.lots[0].qty == Decimal(8)
+        assert result.lots[0].cost_per_share == Decimal(120)
+        assert result.total_qty == Decimal(8)
 
     async def test_long_term_classification(self) -> None:
         """Lot opened > 365 days ago is_long_term=True; <= 365 days is False."""
@@ -300,8 +300,8 @@ class TestGetHoldingLotsUseCase:
         assert result.lots[0].days_held >= 400
         assert result.lots[1].is_long_term is False
         assert result.lots[1].days_held <= 365
-        assert result.long_term_qty == Decimal("10")
-        assert result.short_term_qty == Decimal("5")
+        assert result.long_term_qty == Decimal(10)
+        assert result.short_term_qty == Decimal(5)
 
     async def test_unrealised_pnl_with_current_price(self) -> None:
         """When current_price is supplied, each lot gets unrealised = qty*(price-cost)."""
@@ -332,14 +332,14 @@ class TestGetHoldingLotsUseCase:
                 instrument_id=inst.id,
                 owner_id=owner,
                 tenant_id=tenant,
-                current_price=Decimal("150"),
+                current_price=Decimal(150),
             ),
             uow,
         )
 
         assert len(result.lots) == 1
         # 10 * (150 - 100) = 500
-        assert result.lots[0].unrealised_pnl == Decimal("500")
+        assert result.lots[0].unrealised_pnl == Decimal(500)
 
     async def test_dividends_skipped(self) -> None:
         """DIVIDEND transactions are ignored; lots are unaffected."""
@@ -387,7 +387,7 @@ class TestGetHoldingLotsUseCase:
 
         # Only the BUY lot — dividend is invisible to the lot ledger.
         assert len(result.lots) == 1
-        assert result.lots[0].qty == Decimal("10")
+        assert result.lots[0].qty == Decimal(10)
 
     async def test_empty_holding(self) -> None:
         """No transactions for the requested instrument → empty lots."""

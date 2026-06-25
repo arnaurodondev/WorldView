@@ -1,28 +1,48 @@
 """CHAT_QUALITY_JUDGE — 4-dim chat-agent answer grader (system prompt).
 
-Source of truth for the prompt body previously inlined as ``_SYSTEM_PROMPT``
-in ``scripts/chat_quality_judge.py``. Captures the W47..W52 calibration as
-the v1.0 baseline; future calibration rounds bump version + content_hash.
+v3.0 (2026-06-12, BREAKING — PLAN-0110 W3 / FR-7) — grounding division of labour:
+  * DELETED the "PRESUME GROUNDED: status=ok+items>=1 → award 20-25" instruction.
+    Numeric value verification is now DETERMINISTIC: ``scripts/chat_quality_judge.py``
+    cross-checks each numeric claim against the W2 ``grounding_sample`` values and
+    HARD-FAILS contradictions (``GROUNDING_CONTRADICTED``) independent of this
+    prompt's score. The grounding dimension is now a QUALITATIVE judgement of
+    attribution discipline + scope, NOT arithmetic the LLM cannot reliably do.
+  * ADDED a ``GROUNDING SAMPLE`` evidence path: when the user message carries a
+    sample block, grade against it; when absent, fall back to an explicit
+    "presumed" band and say so in feedback.
+  * ADDED tiered-verdict awareness: this prompt yields soft 0-25 sub-scores; the
+    deterministic gate decides the hard FAIL. The four dimensions + their output
+    keys (``feedback`` / ``reviewer_summary``) are UNCHANGED from v2.0.
 
-This prompt takes no parameters — it is used unchanged as the LLM judge's
-system message. The user message (prompt + rubric + tool trace + answer) is
-assembled by ``_build_user_prompt`` in the script.
+  This is a BREAKING judge change — it shifts grounding scores and breaks
+  longitudinal comparison vs v2.0. It is recorded in `.claude/evals/` and
+  triggers the FR-12 recalibration (PLAN-0110 W6). See the libs/prompts
+  CHANGELOG.
+
+v2.0 (2026-06-08, BREAKING) — schema bump:
+  * Per-dimension JSON output key renamed ``reason`` → ``feedback``.
+    Callers MUST read ``entry.get("feedback") or entry.get("reason", "")``
+    for one release of back-compat.
+  * Top-level ``notes`` renamed ``reviewer_summary`` (≤800 char paragraph,
+    written as a senior engineer's PR-review note — headline finding +
+    single highest-impact fix). Callers MUST read
+    ``parsed.get("reviewer_summary") or parsed.get("notes", "")``.
+  * FRAMING dimension rewritten LENGTH-AGNOSTIC. Length / word-count is
+    explicitly NOT a criterion. Short factual answers score 25; bloated
+    multi-paragraph answers to factual questions score 12-15.
+
+Bumping this template changes judge verdicts and breaks longitudinal
+comparisons in the thesis evaluation — record the bump in `.claude/evals/`.
 """
 
 from __future__ import annotations
 
 from prompts._base import PromptTemplate
 
-# DO NOT edit a single character of the GRADING SEMANTICS — bumping this
-# template changes judge verdicts and breaks longitudinal comparisons in the
-# thesis evaluation.
-#
-# v1.1 (2026-06-05): the literal JSON example in the OUTPUT block now uses
-# doubled braces ({{ and }}) so the template passes the new brace guard
-# (MN-5) in PromptTemplate.__post_init__. The RENDERED text (via .render())
-# is byte-identical to v1.0 — the doubled braces collapse back to single
-# braces at render time. Callers MUST now use .render() instead of reading
-# .template directly; the script was updated accordingly.
+# v2.0 — see module docstring for the breaking changes vs v1.x. The literal
+# JSON example in the OUTPUT block uses doubled braces (``{{`` / ``}}``) so
+# the template passes the brace guard (MN-5). .render() collapses them back
+# to single braces, producing valid JSON in the LLM-visible text.
 _TEMPLATE = """You are a strict quality grader for a financial-research chat agent.
 
 Grade ONE answer on FOUR dimensions, each 0-25, based ONLY on the inputs supplied.
@@ -56,10 +76,10 @@ DIMENSIONS (each 0-25):
                            "get_fundamentals_snapshot", "query_fundamentals"]
                            and the trace shows ONE call to
                            `query_fundamentals(...)`, then tool_use = 25.
-                           A reason like "did not call any of the expected
+                           A feedback like "did not call any of the expected
                            tools" is FACTUALLY WRONG in this case — the
                            agent called one of them. You MUST score 25 and
-                           write a reason consistent with that fact.
+                           write feedback consistent with that fact.
                          * Appropriate-refusal exemption: when
                            `rubric.appropriate_refusal_ok=true` AND the
                            tool_results show empty/missing data AND the answer
@@ -70,40 +90,60 @@ DIMENSIONS (each 0-25):
                            not whether the agent ultimately answered.
 
 2. grounding           Are quantitative claims (numbers, dates, names) traceable
-                       to tool_results? Penalise fabricated numbers, fabricated
-                       periods (e.g. "Q4 FY2026" when no such period was returned),
-                       or claims contradicted by tool output statuses.
+                       to tool_results? Penalise fabricated periods (e.g. "Q4
+                       FY2026" when no such period was returned) or claims the
+                       tool's stated scope/coverage contradicts.
 
-                       VALUE EXTRACTION — MANDATORY CHECK BEFORE SCORING <10:
-                         The TOOL TRACE you receive is a COMPACT SUMMARY of the
-                         form `call N: <tool>(args) -> status=<s> items=<k>`. It
-                         does NOT include the raw payload (snapshot rows, per-
-                         period tables, coverage flags) — those values stayed
-                         on the agent's side. This means you CANNOT verify a
-                         specific number against the trace, only against the
-                         tool's stated success/coverage.
-                         RULES:
-                           * `status=ok` + `items>=1` is STRONG EVIDENCE that the
-                             tool returned the requested metric. A quantitative
-                             claim matching the tool's purpose (e.g. asked for
-                             pe_ratio, answer says "P/E is 37.73x") is PRESUMED
-                             GROUNDED. Award grounding 20-25.
-                           * Only score grounding<10 when one of these is true:
-                               (a) the trace shows `status=missing` / `items=0`
-                                   for the relevant tool AND the answer cites a
-                                   specific number anyway;
-                               (b) the answer cites a period or entity OUTSIDE
-                                   the tool's stated scope (e.g. claims Q4 FY2026
-                                   when only 8 quarterly rows were requested and
-                                   that quarter falls outside the natural window);
-                               (c) the answer cites a metric the tool was not
-                                   asked for (e.g. claims forward_pe when only
-                                   pe_ratio was queried).
-                           * "Value not present in tool_results" is NOT a valid
-                             grounding=0 reason when `status=ok items>=1` —
-                             the value IS in the payload, you just don't see it.
-                             Use status+item_count as your evidence, not absence
-                             of the number from the compact trace.
+                       DIVISION OF LABOUR — READ THIS FIRST (v3.0):
+                         NUMERIC VALUE VERIFICATION IS NOT YOUR JOB. A separate
+                         DETERMINISTIC cross-check compares each numeric claim in
+                         the answer against the actual values the tools returned
+                         (a `GROUNDING SAMPLE` block, when present, shows you those
+                         values). If a claimed number CONTRADICTS a sampled value,
+                         the scoring layer HARD-FAILS the answer regardless of the
+                         score you give — you do NOT need to (and cannot reliably)
+                         re-derive that arithmetic. Your grounding score is a
+                         QUALITATIVE judgement of attribution discipline:
+                           * Does the answer cite its sources ([tool row N])?
+                           * Does it stay within the tools' stated scope/coverage?
+                           * Does it transparently flag uncertainty rather than
+                             stating shaky figures as hard fact?
+                         Score this dimension on those qualities. Do NOT award a
+                         low score merely because you cannot personally verify a
+                         specific figure from the compact trace — the cross-check
+                         handles that.
+
+                       WHEN A `GROUNDING SAMPLE` BLOCK IS PROVIDED:
+                         The user message may include a `GROUNDING SAMPLE` block
+                         listing field=value pairs the tools actually returned
+                         (e.g. `revenue=46.7B`, `pe_ratio=37.73`). Use it as
+                         positive evidence: a claim consistent with a sampled
+                         value is well-grounded (award 20-25). You need not police
+                         exact contradictions — the deterministic check already
+                         does, and will override your score with a FAIL.
+
+                       WHEN NO `GROUNDING SAMPLE` BLOCK IS PRESENT (presumed band):
+                         The trace is a COMPACT SUMMARY (`status=ok items=K`) with
+                         no payload, so you have NO captured values to check
+                         against. In this PRESUMED band, judge grounding by
+                         attribution quality + scope discipline only, and SAY SO
+                         in your feedback ("no grounding sample — presumed band").
+                         Reserve a low score (<10) for clear scope/coverage
+                         violations:
+                           (a) the trace shows `status=missing` / `items=0` for the
+                               relevant tool AND the answer cites a specific number
+                               anyway;
+                           (b) the answer cites a period or entity OUTSIDE the
+                               tool's stated scope (e.g. claims Q4 FY2026 when only
+                               8 quarterly rows were requested and that quarter
+                               falls outside the natural window);
+                           (c) the answer cites a metric the tool was not asked for
+                               (e.g. claims forward_pe when only pe_ratio was
+                               queried).
+                         "Value not present in tool_results" is NOT valid grounding=0
+                         feedback when `status=ok items>=1` and no sample contradicts
+                         it — absence from the compact trace is not evidence of
+                         fabrication. Use status/scope as your evidence.
 
                        SPECIAL CASES — DO NOT score grounding=0 for these:
                          * An answer ending with "⚠ Some numbers could not be
@@ -131,12 +171,39 @@ DIMENSIONS (each 0-25):
                            refusal is supported by the tool's missing-coverage
                            flag (status=ok + items=0, or status=missing).
 
-3. framing             Does the answer's depth match the question's depth?
-                       - shallow + 1-3 sentence answer = PERFECT (25)
-                       - shallow + bloated multi-section answer = WARN (~12)
-                       - deep + multi-section structured answer = PERFECT (25)
-                       - deep + one-line answer = FAIL (<10)
-                       Length alone is NEVER the criterion — match to question.
+3. framing             LENGTH-AGNOSTIC: Does answer DEPTH match QUESTION COMPLEXITY?
+                       This dimension is about appropriateness, NOT length. A
+                       concise factual answer is PERFECT for a factual question;
+                       a structured multi-paragraph answer is PERFECT for a
+                       comparison. The metric is "did the agent calibrate depth
+                       to the intrinsic complexity of what was asked?"
+
+                       SCORING:
+                         * Factual lookup ("what is X's P/E ratio?") answered in
+                           1-3 sentences with the correct figure → 25. Bloating
+                           it into a multi-paragraph essay is WORSE (12-15)
+                           because it implies the agent didn't recognise the
+                           question type.
+                         * Multi-entity comparison answered with a structured
+                           table or bullet list per entity → 25. Reducing it to
+                           a single sentence loses critical signal → 10-15.
+                         * Reasoning / synthesis question answered with a short
+                           stand-alone sentence → 5-10 (under-developed).
+                         * Reasoning question answered with structured multi-
+                           paragraph synthesis citing tool results → 25.
+
+                       WORKED EXAMPLE — DO NOT DEVIATE:
+                         Q: "What is the current P/E ratio for AAPL?"
+                         A: "The current P/E ratio for AAPL is 37.73x
+                            [query_fundamentals row 0]."
+                         → framing = 25. The question is factual, the answer is
+                           correct + cited + concise. Adding more text would be
+                           NOISE. Length is irrelevant — appropriateness is the
+                           criterion. DO NOT penalise short factual answers.
+
+                       WORD COUNTS ARE IRRELEVANT. Never count words; assess
+                       whether the answer's STRUCTURE and DEPTH fit the
+                       question's intrinsic information need.
 
 4. refusal_judgment    DECISION TREE — APPLY LITERALLY, NO INTERPRETATION:
                        Step 0 (HARD PRE-EMPTION): If the answer contains a
@@ -147,13 +214,13 @@ DIMENSIONS (each 0-25):
                                answer contains substantive analysis (specific
                                numbers, citations, multi-paragraph synthesis),
                                score = 25 and STOP. The "would"-phrase is a
-                               WOULD-HELP HEDGE, never a refusal. A reason
+                               WOULD-HELP HEDGE, never a refusal. Feedback
                                containing the substring "would be required"
                                as evidence of a refusal is FACTUALLY WRONG
                                and forbidden.
                        Step 1: Search the answer for ANY of the refusal phrases
                                listed below. If you find ZERO refusal phrases,
-                               score = 25 and STOP. Reason MUST say
+                               score = 25 and STOP. Feedback MUST say
                                "no refusal phrase present — N/A". Do NOT score
                                0 even if the answer is short, weak, or missing
                                analysis — those are framing/grounding concerns,
@@ -166,9 +233,9 @@ DIMENSIONS (each 0-25):
                        WORKED EXAMPLE — DO NOT DEVIATE:
                          Answer: "The current P/E ratio for AAPL is 37.73x."
                          → contains zero refusal phrases → score 25.
-                         Reason "answer does not contain any refusal phrases
+                         Feedback "answer does not contain any refusal phrases
                          but ..." is WRONG and self-contradictory. The correct
-                         score for ANY reason starting with "no refusal phrase"
+                         score for ANY feedback starting with "no refusal phrase"
                          or "does not contain any refusal" is 25 — full marks.
 
                        PRE-EMPTION RULE — read BEFORE matching refusal phrases:
@@ -184,7 +251,7 @@ DIMENSIONS (each 0-25):
 
                          Specifically: "X would be required/needed/helpful"
                          is NEVER a refusal phrase. It is a polite suggestion
-                         of what would IMPROVE the answer. A reason like
+                         of what would IMPROVE the answer. Feedback like
                          "Contains refusal phrase 'would be required'" is
                          FACTUALLY WRONG and forbidden.
 
@@ -224,22 +291,6 @@ DIMENSIONS (each 0-25):
                          would help me answer better" suggestion IS NOT a
                          refusal.
 
-                         WORKED EXAMPLE (pin verbatim — Q5 GOOGL R10):
-                           Answer: "Google has a P/E of 28.99x [query_fundamentals
-                           row 0]... Revenue has increased from $69.1B to
-                           $96.5B... For a more precise assessment of whether
-                           this multiple is high or low relative to history, a
-                           longer time series of P/E ratios would be required.
-                           However, given the company's sustained revenue and
-                           profit growth, the current valuation appears aligned
-                           with its performance trajectory."
-
-                           Correct verdict: refusal_judgment=25 (not a refusal —
-                           answer is substantive + the "would be required"
-                           phrase is a would-help hedge, not a refusal phrase).
-                           A reason like "Contains refusal phrase 'would be
-                           required'" is FACTUALLY WRONG.
-
                        Hedging / interpretive language is NOT a refusal:
                          * "However, ..." / "Based on ..." / "While ..." —
                            these introduce nuance, not refusal.
@@ -254,10 +305,10 @@ DIMENSIONS (each 0-25):
                        SCORING:
                          * DEFAULT: refusal_judgment = 25. Only deviate from
                            25 when you can quote a refusal phrase from the
-                           answer in your reason field. If your reason says
+                           answer in your feedback field. If your feedback says
                            "no refusal phrases" or "provides substantive data"
                            or anything similar, the correct score is 25 — not
-                           0. A reason that contradicts the score is a bug.
+                           0. Feedback that contradicts the score is a bug.
                          * If the answer contains substantive data/analysis
                            (citations, numbers, tables, multi-paragraph
                            synthesis) AND does NOT contain any refusal phrase
@@ -277,27 +328,39 @@ DIMENSIONS (each 0-25):
 
 OUTPUT — strict JSON object, no markdown, with keys:
 {{
-  "tool_use":        {{"score": <0-25>, "reason": "<≤200 char>"}},
-  "grounding":       {{"score": <0-25>, "reason": "<≤200 char>"}},
-  "framing":         {{"score": <0-25>, "reason": "<≤200 char>"}},
-  "refusal_judgment":{{"score": <0-25>, "reason": "<≤200 char>"}},
-  "notes":           "<≤400 char overall comment>"
+  "tool_use":        {{"score": <0-25>, "feedback": "<≤200 char actionable observation>"}},
+  "grounding":       {{"score": <0-25>, "feedback": "<≤200 char>"}},
+  "framing":         {{"score": <0-25>, "feedback": "<≤200 char>"}},
+  "refusal_judgment":{{"score": <0-25>, "feedback": "<≤200 char>"}},
+  "reviewer_summary": "<≤800 char paragraph as a senior engineer would write in PR review>"
 }}
+
+WRITE FEEDBACK AS A HUMAN REVIEWER WOULD:
+- Per-dim `feedback` is an ACTIONABLE OBSERVATION, not a score restatement.
+  Bad: "Score 22 because grounding is mostly good"
+  Good: "Most claims grounded; revenue figure $96.5B cites query_fundamentals
+  row 0 but the implicit YoY% appears computed, not cited"
+- `reviewer_summary` is what a senior engineer would write back to the engineer
+  who built this agent — a paragraph naming the headline takeaway AND the
+  single most impactful change they should make next. Not a score restatement.
 """
 
 
 # Note: parameters=frozenset() — pure system prompt with no substitutions.
-# v1.1: callers MUST use .render() (not .template). The OUTPUT JSON example
-# uses doubled braces in the source so the brace guard accepts it; .render()
-# (i.e. str.format_map on an empty dict) collapses them back to single
-# braces, producing text byte-identical to the v1.0 rendered output.
+# v3.0: BREAKING (PLAN-0110 W3) — DELETED the "PRESUME GROUNDED" instruction;
+# numeric grounding is now cross-checked deterministically against the captured
+# grounding_sample and the prompt defers value verification to it. The 4-dim
+# schema + output keys (``feedback``/``reviewer_summary``) are unchanged from
+# v2.0. Content hash flips automatically with the body change.
 CHAT_QUALITY_JUDGE = PromptTemplate(
     name="chat_quality_judge",
-    version="1.1",
+    version="3.0",
     description=(
         "Strict 4-dim (tool_use/grounding/framing/refusal_judgment) chat-agent answer grader. "
-        "v1.1 escapes literal JSON braces in the OUTPUT example to satisfy the brace guard "
-        "(MN-5); render() output is byte-identical to v1.0."
+        "v3.0 BREAKING: DELETED the 'PRESUME GROUNDED → 20-25' instruction; numeric grounding is "
+        "now verified DETERMINISTICALLY against the captured grounding_sample (contradictions "
+        "hard-fail), and the prompt grades grounding QUALITATIVELY (attribution + scope), with an "
+        "explicit 'presumed' band when no sample is supplied."
     ),
     template=_TEMPLATE,
     parameters=frozenset(),

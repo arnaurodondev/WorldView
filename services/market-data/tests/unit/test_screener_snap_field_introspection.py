@@ -89,6 +89,13 @@ async def test_query_screen_skips_missing_calendar_columns() -> None:
     }
 
     async def _execute(stmt: Any) -> MagicMock:
+        # WHY skip SET LOCAL: query_screen now issues a statement_timeout guard
+        # before the real query (PLAN-0099). Filter it from captured so
+        # captured[-1] is always the screener SELECT (index-stable).
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -108,8 +115,8 @@ async def test_query_screen_skips_missing_calendar_columns() -> None:
     # missing calendar columns in its projection.
     await query_screen(session, filters)
 
-    # Second captured statement is the screener query (first is introspection).
-    screen_stmt = captured[1]
+    # Last captured statement is the screener query (first is introspection).
+    screen_stmt = captured[-1]
     sql = _sql(screen_stmt).lower()
     assert "next_earnings_date" not in sql, f"projection leaked missing column:\n{sql}"
     assert "next_dividend_date" not in sql, f"projection leaked missing column:\n{sql}"
@@ -129,6 +136,10 @@ async def test_query_screen_skips_insider_filter_when_column_missing() -> None:
     present: set[str] = set()  # nothing — extreme case
 
     async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -149,7 +160,7 @@ async def test_query_screen_skips_insider_filter_when_column_missing() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[1]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "insider_net_buy_90d" not in sql
 
 
@@ -164,6 +175,10 @@ async def test_query_screen_projects_all_snap_fields_when_schema_complete() -> N
     present = set(fmq._SNAP_FIELDS)
 
     async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -177,7 +192,7 @@ async def test_query_screen_projects_all_snap_fields_when_schema_complete() -> N
 
     await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=40.0)])
 
-    sql = _sql(captured[1]).lower()
+    sql = _sql(captured[-1]).lower()
     # Every snap field appears as ``snap_<field>`` alias in the projection.
     for field in fmq._SNAP_FIELDS:
         assert f"snap_{field}" in sql, f"{field} missing from full-schema projection"
@@ -207,3 +222,83 @@ async def test_query_screen_caches_introspection_across_calls() -> None:
     await query_screen(session, filters)
 
     assert introspect_calls == 1, f"introspection ran {introspect_calls} times — cache broken"
+
+
+@pytest.mark.asyncio
+async def test_no_filter_path_includes_extended_key_metrics() -> None:
+    """PRD-0099: no-filter screener SQL must reference the 5 new key_metrics.
+
+    Before PRD-0099, only [market_capitalization, pe_ratio, daily_return, beta,
+    revenue_usd] were projected — revenue_usd was also wrong (no rows). The fix
+    replaces revenue_usd with revenue_ttm and adds forward_pe, dividend_yield,
+    roe_ttm, operating_margin_ttm, quarterly_revenue_growth_yoy.
+
+    2026-06-10 repair: the BP-screener500 rewrite (2026-06-09) split the
+    no-filter branch into page-IDs query → count → main metric query. With an
+    all-empty mock the page query returned no rows and query_screen early-
+    returned BEFORE building the metric SQL, so ``captured[-1]`` was the page
+    query and the assertions below silently checked the wrong statement. The
+    mock now returns one fake page row so the real metric query is built.
+
+    2026-06-10 (frontend audit gap #2): also asserts the two 52-week distance
+    metrics are projected in the default view.
+    """
+    captured: list[Any] = []
+    present = set(fmq._SNAP_FIELDS)
+
+    page_row = MagicMock()
+    page_row.id = "instr-page-1"
+
+    async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
+        captured.append(stmt)
+        result = MagicMock()
+        s = str(stmt)
+        if "information_schema" in s:
+            result.all = MagicMock(return_value=[(c,) for c in present])
+        # WHY km_ check FIRST: the main metric statement projects snap columns
+        # whose names contain "count" (news_count_7d, recent_contradiction_count)
+        # so a bare "count" substring check would misroute it. The COUNT(*)
+        # query needs no explicit branch: MagicMock.__int__ defaults to 1.
+        elif "km_" in s:
+            # The main metric query (key-metric subqueries aliased km_<name>).
+            # Return no rows → query_screen returns ([], total) right after,
+            # which keeps the page-extras enrichment out of this SQL test.
+            result.all = MagicMock(return_value=[])
+        else:
+            # The page-IDs query — must return ≥1 row or the branch
+            # early-returns before building the metric query.
+            result.all = MagicMock(return_value=[page_row])
+        return result
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=_execute)
+
+    # Empty filters → no-filter path
+    await query_screen(session, [])
+
+    # Last captured call is the main screener query (after introspection,
+    # page-IDs and count queries).
+    assert len(captured) >= 2, "expected introspection + screener query"
+    sql = _sql(captured[-1]).lower()
+    assert "km_" in sql, f"main metric query never built — page query leaked into captured[-1]:\n{sql}"
+
+    expected_metrics = [
+        "revenue_ttm",
+        "forward_pe",
+        "dividend_yield",
+        "roe_ttm",
+        "operating_margin_ttm",
+        "quarterly_revenue_growth_yoy",
+        # 2026-06-10: 52-week distances now part of the default view.
+        "dist_from_52w_high_pct",
+        "dist_from_52w_low_pct",
+    ]
+    for metric in expected_metrics:
+        assert metric in sql, f"PRD-0099: no-filter screener SQL missing '{metric}'"
+
+    # revenue_usd must NOT appear — it was never in the extractor catalog
+    assert "revenue_usd" not in sql, "stale 'revenue_usd' key_metric still in no-filter path"

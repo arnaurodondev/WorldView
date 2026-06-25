@@ -85,6 +85,25 @@ const FORBIDDEN_RADIUS = /rounded-\[(?:[3-9]|[1-9][0-9]+)px\]/;
 // interpolation pattern in TS template strings.
 const FORBIDDEN_CURRENCY = /\$\$\{[^}]+\.toFixed\(/;
 
+// PRD-0089 W1 §6.3 — two new forbidden patterns added to the architecture test:
+//
+// 1. `border-white/[` opacity literals (banned by F1 token rollout).
+//    Components must use `border-border-subtle` (or other CSS token) instead.
+//    The previous StatusBar used `border-white/[0.06]` which is an opacity-
+//    based alias that doesn't respect theme overrides. F1 locked the token.
+//    Exception: this test file itself and palette source files.
+//
+// 2. References to deleted deprecated shell components (TopBarMarquee,
+//    MarqueeTickerChip, IndexTicker). Any post-deletion import of these files
+//    indicates a stale import site that would cause a build error.
+const FORBIDDEN_BORDER_WHITE_OPACITY = /border-white\/\[/;
+
+// WHY string match (not import-path check): the forbidden pattern covers any
+// className string that references the banned opacity literal. Import-path
+// checks would only catch direct imports, not className strings.
+const FORBIDDEN_DEPRECATED_SHELL =
+  /\b(TopBarMarquee|MarqueeTickerChip|IndexTicker)\b/;
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 /** Recursively list all .ts/.tsx files under a directory. */
@@ -153,17 +172,34 @@ function findOffences(): { file: string; line: number; text: string }[] {
       for (let i = 0; i < strippedLines.length; i++) {
         const codeLine = strippedLines[i] ?? "";
         if (codeLine.trim().length === 0) continue;
-        // HF-10: combined detector — any one of the four checks triggers an
-        // offence. Currency check skips the test file itself (which embeds
-        // the forbidden pattern in regex string form to assert the rule).
+        // HF-10: combined detector — any one of the six checks triggers an
+        // offence. Currency and deprecated-shell checks skip the test file
+        // itself (which embeds the forbidden patterns to assert the rules).
         const isCurrencyOffence =
           FORBIDDEN_CURRENCY.test(codeLine) &&
           !rel.endsWith("no-off-palette-colors.test.ts");
+        // WHY skip test file for border-white check: the test file contains
+        // the regex pattern string as a literal — that's not a violation.
+        const isBorderWhiteOffence =
+          FORBIDDEN_BORDER_WHITE_OPACITY.test(codeLine) &&
+          !rel.endsWith("no-off-palette-colors.test.ts");
+        // WHY skip test file + deprecated component files themselves:
+        // The deleted files won't exist post-W1. During the transition the
+        // deprecated files are the source of truth (not violations). Any OTHER
+        // file referencing these symbols post-deletion is a violation.
+        const isDeprecatedShellOffence =
+          FORBIDDEN_DEPRECATED_SHELL.test(codeLine) &&
+          !rel.endsWith("no-off-palette-colors.test.ts") &&
+          !rel.includes("components/shell/TopBarMarquee") &&
+          !rel.includes("components/shell/MarqueeTickerChip") &&
+          !rel.includes("components/shell/IndexTicker");
         if (
           FORBIDDEN_HEX.test(codeLine) ||
           FORBIDDEN_TW.test(codeLine) ||
           FORBIDDEN_RADIUS.test(codeLine) ||
-          isCurrencyOffence
+          isCurrencyOffence ||
+          isBorderWhiteOffence ||
+          isDeprecatedShellOffence
         ) {
           offences.push({
             file: rel,

@@ -51,7 +51,30 @@ class ExtractionInput:
 
 @dataclass(frozen=True)
 class ExtractionOutput:
+    """Result of a single structured-extraction call.
+
+    Task #36 (extraction 429 fallback) adds three resilience-audit fields. They
+    are all defaulted so EVERY existing construction site (tests, other adapters)
+    stays valid without edits — backward-compatible by design:
+
+      * ``model_used``      — the model that ACTUALLY produced this result. When a
+                              429/timeout on the primary forced a fallback hop this
+                              is the SECONDARY model slug, NOT the configured
+                              primary.  ``None`` falls back to ``model_id`` for
+                              callers that pre-date the field.
+      * ``fallback_reason`` — why the fallback fired, one of the literal strings
+                              ``"none" | "rate_limit" | "timeout" | "server_error"``.
+                              ``"none"`` means the primary served the call directly.
+      * ``attempts``        — total number of provider HTTP attempts made across
+                              the primary AND fallback models (>=1).  Lets the
+                              usage-log/ops see how hard a call had to work.
+    """
+
     result: dict  # type: ignore[type-arg]
     raw_response: str
     model_id: str
     extraction_confidence: float | None = None
+    # ── Task #36 resilience-audit metadata (all backward-compatible defaults) ──
+    model_used: str | None = None
+    fallback_reason: str = "none"
+    attempts: int = 1

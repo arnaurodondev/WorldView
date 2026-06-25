@@ -18,11 +18,13 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import re
 import time
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+from prometheus_client import Counter
 from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # type: ignore[import-untyped]
 from sqlalchemy import text
 
@@ -57,6 +59,43 @@ _RELEVANCE_PROMPT_ID = ARTICLE_RELEVANCE_SCORER.identifier()
 
 # Valid sentiment enum values — reject anything the LLM hallucinates.
 _VALID_SENTIMENTS = frozenset({"positive", "negative", "neutral", "mixed"})
+
+# PLAN-0109 B-1: track empty/unparseable LLM responses so a sustained run of
+# garbage from the provider trips RelevanceScoringDegraded in Prometheus. The
+# reason label distinguishes between an empty content string, a JSON decode
+# failure, and a response missing the required "score" key — operators can use
+# this to tell a provider outage from a prompt/template regression.
+RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER = Counter(
+    "nlp_pipeline_relevance_scoring_empty_response_total",
+    "Count of relevance-scoring LLM responses that were empty or unparseable.",
+    labelnames=("model_id", "reason"),
+)
+
+
+def _extract_relevance_json(content: str | None) -> dict[str, object]:
+    """Strip Qwen3 ``<think>`` blocks + markdown fences, then parse JSON.
+
+    Qwen3 chat-template models (Meta-Llama-3.1-8B too, on some sampling
+    settings) prepend a hidden chain-of-thought wrapped in ``<think>``/``
+    </think>`` tags. They also occasionally emit ```json fenced blocks even
+    when ``response_format=json_object`` is set. Both forms break a naive
+    ``json.loads(content)``. This helper centralizes the salvage logic so the
+    DeepInfra path returns a dict rather than silently dropping the article.
+    """
+    if not content:
+        raise ValueError("empty_content")
+    # 1) Strip <think>…</think> blocks (DOTALL handles embedded newlines).
+    content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
+    # 2) Try a ```json …``` fence first (non-greedy capture of {…}).
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
+    if fence_match:
+        content = fence_match.group(1)
+    else:
+        # 3) Fallback: greedy {…} anywhere in the string — catches prefix prose.
+        brace_match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+        if brace_match:
+            content = brace_match.group(0)
+    return json.loads(content)  # type: ignore[no-any-return]
 
 
 class ArticleRelevanceScoringWorker:
@@ -119,6 +158,14 @@ class ArticleRelevanceScoringWorker:
         # exact input lineage. We hash (title, source_type) since the LLM prompt is
         # deterministic on those (title-only prompt — see PRD-0026).
         scored: list[tuple[UUID, float, str | None, str]] = []
+        # PLAN-0109 B-1: when the provider goes degraded (e.g. Qwen3 emitting
+        # only <think>… and truncating before JSON) every call returns None.
+        # Rather than burn through the whole batch we abort once half of the
+        # batch has come back empty in a row — the cycle handler upstream
+        # already logs the RuntimeError and the Prometheus counter trips the
+        # RelevanceScoringDegraded alert.
+        consecutive_empty = 0
+        empty_threshold = max(1, self._batch_size // 2)
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 for doc_id, title, source_type in articles:
@@ -130,6 +177,11 @@ class ArticleRelevanceScoringWorker:
                         score, sentiment = result
                         input_hash = hashlib.sha256(f"{title}\x00{source_type or ''}".encode()).hexdigest()
                         scored.append((doc_id, score, sentiment, input_hash))
+                        consecutive_empty = 0
+                    else:
+                        consecutive_empty += 1
+                        if consecutive_empty >= empty_threshold:
+                            raise RuntimeError("relevance_scoring_provider_degraded")
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             # Provider unavailable — skip the entire cycle; try again next interval
             logger.warning(  # type: ignore[no-any-return]
@@ -266,10 +318,10 @@ class ArticleRelevanceScoringWorker:
             # Ollama wraps the model output in a "response" field when format=json
             inner = data.get("response", raw)
             parsed = json.loads(inner) if isinstance(inner, str) else inner
-            score = float(parsed["score"])
+            score = float(parsed["score"])  # type: ignore[arg-type]
             # F-Q1-07: extract sentiment — default to None if missing or not a valid enum.
             raw_sentiment = parsed.get("sentiment", "")
-            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            sentiment: str | None = str(raw_sentiment) if raw_sentiment in _VALID_SENTIMENTS else None
             await self._record_usage(
                 provider="ollama",
                 model_id=self._model,
@@ -332,19 +384,50 @@ class ArticleRelevanceScoringWorker:
                     # Force JSON output — avoids free-form prose wrapping the score object.
                     "response_format": {"type": "json_object"},
                     "temperature": 0.0,
-                    # WHY 96 (up from 64): the extended response includes sentiment token
-                    # (~10 extra characters in the JSON).  96 provides headroom without waste.
-                    "max_tokens": 96,
+                    # PLAN-0109 B-1: Qwen3 chat-template models emit a hidden
+                    # <think>…</think> block that consumes 100+ output tokens
+                    # before the JSON ever starts. With max_tokens=96 the
+                    # response was truncated mid-think and the content field
+                    # came back empty, silently dropping ~80% of articles. We
+                    # both disable thinking via chat_template_kwargs AND raise
+                    # the cap to 512 to cover any provider that ignores the
+                    # kwarg.
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "max_tokens": 512,
                 },
             )
             resp.raise_for_status()
             latency_ms = int((time.perf_counter() - t0) * 1000)
             content = resp.json()["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
-            score = float(parsed["score"])
+            # PLAN-0109 B-1: hardened extraction — empty / <think>-wrapped /
+            # markdown-fenced responses no longer kill the article silently.
+            try:
+                parsed = _extract_relevance_json(content)
+            except ValueError as exc:
+                # Empty content from the provider — track separately so the
+                # RelevanceScoringDegraded alert can distinguish a model
+                # outage from a prompt regression.
+                RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER.labels(
+                    model_id=self._api_model_id,
+                    reason="empty_content",
+                ).inc()
+                raise json.JSONDecodeError(str(exc), "", 0) from exc
+            except json.JSONDecodeError:
+                RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER.labels(
+                    model_id=self._api_model_id,
+                    reason="json_decode",
+                ).inc()
+                raise
+            if "score" not in parsed:
+                RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER.labels(
+                    model_id=self._api_model_id,
+                    reason="missing_score",
+                ).inc()
+                raise KeyError("score")
+            score = float(parsed["score"])  # type: ignore[arg-type]
             # F-Q1-07: extract sentiment — default to None if missing or invalid enum.
             raw_sentiment = parsed.get("sentiment", "")
-            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            sentiment: str | None = str(raw_sentiment) if raw_sentiment in _VALID_SENTIMENTS else None
             await self._record_usage(
                 provider="deepinfra",
                 model_id=self._api_model_id,

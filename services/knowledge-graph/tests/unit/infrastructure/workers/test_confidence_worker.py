@@ -109,12 +109,89 @@ class TestConfidenceWorkerRun:
             mock_ev.fetch_unprocessed_by_partition = AsyncMock(return_value=[])
             MockEvRepo.return_value = mock_ev
 
+            # PLAN-0109 W2: the run() now also runs the staleness sweep, which
+            # queries fetch_due_for_recompute — stub it empty so "no work" holds.
+            mock_rel = AsyncMock()
+            mock_rel.fetch_due_for_recompute = AsyncMock(return_value=[])
+            MockRelRepo.return_value = mock_rel
+
             worker = ConfidenceWorker(sf, settings)
             asyncio.run(worker.run())
 
             # mark_confidence_updated should never be called
-            for _call in MockRelRepo.return_value.mock_calls:
+            for _call in mock_rel.mock_calls:
                 assert "mark_confidence_updated" not in str(_call)
+
+    def test_sweep_recomputes_due_relations(self) -> None:
+        """PLAN-0109 W2: the staleness sweep recomputes each DUE relation."""
+        from uuid import uuid4
+
+        from knowledge_graph.config import Settings
+        from knowledge_graph.infrastructure.workers.confidence import ConfidenceWorker
+
+        settings = Settings()
+        settings.confidence_formula_v2 = True
+        sf = _make_session_factory()
+        rid, sid, oid = uuid4(), uuid4(), uuid4()
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository",
+            ) as MockRelRepo,
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence.RelationEvidenceRepository",
+            ) as MockEvRepo,
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.contradiction.ContradictionRepository",
+            ) as MockContraRepo,
+        ):
+            mock_rel = AsyncMock()
+            mock_rel.fetch_due_for_recompute = AsyncMock(
+                return_value=[
+                    {
+                        "relation_id": rid,
+                        "subject_entity_id": sid,
+                        "object_entity_id": oid,
+                        "canonical_type": "supplier_of",
+                        "semantic_mode": "RELATION_STATE",
+                        "decay_alpha": 0.00385,
+                        "base_confidence": 0.55,
+                    }
+                ]
+            )
+            mock_rel.mark_confidence_updated = AsyncMock()
+            mock_rel.get_valid_to = AsyncMock(return_value=None)
+            mock_rel.update_valid_from_and_period_type = AsyncMock()
+            MockRelRepo.return_value = mock_rel
+
+            mock_ev = AsyncMock()
+            mock_ev.get_all_raw_for_triple = AsyncMock(
+                return_value=[
+                    {
+                        "source_type": "sec_10k",
+                        "source_name": "X",
+                        "evidence_date": _NOW,
+                        "extraction_confidence": 0.9,
+                        "source_trust_weight": 0.9,
+                    }
+                ]
+            )
+            mock_ev.get_earliest_evidence_date = AsyncMock(return_value=None)
+            MockEvRepo.return_value = mock_ev
+
+            mock_contra = AsyncMock()
+            mock_contra.fetch_active_for_subject = AsyncMock(return_value=[])
+            MockContraRepo.return_value = mock_contra
+
+            worker = ConfidenceWorker(sf, settings)
+            worker._source_trust = {"sec_10k": 0.95}
+            n = asyncio.run(worker._sweep_partition(0))
+
+        assert n == 1
+        mock_rel.mark_confidence_updated.assert_called_once()
+        # The persisted confidence is a valid probability.
+        persisted = mock_rel.mark_confidence_updated.call_args.args[1]
+        assert 0.0 <= persisted <= 1.0
 
     def test_confidence_bounded_at_one(self) -> None:
         """Computed confidence must always be clamped to [0, 1]."""

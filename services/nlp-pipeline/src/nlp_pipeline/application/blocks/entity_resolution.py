@@ -23,6 +23,7 @@ from uuid import UUID
 import structlog  # type: ignore[import-untyped]
 
 import common.ids  # type: ignore[import-untyped]
+from common.tickers import strip_exchange_qualifier  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import ResolutionOutcome
 from nlp_pipeline.domain.models import EntityMention, MentionResolution
 
@@ -37,6 +38,29 @@ if TYPE_CHECKING:
     from nlp_pipeline.infrastructure.nlp_db.repositories.mention_resolution import MentionResolutionRepository
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _ticker_candidate(surface: str) -> str | None:
+    """Return the ticker symbol to look up for ``surface``, or None if it is not
+    ticker-shaped.
+
+    A ticker is an ALL-UPPERCASE symbol of <=6 chars, after stripping a trailing
+    ``.EXCHANGE`` venue qualifier (``AAPL.MX`` -> ``AAPL``).
+
+    The case-sensitivity (``isupper()``) is LOAD-BEARING — it is what stops a
+    mixed-case company name/acronym (``xAI``, ``Citi``, ``eBay``) from being
+    treated as a ticker and colliding with an unrelated security that happens to
+    own that ticker (the 2026-06-20 ``xAI`` -> "XAI Octagon ... Trust" fund
+    mis-resolution class). ``strip_exchange_qualifier`` preserves case, so a
+    mixed-case surface stays mixed-case here and is correctly rejected. Extracted
+    into a single helper (used by both the per-mention and batch Stage-2 paths) so
+    the guard is testable and cannot silently regress.
+    """
+    candidate = strip_exchange_qualifier(surface.strip()) or surface.strip()
+    if candidate.isupper() and len(candidate) <= 6:
+        return candidate
+    return None
+
 
 # ── Resolution thresholds (PRD §6.7 Block 9) ─────────────────────────────────
 
@@ -108,9 +132,11 @@ async def _stage2_ticker_isin(
     audit: list[MentionResolution],
 ) -> tuple[UUID | None, float]:
     """Stage 2 — ticker/ISIN match against canonical_entities."""
-    # Attempt to parse ticker from the mention text (bare uppercase word)
+    # Attempt to parse ticker from the mention text (bare uppercase word).
+    # _ticker_candidate enforces the case-sensitive gate that keeps mixed-case
+    # company acronyms (xAI/Citi) from colliding with unrelated tickers.
     text = mention.mention_text.strip()
-    ticker = text if text.isupper() and len(text) <= 6 else None
+    ticker = _ticker_candidate(text)
     isin = text if len(text) == 12 and text[:2].isalpha() and text[2:].isalnum() else None
 
     entity_id = await alias_repo.ticker_isin_match(ticker=ticker, isin=isin)
@@ -292,9 +318,118 @@ VALUES
         CAST(:ctx AS text)
     )
 ON CONFLICT (normalized_surface, mention_class)
-DO UPDATE SET retry_count = provisional_entity_queue.retry_count
+DO NOTHING
 RETURNING queue_id
 """
+
+
+# Lock-convoy fix (2026-06-22, BP-707): the old ``DO UPDATE SET retry_count =
+# retry_count`` no-op took a row ExclusiveLock on the hot conflicting tuple
+# (``apple``, ``the company`` …) and HELD it across the 12-22s deep-extraction
+# LLM call until commit — convoying ~48 concurrent backends into 40-51s waits →
+# 10-min statement_timeout → 900s message_processing_timeout → DLQ (silent loss).
+# ``DO NOTHING`` acquires NO held write lock; on conflict RETURNING yields no row,
+# so the caller falls back to this lock-free MVCC SELECT for the canonical queue_id.
+_PROVISIONAL_SELECT_SQL = """
+SELECT queue_id
+FROM provisional_entity_queue
+WHERE normalized_surface = lower(trim(CAST(:surface AS varchar(500))))
+  AND mention_class = CAST(:mention_class AS varchar(50))
+"""
+
+# Short transaction-local lock_timeout (ms) for provisional inserts. With
+# DO NOTHING there is no held conflict lock, but any residual wait now fails FAST
+# with lock_not_available (caught by the per-insert SAVEPOINT → mention downgraded
+# to UNRESOLVED + re-attempted by the worker) instead of hanging to the 10-min
+# statement_timeout that killed whole articles into the DLQ.
+_PROVISIONAL_LOCK_TIMEOUT_MS = 2000
+
+
+async def set_provisional_lock_timeout(intelligence_session: object) -> None:
+    """Apply the short provisional-insert ``lock_timeout`` for this transaction.
+
+    Called once at the top of the entity-resolution block (before any provisional
+    INSERT). ``SET LOCAL`` scopes it to the current transaction — auto-reverts on
+    commit/rollback, so it never leaks to pooled connections or other query paths.
+    """
+    from sqlalchemy import text  # type: ignore[import-untyped]
+
+    # lock_timeout cannot be parameterised in SET; the value is an int constant
+    # (never user input), so direct interpolation is injection-safe.
+    await intelligence_session.execute(  # type: ignore[attr-defined]
+        text(f"SET LOCAL lock_timeout = {_PROVISIONAL_LOCK_TIMEOUT_MS}"),
+    )
+
+
+async def _insert_provisional_surface(
+    *,
+    surface: str,
+    mention_class_value: str,
+    doc_id: UUID,
+    intelligence_session: object,
+) -> UUID:
+    """Insert one row into provisional_entity_queue for a bare *surface*.
+
+    The low-level INSERT shared by ``_insert_provisional`` (mention-backed) and
+    ``ensure_provisional_for_ref`` (surface-only, no backing mention). Returns
+    the canonical ``queue_id`` for the (normalized_surface, mention_class) pair —
+    newly generated on first insert, pre-existing on conflict.
+    """
+    from sqlalchemy import text  # type: ignore[import-untyped]
+
+    result = await intelligence_session.execute(  # type: ignore[attr-defined]
+        text(_PROVISIONAL_INSERT_SQL),
+        {
+            "queue_id": str(common.ids.new_uuid7()),
+            "surface": surface,
+            "mention_class": mention_class_value,
+            "doc_id": str(doc_id),
+            # context_snippet left NULL for now; future work could extract a
+            # surrounding-sentence snippet here, but B-3 already does that for
+            # the unresolved-resolution-worker prompt and we don't want two
+            # parallel implementations.
+            "ctx": None,
+        },
+    )
+    # DO NOTHING → RETURNING is empty on conflict; scalar_one_or_none is None
+    # exactly then → lock-free SELECT for the canonical pre-existing queue_id
+    # (shared by _insert_provisional and ensure_provisional_for_ref).
+    queue_id_str = result.scalar_one_or_none()
+    if queue_id_str is None:
+        select_result = await intelligence_session.execute(  # type: ignore[attr-defined]
+            text(_PROVISIONAL_SELECT_SQL),
+            {"surface": surface, "mention_class": mention_class_value},
+        )
+        queue_id_str = select_result.scalar_one()
+    return UUID(str(queue_id_str))
+
+
+async def _provisional_within_churn_limit(
+    *,
+    surface: str,
+    mention_class_value: str,
+    intelligence_session: object,
+) -> bool:
+    """Return True when minting another provisional for (surface, class) is allowed.
+
+    Shared churn-guard: skip the INSERT once ``MAX_PROVISIONAL_PER_HOUR`` rows
+    already exist for the same (normalized_surface, mention_class) pair in the
+    last rolling hour (noisy NER/LLM tokens like "the company" would otherwise
+    hammer the savepoint machinery on every article).
+    """
+    from sqlalchemy import text as _sql_text  # type: ignore[import-untyped]
+
+    count_result = await intelligence_session.execute(  # type: ignore[attr-defined]
+        _sql_text(
+            "SELECT COUNT(*) FROM provisional_entity_queue"
+            " WHERE normalized_surface = lower(trim(:surface))"
+            "   AND mention_class = :mention_class"
+            "   AND created_at >= NOW() - INTERVAL '1 hour'"
+        ),
+        {"surface": surface, "mention_class": mention_class_value},
+    )
+    hourly_count: int = count_result.scalar_one()
+    return hourly_count < MAX_PROVISIONAL_PER_HOUR
 
 
 async def _insert_provisional(
@@ -310,8 +445,6 @@ async def _insert_provisional(
     (B-1 ``_build_raw_relations`` etc.) can reference it as a synthetic
     "entity id" while emitting ``entity_provisional=True`` flagged relations.
     """
-    from sqlalchemy import text  # type: ignore[import-untyped]
-
     # PLAN-0052 platform-QA round 4 (2026-05-01): use `.value` rather than
     # `str(enum)` to send the lowercase enum value the DB CHECK constraint
     # expects. `str(MentionClass.ORGANIZATION)` returns the Python repr
@@ -325,22 +458,12 @@ async def _insert_provisional(
         if hasattr(mention.mention_class, "value")
         else str(mention.mention_class)
     )
-    result = await intelligence_session.execute(  # type: ignore[attr-defined]
-        text(_PROVISIONAL_INSERT_SQL),
-        {
-            "queue_id": str(common.ids.new_uuid7()),
-            "surface": mention.mention_text,
-            "mention_class": mention_class_value,
-            "doc_id": str(mention.doc_id),
-            # context_snippet left NULL for now; future work could extract a
-            # surrounding-sentence snippet here, but B-3 already does that for
-            # the unresolved-resolution-worker prompt and we don't want two
-            # parallel implementations.
-            "ctx": None,
-        },
+    return await _insert_provisional_surface(
+        surface=mention.mention_text,
+        mention_class_value=mention_class_value,
+        doc_id=mention.doc_id,
+        intelligence_session=intelligence_session,
     )
-    queue_id_str = result.scalar_one()
-    return UUID(str(queue_id_str))
 
 
 # ── Main block entry point ────────────────────────────────────────────────────
@@ -393,6 +516,12 @@ async def run_entity_resolution_block(
     if not mentions:
         return mentions, []
 
+    # Lock-convoy fix (BP-707): bound provisional-insert lock waits for THIS
+    # transaction so a hot-tuple conflict fails fast → UNRESOLVED downgrade
+    # (re-attempted by UnresolvedResolutionWorker) instead of a 10-min
+    # statement_timeout that dead-letters the whole article. SET LOCAL auto-reverts.
+    await set_provisional_lock_timeout(intelligence_session)
+
     all_audit: list[MentionResolution] = []
 
     # ── Stage 1 batch: exact alias (1 query for all mentions) ─────────────────
@@ -400,15 +529,31 @@ async def run_entity_resolution_block(
     exact_matches: dict[str, UUID] = await alias_repo.batch_exact_match(all_texts)
 
     # ── Stage 2 batch: ticker/ISIN (1-2 queries for all mentions) ─────────────
+    # 2026-06-15 entity-matching fix: a mention like "AAPL.MX" carries an
+    # exchange qualifier.  Strip it to the bare symbol BEFORE the all-caps/len
+    # ticker gate — ".MX" pushed "AAPL.MX" to length 7, past the <=6 cap, so it
+    # never reached the ticker lookup and fell through to fuzzy/ANN or a silent
+    # drop.  ``s2_lookup_key`` remembers the value actually queried per mention so
+    # the per-mention classification below can map a hit back to the original
+    # surface form (the matches dict is keyed by the queried bare ticker).
     tickers: list[str] = []
     isins: list[str] = []
+    s2_lookup_key: dict[str, str] = {}  # mention_text.strip() -> ticker/isin value queried
     for m in mentions:
         text_stripped = m.mention_text.strip()
-        if text_stripped.isupper() and len(text_stripped) <= 6:
-            tickers.append(text_stripped)
+        ticker_candidate = _ticker_candidate(text_stripped)
+        if ticker_candidate is not None:
+            tickers.append(ticker_candidate)
+            s2_lookup_key[text_stripped] = ticker_candidate
         if len(text_stripped) == 12 and text_stripped[:2].isalpha() and text_stripped[2:].isalnum():
             isins.append(text_stripped)
+            s2_lookup_key[text_stripped] = text_stripped
     ticker_isin_matches: dict[str, UUID] = await alias_repo.batch_ticker_isin_match(tickers, isins)
+
+    def _matched_in_stage2(text: str) -> UUID | None:
+        """Stage-2 entity for ``text``, resolved via its exchange-stripped key."""
+        key = s2_lookup_key.get(text.strip())
+        return ticker_isin_matches.get(key) if key is not None else None
 
     # ── Stage 2.5 batch: class-aware canonical_name match (PLAN-0087 F-LLM-001) ─
     # GLiNER tags Apple/Microsoft/Intel as ``mention_class='organization'`` but
@@ -426,7 +571,7 @@ async def run_entity_resolution_block(
     for m in mentions:
         if m.mention_text.lower().strip() in exact_matches:
             continue
-        if m.mention_text.strip() in ticker_isin_matches:
+        if _matched_in_stage2(m.mention_text) is not None:
             continue
         mclass_val = m.mention_class.value if hasattr(m.mention_class, "value") else str(m.mention_class)
         stage25_pairs.append((m.mention_text, mclass_val))
@@ -446,7 +591,7 @@ async def run_entity_resolution_block(
         m
         for m in mentions
         if m.mention_text.lower().strip() not in exact_matches
-        and m.mention_text.strip() not in ticker_isin_matches
+        and _matched_in_stage2(m.mention_text) is None
         and not _matched_in_stage25(m)
     ]
     fuzzy_matches: dict[str, list[tuple[UUID, float]]] = {}
@@ -485,8 +630,7 @@ async def run_entity_resolution_block(
 
         # Stage 2 result — always emit audit entry (hit or miss) for full trail
         if resolved_id is None:
-            stripped = mention.mention_text.strip()
-            s2_entity = ticker_isin_matches.get(stripped)
+            s2_entity = _matched_in_stage2(mention.mention_text)
             if s2_entity is not None:
                 resolved_id = s2_entity
                 confidence = CONFIDENCE_TICKER_ISIN
@@ -753,6 +897,66 @@ async def ensure_provisional_for_mention(
             "ensure_provisional.insert_failed",
             mention_id=str(mention.mention_id),
             surface=mention.mention_text,
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+            exc_info=True,
+        )
+        return None
+
+
+async def ensure_provisional_for_ref(
+    *,
+    surface: str,
+    mention_class: object,
+    doc_id: UUID,
+    intelligence_session: object,
+) -> UUID | None:
+    """Mint a provisional_entity_queue row for a bare LLM endpoint *surface*.
+
+    The non-mention sibling of :func:`ensure_provisional_for_mention`. Used by
+    the article-consumer's M2 endpoint-recovery step (2026-06-14 mitigation):
+    when the deep-extraction LLM references an entity in a relation/event/claim
+    that GLiNER never minted a mention for, there is no ``EntityMention`` to
+    promote — but the relation must still PERSIST. This mints a queue row keyed
+    on the surface itself so ``_build_raw_*`` can address it with a synthetic id
+    and ``entity_provisional=True``; the ``UnresolvedResolutionWorker``
+    canonicalizes it later → KG promotion (the proven provisional path that
+    already lands thousands of provisional relations).
+
+    Reuses the SAME SAVEPOINT + churn-guard + INSERT machinery as the
+    mention-backed path (no parallel implementation). Returns the queue_id (new
+    or pre-existing on UNIQUE conflict), or ``None`` on churn-guard hit / DB
+    failure (caller then treats the ref as a genuine drop).
+    """
+    mention_class_value = mention_class.value if hasattr(mention_class, "value") else str(mention_class)
+
+    try:
+        if not await _provisional_within_churn_limit(
+            surface=surface,
+            mention_class_value=mention_class_value,
+            intelligence_session=intelligence_session,
+        ):
+            logger.warning(  # type: ignore[no-any-return]
+                "ensure_provisional_for_ref.churn_guard_skipped",
+                surface_form=surface,
+                entity_class=mention_class_value,
+            )
+            return None
+
+        # SAVEPOINT-guarded INSERT (BP-239): a UNIQUE-constraint failure must not
+        # poison the article-consumer's outer transaction.
+        async with intelligence_session.begin_nested():  # type: ignore[attr-defined]
+            queue_id = await _insert_provisional_surface(
+                surface=surface,
+                mention_class_value=mention_class_value,
+                doc_id=doc_id,
+                intelligence_session=intelligence_session,
+            )
+        return queue_id
+    except Exception as exc:
+        logger.warning(  # type: ignore[no-any-return]
+            "ensure_provisional_for_ref.insert_failed",
+            surface=surface,
             exception_type=type(exc).__name__,
             exception_message=str(exc),
             exc_info=True,

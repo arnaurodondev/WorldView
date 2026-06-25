@@ -178,11 +178,14 @@ class StoredArticleDedupConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-
         bootstrap_servers: str,
         group_id: str,
         session_factory: async_sessionmaker[AsyncSession],
+        group_instance_id: str = "",
     ) -> None:
         consumer_config = ConsumerConfig(
             bootstrap_servers=bootstrap_servers,
             group_id=group_id,
             topics=[_INPUT_TOPIC],
+            # PLAN-0113 FIX-2: static-membership identity (empty = dynamic, no-op).
+            group_instance_id=group_instance_id,
         )
         super().__init__(consumer_config)
         self._session_factory = session_factory

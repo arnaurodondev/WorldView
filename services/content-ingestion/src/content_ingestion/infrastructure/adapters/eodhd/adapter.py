@@ -72,8 +72,14 @@ class EODHDAdapter(SourceAdapter):
         """
         config = source.config
         ticker = config.get("ticker", "")
+        # QUOTA-OPT (2026-06-16): anchor ``from`` on the watermark and set
+        # ``to=today`` so EODHD returns the entire batch since our last sweep
+        # in one (paginated) call — EODHD bills per-request, not per-article.
+        # ``from_date`` already carries the watermark (or "" on first run);
+        # an explicit source-config ``from_date``/``to_date`` still wins for
+        # operator-driven backfills.
         effective_from = from_date or config.get("from_date", "")
-        to_date = config.get("to_date", "")
+        to_date = config.get("to_date", "") or common.time.utc_now().date().isoformat()
 
         articles = await self._retry_request(
             lambda: self._client.fetch_all_pages(ticker=ticker, from_date=effective_from, to_date=to_date),

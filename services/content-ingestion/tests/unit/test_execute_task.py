@@ -260,6 +260,69 @@ class TestExecuteUpdatesWatermark:
         assert mock_asr.upsert.await_count >= 1
         assert task.status == IngestionTaskStatus.SUCCEEDED
 
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_watermark_advances_to_newest_article_published_at(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """QUOTA-OPT: ``last_watermark`` must advance to the NEWEST article's
+        ``published_at`` (not wall-clock ``now``) so the next sweep's ``from``
+        window stays tight and correct."""
+        from datetime import UTC, datetime
+
+        from content_ingestion.domain.entities import FetchResult
+
+        task = _make_claimed_task()
+
+        older = FetchResult(
+            source_id=task.source_id,
+            url="https://example.com/old",
+            url_hash="h1",
+            raw_bytes=b"{}",
+            fetched_at=common.time.utc_now(),
+            http_status=200,
+            content_type="application/json",
+            published_at=datetime(2026, 6, 10, 9, 0, tzinfo=UTC),
+        )
+        newest = FetchResult(
+            source_id=task.source_id,
+            url="https://example.com/new",
+            url_hash="h2",
+            raw_bytes=b"{}",
+            fetched_at=common.time.utc_now(),
+            http_status=200,
+            content_type="application/json",
+            published_at=datetime(2026, 6, 14, 18, 30, tzinfo=UTC),
+        )
+        mock_fetch.return_value = _make_fetch_output(task, results=[older, newest])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=2)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(write_factory=write_factory, adapter_state_factory=adapter_state_factory)
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        # The upsert that advances the watermark must carry the NEWEST article's
+        # published_at, not the wall-clock now.
+        advancing_calls = [c for c in mock_asr.upsert.await_args_list if "last_watermark" in c.kwargs]
+        assert advancing_calls, "watermark must advance on a non-empty successful poll"
+        assert advancing_calls[-1].kwargs["last_watermark"] == datetime(2026, 6, 14, 18, 30, tzinfo=UTC)
+
 
 class TestMetricsNotCalledInUseCase:
     """Verify metrics recording is NOT called inside the use case (T-C-05).
@@ -282,6 +345,114 @@ class TestMetricsNotCalledInUseCase:
         assert result.fetched == 5
         # Verify no 'record_fetch' attribute exists on the use case
         assert not hasattr(uc, "_metrics")
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0109 / T-C-1-02 — Watermark always advances ``last_run_at`` on success
+# ---------------------------------------------------------------------------
+
+
+class TestWatermarkLastRunAtAlwaysAdvances:
+    """When a poll completes successfully with zero fetched articles, the
+    ``last_run_at`` field MUST advance so the polling-staleness alert can
+    distinguish a healthy "no news today" cycle from a silently hung worker.
+    ``last_watermark`` must remain unchanged so backfills stay anchored on
+    the most recent article we actually saw (BP-658)."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    async def test_last_run_at_set_when_fetched_zero(self, mock_fetch: AsyncMock) -> None:
+        """Adapter returns empty list → ``adapter_state_repo.upsert`` is called
+        with ``last_run_at`` set (and ``last_watermark`` NOT passed)."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[])
+
+        adapter_state_factory, repo = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_state_factory=adapter_state_factory,
+        )
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        # adapter_state_repo.upsert must have been called at least once
+        # (once for the empty-results path).  Verify last_run_at is present.
+        assert repo.upsert.await_count >= 1
+        last_call = repo.upsert.await_args
+        assert last_call is not None
+        # kwargs should carry last_run_at but NOT last_watermark
+        assert last_call.kwargs.get("last_run_at") is not None
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    async def test_last_watermark_unchanged_when_fetched_zero(self, mock_fetch: AsyncMock) -> None:
+        """Empty-but-successful poll must NOT pass ``last_watermark`` to the
+        upsert so the existing watermark is preserved (backfill anchor)."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[])
+
+        adapter_state_factory, repo = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_state_factory=adapter_state_factory,
+        )
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        assert repo.upsert.await_count >= 1
+        # No call should have advanced last_watermark on the empty path.
+        for call in repo.upsert.await_args_list:
+            assert (
+                "last_watermark" not in call.kwargs
+            ), "last_watermark must not be touched on an empty-but-successful poll"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0109 / T-C-1-03 — Transaction hygiene: rollback short-lived sessions
+# ---------------------------------------------------------------------------
+
+
+class TestFetchSessionRollback:
+    """The dedup-check session in ``_fetch_from_source`` spans the external
+    HTTP fetch.  On every exit path (success or failure) the session MUST be
+    rolled back so the pooled asyncpg connection does not return with state
+    ``idle in transaction (aborted)`` (BP-659)."""
+
+    async def test_fetch_session_rollback_called_on_exit(self) -> None:
+        """``_fetch_from_source`` must call ``session.rollback()`` even on
+        a successful path (read-only session over network I/O)."""
+        task = _make_claimed_task()
+
+        # Adapter returns empty results — clean success path
+        mock_adapter = MagicMock()
+        mock_adapter.fetch = AsyncMock(return_value=[])
+        adapter_builder = MagicMock(return_value=mock_adapter)
+
+        mock_dedup_repo = AsyncMock()
+        fetch_log_factory = MagicMock(return_value=mock_dedup_repo)
+
+        # Session whose rollback is recorded
+        mock_session = AsyncMock()
+        mock_session.rollback = AsyncMock()
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_builder=adapter_builder,
+            fetch_log_factory=fetch_log_factory,
+        )
+
+        await uc._fetch_from_source(task, "")
+
+        # rollback must have been invoked exactly once on the dedup session
+        mock_session.rollback.assert_awaited()
 
 
 class TestAdapterBuilderInjection:
@@ -425,8 +596,11 @@ class TestSplitBrainPrevention:
         # Must be RETRY, not SUCCEEDED
         assert task.status == IngestionTaskStatus.RETRY
         assert result is None
-        # inner_task_repo must have been called with RETRY status
-        inner_task_repo.update_status.assert_awaited_once()
+        # inner_task_repo receives RUNNING first (poisoned-session P0 fix:
+        # committed immediately in its own session) and then RETRY.
+        assert inner_task_repo.update_status.await_count == 2
+        first_call = inner_task_repo.update_status.await_args_list[0]
+        assert first_call.args[1] == IngestionTaskStatus.RUNNING
         call_args = inner_task_repo.update_status.await_args
         assert call_args.args[1] == IngestionTaskStatus.RETRY
 
@@ -490,9 +664,11 @@ class TestSplitBrainPrevention:
 
         adapter_state_factory, _mock_asr = _make_adapter_state_factory()
 
-        # Write factory whose session.commit raises on the first call (inside the lock)
+        # Write factory whose session.commit raises on the SECOND call.
+        # The first commit is now the immediate RUNNING commit (poisoned-session
+        # P0 fix); the second is the data+status commit inside the lock.
         mock_session = AsyncMock()
-        mock_session.commit.side_effect = RuntimeError("DB commit failed")
+        mock_session.commit.side_effect = [None, RuntimeError("DB commit failed")]
         mock_session_cm = AsyncMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
@@ -522,6 +698,277 @@ class TestSplitBrainPrevention:
         assert (
             task.status != IngestionTaskStatus.SUCCEEDED
         ), "Task was marked SUCCEEDED despite the commit failing — D-9 split-brain detected"
+
+
+# ---------------------------------------------------------------------------
+# Poisoned-session P0 (2026-06-11) — RUNNING status committed immediately
+# ---------------------------------------------------------------------------
+
+
+class TestRunningStatusCommittedImmediately:
+    """The RUNNING status write must be committed in its own short-lived
+    session BEFORE the fetch begins.  Holding it uncommitted on the outer
+    worker session created a row lock that self-deadlocked with the D-9
+    status update from the advisory-lock session, poisoning the asyncpg
+    pool after the 120s task timeout ("Can't reconnect until invalid
+    transaction is rolled back")."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._do_fetch_and_write")
+    async def test_running_commit_happens_before_fetch(self, mock_dofw: AsyncMock) -> None:
+        """When task_factory is provided, RUNNING goes through a fresh
+        write_factory session and ``session.commit()`` is awaited BEFORE
+        ``_do_fetch_and_write`` (the fetch pipeline) starts."""
+        events: list[str] = []
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock(side_effect=lambda: events.append("running_commit"))
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        async def _record_fetch(*_args: object, **_kwargs: object) -> FetchSummary:
+            events.append("fetch_started")
+            return FetchSummary(source_name="test", fetched=1)
+
+        mock_dofw.side_effect = _record_fetch
+
+        inner_task_repo = AsyncMock()
+        inner_task_repo.update_status = AsyncMock(side_effect=lambda *_a, **_k: events.append("running_write"))
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=MagicMock(),
+            fetch_log_factory=MagicMock(),
+            outbox_factory=MagicMock(),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        result = await uc.execute(task := _make_claimed_task(), outer_task_repo)
+
+        assert result is not None
+        # RUNNING write + commit must precede the fetch — the exact ordering
+        # that prevents the uncommitted row lock from being held across the
+        # long external fetch.
+        assert events == ["running_write", "running_commit", "fetch_started"]
+        # The RUNNING write must NOT go through the outer (uncommitted) session.
+        for call in outer_task_repo.update_status.await_args_list:
+            if len(call.args) >= 2:
+                assert call.args[1] != IngestionTaskStatus.RUNNING, (
+                    "RUNNING was written on the outer worker session — "
+                    "uncommitted row lock would self-deadlock with the D-9 update"
+                )
+        assert task.status == IngestionTaskStatus.RUNNING or task.status == IngestionTaskStatus.SUCCEEDED
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_final_status_write_after_running_commit_no_self_deadlock(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """Regression for the self-deadlock: both the RUNNING write and the
+        final SUCCEEDED write touch the same task row from different sessions.
+        The RUNNING commit must complete BEFORE the advisory-lock session
+        issues its UPDATE — asserted via strict event ordering."""
+        events: list[str] = []
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[MagicMock()])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=1)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _repo = _make_adapter_state_factory()
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        inner_task_repo = AsyncMock()
+
+        def _record_status(_task_id: object, status: object, **_kw: object) -> None:
+            events.append(f"status:{status}")
+
+        inner_task_repo.update_status = AsyncMock(side_effect=_record_status)
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        result = await uc.execute(task, outer_task_repo)
+
+        assert result is not None
+        assert task.status == IngestionTaskStatus.SUCCEEDED
+        # Strict ordering: RUNNING write → commit (releases the row lock) →
+        # SUCCEEDED write from the advisory-lock session → commit.  If the
+        # first commit were missing, the second status write would block on
+        # the row lock in production (the self-deadlock).
+        running_write = events.index(f"status:{IngestionTaskStatus.RUNNING}")
+        succeeded_write = events.index(f"status:{IngestionTaskStatus.SUCCEEDED}")
+        first_commit = events.index("commit")
+        assert running_write < first_commit < succeeded_write, (
+            f"RUNNING was not committed before the SUCCEEDED write — " f"self-deadlock regression (events={events})"
+        )
+        # The outer task_repo must never have been used for status writes.
+        outer_task_repo.update_status.assert_not_awaited()
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._do_fetch_and_write")
+    async def test_running_commit_failure_rolls_back_and_raises(self, mock_dofw: AsyncMock) -> None:
+        """If the immediate RUNNING commit fails, the session is rolled back
+        (clean pooled connection) and the error propagates to the worker's
+        rescue path — the fetch must never start."""
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=MagicMock(),
+            fetch_log_factory=MagicMock(),
+            outbox_factory=MagicMock(),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            await uc.execute(_make_claimed_task(), _mock_task_repo())
+
+        mock_session.rollback.assert_awaited()
+        mock_dofw.assert_not_awaited()
+
+
+class TestAdvisoryLockSessionHygiene:
+    """Defense-in-depth checks for the advisory-lock session (poisoned-session P0)."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_lock_timeout_set_on_advisory_lock_session(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """``SET LOCAL lock_timeout`` must be issued on the advisory-lock
+        session so a future re-introduction of an uncommitted row lock fails
+        loudly after 10s instead of hanging until the 120s task timeout."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[MagicMock()])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=1)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _repo = _make_adapter_state_factory()
+        write_factory, session = _make_write_factory()
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+
+        await uc.execute(task, _mock_task_repo())
+
+        executed_sql = [str(call.args[0]) for call in session.execute.await_args_list if call.args]
+        assert any(
+            "lock_timeout" in sql for sql in executed_sql
+        ), f"SET LOCAL lock_timeout was never issued on the advisory-lock session (executed={executed_sql})"
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_advisory_lock_session_rolled_back_on_failure(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """If anything inside the advisory-lock session fails, the session is
+        rolled back BEFORE the lock context exits, so ``pg_advisory_unlock``
+        runs on a clean (non-aborted) transaction."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[MagicMock()])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        # The write pipeline blows up inside the lock
+        mock_faw = AsyncMock()
+        mock_faw.execute.side_effect = RuntimeError("write pipeline failed")
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _repo = _make_adapter_state_factory()
+        write_factory, session = _make_write_factory()
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+
+        # execute() swallows the error (marks RETRY) — that is fine; we only
+        # care that the advisory-lock session was explicitly rolled back.
+        await uc.execute(task, _mock_task_repo())
+
+        session.rollback.assert_awaited()
+        assert task.status == IngestionTaskStatus.RETRY
 
 
 # ---------------------------------------------------------------------------

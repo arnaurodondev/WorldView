@@ -24,7 +24,7 @@ Also covers the snapshot writer side:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -45,10 +45,20 @@ pytestmark = pytest.mark.unit
 
 
 def _make_capture_session() -> tuple[MagicMock, list[Any]]:
-    """Return (session, captured_statements) — every ``execute`` call is recorded."""
+    """Return (session, captured_statements) — every ``execute`` call is recorded.
+
+    WHY filter out SET LOCAL: query_screen issues ``SET LOCAL statement_timeout``
+    before the screener query (PLAN-0099 timeout guard). We skip it so
+    ``captured[-1]`` is always the screener SELECT regardless of whether the
+    snap-field introspection cache is warm or cold.
+    """
     captured: list[Any] = []
 
     async def _capture(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         result.all = MagicMock(return_value=[])
@@ -90,7 +100,7 @@ async def test_query_screen_next_earnings_within_30_days_adds_where_clause() -> 
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_earnings_within_days=30)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The next_earnings_date column must appear with both the lower bound
     # (CURRENT_DATE) and the upper bound (CURRENT_DATE + INTERVAL '30 days').
     assert "next_earnings_date" in sql, f"next_earnings_date missing from SQL:\n{sql}"
@@ -107,7 +117,7 @@ async def test_query_screen_next_earnings_within_0_days_still_filters_to_today()
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_earnings_within_days=0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # Both bounds resolve to CURRENT_DATE — the SQL still contains the BETWEEN
     # predicate (no short-circuit on 0, which would be a bug).
     assert "next_earnings_date" in sql
@@ -123,7 +133,7 @@ async def test_query_screen_next_dividend_within_days_adds_where_clause() -> Non
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_dividend_within_days=14)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "next_dividend_date" in sql, f"next_dividend_date missing from SQL:\n{sql}"
     assert "14" in sql, f"14-day window missing from SQL:\n{sql}"
 
@@ -137,7 +147,7 @@ async def test_query_screen_without_calendar_filter_omits_where_clause() -> None
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The SELECT projects next_earnings_date / next_dividend_date columns, so
     # they always appear in the projection. But the WHERE clause must NOT
     # contain a BETWEEN against them.
@@ -160,7 +170,7 @@ async def test_query_screen_sort_by_next_earnings_date_asc_puts_soonest_first() 
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="next_earnings_date", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The ORDER BY must reference the snapshot column and be ASC.
     assert "order by" in sql
     assert "next_earnings_date" in sql
@@ -175,7 +185,7 @@ async def test_query_screen_sort_by_next_dividend_date_asc() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="next_dividend_date", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     assert "next_dividend_date" in sql
     assert "asc" in sql.split("order by", 1)[1]
@@ -218,6 +228,56 @@ async def test_query_screen_result_includes_calendar_fields_when_present() -> No
     r = results[0]
     assert r.metrics.get("next_earnings_date") == date(2026, 2, 12)
     assert r.metrics.get("next_dividend_date") == date(2026, 2, 25)
+
+
+@pytest.mark.asyncio
+async def test_query_screen_projects_intelligence_rollup_synced_at() -> None:
+    """L-5b: ``intelligence_rollup_synced_at`` snapshot column is projected.
+
+    Regression guard for the residual L-5b gap (audit 2026-06-16-l5b): the
+    freshness stamp lived in the ORM model + migration 035 but was never added
+    to ``_SNAP_FIELDS``, so it never reached the screener response and the IB-L5
+    stale-data tooltip always saw ``null``.
+    """
+    from datetime import datetime
+
+    synced = datetime(2026, 6, 18, 4, 0, 0, tzinfo=UTC)
+    row = MagicMock()
+    row.instrument_id = "instr-int"
+    row.ticker = "AAPL"
+    row.name = "Apple Inc."
+    row.exchange = "NASDAQ"
+    row.sector = "Technology"
+    row.total_count = 1
+    row.pe_ratio = 25.0
+    # All other snap fields NULL so only the freshness stamp surfaces.
+    for sf in (
+        "avg_volume_30d",
+        "eps_ttm",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+        "credit_rating",
+        "next_earnings_date",
+        "next_dividend_date",
+    ):
+        setattr(row, f"snap_{sf}", None)
+    row.snap_intelligence_rollup_synced_at = synced
+
+    session = _make_capture_session_with_rows([row])
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    results, _ = await query_screen(session, filters)
+
+    assert results[0].metrics.get("intelligence_rollup_synced_at") == synced
+
+
+def test_intelligence_rollup_synced_at_registered_in_snap_fields() -> None:
+    """Static guard: the field is in ``_SNAP_FIELDS`` (projection driver)."""
+    from market_data.infrastructure.db.repositories.fundamental_metrics_query import _SNAP_FIELDS
+
+    assert "intelligence_rollup_synced_at" in _SNAP_FIELDS
 
 
 @pytest.mark.asyncio

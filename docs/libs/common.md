@@ -11,7 +11,9 @@
 
 `common` is the **foundation layer**: because every other service and library
 can depend on it, it must never itself introduce heavyweight dependencies (no
-pydantic, no SQLAlchemy, no httpx). It solves three concrete problems:
+pydantic, no SQLAlchemy, no httpx). Its only runtime dependencies are the ID
+libraries (`python-ulid`, `uuid6`) and `structlog` (used by the startup-retry
+decorator for log emission). It solves five concrete problems:
 
 1. **Safe timestamps** — naive `datetime` objects are silent bugs (wrong timezone
    assumptions silently corrupt time-series data). Every time-returning function
@@ -23,6 +25,13 @@ pydantic, no SQLAlchemy, no httpx). It solves three concrete problems:
 3. **Type-safe domain IDs** — `NewType` wrappers for `TenantId`, `EntityId`, etc.
    mean mypy will catch cases where an `EntityId` is passed where a `TenantId` is
    expected. Zero runtime overhead — they compile to identity functions.
+4. **Ticker normalisation** — `common.tickers.strip_exchange_qualifier` collapses
+   provider-suffixed symbols (`AAPL.MX`, `NVDA.US`) to the bare canonical ticker
+   so entity resolution in S5/S6 dedups consistently, while preserving genuine
+   share classes (`BRK.A`) and preferred-share notations (`JPM.PRM`).
+5. **Startup resilience** — `common.retry.retry_on_startup` retries transient
+   DNS/TCP/timeout errors during worker bootstrap with exponential backoff,
+   instead of crash-looping the container before its dependencies are reachable.
 
 ---
 
@@ -43,7 +52,8 @@ dev = ["common[dev]"]
 pip install -e "libs/common[dev]"
 ```
 
-Dependencies: `python-ulid>=3.0,<4`, `uuid6>=2024.1,<2025`. Python 3.11–3.12.
+Dependencies: `python-ulid>=3.0,<4`, `uuid6>=2024.1,<2025`,
+`structlog>=25.0,<26`. Python 3.11–3.12.
 
 ---
 
@@ -70,6 +80,12 @@ Dependencies: `python-ulid>=3.0,<4`, `uuid6>=2024.1,<2025`. Python 3.11–3.12.
 | `new_uuid` | `() -> UUID` | `UUID` (UUIDv4) | Backwards-compatible ID for portfolio and market-ingestion services that already have UUIDv4 rows in production. |
 | `new_uuid_str` | `() -> str` | `str` | Same as `new_uuid()` but as a string. |
 | `uuid5_from_parts` | `(*parts: str) -> str` | `str` (UUID5, hyphenated) | Deterministic UUID from ordered string parts. Used for idempotent Kafka replay — same inputs always produce the same UUID, so `ON CONFLICT DO NOTHING` prevents duplicate rows. Uses the RFC 4122 DNS namespace UUID as the stable worldview namespace. |
+
+**Module constant:**
+
+| Constant | Type | Description |
+|----------|------|-------------|
+| `PUBLIC_TENANT_ID` | `UUID` (all-zero, `00000000-...`) | Fallback `tenant_id` for legacy Kafka messages that predate multi-tenant stamping (PLAN-0086 Wave A-1) and arrive without a `tenant_id`. Lets pre-migration backlogs drain past the nlp_pipeline NOT NULL constraint instead of crash-looping (BP-575 / PLAN-0096 Wave 4). Import from `common.ids` (not re-exported from the package root). **Do NOT use in new code that has a real tenant on hand.** |
 
 **ID selection flowchart:**
 
@@ -105,6 +121,47 @@ compile-time error, not a runtime one.
 Service-local IDs (`SourceId`, `SectionId`, `AlertId`, etc.) belong in each
 service's own domain layer.
 
+### Ticker Normalisation (`common.tickers`)
+
+> Not re-exported from the package root — import from `common.tickers`.
+
+| Function | Signature | Returns | Description |
+|----------|-----------|---------|-------------|
+| `strip_exchange_qualifier` | `(symbol: str \| None) -> str \| None` | `str \| None` | Removes a trailing `.EXCHANGE` venue suffix (`AAPL.MX` → `AAPL`, `NVDA.US` → `NVDA`) so vendor-suffixed symbols collapse to the bare canonical ticker for dedup/identity. |
+
+Behaviour details:
+
+- Only **multi-letter** suffixes from a fixed allowlist (`US`, `MX`, `TO`, `PA`,
+  `HK`, `JSE`, …) are stripped. Single-letter venue codes (`.L`, `.F`, `.V`) are
+  intentionally **not** in the allowlist.
+- Genuine securities are **preserved**: share classes (`BRK.A` → `BRK.A`) and
+  preferred-share notations (`JPM.PRM` → `JPM.PRM`) are never stripped because
+  `A` / `PRM` are not exchange codes.
+- Splits on the **last** dot only and strips a **single** qualifier (no recursion).
+  The base part must be non-empty, so `".US"` is returned unchanged.
+- `None`, `""`, and unrecognised symbols are returned unchanged (surrounding
+  whitespace is trimmed for non-empty inputs).
+
+### Startup Retry (`common.retry`)
+
+> Not re-exported from the package root — import from `common.retry`.
+
+| Function | Signature | Returns | Description |
+|----------|-----------|---------|-------------|
+| `retry_on_startup` | `(*, max_attempts: int = 3, backoff_seconds: float = 5.0, retry_on: tuple[type[BaseException], ...] = _DEFAULT_RETRY_ON) -> Callable[[F], F]` | decorator | Decorator for **async** worker-bootstrap functions. Retries transient startup errors with exponential backoff, logs each attempt at WARNING, and on exhaustion logs CRITICAL + re-raises the last error so docker-compose's restart policy takes over. |
+
+Defaults and behaviour:
+
+- `max_attempts=3`, `backoff_seconds=5.0` → sleeps of 5s → 10s → 20s (backoff
+  doubles each retry).
+- Default `retry_on` covers transient DNS/TCP/timeout races:
+  `socket.gaierror`, `ConnectionRefusedError`, `OSError`, `asyncio.TimeoutError`.
+  Any exception **outside** `retry_on` propagates immediately (a misconfiguration
+  must not be masked as a transient blip — HR-031).
+- Wraps **async callables only**; the returned wrapper preserves the wrapped
+  function's signature. Spawns no background tasks, so exhaustion exits cleanly
+  (BP-403).
+
 ---
 
 ## Usage Examples
@@ -133,6 +190,30 @@ stable_id = uuid5_from_parts(str(doc_id), str(entity_id), "new_evidence")
 # --- Type safety ---
 # mypy error: Argument of type "UserId" cannot be assigned to "TenantId"
 # tenant: TenantId = UserId(new_uuid7())   # ← mypy rejects this
+```
+
+```python
+# --- Ticker normalisation (submodule import — not re-exported from root) ---
+from common.tickers import strip_exchange_qualifier
+
+strip_exchange_qualifier("AAPL.MX")   # "AAPL"  — venue suffix stripped
+strip_exchange_qualifier("NVDA.US")   # "NVDA"
+strip_exchange_qualifier("BRK.A")     # "BRK.A" — share class preserved
+strip_exchange_qualifier("JPM.PRM")   # "JPM.PRM" — preferred share preserved
+strip_exchange_qualifier(None)        # None
+```
+
+```python
+# --- Startup retry decorator (submodule import — not re-exported from root) ---
+from common.retry import retry_on_startup
+
+@retry_on_startup(max_attempts=5, backoff_seconds=2.0)
+async def _bootstrap() -> None:
+    # Transient gaierror/ConnectionRefusedError/OSError/TimeoutError → retried
+    # with 2s → 4s → 8s → 16s backoff; on exhaustion logs CRITICAL + re-raises.
+    await session.execute(text("SELECT 1"))
+
+await _bootstrap()
 ```
 
 ---
@@ -184,6 +265,12 @@ pydantic-settings models.
   third-party library that could change. Do not add business logic.
 - **New type aliases**: add to `common/types.py` only if the type is used by
   **two or more services**. Service-local types belong in the service domain layer.
+- **New ticker rules**: extend the `_EXCHANGE_SUFFIXES` allowlist in
+  `common/tickers.py`. Add **multi-letter** venue codes only — single-letter codes
+  risk colliding with share classes (`BRK.A`).
+- **New retryable errors**: pass a custom `retry_on` tuple to `retry_on_startup`
+  rather than broadening the module default; keep the default narrow so genuine
+  misconfigurations are not masked as transient.
 
 ---
 
@@ -195,11 +282,17 @@ python -m pytest tests/ -v
 ```
 
 **What the tests cover:**
-- Round-trip `to_iso8601(from_iso8601(s)) == s`
-- `ensure_utc` raises on naive datetimes
-- `parse_bar_date` and `parse_bar_datetime` edge cases
-- ULID lexicographic ordering
-- `uuid5_from_parts` stability (same inputs → same output; reordered inputs → different output)
+- Round-trip `to_iso8601(from_iso8601(s)) == s` (`test_time.py`)
+- `ensure_utc` raises on naive datetimes (`test_time.py`)
+- `parse_bar_date` and `parse_bar_datetime` edge cases (`test_time.py`)
+- ULID lexicographic ordering (`test_ids.py`)
+- `uuid5_from_parts` stability — same inputs → same output; reordered inputs →
+  different output (`test_ids.py`)
+- `NewType` aliases behave as identity functions at runtime (`test_types.py`)
+- `strip_exchange_qualifier` — venue stripping, share-class/preferred preservation,
+  None/empty passthrough (`test_tickers.py`)
+- `retry_on_startup` — retry budget, backoff doubling, non-retryable passthrough,
+  CRITICAL-on-exhaustion re-raise (`test_retry.py`)
 
 ---
 

@@ -49,15 +49,21 @@ async def test_creates_holdings_from_snapshot(uow, tenant_id, portfolio_id) -> N
         portfolio_id=portfolio_id,
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst_a, quantity=Decimal(10), average_cost=Decimal(150), currency="USD"
+                instrument_id=inst_a,
+                quantity=Decimal(10),
+                average_cost=Decimal(150),
+                currency="USD",
             ),
             ResolvedSnapshotPosition(
-                instrument_id=inst_b, quantity=Decimal(5), average_cost=Decimal(200), currency="USD"
+                instrument_id=inst_b,
+                quantity=Decimal(5),
+                average_cost=Decimal(200),
+                currency="USD",
             ),
         ],
     )
 
-    result = await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    result = await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
 
     assert result.upserted == 2
     assert result.deleted == 0
@@ -92,12 +98,15 @@ async def test_overwrite_replaces_inflated_quantity(uow, tenant_id, portfolio_id
         # Broker says the truth is 100 shares.
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(100), average_cost=Decimal(150), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(100),
+                average_cost=Decimal(150),
+                currency="USD",
             ),
         ],
     )
 
-    result = await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    result = await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
 
     assert result.upserted == 1
     holdings = await uow.holdings.list_by_portfolio(portfolio_id)
@@ -122,7 +131,7 @@ async def test_position_absent_from_snapshot_is_deleted(uow, tenant_id, portfoli
         positions=[],  # broker reports nothing
     )
 
-    result = await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    result = await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
 
     assert result.deleted == 1
     holdings = await uow.holdings.list_by_portfolio(portfolio_id)
@@ -138,10 +147,10 @@ async def test_idempotent_re_run_emits_no_duplicate_events(uow, tenant_id, portf
     ]
     cmd = UpsertHoldingsFromSnapshotCommand(tenant_id=tenant_id, portfolio_id=portfolio_id, positions=positions)
 
-    await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
     events_after_first = len(uow.outbox.events_by_type(HoldingChanged.EVENT_TYPE))
 
-    await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
     events_after_second = len(uow.outbox.events_by_type(HoldingChanged.EVENT_TYPE))
 
     # Re-running with identical input must NOT add HoldingChanged events.
@@ -157,18 +166,100 @@ async def test_multi_account_aggregation(uow, tenant_id, portfolio_id) -> None:
         portfolio_id=portfolio_id,
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(10), average_cost=Decimal(100), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(10),
+                average_cost=Decimal(100),
+                currency="USD",
             ),
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(10), average_cost=Decimal(200), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(10),
+                average_cost=Decimal(200),
+                currency="USD",
             ),
         ],
     )
 
-    await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+    await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
 
     holdings = await uow.holdings.list_by_portfolio(portfolio_id)
     assert len(holdings) == 1
     assert holdings[0].quantity == Decimal(20)
     # Quantity-weighted average cost: (10*100 + 10*200) / 20 = 150
     assert holdings[0].average_cost == Decimal(150)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0109 Sub-Plan G — holding.changed emission gating
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_emission_gated_off_by_default(uow, tenant_id, portfolio_id) -> None:
+    """With ``emit_holding_changed_events=False`` no HoldingChanged outbox row is written.
+
+    PLAN-0109 Sub-Plan G: the default-off flag suppresses emission while
+    keeping the holdings-table mutation intact (canonical source of truth).
+    """
+    inst = new_uuid()
+    cmd = UpsertHoldingsFromSnapshotCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        positions=[
+            ResolvedSnapshotPosition(
+                instrument_id=inst,
+                quantity=Decimal(10),
+                average_cost=Decimal(150),
+                currency="USD",
+            ),
+        ],
+    )
+
+    # Default constructor → emit_holding_changed_events=False.
+    result = await UpsertHoldingsFromSnapshotUseCase().execute(cmd, uow)
+
+    # Holdings table still mutated — gating only suppresses outbox emission.
+    assert result.upserted == 1
+    holdings = await uow.holdings.list_by_portfolio(portfolio_id)
+    assert len(holdings) == 1
+    # ZERO HoldingChanged events because the flag is off.
+    holding_events = uow.outbox.events_by_type(HoldingChanged.EVENT_TYPE)
+    assert holding_events == []
+
+
+@pytest.mark.asyncio
+async def test_emission_enabled_emits_one_event_per_closed_position(uow, tenant_id, portfolio_id) -> None:
+    """With ``emit_holding_changed_events=True`` closed positions emit a HoldingChanged event.
+
+    PLAN-0109 Sub-Plan G: the historical behaviour (one quantity=0 event per
+    closed position) is preserved when the flag is flipped on.
+    """
+    inst_closed_a = new_uuid()
+    inst_closed_b = new_uuid()
+    # Seed two open holdings the snapshot will drop.
+    for inst in (inst_closed_a, inst_closed_b):
+        await uow.holdings.save(
+            Holding(
+                portfolio_id=portfolio_id,
+                instrument_id=inst,
+                tenant_id=tenant_id,
+                currency="USD",
+                quantity=Decimal(5),
+            ),
+        )
+
+    cmd = UpsertHoldingsFromSnapshotCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        positions=[],  # broker reports no positions → both holdings closed
+    )
+
+    result = await UpsertHoldingsFromSnapshotUseCase(emit_holding_changed_events=True).execute(cmd, uow)
+
+    assert result.deleted == 2
+    holding_events = uow.outbox.events_by_type(HoldingChanged.EVENT_TYPE)
+    # One HoldingChanged event per closed position.
+    assert len(holding_events) == 2
+    # Each emitted event carries quantity="0" (the canonical "closed" signal).
+    for record in holding_events:
+        assert record.payload["quantity"] == "0"

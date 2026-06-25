@@ -32,6 +32,26 @@ class AlertType(StrEnum):
     USER_RULE = "user_rule"
 
 
+class RuleType(StrEnum):
+    """The 5 user-creatable standing-rule types (PLAN-0113 §6.5.1).
+
+    Stored as VARCHAR(50) in ``alert_rules.rule_type`` (BP-007 — never a PG
+    enum, so future rule types add zero DDL).  Each value pairs with a
+    discriminated-union ``condition`` value object (``rule_conditions.py``)
+    and a ``RuleEvaluator`` registered in ``application/rules/registry.py``.
+
+    Keying (PRD §6.5.1):
+      - PRICE_CROSS / NEWS_COUNT / NEWS_MOMENTUM / FUNDAMENTAL_CROSS → ``entity_id``
+      - KG_CONNECTION → ``node_a_entity_id`` + ``node_b_entity_id`` (A ≠ B)
+    """
+
+    PRICE_CROSS = "PRICE_CROSS"
+    NEWS_COUNT = "NEWS_COUNT"
+    NEWS_MOMENTUM = "NEWS_MOMENTUM"
+    KG_CONNECTION = "KG_CONNECTION"
+    FUNDAMENTAL_CROSS = "FUNDAMENTAL_CROSS"
+
+
 class OutboxStatus(StrEnum):
     """Lifecycle status of an outbox event row."""
 

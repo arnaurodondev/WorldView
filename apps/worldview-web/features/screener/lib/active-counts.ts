@@ -43,7 +43,13 @@ export interface SectionActiveCounts {
   growth: number;
   leverage: number;
   technical: number;
+  // IB-L3 — Returns + 52W distance (SERVER_SIDE, backend shipped)
+  performance: number;
+  // IB-L4 — Analyst / Insider / Ownership (SERVER_SIDE, backend shipped)
+  ownership: number;
   news: number;
+  // IB-L5 — Intelligence rollup (SERVER_SIDE, backend shipped)
+  intelligence: number;
 }
 
 /**
@@ -60,6 +66,10 @@ export function countActiveFiltersByGroup(
 ): SectionActiveCounts {
   return {
     valuation:
+      // marketCapMin/Max counted here since Round 2 added a Market Cap log
+      // slider to the Valuation section (previously only settable via the
+      // chip strip, so it was never badge-counted — a latent gap).
+      rangeCount(form.marketCapMin, form.marketCapMax) +
       rangeCount(form.peMin, form.peMax) +
       rangeCount(form.pbMin, form.pbMax) +
       rangeCount(form.psMin, form.psMax) +
@@ -83,13 +93,48 @@ export function countActiveFiltersByGroup(
       (form.above50dMa ? 1 : 0) +
       rangeCount(form.rsiMin, form.rsiMax) +
       (isSet(form.volumeRatioMin) ? 1 : 0) +
+      // Round 2: absolute 30d-avg-volume range (SERVER_SIDE) lives in the
+      // Technical section next to the relative volume-ratio select.
+      rangeCount(form.avgVolume30dMin, form.avgVolume30dMax) +
       (isSet(form.distFrom52wHighMax) ? 1 : 0) +
       (isSet(form.distFrom52wLowMin) ? 1 : 0),
+
+    // IB-L3 — Returns + 52W distance (8 range pairs)
+    performance:
+      rangeCount(form.dist52wHighPctMin, form.dist52wHighPctMax) +
+      rangeCount(form.dist52wLowPctMin, form.dist52wLowPctMax) +
+      rangeCount(form.return1mMin, form.return1mMax) +
+      rangeCount(form.return3mMin, form.return3mMax) +
+      rangeCount(form.return6mMin, form.return6mMax) +
+      rangeCount(form.returnYtdMin, form.returnYtdMax) +
+      rangeCount(form.return1yMin, form.return1yMax) +
+      rangeCount(form.return3yMin, form.return3yMax),
+
+    // IB-L4 — Analyst / Insider / Ownership (5 range pairs)
+    // WHY no ANALYST UPSIDE filter: it is client-side derived (target/price − 1);
+    // v1 ships no server-side filter for it per spec §IB-L4 T-IB4-02 note.
+    ownership:
+      rangeCount(form.analystTargetPriceMin, form.analystTargetPriceMax) +
+      rangeCount(form.analystConsensusMin, form.analystConsensusMax) +
+      rangeCount(form.insiderNetBuy90dMin, form.insiderNetBuy90dMax) +
+      rangeCount(form.instOwnPctMin, form.instOwnPctMax) +
+      rangeCount(form.shortPctMin, form.shortPctMax),
 
     news:
       (isSet(form.newsVelocity7dMin) ? 1 : 0) +
       rangeCount(form.controversyMin, form.controversyMax) +
       (isSet(form.recentEarningsDays) ? 1 : 0) +
       (isSet(form.insiderActivity) ? 1 : 0),
+
+    // IB-L5 — Intelligence rollup (6 range sides + 2 boolean toggles)
+    // WHY boolean flags counted as 1 each: a single boolean "has active alert"
+    // is a meaningful constraint worth showing in the section badge.
+    intelligence:
+      rangeCount(form.newsCount7dMin, form.newsCount7dMax) +
+      rangeCount(form.llmRelevance7dMin, form.llmRelevance7dMax) +
+      rangeCount(form.displayRelevance7dMin, form.displayRelevance7dMax) +
+      rangeCount(form.contradictionsMin, form.contradictionsMax) +
+      (form.hasAiBrief === true ? 1 : 0) +
+      (form.hasActiveAlert === true ? 1 : 0),
   };
 }

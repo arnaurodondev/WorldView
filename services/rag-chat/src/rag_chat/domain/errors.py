@@ -64,6 +64,33 @@ class PromptInjectionError(RagError):
     error_code = "PROMPT_INJECTION"
 
 
+class ClassifierUnavailableError(RagError):
+    """The Layer 2 LLM injection classifier could NOT RUN.
+
+    Raised when the classifier's upstream provider is unavailable or the
+    transport failed (HTTP 402/429/5xx, connect error, network error). This is
+    explicitly DISTINCT from ``PromptInjectionError`` — it means the safety
+    check could not be executed, NOT that an injection was detected.
+
+    WHY a separate error class (the bug this fixes): the old classifier mapped
+    EVERY exception (including a DeepInfra ``402 Payment Required`` billing blip)
+    to a fail-closed ``True`` (UNSAFE) verdict, which the pipeline then surfaced
+    to users as ``INPUT_REJECTED "[PROMPT_INJECTION] Semantic injection
+    detected"``. A billing/outage event therefore took down ALL chat behind a
+    MISLEADING "injection detected" message. Distinguishing the two lets the API
+    layer return an accurate, honest error (``CLASSIFIER_UNAVAILABLE`` —
+    "input safety check temporarily unavailable, please retry") while STILL
+    failing closed (rejecting the request) by default.
+
+    Default policy is fail-closed-but-HONEST. The closed-vs-open behaviour is a
+    config flag (``RAG_CHAT_CLASSIFIER_FAIL_OPEN``, default ``false``); we NEVER
+    default to fail-open because that would let real injections through during an
+    outage.
+    """
+
+    error_code = "CLASSIFIER_UNAVAILABLE"
+
+
 class PIIDetectedError(RagError):
     """User input contains detected personally identifiable information."""
 

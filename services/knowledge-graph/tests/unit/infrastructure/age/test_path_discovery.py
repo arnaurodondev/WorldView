@@ -23,14 +23,17 @@ def _make_session_factory(
 ) -> MagicMock:
     """Build a mock async_sessionmaker that returns rows or raises an exception.
 
-    The session mock intercepts calls in order:
+    The session mock intercepts calls in order (PLAN-0112 T-1-04 added the
+    ``max_parallel_workers_per_gather`` SET, so there are now FOUR setup calls
+    before the Cypher queries):
       1. LOAD 'age'
       2. SET search_path
-      3. SET LOCAL statement_timeout
-      4. 2-hop Cypher query → rows_2hop
-      5. 3-hop Cypher query → rows_3hop
+      3. SET LOCAL max_parallel_workers_per_gather = 0
+      4. SET LOCAL statement_timeout
+      5. 2-hop Cypher query → rows_2hop
+      6. 3-hop Cypher query → rows_3hop
 
-    When ``raise_exc`` is provided it fires on the 4th execute call (the first
+    When ``raise_exc`` is provided it fires on the 5th execute call (the first
     Cypher query).
     """
     session = AsyncMock()
@@ -44,13 +47,15 @@ def _make_session_factory(
     session.__aexit__ = AsyncMock(return_value=None)
 
     if raise_exc is not None:
+        # 4 setup SETs → ok, then the first Cypher query raises.
         _ok = MagicMock()
-        session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, raise_exc])
+        session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, _ok, raise_exc])
     else:
-        # LOAD 'age' → ok, SET search_path → ok, SET LOCAL → ok,
-        # 2-hop query → result_2, 3-hop query → result_3
+        # LOAD 'age' → ok, SET search_path → ok, SET LOCAL parallel → ok,
+        # SET LOCAL statement_timeout → ok, 2-hop query → result_2,
+        # 3-hop query → result_3
         _ok = MagicMock()
-        session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, result_2, result_3])
+        session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, _ok, result_2, result_3])
 
     factory = MagicMock()
     factory.return_value = session
@@ -267,3 +272,68 @@ class TestPathDiscovery:
         paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
         # Only 1 unique path despite 2 identical rows
         assert len(paths) == 1
+
+
+class TestTimeoutConstantsInvariant:
+    """Regression guard for the PLAN-0111 A-3 timeout inversion.
+
+    The DB-side ``statement_timeout`` MUST fire STRICTLY BEFORE the per-query
+    ``asyncio.wait_for`` budget so Postgres cancels its own query cleanly
+    instead of the client abandoning an orphaned connection (which produced
+    "could not send data to client: Broken pipe" log spam and 1,172 failed
+    path_insight_jobs).
+    """
+
+    def test_statement_timeout_strictly_less_than_per_query_wait_for(self) -> None:
+        from knowledge_graph.infrastructure.age import path_discovery as pd
+
+        # Per-query wait_for budget = half the overall discovery budget.
+        per_query_wait_for_s = pd._DISCOVERY_TIMEOUT_SECONDS / 2
+        statement_timeout_s = float(pd._STATEMENT_TIMEOUT_MS) / 1000.0
+
+        # DB cancels before the client → no orphaned query, no broken pipe.
+        assert statement_timeout_s < per_query_wait_for_s, (
+            f"statement_timeout ({statement_timeout_s}s) must be < per-query "
+            f"wait_for ({per_query_wait_for_s}s) — see PLAN-0111 A-3 / BP-688"
+        )
+
+
+class TestAgeSessionHygiene:
+    """PLAN-0112 T-1-04 — AGE-session Postgres hygiene + hop cap."""
+
+    def test_age_session_disables_parallel_workers(self) -> None:
+        """``_setup_age_session`` must emit ``max_parallel_workers_per_gather = 0``.
+
+        NFR-2: parallel Gather workers die mid-AGE-traversal and spam the
+        Postgres log with FATAL parallel-worker errors; forcing a serial plan
+        removes that noise.
+        """
+        from knowledge_graph.infrastructure.age.path_discovery import _setup_age_session
+
+        session = AsyncMock()
+        session.execute = AsyncMock()
+        asyncio.run(_setup_age_session(session))
+
+        emitted = [str(call.args[0]).lower() for call in session.execute.call_args_list]
+        assert any(
+            "max_parallel_workers_per_gather" in sql and "0" in sql for sql in emitted
+        ), f"expected a 'SET LOCAL max_parallel_workers_per_gather = 0' statement, got: {emitted}"
+        # The existing LOAD 'age' + search_path setup must remain.
+        assert any("load 'age'" in sql for sql in emitted)
+        assert any("search_path" in sql for sql in emitted)
+
+    def test_max_hops_default_3(self) -> None:
+        """The hop ceiling defaults to 3 (config-driven cap, §AD-5)."""
+        from knowledge_graph.config import Settings
+        from knowledge_graph.infrastructure.age import path_discovery as pd
+
+        # Module-level cap (env-driven, mirrors the seeder pattern).
+        assert pd._PATH_MAX_HOPS == 3
+
+        # Settings knob default also 3 so the two stay in lock-step.
+        settings = Settings(  # type: ignore[call-arg]
+            database_url="postgresql://x",
+            storage_access_key="k",
+            storage_secret_key="s",
+        )
+        assert settings.path_max_hops == 3

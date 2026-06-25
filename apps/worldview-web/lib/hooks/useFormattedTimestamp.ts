@@ -27,8 +27,10 @@
  */
 
 "use client";
-// WHY "use client": hook pattern — could add useInterval in future for live
-// relative time. Marking "use client" now avoids a refactor cascade later.
+// WHY "use client": useEffect + useState for live relative-time ticking require
+// the browser runtime. Server components cannot call this hook.
+
+import { useState, useEffect } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -120,6 +122,19 @@ function formatShort(date: Date): string {
  *
  * Returns "—" for null/undefined/invalid inputs so callers never see
  * "Invalid Date" or empty strings in the UI.
+ *
+ * FE-004 fix: when format === "relative" the hook ticks every 60 s so the
+ * displayed label stays accurate without a page reload. For example, a badge
+ * showing "4h ago" automatically updates to "5h ago" after the threshold
+ * passes — important for trust in the LastSyncedBadge stale-data indicator.
+ *
+ * WHY 60 000 ms interval (not 1 000 ms): the minimum bucket in formatRelative
+ * is "Nm ago" (minute precision). Ticking every second would re-render 59
+ * times per minute with no visible change and waste React reconciliation cycles.
+ *
+ * WHY only for "relative": "absolute" and "short" formats don't change over
+ * time so they don't need an interval — we return them synchronously without
+ * subscribing to any timer.
  */
 export function useFormattedTimestamp(
   timestamp: string | Date | null | undefined,
@@ -127,14 +142,50 @@ export function useFormattedTimestamp(
 ): string {
   const date = toDate(timestamp);
 
-  if (!date) return "—";
-
-  switch (format) {
-    case "relative":
-      return formatRelative(date);
-    case "absolute":
-      return formatAbsolute(date);
-    case "short":
-      return formatShort(date);
+  // For non-relative formats (absolute, short) compute synchronously — no
+  // timer subscription needed.  This branch is also used when date is null so
+  // the early-return path is reachable without calling any hooks conditionally.
+  // WHY compute eagerly here: useState requires an initial value before any
+  // useEffect fires, and we need the same computation for the initial render
+  // AND for the interval update, so we factor it out as a helper closure.
+  function compute(): string {
+    if (!date) return "—";
+    switch (format) {
+      case "relative":
+        return formatRelative(date);
+      case "absolute":
+        return formatAbsolute(date);
+      case "short":
+        return formatShort(date);
+    }
   }
+
+  // FE-004: for relative format, keep the displayed value in state so React
+  // can trigger a re-render when the interval fires.  For other formats we
+  // still call useState/useEffect unconditionally (React rules of hooks) but
+  // the interval is not started (effect returns early).
+  const [label, setLabel] = useState<string>(compute);
+
+  useEffect(() => {
+    // Recompute once immediately (handles the case where timestamp prop changes
+    // between renders — the initial useState call above used the old value via
+    // lazy initialiser only on mount).
+    setLabel(compute());
+
+    // Only start a live-update timer for relative format — the other formats
+    // are static and do not benefit from polling.
+    if (format !== "relative") return;
+
+    const id = setInterval(() => {
+      setLabel(compute());
+    }, 60_000); // 60 s — matches the minimum visible bucket ("Nm ago")
+
+    return () => clearInterval(id);
+    // WHY `date` and `format` in deps: if the parent passes a new timestamp or
+    // switches format, the effect must re-run to restart the interval with the
+    // new target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date?.getTime(), format]);
+
+  return label;
 }

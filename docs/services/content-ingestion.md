@@ -7,13 +7,13 @@
 
 ## Mission
 
-Content Ingestion is the raw news and document acquisition hub. It polls four external news sources (EODHD news API, SEC EDGAR filings, Finnhub, NewsAPI) and Polymarket prediction markets on configurable schedules, stores raw article bytes verbatim in MinIO bronze tier, and emits `content.article.raw.v1` Kafka events. It also accepts tenant-uploaded documents (PDF, plain text) via a REST API. No cleaning, deduplication, or NLP happens here — that is Content Store's (S5's) job.
+Content Ingestion is the raw news and document acquisition hub. It polls external news sources — EODHD global news, EODHD per-ticker news (`eodhd_ticker_news`, one source row auto-created per equity by `TickerNewsSymbolSyncWorker`), SEC EDGAR filings, Finnhub, NewsAPI — plus Polymarket prediction markets on configurable schedules, stores raw article bytes verbatim in MinIO bronze tier, and emits `content.article.raw.v1` Kafka events. It also accepts tenant-uploaded documents (PDF, plain text) via a REST API and consumes `nlp.document.ready.v1` to mark those uploads `ready`. The only deduplication it performs is fetch-level (URL-hash / `(market_id, fetched_at)` dedup to avoid re-fetching the same item) — no cleaning, content normalization, or NLP happens here; that is Content Store's (S5's) and NLP-pipeline's (S6's) job.
 
 ---
 
 ## Architecture
 
-Content Ingestion follows the hexagonal architecture with four independent runtime processes:
+Content Ingestion follows the hexagonal architecture with five independent runtime processes:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -43,14 +43,15 @@ Content Ingestion follows the hexagonal architecture with four independent runti
                             └──────────────────────────────────────┘
 ```
 
-### Four Independent Processes
+### Five Independent Processes
 
 | Process | Entry Point | Description |
 |---------|-------------|-------------|
 | API | `uvicorn content_ingestion.app:create_app --factory --port 8004` | HTTP endpoints only — no background work |
-| Scheduler | `python -m content_ingestion.infrastructure.scheduler.scheduler_main` | Evaluates sources on each tick, creates task rows idempotently |
-| Worker | `python -m content_ingestion.infrastructure.workers.worker` | Claims tasks, executes fetch-and-write pipeline |
+| Scheduler | `python -m content_ingestion.infrastructure.scheduler.scheduler_main` | Evaluates sources on each tick, creates task rows idempotently; also runs `TickerNewsSymbolSyncWorker` (auto-creates `eodhd_ticker_news` source rows) |
+| Worker | `python -m content_ingestion.infrastructure.workers.worker_main` | Claims tasks, executes fetch-and-write pipeline |
 | Dispatcher | `python -m content_ingestion.infrastructure.messaging.outbox.dispatcher_main` | Publishes outbox events to Kafka |
+| Document-ready consumer | `python -m content_ingestion.infrastructure.messaging.consumers.document_ready_consumer_main` | Consumes `nlp.document.ready.v1`; transitions tenant uploads to `status=ready` |
 
 ---
 
@@ -92,7 +93,7 @@ Requires `X-Admin-Token` header matching `CONTENT_INGESTION_ADMIN_TOKEN`.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/internal/v1/health` | — | Internal health check |
-| POST | `/internal/v1/ingest/submit` | `X-Internal-Token` | Accept raw content submitted by S9 (SSRF-validated) |
+| POST | `/internal/v1/ingest/submit` | `X-Internal-JWT` | Accept raw content submitted by S9 (SSRF-validated) |
 
 ### Tenant Document API (PLAN-0086)
 
@@ -128,8 +129,9 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 
 | Topic | Schema File | Key | Description |
 |-------|-------------|-----|-------------|
-| `content.article.raw.v1` | `infra/kafka/schemas/content.article.raw.v1.avsc` | `url_hash` | Raw article fetched from news sources and stored in MinIO bronze |
-| `market.prediction.v1` | `infra/kafka/schemas/market.prediction.v1.avsc` | `market_id` | Polymarket prediction market snapshot |
+| `content.article.raw.v1` | `infrastructure/messaging/schemas/content.article.raw.v1.avsc` | `url_hash` | Raw article fetched from news sources and stored in MinIO bronze |
+| `market.prediction.v1` | `infrastructure/messaging/schemas/market.prediction.v1.avsc` | `market_id` | Polymarket prediction market snapshot (`market.prediction.snapshot` event type via outbox) |
+| `content.document.deleted.v1` | `infrastructure/messaging/schemas/content.document.deleted.v1.avsc` | `doc_id` | Tenant document soft-deletion event (emitted by `DeleteTenantDocumentUseCase`) so downstream services purge derived artifacts |
 
 **`ContentArticleRaw` Avro fields:**
 
@@ -165,9 +167,24 @@ curl -X POST http://localhost:8004/api/v1/documents/upload \
 | `market_slug` | string? | Polymarket slug for URL construction |
 | `category` | string? | High-level category (politics, crypto, sports, etc.) |
 
+**`ContentDocumentDeleted` Avro fields (content.document.deleted.v1):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | string | UUIDv7 |
+| `event_type` | string | `"content.document.deleted"` |
+| `schema_version` | int | Default `1` |
+| `occurred_at` | string | ISO-8601 UTC |
+| `doc_id` | string | UUIDv7 of the deleted document |
+| `tenant_id` | string | Owning tenant UUID — always set for deletions |
+
 ### Consumed
 
-None — Content Ingestion is a producer-only service.
+| Topic | Schema File | Consumer | Description |
+|-------|-------------|----------|-------------|
+| `nlp.document.ready.v1` | `messaging.kafka.schema_paths` → `nlp.document.ready.v1.avsc` | `DocumentReadyConsumer` (`document_ready_consumer_main`) | Emitted by S6 after a tenant upload's NLP artifacts (chunks, embeddings, mentions) are created. Calls `set_ready()` to flip the upload row to `status=ready` and store `chunk_count` / `word_count`. Idempotent `WHERE (doc_id, tenant_id)` UPDATE + `ValkeyDedupMixin` 24h fast-path. |
+
+The tenant-document lifecycle is: `S4 upload API → content.article.stored.v1 → S6 pipeline → nlp.document.ready.v1 → S4 set_ready`.
 
 ---
 
@@ -267,7 +284,8 @@ CREATE TABLE dead_letter_queue (
     dlq_id            UUID        PRIMARY KEY,
     original_event_id UUID        NOT NULL,
     topic             TEXT        NOT NULL,
-    payload_avro      BYTEA       NOT NULL,
+    payload_avro      BYTEA       NOT NULL,         -- raw Confluent-framed bytes
+    payload_json      JSONB,                        -- canonical payload preserved for requeue (BP-040)
     error_detail      TEXT,
     status            TEXT        NOT NULL DEFAULT 'failed',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -311,8 +329,12 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 | `0003_nullable_source_id_fetch_log` | Make `article_fetch_log.source_id` nullable (supports tenant uploads) |
 | `0004_add_prediction_market_fetch_log` | Add `prediction_market_fetch_log` for Polymarket dedup |
 | `0005_add_next_attempt_at_cit` | Add `next_attempt_at` and `window_start` to tasks |
-| `0006_source_dedup_config_hash` | Add config hash for source dedup |
+| `0006_source_dedup_config_hash` | Add config hash + `uq_sources_dedup (source_type, config_hash)` for source dedup |
 | `0007_add_tenant_document_uploads` | Add `tenant_document_uploads` table (PLAN-0086) |
+| `0008_seed_default_sources` | Seed the canonical default content sources (idempotent via `uq_sources_dedup`) — PLAN-0106 Wave B-1 |
+| `0009_remove_finnhub_global_news` | Remove the `finnhub` source seeded with no `symbol` (Finnhub `company-news` requires a symbol); per-ticker `Finnhub-<SYM>` sources are kept |
+
+**Latest head:** `0009_remove_finnhub_global_news`.
 
 ---
 
@@ -322,7 +344,7 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 |-------------|---------|-------------|
 | `worldview-bronze/content-ingestion/{source_type}/{url_hash}/raw/v1.json` | JSON envelope + base64 payload | Raw article bytes |
 | `worldview-bronze/prediction-markets/polymarket/{market_id}/{fetched_at_iso}/raw.json` | Raw Polymarket JSON | Raw prediction market response |
-| `worldview-bronze/tenant-uploads/{tenant_id}/{doc_id}/raw` | Raw file bytes | Tenant-uploaded document (pre-processing) |
+| `worldview-bronze/tenant-uploads/{tenant_id}/{doc_id}/bronze/{filename}` | Raw file bytes | Tenant-uploaded document (pre-processing) |
 
 ---
 
@@ -330,9 +352,12 @@ CREATE INDEX idx_tdu_uploaded_at ON tenant_document_uploads (tenant_id, uploaded
 
 All adapters inherit from `SourceAdapterPort` ABC. Each has a typed `provider_cfg` sub-model injected at construction — no module-level constants.
 
+All news-source `SourceType` values come from `contracts.enums.ContentSourceType`: `eodhd`, `eodhd_ticker_news`, `sec_edgar`, `finnhub`, `newsapi`, `polymarket`, `manual`.
+
 | Source | Poll Interval | Auth | Rate Limit | Dedup Method | Backfill Support |
 |--------|--------------|------|------------|-------------|-----------------|
-| **EODHD News** | 15 min | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
+| **EODHD News** (global) | per-source config | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
+| **EODHD Ticker News** (`eodhd_ticker_news`) | 1 hour (`ticker_news_poll_interval_seconds=3600`) | `EODHD_API_KEY` query param | Token bucket (10 req/s) | `sha256(article.link)` | Date-range via `from`/`to` |
 | **SEC EDGAR** | 30 min | User-Agent header (required) | `asyncio.Semaphore(8)` | `sha256(accession_no + filename)` | Date-range via `startdt`/`enddt` |
 | **Finnhub** | 15 min | `FINNHUB_API_KEY` query param | Token bucket (55 req/min) | `sha256(str(article_id))` | Date-range on news + transcripts |
 | **NewsAPI** | 4 hours* | `NEWSAPI_KEY` (`X-Api-Key` header) | Valkey daily counter (100 req/day default) | `sha256(article.url)` | Date-range via `from` |
@@ -342,7 +367,9 @@ All adapters inherit from `SourceAdapterPort` ABC. Each has a typed `provider_cf
 
 **Retry policy (all adapters):** 3x exponential backoff (1s/2s/4s). `AdapterError` raised after exhaustion → task moves to DLQ.
 
-**Polymarket special path:** POLYMARKET is NOT in `ADAPTER_REGISTRY`. The worker detects `SourceType.POLYMARKET` and dispatches directly to `_execute_polymarket_task()` → `PolymarketAdapter` → `FetchAndWritePredictionMarketsUseCase`.
+**`ADAPTER_REGISTRY` (in `infrastructure/scheduler/scheduler.py`)** maps the standard source types to adapters: `EODHD`, `EODHD_TICKER_NEWS`, `SEC_EDGAR`, `FINNHUB`, `NEWSAPI`.
+
+**Polymarket special path:** `POLYMARKET` is intentionally NOT in `ADAPTER_REGISTRY`. The worker detects `SourceType.POLYMARKET` and dispatches directly to `_execute_polymarket_task()` → `PolymarketAdapter` → `FetchAndWritePredictionMarketsUseCase` (R24: batch-collect first, then short-lived session for dedup). The scheduler uses `PolymarketAdapter` only for its `fetch_log_exists_fn` dedup callback.
 
 ---
 
@@ -439,13 +466,17 @@ All environment variables are prefixed with `CONTENT_INGESTION_`. Nested provide
 
 ## Authentication
 
-| Token | Header | Env Var | Used By |
-|-------|--------|---------|---------|
-| Admin token | `X-Admin-Token` | `CONTENT_INGESTION_ADMIN_TOKEN` | Source CRUD, DLQ admin, status |
-| Internal service token | `X-Internal-Token` | `INTERNAL_SERVICE_TOKEN` | `POST /internal/v1/ingest/submit` |
-| Internal JWT | `X-Internal-JWT` | Signed by S9 | Tenant document API |
+`InternalJWTMiddleware` (RS256, JWKS fetched from `{api_gateway_url}/internal/jwks`) is registered globally and rejects any request without a valid `X-Internal-JWT` — **except** the skip paths `/healthz`, `/readyz`, `/internal/v1/health`, `/health*`, `/metrics`. This means **every** `/api/v1/*`, `/admin/*` and `/internal/v1/ingest/submit` request must carry a valid internal JWT.
 
-Both admin and internal tokens are validated with `hmac.compare_digest()` (timing-safe).
+Admin routes additionally require an `X-Admin-Token` header (route-level `AdminAuthDep` → `verify_admin_token`), so they need BOTH tokens.
+
+| Auth | Header | Env Var / Source | Used By |
+|------|--------|------------------|---------|
+| Internal JWT (RS256) | `X-Internal-JWT` | Signed by S9; verified via JWKS | All non-skip routes (gate) |
+| Admin token | `X-Admin-Token` | `CONTENT_INGESTION_ADMIN_TOKEN` | Source CRUD, DLQ admin, status (in addition to the JWT gate) |
+| Tenant identity | derived from `X-Internal-JWT` claims (`tenant_id`, `user_id`) | Signed by S9 | Tenant document API |
+
+The admin token is validated with `hmac.compare_digest()` (timing-safe). The JWT signature is verified against the S9 JWKS public key; when the key is unavailable the middleware **fails closed** (401) unless `internal_jwt_skip_verification=true` (never in production).
 
 ---
 
@@ -490,7 +521,7 @@ curl http://localhost:8004/api/v1/status \
 ```bash
 cd services/content-ingestion
 
-# Unit tests (no infra needed) — 399 tests
+# Unit tests (no infra needed) — ~780 tests
 python -m pytest tests/unit -v -m unit
 
 # Integration tests (requires PostgreSQL + MinIO + Valkey)

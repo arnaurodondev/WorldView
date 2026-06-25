@@ -8,10 +8,13 @@ is available.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from market_data.application.use_cases.rollup_insider_90d import (
     _seconds_until_next_run_hour,
+    run_insider_rollup_once,
 )
 
 pytestmark = pytest.mark.unit
@@ -72,3 +75,59 @@ def test_min_interval_is_at_least_20_hours() -> None:
     )
 
     assert _MIN_INTERVAL_BETWEEN_RUNS >= timedelta(hours=20)
+
+
+# ── run_insider_rollup_once: emptied-window staleness fix ───────────────────
+
+
+async def _capture_rollup_sql() -> tuple[str, dict[str, Any]]:
+    """Run ``run_insider_rollup_once`` against a mock session and return the SQL.
+
+    Returns (compiled_sql_text, bind_params) of the single statement executed.
+    """
+    captured: dict[str, Any] = {}
+
+    async def _execute(stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        captured["sql"] = str(stmt)
+        captured["params"] = params or {}
+        result = MagicMock()
+        result.rowcount = 95
+        return result
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=_execute)
+    stats = await run_insider_rollup_once(session)
+    captured["stats"] = stats
+    return captured["sql"], captured["params"]
+
+
+@pytest.mark.asyncio
+async def test_rollup_drives_off_every_instrument_with_raw_data() -> None:
+    """The UPSERT must select from a ``have_data`` set (every instrument w/ rows),
+    not only from the in-window aggregate — otherwise emptied windows keep a
+    stale value (BP-insider-staleness).
+    """
+    sql, _ = await _capture_rollup_sql()
+    lowered = sql.lower()
+    assert "have_data" in lowered, f"rollup no longer driven off the full raw-data set:\n{sql}"
+    # The INSERT ... SELECT source must be have_data LEFT JOIN agg.
+    assert "left join agg" in lowered, f"missing LEFT JOIN to in-window agg:\n{sql}"
+
+
+@pytest.mark.asyncio
+async def test_rollup_coalesces_empty_window_to_zero() -> None:
+    """An instrument with raw data but no in-window txns must roll up to 0,
+    distinct from NULL ("no insider data ever").
+    """
+    sql, _ = await _capture_rollup_sql()
+    assert "coalesce(agg.total_90d, 0)" in sql.lower(), f"empty window not coalesced to 0:\n{sql}"
+
+
+@pytest.mark.asyncio
+async def test_rollup_window_start_is_90_days_before_today() -> None:
+    """The ``:window_start`` bind is exactly today - 90 days (UTC)."""
+    import common.time  # type: ignore[import-untyped]
+
+    _, params = await _capture_rollup_sql()
+    expected = common.time.utc_now().date() - timedelta(days=90)
+    assert params["window_start"] == expected

@@ -106,12 +106,18 @@ WHERE job_id = CAST(:job_id AS UUID)
             },
         )
 
-    async def mark_failed(self, job_id: UUID, error_text: str) -> None:
+    async def mark_failed(self, job_id: UUID, error_text: str) -> str | None:
         """Increment retry_count; terminal 'failed' when retry_count reaches 3.
 
         BP-113: must never leave a job permanently stuck in ``running``.
+
+        Returns the resulting status ('failed' when the job exhausted its
+        retries and is now terminal, otherwise 'pending') so the caller can
+        emit the ``path_jobs_failed_total`` metric only on the terminal
+        transition (PLAN-0112 T-1-03).  Returns ``None`` if the job_id was not
+        found.
         """
-        await self._session.execute(
+        result = await self._session.execute(
             text("""
 UPDATE path_insight_jobs
 SET status      = CASE
@@ -123,12 +129,15 @@ SET status      = CASE
     claimed_at  = NULL,
     error_text  = :error_text
 WHERE job_id = CAST(:job_id AS UUID)
+RETURNING status
 """),
             {
                 "job_id": str(job_id),
                 "error_text": error_text[:2000] if error_text else "",  # truncate for safety
             },
         )
+        row = result.fetchone()
+        return str(row[0]) if row is not None else None
 
     async def reclaim_stuck(self, timeout_seconds: int = 600) -> int:
         """Reset jobs stuck in ``running`` for longer than ``timeout_seconds``.

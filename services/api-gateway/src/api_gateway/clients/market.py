@@ -17,12 +17,12 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
+
 from api_gateway.clients.base import DownstreamError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import httpx
 
     from api_gateway.clients.base import ServiceClients
 
@@ -146,7 +146,7 @@ async def get_market_heatmap(
                 headers=_h(),
             )
             if resp.status_code >= 400:
-                raise DownstreamError("market-data", resp.status_code, resp.text)
+                raise DownstreamError("market-data", resp.status_code, resp.text[:200])
             return cast("dict[str, Any]", resp.json())
 
         try:
@@ -204,6 +204,7 @@ async def get_top_movers(
     mover_type: str = "gainers",
     limit: int = 10,
     period: str = "1D",
+    offset: int = 0,
     *,
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
@@ -233,12 +234,25 @@ async def get_top_movers(
     # WHY all periods use period-movers: the screener-based 1D path queried
     # fundamental_metrics.daily_return which is only populated for ~8 instruments.
     # The OHLCV LATERAL JOIN in period-movers yields 500+ instruments for all periods.
-    resp = await clients.market_data.get(
-        f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
-        headers=_h(),
-    )
+    #
+    # WHY catch httpx.ReadTimeout/ConnectTimeout/asyncio.TimeoutError: on a cold
+    # start (market-data container still warming up), the downstream call raises
+    # a raw httpx timeout that propagates as an unhandled 500 in the route handler
+    # (which only catches DownstreamError). Wrapping into DownstreamError(status=504)
+    # gives the user a clean "Gateway Timeout" instead of a misleading 500.
+    try:
+        resp = await clients.market_data.get(
+            f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
+            headers=_h(),
+        )
+    except (TimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+        raise DownstreamError(
+            "market-data",
+            504,
+            f"market-data timeout: {exc.__class__.__name__}",
+        ) from exc
     if resp.status_code >= 400:
-        raise DownstreamError("market-data", resp.status_code, resp.text)
+        raise DownstreamError("market-data", resp.status_code, resp.text[:200])
     return cast("dict[str, Any]", resp.json())
 
 

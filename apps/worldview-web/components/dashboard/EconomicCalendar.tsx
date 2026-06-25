@@ -15,29 +15,81 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery.
+// WHY "use client": uses useInfiniteQuery + interactive "Load more" button.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { EconomicImpact } from "@/types/api";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) — copy key keeps
+// the previously rendered strings verbatim.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): the bespoke muted error TEXT becomes a named error state
+// with a Retry action wired to refetch() (parity with the sister
+// EarningsCalendarWidget, which already shipped error+Retry).
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+import { CalendarClock } from "lucide-react";
+import type { EconomicCalendarResponse, EconomicImpact } from "@/types/api";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * PAGE_SIZE — events fetched per page.
+ *
+ * WHY 30 (user request 2026-06-12 "blocks of 30"): the dashboard's listing
+ * widgets are standardised on a 30-row block / page so each "Load more" reveals
+ * a full screen of context. The S9 `/v1/fundamentals/economic-calendar`
+ * endpoint accepts `limit` 1–2000 (docs/services/api-gateway.md), so 30 is well
+ * within the cap. (Was 10; before that `.slice(0, 8)` silently capped the list.)
+ */
+const PAGE_SIZE = 30;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EconomicCalendar() {
   const { accessToken } = useAuth();
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["economic-calendar"],
-    queryFn: () => createGateway(accessToken).getEconomicCalendar(),
-    enabled: !!accessToken,
-    // WHY 10min: economic events don't change frequently; 10min is fine
-    staleTime: 10 * 60_000,
-    refetchInterval: 10 * 60_000,
-  });
+  // WHY useInfiniteQuery: drives a "Load more" button that fetches the next
+  // PAGE_SIZE events using offset-based pagination. The previous version used
+  // .slice(0, 8) which silently dropped any further events the API returned
+  // (Dashboard Regression #3). Now the user can page through the full window.
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data, isLoading, isError, refetch, isFetching, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      EconomicCalendarResponse,
+      Error,
+      InfiniteData<EconomicCalendarResponse>,
+      readonly unknown[],
+      number
+    >({
+      queryKey: ["economic-calendar-infinite"],
+      queryFn: ({ pageParam }) =>
+        createGateway(accessToken).getEconomicCalendar({ limit: PAGE_SIZE, offset: pageParam }),
+      // WHY 0 as initialPageParam: first page starts at offset=0.
+      initialPageParam: 0,
+      getNextPageParam: (lastPage, allPages) => {
+        // WHY combine page-size signal + total count: if the server returned
+        // a full page AND we've not yet seen all `total` events, there are
+        // more pages. Otherwise we've reached the end.
+        const loaded = allPages.reduce((n, p) => n + p.events.length, 0);
+        const total = lastPage.total;
+        if (total != null) return loaded < total ? loaded : undefined;
+        // Fallback when backend doesn't return `total`: stop when we get a
+        // partial page (server returned fewer rows than the page size).
+        return lastPage.events.length === PAGE_SIZE ? loaded : undefined;
+      },
+      enabled: !!accessToken,
+      // WHY 10min: economic events don't change frequently; 10min is fine
+      staleTime: 10 * 60_000,
+      refetchInterval: 10 * 60_000,
+    });
 
-  const events = data?.events ?? [];
+  // WHY flatten across pages: each page is a slice of the leaderboard; we
+  // render the concatenation as a single scrollable list.
+  const events = data?.pages.flatMap((p) => p.events) ?? [];
+  // WHY total fallback to events.length: when backend omits total we can still
+  // hide the "Load more" button once we hit the end.
+  const total = data?.pages[0]?.total ?? events.length;
 
   // WHY single outer wrapper for all render paths:
   // All states (loading, error, empty, data) live inside the same bg-background
@@ -47,7 +99,8 @@ export function EconomicCalendar() {
     // WHY bg-background + h-full flex-col: consistent with EarningsCalendarWidget,
     // PortfolioNewsWidget, and PredictionMarketsWidget — all Row-4 panels use this
     // outer container pattern so the gap-px hairline separators look uniform.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Economic calendar">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -59,28 +112,37 @@ export function EconomicCalendar() {
       {/* ── Loading state ──────────────────────────────────────────────── */}
       {/* SA-2 PLAN-0088 density: space-y-1.5 + py-1.5 (was space-y-2 + py-2).
           T-F-6-03: standardised inner content padding px-3 (unchanged). */}
+      {/* Round 3 (item 3): skeleton rows now use the loaded list's exact
+          geometry — h-[22px] divide-y rows at px-2 with the real column
+          slots (date+time · title flex · forecast/previous · impact letter)
+          instead of the previous taller spaced bars, so the event rows swap
+          in with zero layout shift. 6 rows ≈ a typical first page fold. */}
       {isLoading && (
-        <div className="flex-1 space-y-1.5 px-3 py-1.5">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="flex gap-2">
-              <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-8" style={{ animationDelay: `${i * 50}ms` }} />
+        <div className="flex-1 divide-y divide-border/30">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
+              <Skeleton className="h-3 w-[72px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-[64px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-3 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
       )}
 
       {/* ── Error state ─────────────────────────────────────────────────── */}
-      {/* WHY muted (not destructive red): backend service offline is not a user error.
-          Muted text avoids making the dashboard look broken. */}
+      {/* Round 4 (item 1): named error state + Retry replaces the bespoke
+          muted text. The old copy ("events will appear once macro data is
+          ingested") misdiagnosed a FETCH failure as a data-pipeline gap —
+          the dashboard.no-economic-events empty state already owns the
+          truthful data-gap message; this branch owns the failure message. */}
       {isError && (
-        // T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1)
-        // WHY text-xs (was text-sm): dashboard tile error copy → 12px Bloomberg
-        // standard. PLAN-0087 F-DENSITY-001.
-        <p className="flex-1 px-3 py-2 text-xs text-muted-foreground">
-          Economic calendar unavailable — events will appear once macro data is ingested.
-        </p>
+        <WidgetErrorState
+          copyKey="dashboard.economic-error"
+          icon={CalendarClock}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
@@ -89,19 +151,27 @@ export function EconomicCalendar() {
           A clear message sets correct expectations: the API is functional but the
           economic event data stream hasn't populated yet. */}
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
+      {/* Round 3 (item 4): shared EmptyState primitive — copy key
+          dashboard.no-economic-events carries the exact strings that were
+          hardcoded here, so the rationale (data-not-ingested, not "broken")
+          and any text-matching tests are preserved. */}
       {!isLoading && !isError && events.length === 0 && (
-        <div className="flex-1 flex flex-col gap-0.5 px-3 py-2">
-          <p className="text-xs text-muted-foreground">No upcoming economic events scheduled.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Economic events populate as market calendar data is ingested.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-economic-events"
+            icon={CalendarClock}
+          />
         </div>
       )}
 
       {/* ── Event rows ──────────────────────────────────────────────────── */}
+      {/* WHY no .slice(): we now render every event the server returned across
+          all loaded pages. The "Load more" button at the bottom drives the
+          next page fetch via useInfiniteQuery.fetchNextPage(). */}
       {!isLoading && !isError && events.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => {
+          {events.map((event) => {
             const date = new Date(event.event_date);
             const dateStr = date.toISOString().slice(5, 10); // "MM-DD"
             const timeStr = date.toISOString().slice(11, 16); // "HH:MM"
@@ -148,6 +218,26 @@ export function EconomicCalendar() {
               </div>
             );
           })}
+
+          {/* ── Load more button ──────────────────────────────────────── */}
+          {/* WHY render at the bottom of the scrollable list: discoverability
+              — user scrolls to the bottom and sees the action. We only render
+              when hasNextPage is true so the panel stays clean at end-of-list. */}
+          {hasNextPage && (
+            <div className="flex items-center justify-center border-t border-border/30 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                // Round 3 (item 5): hover bg + keyboard focus ring on the pager.
+                className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
+              >
+                {isFetchingNextPage
+                  ? "Loading…"
+                  : `Load more (${events.length}/${total})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -162,7 +252,7 @@ function ImpactBadge({ impact }: { impact: EconomicImpact }) {
   const colors: Record<EconomicImpact, string> = {
     HIGH: "text-warning", // PLAN-0059 W0 F-VISUAL-022: --warning token (was amber-400)
     MEDIUM: "text-muted-foreground",
-    LOW: "text-muted-foreground/50",
+    LOW: "text-muted-foreground-dim",
   };
 
   return (

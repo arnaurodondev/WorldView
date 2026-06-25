@@ -15,6 +15,25 @@
 
 set -euo pipefail
 
+# ── Filename guard ───────────────────────────────────────────────────────────
+# Block staged env/backup/key FILES by name, before scanning content. The
+# 2026-06 docker.env.bak incident slipped the *.env .gitignore (the .bak suffix)
+# and its DeepInfra keys are bare 32-char hex (no provider prefix), so a name
+# check is the reliable catch. Templates (*.env.example / *.env.template) pass.
+staged_names=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+if [ -n "$staged_names" ]; then
+  bad_files=$(printf '%s\n' "$staged_names" \
+    | grep -iE '(/docker\.env$|\.env\.bak$|\.env\.local$|/configs/.*\.env\.[^/]+$|\.bak$|\.orig$|\.pem$|\.p12$|\.pfx$|(^|/)id_rsa$|\.keytab$)' \
+    | grep -ivE '\.env\.example$|\.env\.template$|\.env\.sample$' || true)
+  if [ -n "$bad_files" ]; then
+    printf '\n\033[31mBLOCKED:\033[0m env/secret/backup file(s) staged for commit:\n' >&2
+    printf '  %s\n' $bad_files >&2
+    printf 'These must never be committed. Remove from the index (git rm --cached <f>),\n' >&2
+    printf 'add to .gitignore, and ROTATE any credentials they contained.\n\n' >&2
+    exit 1
+  fi
+fi
+
 # Staged additions only — diff format puts a "+" at the start of new lines.
 staged=$(git diff --cached -U0 --diff-filter=ACM 2>/dev/null || true)
 [ -z "$staged" ] && exit 0
@@ -48,7 +67,9 @@ while IFS= read -r m; do report "stripe-sk" "$m"; done < <(printf '%s\n' "$added
 # 2. Generic high-entropy values following common secret-name patterns.
 #    Catches the DeepInfra-style 32+ char alphanumerics that don't have a vendor prefix.
 #    We require the assignment LHS to look like a secret name to keep false-positives low.
-suspect_pattern='([A-Z][A-Z0-9_]*)?(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|AUTH_KEY)[[:space:]]*[=:][[:space:]]*["'\'']?([A-Za-z0-9_+/=-]{16,})'
+# Value class includes "." so dotted keys (e.g. EODHD "6a3b...dec9.8906...") are not
+# truncated below the 16-char threshold and slip through.
+suspect_pattern='([A-Z][A-Z0-9_]*)?(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET|AUTH_KEY)[[:space:]]*[=:][[:space:]]*["'\'']?([A-Za-z0-9_+/=.-]{16,})'
 while IFS= read -r line; do
   # Skip placeholder / empty / example values.
   value=$(printf '%s\n' "$line" | sed -E "s/.*[=:][[:space:]]*[\"']?//" | sed -E 's/[\"'\'']?$//')

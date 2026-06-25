@@ -21,6 +21,7 @@ from nlp_pipeline.application.blocks.deep_extraction import (
     SINGLE_WINDOW_TOKEN_LIMIT,
     WINDOW_OVERLAP_TOKENS,
     WINDOW_SIZE_TOKENS,
+    _build_prompt,
     _build_windows,
     _merge_results_safe,
     run_deep_extraction_block,
@@ -51,13 +52,14 @@ def _make_mention(
     text: str,
     resolved_entity_id: uuid.UUID | None = None,
     doc_id: uuid.UUID | None = None,
+    mention_class: MentionClass = MentionClass.ORGANIZATION,
 ) -> EntityMention:
     m = EntityMention(
         mention_id=uuid.uuid4(),
         doc_id=doc_id or uuid.uuid4(),
         section_id=uuid.uuid4(),
         mention_text=text,
-        mention_class=MentionClass.ORGANIZATION,
+        mention_class=mention_class,
         confidence=0.90,
         char_start=0,
         char_end=len(text),
@@ -133,6 +135,51 @@ class TestMergeResultsSafe:
         }
         merged = _merge_results_safe([r1, r2])
         assert len(list(merged["events"])) == 2  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+class TestBuildPrompt:
+    """ENHANCEMENT #1: type-annotated entity allow-list rendered into the prompt.
+
+    Each distinct entity surface is tagged with its GLiNER ``mention_class``
+    so the model can enforce relation precision + direction (2026-06-20
+    stored-relation-quality audit: ~22% entity type/resolution errors).
+    """
+
+    def test_renders_class_annotations(self) -> None:
+        mentions = [
+            _make_mention("Apple Inc.", mention_class=MentionClass.ORGANIZATION),
+            _make_mention("Tim Cook", mention_class=MentionClass.PERSON),
+            _make_mention("S&P 500", mention_class=MentionClass.INDEX),
+            _make_mention("US Dollar", mention_class=MentionClass.CURRENCY),
+        ]
+        prompt = _build_prompt("some article text", mentions)
+        assert "Apple Inc. [organization]" in prompt
+        assert "Tim Cook [person]" in prompt
+        assert "S&P 500 [index]" in prompt
+        assert "US Dollar [currency]" in prompt
+
+    def test_order_preserving_dedup_first_class_wins(self) -> None:
+        """Duplicate surfaces are collapsed; the FIRST-seen class wins and the
+        original insertion order is preserved. Uses surfaces that do NOT appear
+        in the prompt's static examples so the assertion targets only the
+        dynamically-rendered entity allow-list."""
+        mentions = [
+            _make_mention("Acme Robotics", mention_class=MentionClass.ORGANIZATION),
+            _make_mention("Jane Roe", mention_class=MentionClass.PERSON),
+            # Duplicate surface with a DIFFERENT class — must be dropped, first wins.
+            _make_mention("Acme Robotics", mention_class=MentionClass.FINANCIAL_INSTITUTION),
+        ]
+        prompt = _build_prompt("text", mentions)
+        # Exactly one rendering of Acme, tagged organization (first-seen).
+        assert prompt.count("Acme Robotics [organization]") == 1
+        assert "Acme Robotics [financial_institution]" not in prompt
+        # Order preserved: Acme appears before Jane Roe in the entity list.
+        assert prompt.index("Acme Robotics [organization]") < prompt.index("Jane Roe [person]")
+
+    def test_empty_mentions_uses_fallback(self) -> None:
+        prompt = _build_prompt("text", [])
+        assert "none identified" in prompt
 
 
 @pytest.mark.unit
@@ -323,9 +370,12 @@ class TestRunDeepExtractionBlock:
 
     @pytest.mark.asyncio
     async def test_extraction_failure_does_not_raise(self) -> None:
-        """Extraction errors must be caught — method never raises to caller."""
+        """A NON-transient (non-RetryableError) extraction error is caught and
+        the window is recorded empty — method never raises to caller for the
+        generic-exception case. (Transient timeouts are handled separately;
+        see TestDeepExtractionTimeouts.)"""
         client = MagicMock()
-        client.extract = AsyncMock(side_effect=Exception("Ollama timeout"))
+        client.extract = AsyncMock(side_effect=Exception("Ollama parse blow-up"))
 
         result, signals = await run_deep_extraction_block(
             doc_id=uuid.uuid4(),
@@ -341,3 +391,149 @@ class TestRunDeepExtractionBlock:
 
         assert result["events"] == []
         assert signals == []
+        # A non-transient failure is NOT a timeout — the doc is not degraded.
+        assert result["degraded"] is False
+        assert result["timed_out_windows"] == 0
+
+
+@pytest.mark.unit
+class TestDeepExtractionTimeouts:
+    """Task #22 (BP-677): unmask deep-extraction timeouts.
+
+    A transient ``RetryableError`` (timeout/429/5xx/connection) from the
+    extraction adapter must NOT be silently substituted with an empty result
+    and logged as a clean zero. The doc must carry ``degraded=true`` +
+    ``timed_out_windows>=1``; if EVERY window times out the block re-raises
+    ``RetryableError`` so the consumer retries the whole doc.
+    """
+
+    @staticmethod
+    def _long_multi_window_chunk(doc_id: uuid.UUID) -> Chunk:
+        # Force >1 window so partial-timeout scenarios are reachable.
+        long_text = " ".join(f"word{i}" for i in range(SINGLE_WINDOW_TOKEN_LIMIT + WINDOW_SIZE_TOKENS + 1000))
+        return _make_chunk(long_text, doc_id=doc_id)
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_flags_degraded_and_keeps_good_windows(self) -> None:
+        """SOME windows succeed, SOME time out -> persist the good windows but
+        flag degraded=true + timed_out_windows>=1. The timeout is NOT swallowed
+        as a clean zero."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+        from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+
+        good = ExtractionOutput(
+            result={
+                "events": [{"event_type": "earnings", "description": "beat", "confidence": 0.6}],
+                "claims": [],
+                "relations": [],
+            },
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        # First window succeeds, every subsequent window times out.
+        client = MagicMock()
+        client.extract = AsyncMock(side_effect=[good, RetryableError("DeepSeek timeout"), RetryableError("timeout")])
+
+        result, _signals = await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+        )
+
+        # Good window's content is preserved (not lost).
+        assert len(list(result["events"])) == 1  # type: ignore[arg-type]
+        # Degradation is surfaced, NOT swallowed.
+        assert result["degraded"] is True
+        assert result["timed_out_windows"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_all_windows_timeout_raises_retryable(self) -> None:
+        """EVERY window times out -> RetryableError is raised so the consumer
+        retries the whole doc instead of committing a fake empty extraction."""
+        from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
+
+        client = MagicMock()
+        client.extract = AsyncMock(side_effect=RetryableError("DeepSeek wall-clock timeout"))
+
+        with pytest.raises(RetryableError):
+            await run_deep_extraction_block(
+                doc_id=uuid.uuid4(),
+                chunks=[_make_chunk("Single window article body.")],
+                mentions=[],
+                processing_path=ProcessingPath.FULL_PIPELINE,
+                extraction_client=client,
+                model_id="qwen2.5:7b-instruct",
+                published_at=None,
+                extracted_at=datetime.now(tz=UTC),
+                outbox_topic_signal="nlp.signal.detected.v1",
+            )
+
+    @pytest.mark.asyncio
+    async def test_genuine_empty_is_not_degraded(self) -> None:
+        """Model returns {events:[],claims:[],relations:[]} successfully (no
+        exception) -> degraded=false, timed_out_windows=0. This MUST be
+        distinguishable from the all-timeout case."""
+        client = _make_extraction_client({"events": [], "claims": [], "relations": []})
+
+        result, signals = await run_deep_extraction_block(
+            doc_id=uuid.uuid4(),
+            chunks=[_make_chunk("An article with genuinely no extractable events.")],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+        )
+
+        assert list(result["events"]) == []  # type: ignore[arg-type]
+        assert result["degraded"] is False
+        assert result["timed_out_windows"] == 0
+        assert signals == []
+
+    @pytest.mark.asyncio
+    async def test_fully_successful_doc_unchanged_behaviour(self) -> None:
+        """A fully-successful multi-window doc behaves exactly as before:
+        degraded=false, timed_out_windows=0, content merged normally."""
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-not-found]
+
+        doc_id = uuid.uuid4()
+        chunk = self._long_multi_window_chunk(doc_id)
+        out = ExtractionOutput(
+            result={
+                "events": [{"event_type": "earnings", "description": "beat", "confidence": 0.6}],
+                "claims": [],
+                "relations": [],
+            },
+            raw_response="",
+            model_id="qwen2.5:7b-instruct",
+        )
+        client = MagicMock()
+        client.extract = AsyncMock(return_value=out)
+
+        result, _signals = await run_deep_extraction_block(
+            doc_id=doc_id,
+            chunks=[chunk],
+            mentions=[],
+            processing_path=ProcessingPath.FULL_PIPELINE,
+            extraction_client=client,
+            model_id="qwen2.5:7b-instruct",
+            published_at=None,
+            extracted_at=datetime.now(tz=UTC),
+            outbox_topic_signal="nlp.signal.detected.v1",
+        )
+
+        assert result["degraded"] is False
+        assert result["timed_out_windows"] == 0
+        # Deduplicated to a single event across windows (overlap dedup).
+        assert len(list(result["events"])) == 1  # type: ignore[arg-type]

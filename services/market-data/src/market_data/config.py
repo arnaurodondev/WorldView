@@ -34,6 +34,31 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     schema_registry_url: str = "http://localhost:8081"
 
+    # PLAN-0113 FIX-2: static-membership instance ids (opt-in). Empty default =
+    # dynamic membership (no-op). Setting a stable, per-replica value enables Kafka
+    # static membership so a rolling restart does not trigger a full group rebalance.
+    kafka_ohlcv_consumer_instance_id: str = ""
+    kafka_quotes_consumer_instance_id: str = ""
+    kafka_fundamentals_consumer_instance_id: str = ""
+    kafka_insider_transactions_consumer_instance_id: str = ""
+    kafka_intraday_resampling_consumer_instance_id: str = ""
+    kafka_prediction_market_consumer_instance_id: str = ""
+
+    # ── Outbox dispatcher (BUG-4 / BP-612) ─────────────────────────────────────
+    # These tune the ``DispatcherConfig`` built in ``dispatcher_main`` /
+    # ``create_dispatcher``. Historically market-data built ``DispatcherConfig()``
+    # with no override, so it inherited the lib default ``max_attempts=5``. A
+    # transient broker blip on 2026-06-17 exhausted that 5-attempt budget in
+    # minutes and permanently dead-lettered 44 ``market.instrument.*`` events
+    # (lost downstream InstrumentRef / canonical-entity creation). market-ingestion
+    # already raised this to 20 under BP-612; we now apply the same symmetric fix
+    # here. 20 attempts x ~60 s backoff is ~20 min coverage, enough to ride out a
+    # rolling restart or Kafka blip before dead-lettering.
+    dispatcher_poll_interval_seconds: float = 5.0
+    dispatcher_lease_seconds: int = 30
+    dispatcher_batch_size: int = 100
+    dispatcher_max_attempts: int = 20
+
     # Storage
     storage_endpoint: str = "http://localhost:7480"
     storage_access_key: SecretStr  # Required — set MARKET_DATA_STORAGE_ACCESS_KEY env var
@@ -77,6 +102,35 @@ class Settings(BaseSettings):
     # worker fires. Default 03:00 places it one hour after L-3's 02:00 so
     # the two big analytical writes do not pile up.
     insider_rollup_hour_utc: int = 3
+
+    # PLAN-0089 Wave L-5b — hour of UTC day at which the intelligence rollup
+    # sync worker fires. Default 04:00 places it one hour after L-4b's 03:00
+    # and two hours after L-3's 02:00 so three large nightly writes are evenly
+    # spread across the 02:00-04:00 UTC window. Configurable via env var
+    # ``MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC``.
+    intelligence_rollup_hour_utc: int = 4
+
+    # URLs for the 4 upstream intelligence services called by the L-5b worker.
+    # Default to Docker-Compose service names so the out-of-box local dev stack
+    # works without any extra configuration.
+    # NOTE: the S6 news-rollup endpoint lives in nlp-pipeline (nlp_db owns
+    # routing_decisions / document_source_metadata / article_impact_windows),
+    # NOT in content-store. The previous default (``http://content-store:8006``)
+    # was doubly wrong — wrong service AND wrong port — so every nightly call
+    # silently 404'd, leaving news_count_7d/llm_relevance_7d_max/
+    # display_relevance_7d_weighted NULL across all instruments.
+    # ``content_store_url`` is kept as an alias for backward env-var compat.
+    nlp_pipeline_url: str = "http://nlp-pipeline:8006"
+    content_store_url: str = "http://nlp-pipeline:8006"
+    knowledge_graph_url: str = "http://knowledge-graph:8007"
+    alert_service_url: str = "http://alert:8010"
+    rag_chat_url: str = "http://rag-chat:8008"
+
+    # RS256 private key for signing internal JWTs sent to upstream services.
+    # Mirrors the pattern used by ``FundamentalsRefreshWorker``. Empty string
+    # triggers the dev HS256 fallback (acceptable when
+    # ``internal_jwt_skip_verification=True`` on the upstream services).
+    internal_jwt_private_key: str = ""
 
     # PLAN-0102 T-W6-02 / BP-617 — per-message processing timeout (seconds)
     # for the fundamentals consumer's `market.dataset.fetched` topic. The

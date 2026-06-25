@@ -129,29 +129,33 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
         pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
-        if self._current_uow is None:
-            raise RuntimeError("store_failure called outside of processing context — this is a programming error")
+        # F-004 (idle-in-transaction leak): write via a FRESH, committed UoW —
+        # NOT ``self._current_uow`` (already rolled-back + closed by base
+        # ``_handle_message`` before ``_handle_failure`` dispatches here). The
+        # stale-UoW write left the backend ``idle in transaction`` (uncommitted).
         payload = {
             "event_id": failure.event_id,
             "topic": failure.topic,
             "error": str(failure.last_error),
         }
-        await self._current_uow.failed_tasks.create(task_type="prediction_market_consumer", payload=payload)
+        async with self._uow_factory() as uow:
+            await uow.failed_tasks.create(task_type="prediction_market_consumer", payload=payload)
+            await uow.commit()
         return payload
 
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
         pass
 
     async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:
-        if self._current_uow is not None:
-            payload = {
-                "event_id": failure.event_id,
-                "topic": failure.topic,
-                "error": str(failure.last_error),
-            }
-            await self._current_uow.failed_tasks.create(
-                task_type="prediction_market_consumer_dead", payload=payload, max_attempts=0
-            )
+        # F-004: persist the dead-letter row via a fresh committed UoW.
+        payload = {
+            "event_id": failure.event_id,
+            "topic": failure.topic,
+            "error": str(failure.last_error),
+        }
+        async with self._uow_factory() as uow:
+            await uow.failed_tasks.create(task_type="prediction_market_consumer_dead", payload=payload, max_attempts=0)
+            await uow.commit()
 
     async def get_pending_retries(self) -> list[FailureInfo[dict]]:
         return []

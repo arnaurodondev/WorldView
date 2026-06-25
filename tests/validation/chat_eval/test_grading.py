@@ -728,3 +728,131 @@ class TestBP612RevenueCapDirectionality:
             cap_billions=15.0,
         )
         assert not flagged, "regression: ticker-after-number must not assert claim"
+
+
+# ── PLAN-0110 W5 (OQ-1): single-authority delegation to the tiered engine ──
+
+
+class TestTieredDelegation:
+    """T-W5-03: the chat_eval binary gate derives its hard pass/fail from the
+    tiered ``chat_quality_judge`` invariant gate — not a second scoring path.
+
+    These build synthetic :class:`ChatRunResult` objects and assert the binary
+    verdict tracks the tiered ``fail_reason`` (CONTROL_TOKEN_LEAK → USELESS,
+    GROUNDING_CONTRADICTED → HARMFUL, clean answer → not hard-failed). LLM-free,
+    unit-lane (no live stack).
+    """
+
+    @staticmethod
+    def _result(*, answer: str, tool_results: list[dict] | None = None, tool_calls: list[str] | None = None):  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult, ToolCall
+
+        return ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text=answer,
+            tool_calls=[ToolCall(name=n) for n in (tool_calls or [])],
+            tool_results=tool_results or [],
+        )
+
+    def test_delegates_leaked_control_tokens_to_useless(self) -> None:
+        """A leaked tool-call scaffold trips the tiered CONTROL_TOKEN_LEAK gate
+        and the binary gate must report USELESS sourced from it."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(answer="<function_calls><invoke name=get_entity_news></invoke>")
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == "USELESS", grade["reasons"]
+        # The verdict is DERIVED from the tiered engine, not a second path.
+        assert grade["tiered_verdict"] == "FAIL"
+        assert grade["tiered_fail_reason"] == "CONTROL_TOKEN_LEAK"
+        assert any("tiered gate fired: CONTROL_TOKEN_LEAK" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_delegates_grounding_contradiction_to_harmful(self) -> None:
+        """A numeric claim contradicted by a captured grounding sample trips the
+        tiered GROUNDING_CONTRADICTED gate → HARMFUL (fabrication-class)."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        # Sample says total_holdings=252220; the answer claims 271,474 → contradiction.
+        tool_results = [
+            {
+                "tool": "get_entity_fundamentals",
+                "status": "ok",
+                "item_count": 1,
+                "grounding_sample": {"fields": {"total_holdings": "252220"}},
+            }
+        ]
+        result = self._result(
+            answer="MSTR now holds 271,474 in total_holdings after the latest purchase.",
+            tool_results=tool_results,
+        )
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == "HARMFUL", grade["reasons"]
+        assert grade["tiered_verdict"] == "FAIL"
+        assert grade["tiered_fail_reason"] == "GROUNDING_CONTRADICTED"
+
+    def test_clean_answer_is_not_hard_failed_by_tiered(self) -> None:
+        """A substantive, grounded answer trips NO tiered gate — the binary gate
+        is free to land USEFUL/MARGINAL from the rubric, not a tiered FAIL."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(
+            answer=(
+                "Apple's main competitors include Samsung and Microsoft, per the "
+                "competitive analysis [1k]. Both compete in consumer hardware [2k]."
+            ),
+            tool_calls=["compare_entities"],
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["compare_entities", "get_entity_intelligence"]},
+        )
+        # No gate fired — ``fail_reason`` is the authoritative offline signal.
+        # (The soft band is FAIL only because no LLM dimensions exist offline; the
+        # binary gate ignores the band and reads ``fail_reason``.)
+        assert grade["tiered_fail_reason"] is None
+        assert grade["verdict"] in {"USEFUL", "MARGINAL"}, grade["reasons"]
+
+    def test_tiered_helper_returns_verdict_decision(self) -> None:
+        """``tiered_verdict_for`` returns a tiered VerdictDecision directly."""
+        from tests.validation.chat_eval.grading import tiered_verdict_for
+
+        result = self._result(answer="<invoke name=foo>")
+        decision = tiered_verdict_for(result, {})
+        assert decision.verdict.value == "FAIL"
+        assert decision.fail_reason is not None
+        assert decision.fail_reason.value == "CONTROL_TOKEN_LEAK"
+
+
+# ── PLAN-0110 W5 (F9/OQ-1): chat_eval reads the SINGLE canonical catalogue ──
+
+
+class TestSingleQuestionCatalogue:
+    """T-W5-04: ``harness.load_questions`` reads the canonical benchmark packs
+    (not a divergent chat_eval/questions.yaml) and projects the chat_eval
+    acceptance set. Unit-lane — no live stack, just YAML on disk.
+    """
+
+    def test_load_questions_projects_canonical_chat_eval_set(self) -> None:
+        from tests.validation.chat_eval.harness import load_questions
+
+        questions = load_questions()
+        ids = [q["id"] for q in questions]
+        # Every legacy acceptance id is present, exactly once, with a prompt + gt.
+        assert set(ids) == {"q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "a10"}, ids
+        assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
+        for q in questions:
+            assert q.get("prompt"), q
+            assert isinstance(q.get("ground_truth_assertions"), dict), q
+
+    def test_legacy_questions_yaml_is_empty_stub(self) -> None:
+        """The old chat_eval/questions.yaml is now a deprecation stub (empty list)."""
+        from pathlib import Path
+
+        import yaml
+
+        legacy = Path(__file__).resolve().parent / "questions.yaml"
+        decoded = yaml.safe_load(legacy.read_text())
+        assert not decoded, f"expected empty stub, got: {decoded!r}"

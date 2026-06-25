@@ -69,6 +69,16 @@ class FinnhubAdapter(SourceAdapter):
 
         config = source.config
         symbol = config.get("symbol", "")
+
+        # Defense-in-depth: the company-news endpoint requires a ticker symbol.
+        # A source seeded without a "symbol" key would silently produce an empty
+        # string and trigger HTTP 422 on every scheduler tick (3x retries wasted).
+        # Bail out early with a warning so the operator notices the misconfiguration
+        # without burning API quota or filling logs with retry noise.
+        if not symbol or not symbol.strip():
+            logger.warning("finnhub_skip_no_symbol", source_id=str(source.id))
+            return []
+
         effective_from = from_date or config.get("from_date", "")
         to_date = config.get("to_date", "")
 

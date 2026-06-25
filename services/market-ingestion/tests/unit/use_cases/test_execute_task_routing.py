@@ -1,13 +1,13 @@
 """Unit tests for provider routing logic in ExecuteTaskUseCase.
 
-Covers:
-- OHLCV 1d/1w routes to Yahoo Finance when registered
-- OHLCV 1h stays with EODHD (intraday not supported by Yahoo)
+Covers (PLAN-0036 final topology — Alpaca is the EOD/daily primary, Yahoo dropped):
+- OHLCV 1d/1w prefers Alpaca when registered (static fallback path)
+- OHLCV 1h stays with EODHD (intraday static fallback; cache drives real routing)
 - NEWS_SENTIMENT routes to Finnhub when registered
 - NEWS falls back to EODHD when Finnhub not registered
 - FUNDAMENTALS always uses EODHD
 - provider_routing_override event emitted on override
-- Quota check skipped for Yahoo
+- Quota check skipped for Alpaca (0-credit provider)
 - Quota check skipped for Finnhub
 """
 
@@ -91,17 +91,34 @@ def _make_task(
 
 
 @pytest.mark.unit()
-def test_ohlcv_1d_routes_to_yahoo_when_registered() -> None:
-    """OHLCV daily routes to Yahoo Finance when the adapter is registered."""
+def test_ohlcv_1d_prefers_alpaca_when_registered() -> None:
+    """OHLCV daily prefers Alpaca (free deep-daily source) in the static fallback."""
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
+    result = _preferred_provider(DatasetType.OHLCV, "1d", registry)
+    assert result == Provider.ALPACA
+
+
+@pytest.mark.unit()
+def test_ohlcv_1d_falls_back_to_eodhd_when_no_alpaca() -> None:
+    """OHLCV daily falls back to EODHD when Alpaca is not registered (failover-only)."""
+    registry = _make_registry(Provider.EODHD)
+    result = _preferred_provider(DatasetType.OHLCV, "1d", registry)
+    assert result == Provider.EODHD
+
+
+@pytest.mark.unit()
+def test_ohlcv_1d_does_not_prefer_yahoo() -> None:
+    """Yahoo is dropped from OHLCV routing — it must NOT be preferred for daily."""
     registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
     result = _preferred_provider(DatasetType.OHLCV, "1d", registry)
-    assert result == Provider.YAHOO_FINANCE
+    # Alpaca not registered here → EODHD failover, never Yahoo.
+    assert result == Provider.EODHD
 
 
 @pytest.mark.unit()
 def test_ohlcv_1h_stays_eodhd() -> None:
-    """OHLCV intraday (1h) stays with EODHD — Yahoo only supports daily."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    """OHLCV intraday (1h) stays with EODHD in the static fallback (cache drives real routing)."""
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     result = _preferred_provider(DatasetType.OHLCV, "1h", registry)
     assert result == Provider.EODHD
 
@@ -138,8 +155,12 @@ def test_fundamentals_always_eodhd() -> None:
 @pytest.mark.unit()
 @pytest.mark.asyncio()
 async def test_routing_override_logged() -> None:
-    """provider_routing_override event is emitted when adapter is changed."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    """provider_routing_override event is emitted when adapter is changed.
+
+    With no routing cache, the static fallback selects Alpaca for daily OHLCV
+    (Yahoo dropped), overriding the EODHD-scheduled task.
+    """
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     uow = _make_uow()
     store = MagicMock()
     store.exists = AsyncMock(return_value=False)
@@ -155,11 +176,11 @@ async def test_routing_override_logged() -> None:
     )
     task = _make_task(DatasetType.OHLCV, "1d", Provider.EODHD)
 
-    # Mock the Yahoo adapter's fetch_ohlcv
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(
+    # Mock the Alpaca adapter's fetch_ohlcv (now the daily primary).
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(
         return_value=MagicMock(
-            provider=Provider.YAHOO_FINANCE,
+            provider=Provider.ALPACA,
             dataset_type=DatasetType.OHLCV,
             raw_data=b'[{"open":1}]',
             content_type="application/json",
@@ -180,7 +201,7 @@ async def test_routing_override_logged() -> None:
         ]
         assert len(override_calls) == 1
         kwargs = override_calls[0].kwargs
-        assert kwargs["selected"] == "yahoo_finance"
+        assert kwargs["selected"] == "alpaca"
 
 
 # ===========================================================================
@@ -190,9 +211,9 @@ async def test_routing_override_logged() -> None:
 
 @pytest.mark.unit()
 @pytest.mark.asyncio()
-async def test_quota_check_skipped_for_yahoo() -> None:
-    """When Yahoo is selected, quota service try_consume() is NOT called."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+async def test_quota_check_skipped_for_alpaca() -> None:
+    """When Alpaca is selected (0-credit daily primary), quota try_consume() is NOT called."""
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     uow = _make_uow()
     store = MagicMock()
     store.exists = AsyncMock(return_value=False)
@@ -211,10 +232,10 @@ async def test_quota_check_skipped_for_yahoo() -> None:
     )
     task = _make_task(DatasetType.OHLCV, "1d", Provider.EODHD)
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(
         return_value=MagicMock(
-            provider=Provider.YAHOO_FINANCE,
+            provider=Provider.ALPACA,
             dataset_type=DatasetType.OHLCV,
             raw_data=b'[{"open":1}]',
             content_type="application/json",

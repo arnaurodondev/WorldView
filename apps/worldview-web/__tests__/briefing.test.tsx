@@ -176,6 +176,36 @@ describe("MorningBriefCard", () => {
     }
   });
 
+  // BP-590 recovery: ensures the collapsed view reads `summary_paragraph`
+  // even when `summary` is null. Prior to the recovery, the field was silently
+  // dropped by a bulk-commit revert and the collapsed view showed the
+  // "Details / Market Snapshot / SPY..." narrative fallback instead of the
+  // landscape paragraph.
+  it("renders summary_paragraph when summary is null (BP-590 recovery)", async () => {
+    const gw = (await import("@/lib/gateway")) as unknown as {
+      createGateway: () => { getMorningBrief: () => Promise<unknown> };
+    };
+    const orig = gw.createGateway;
+    gw.createGateway = () => ({
+      getMorningBrief: async () => ({
+        ...mockBriefResponse,
+        summary: null,
+        summary_paragraph:
+          "Broad market consolidates as semiconductors lead a defensive rotation.",
+      }),
+    });
+    try {
+      render(<MorningBriefCard />, { wrapper });
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Broad market consolidates as semiconductors/),
+        ).toBeInTheDocument();
+      });
+    } finally {
+      gw.createGateway = orig;
+    }
+  });
+
   it("falls back to narrative head when summary_paragraph is absent", async () => {
     // The default mockBriefResponse has no summary_paragraph — the collapsed
     // view must still render the narrative content (no blank card).

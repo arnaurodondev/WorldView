@@ -42,6 +42,12 @@ def _fetch_result(raw_data: bytes = b"", content_type: str = "application/json")
     fr.content_type = content_type
     fr.fetched_at = datetime.now(UTC)
     fr.duration_ms = 50
+    # ProviderFetchResult.provider is a real Provider enum on the live path; the
+    # canonicalizer now reads ``fetch_result.provider.value`` to stamp the
+    # canonical ``source`` (OHLCV-SOURCING REWORK), so the mock must expose a
+    # real enum value rather than an auto-spec MagicMock (which is not JSON
+    # serializable).
+    fr.provider = Provider.YAHOO_FINANCE
     return fr
 
 
@@ -1147,3 +1153,59 @@ async def test_passthrough_real_serializer_economic_events() -> None:
     await uc.execute(task)
     task.succeed.assert_called_once()
     task.fail.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Source-provenance regression (OHLCV-SOURCING REWORK 2026-06-17)
+# ---------------------------------------------------------------------------
+#
+# The outbox event consumed by market-data (S3) must carry the provider that
+# ACTUALLY fetched the data, not the provider the task was scheduled for.  EOD
+# OHLCV tasks are scheduled as `eodhd` but re-routed to Yahoo Finance at
+# execution time (routing_ohlcv_eod = yahoo_finance:100,eodhd:80); the real
+# fetcher is recorded in `task.fetched_by_provider`.  Before the fix the event
+# always carried the scheduled provider, so every Yahoo-fetched daily bar was
+# mislabelled `source = eodhd` in market-data.
+
+
+def _commit_task(provider: Provider, fetched_by: str | None) -> MagicMock:
+    """Minimal task stub for exercising commit_transaction directly."""
+    task = _make_task(provider=provider)
+    task.fetched_by_provider = fetched_by
+    return task
+
+
+@pytest.mark.unit
+async def test_outbox_event_uses_actual_fetch_provider_not_scheduled() -> None:
+    """commit_transaction emits fetched_by_provider, not the scheduled provider."""
+    from market_ingestion.application.use_cases.strategies.pipeline import commit_transaction
+
+    task = _commit_task(provider=Provider.EODHD, fetched_by="yahoo_finance")
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    bronze = _object_ref(bucket="market-bronze", key="bronze/key")
+    canonical = _object_ref(bucket="market-canonical", key="canonical/key")
+
+    await commit_transaction(task, bronze, canonical, row_count=1, uow=uow, log=MagicMock())
+
+    uow.outbox.add.assert_awaited_once()
+    emitted_event = uow.outbox.add.await_args.kwargs["events"][0]
+    assert emitted_event.provider == "yahoo_finance"
+
+
+@pytest.mark.unit
+async def test_outbox_event_falls_back_to_scheduled_provider_when_no_reroute() -> None:
+    """When fetched_by_provider is None (no re-route), the scheduled provider is used."""
+    from market_ingestion.application.use_cases.strategies.pipeline import commit_transaction
+
+    task = _commit_task(provider=Provider.ALPACA, fetched_by=None)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    bronze = _object_ref(bucket="market-bronze", key="bronze/key")
+    canonical = _object_ref(bucket="market-canonical", key="canonical/key")
+
+    await commit_transaction(task, bronze, canonical, row_count=1, uow=uow, log=MagicMock())
+
+    uow.outbox.add.assert_awaited_once()
+    emitted_event = uow.outbox.add.await_args.kwargs["events"][0]
+    assert emitted_event.provider == str(Provider.ALPACA)

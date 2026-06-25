@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Create all application databases + extensions.
+# Create the OLTP application databases + extensions for the main `postgres` instance.
+#
+# WORKLOAD SPLIT (2026-06-08): nlp_db, intelligence_db and kg_db moved to the
+# dedicated `postgres-intelligence` (OLAP) instance — see
+# docs/audits/2026-06-08-postgres-workload-split.md and
+# infra/postgres/init-intelligence/. They are intentionally NOT created here.
+#
 # POSTGRES_USER must be a superuser (postgres:postgres is the default for this stack).
 set -euo pipefail
 
@@ -11,9 +17,6 @@ DATABASES=(
     market_data_db
     content_ingestion_db
     content_store_db
-    nlp_db
-    intelligence_db
-    kg_db
     rag_db
     gateway_db
     alert_db
@@ -48,25 +51,8 @@ psql -d content_ingestion_db -v ON_ERROR_STOP=0 <<SQL
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 SQL
 
-# pgvector for nlp_db
-echo "Enabling pgvector in nlp_db"
-psql -d nlp_db -v ON_ERROR_STOP=0 <<SQL
-    CREATE EXTENSION IF NOT EXISTS vector;
-SQL
-
-# pgvector + pg_trgm for intelligence_db (owned by intelligence-migrations; used by S6 + S7)
-echo "Enabling pgvector and pg_trgm in intelligence_db"
-psql -d intelligence_db -v ON_ERROR_STOP=0 <<SQL
-    CREATE EXTENSION IF NOT EXISTS vector;
-    CREATE EXTENSION IF NOT EXISTS pg_trgm;
-SQL
-
-# Apache AGE for kg_db
-echo "Enabling AGE in kg_db"
-psql -d kg_db -v ON_ERROR_STOP=0 <<SQL
-    CREATE EXTENSION IF NOT EXISTS age;
-    SET search_path = ag_catalog, "\$user", public;
-    SELECT create_graph('market_kg');
-SQL
+# NOTE: nlp_db (pgvector), intelligence_db (pgvector + pg_trgm + AGE) and kg_db (AGE)
+# now live on the postgres-intelligence instance — see
+# infra/postgres/init-intelligence/init-databases.sh.
 
 echo "=== Database initialisation complete ==="

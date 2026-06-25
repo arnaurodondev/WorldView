@@ -10,6 +10,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// Round 4: HotkeyProvider is required by the page's useToolTraceChord (it
+// registers the ⌘D debug chord in the central hotkey registry via context).
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
 import type { Thread } from "@/types/api";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -88,7 +93,13 @@ function makeQC() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <QueryClientProvider client={makeQC()}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={makeQC()}>
+      {/* Round 4: useToolTraceChord registers via the hotkey registry —
+          the page needs HotkeyProvider, same as app/(app)/layout.tsx. */}
+      <HotkeyProvider registry={new HotkeyRegistry()}>{children}</HotkeyProvider>
+    </QueryClientProvider>
+  );
 }
 
 async function renderChat() {

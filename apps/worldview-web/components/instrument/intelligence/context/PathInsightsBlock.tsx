@@ -6,17 +6,21 @@
  * chain risk wants to know "Apple → TSMC → ASML" even when ASML is not directly
  * linked to Apple. PathInsightsBlock surfaces 3 such paths at a glance.
  *
- * WHY PORTFOLIO POST-FILTER:
- * The raw paths from S9 are entity-agnostic. Post-filtering to paths that contain
- * a ticker in the user's portfolio makes the insights immediately actionable —
- * "this path passes through a stock I already own". If no holding-intersecting
- * paths exist, we fall back to the 3 highest-scored paths so the block is never
- * empty for active analysts.
+ * WHO USES IT: the instrument IntelligenceTab right rail (mounted between the
+ *   Events block and Contradictions). It reads the SAME ["entity-paths", id, {}]
+ *   cache slot that `useEntityIntelligenceBundle` pre-warms on tab mount, so it
+ *   renders straight from the warm cache without firing its own initial fetch.
+ *   (Historically this block lived in the retired entity-overview ContextPanel;
+ *   the standalone /intelligence explorer uses WeirdnessBreakdown instead.)
  *
- * WHO USES IT: ContextPanel (Intelligence tab right rail, entity-overview mode).
+ * WHY NO PORTFOLIO POST-FILTER (kept simple by design):
+ *   PathNodePublic has no ticker field, so comparing n.name ("Apple Inc.")
+ *   against portfolio tickers ("AAPL") always returns false. Showing the
+ *   top-scored paths is strictly more useful than an always-empty filter, so we
+ *   just take the first `limit` paths (already weirdness-ranked by the backend).
+ *
  * DATA SOURCE:
  *   GET /v1/entities/{id}/paths → EntityPathsResponse (via useEntityPaths)
- *   TanStack Query cache read: qk.portfolios.holdings(activePortfolioId)
  * DESIGN REFERENCE: W7 design doc §5.3 (PathInsightsBlock, 38px cards).
  */
 
@@ -48,8 +52,11 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
     return (pathsData?.paths ?? []).slice(0, limit);
   }, [pathsData, limit]);
 
+  // Round-3 item 2: label-level accent bar — uniform Round-1 section marker.
+  // WHY mx-3 + pl-1.5 (was px-3): the 2px accent replaces the left padding's
+  // first pixels so the bar aligns with the rail's other section markers.
   const sectionLabel = (
-    <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground px-3 py-1 block">
+    <span className="mx-3 my-1 block border-l-2 border-l-primary pl-1.5 text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
       PATH INSIGHTS
     </span>
   );
@@ -97,6 +104,16 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
           );
           const relSummary = relationTypes.slice(0, 3).join(", ");
 
+          // PLAN-0112 T-5-03: surface the "weirdness" headline in the rail.
+          // Prefer the explicit `weirdness` field; fall back to `composite_score`
+          // for pre-PLAN-0112 rows (they are the same number when both present).
+          // If BOTH are missing/null we omit the chip entirely (back-compat).
+          const weird = path.weirdness ?? path.composite_score;
+          const weirdPct =
+            typeof weird === "number" && Number.isFinite(weird)
+              ? Math.round(Math.min(1, Math.max(0, weird)) * 100)
+              : null;
+
           return (
             <button
               key={path.insight_id}
@@ -106,8 +123,16 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
               }
               className="w-full min-h-[38px] py-1 px-2 flex flex-col justify-center text-left border border-border-subtle hover:bg-muted/20 transition-color-only duration-100"
             >
-              {/* WHY ellipsis on path: long paths ("A → B → C → D") overflow the narrow rail */}
-              <span className="text-[11px] text-foreground/90 truncate w-full">{pathLabel}</span>
+              <div className="flex w-full items-center justify-between gap-2">
+                {/* WHY ellipsis on path: long paths ("A → B → C → D") overflow the narrow rail */}
+                <span className="text-[11px] text-foreground/90 truncate">{pathLabel}</span>
+                {/* Weirdness chip (relabelled from the old composite score). */}
+                {weirdPct !== null && (
+                  <span className="shrink-0 rounded-[2px] bg-primary/15 px-1 py-0.5 text-[8px] font-mono uppercase tracking-wider text-primary">
+                    weird {weirdPct}%
+                  </span>
+                )}
+              </div>
               <span className="text-[9px] text-muted-foreground mt-0.5">
                 {path.hop_count} hop{path.hop_count !== 1 ? "s" : ""} · {relSummary}
               </span>

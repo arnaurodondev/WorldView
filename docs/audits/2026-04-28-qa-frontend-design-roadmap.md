@@ -262,7 +262,7 @@ Sort/period state not persisted across tab switches; risk-metrics responsive col
 - **Effort**: L | **Backend dep**: YES (S9)
 
 #### MAJOR — F-X-001 / F-X-002 / F-X-003: Export, Saved Screens, Column Customization
-- **Fix**: 
+- **Fix**:
   - **Export**: `[⬇ Export]` dropdown (CSV/Excel/PDF); papaparse + xlsx
   - **Saved Screens**: Save/Load named filter configs in localStorage (MVP) → S9 sync (Wave 2)
   - **Column Settings**: ⚙ icon → checklist of 12 columns + drag reorder; persist to localStorage

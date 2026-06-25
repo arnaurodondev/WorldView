@@ -9,14 +9,22 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
-from api_gateway.routes.helpers import _auth_headers, _clients
-from api_gateway.schemas import PredictionMarket, PredictionMarketsListResponse
+from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
+from api_gateway.schemas import (
+    EntityIntelligenceBundleResponse,
+    PredictionMarket,
+    PredictionMarketsListResponse,
+)
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -61,14 +69,17 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # WHY ticker: PeerComparisonPanel needs ticker to look up S3
                 # fundamentals (entity_id ≠ instrument_id; resolved by ticker).
                 "ticker": center.get("ticker") or "",
-                # B-01 (Block I T-25): description and sector are optional fields
-                # from S7 EntitySummary. Included here so the frontend type contract
-                # is stable — InlineSelectionPanel may render them if present.
+                # B-01 (Block I T-25): description, sector, and exchange are optional
+                # fields from S7 EntitySummary. Included here so the frontend type
+                # contract is stable — NodeHoverTooltip and EdgeDetailCard use them.
                 "description": center.get("description") or None,
                 "sector": center.get("sector") or None,
+                "exchange": center.get("exchange") or None,
                 # T-A-1-03 (PLAN-0091): from canonical_entities.metadata JSONB via S7.
                 "industry": center.get("industry") or None,
                 "market_cap": center.get("market_cap") or None,
+                # PLAN-0099: isin forwarded (was the only EntitySummary field dropped).
+                "isin": center.get("isin") or None,
             },
         )
 
@@ -83,12 +94,15 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "type": entity_data.get("entity_type") or "unknown",
                 "size": 1,
                 "ticker": entity_data.get("ticker") or "",
-                # B-01: description and sector forwarded if S7 provides them.
+                # B-01: description, sector, and exchange forwarded if S7 provides them.
                 "description": entity_data.get("description") or None,
                 "sector": entity_data.get("sector") or None,
+                "exchange": entity_data.get("exchange") or None,
                 # T-A-1-03 (PLAN-0091): industry + market_cap from S7 EntitySummary.
                 "industry": entity_data.get("industry") or None,
                 "market_cap": entity_data.get("market_cap") or None,
+                # PLAN-0099: isin forwarded (was the only EntitySummary field dropped).
+                "isin": entity_data.get("isin") or None,
             },
         )
 
@@ -139,6 +153,30 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "valid_from": str(rel["valid_from"]) if rel.get("valid_from") else None,
                 "valid_to": str(rel["valid_to"]) if rel.get("valid_to") else None,
                 "confidence_stale": bool(rel.get("confidence_stale") or False),
+                # ── PLAN-0099: previously-dropped S7 RelationResponse fields ──
+                # The gateway used to strip everything below, leaving the edge
+                # detail panel with nothing but label+weight ("S9 drops edge
+                # fields", 2026-05-11 graph-bugs investigation). All additive,
+                # null-safe — forward-compatible schema (R11/BP-148 pattern).
+                # WHY a separate `confidence` next to `weight`: weight coerces
+                # None→0.5 for sigma.js rendering; `confidence` preserves the
+                # null so the panel can distinguish "unknown" from "0.5".
+                "confidence": rel.get("confidence"),  # float | None
+                "semantic_mode": rel.get("semantic_mode") or None,  # RELATION_STATE | TEMPORAL_CLAIM
+                "evidence_count": int(rel.get("evidence_count") or 0),
+                # confidence * log1p(evidence_count), computed by S7 at query time.
+                "summary_authority": float(rel.get("summary_authority") or 0.0),
+                # Evidence recency window — drives "first seen / last seen" labels.
+                "first_evidence_at": str(rel["first_evidence_at"]) if rel.get("first_evidence_at") else None,
+                "latest_evidence_at": str(rel["latest_evidence_at"]) if rel.get("latest_evidence_at") else None,
+                # Confidence-breakdown extras (populated when S7 has them;
+                # null otherwise — see D-R3-001: sub-scores not yet migrated).
+                "relation_period_type": rel.get("relation_period_type") or None,  # ONGOING | ...
+                "strongest_contra_score": rel.get("strongest_contra_score"),  # float | None
+                "latest_contra_at": str(rel["latest_contra_at"]) if rel.get("latest_contra_at") else None,
+                "support": rel.get("support"),  # float | None
+                "corroboration": rel.get("corroboration"),  # float | None
+                "contradiction": rel.get("contradiction"),  # float | None
             },
         )
 
@@ -249,7 +287,7 @@ async def get_entity_graph(
     )
     # Pass non-2xx responses through unchanged (404 = entity not found, etc.)
     if resp.status_code >= 400:
-        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+        return proxy_json_response(request, resp)
 
     raw: dict[str, Any] = resp.json()
     transformed = _transform_graph_response(raw)
@@ -325,7 +363,85 @@ async def get_entity_contradictions(entity_id: UUID, request: Request) -> Any:
         f"/api/v1/entities/{entity_id}/contradictions",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+@router.get("/relations/{relation_id}")
+async def get_relation_detail(
+    relation_id: UUID,
+    request: Request,
+    evidence_limit: int = Query(default=25, ge=1, le=100),
+) -> Any:
+    """Proxy GET /api/v1/relations/{relation_id} → S7 Knowledge Graph (PLAN-0099).
+
+    Full edge detail for the Intelligence-tab edge-click panel: relation type,
+    semantic_mode, decay_class, confidence + temporal validity, the current LLM
+    summary, subject/object entity summaries, and the evidence list (each item
+    carries evidence_text + document_id + source_name/source_type).
+
+    Article title/url/published_at are NOT included in evidence items —
+    intelligence_db has no article metadata (R9). The frontend resolves
+    ``document_id`` via /v1/documents/{id} or the news endpoints when needed.
+
+    Pass-through proxy: S7 owns the response shape; new optional fields flow
+    through without gateway changes (forward-compatible, BP-148 pattern).
+    Requires authentication. 404 when the relation does not exist.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/relations/{relation_id}",
+        params={"evidence_limit": str(evidence_limit)},
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
+
+
+@router.get("/entities/{entity_id}/events")
+async def get_entity_events(
+    entity_id: UUID,
+    request: Request,
+    active_only: bool = Query(default=True),
+    event_type: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    """Proxy GET /api/v1/temporal-events?entity_id=… → S7 Knowledge Graph (PLAN-0099).
+
+    Entity-scoped temporal events for the Intelligence tab's events column.
+    S7 filters via the ``entity_event_exposures`` join table, so only events
+    the entity is exposed to are returned (lifecycle_phase computed at query
+    time; EXPIRED events excluded when ``active_only=true``).
+
+    WHY a dedicated route (vs the generic calendars in market.py): the
+    calendar routes force ``event_type`` (macro/corporate) and have no
+    entity_id support; the Intelligence tab needs ALL event types scoped to
+    one entity. ``entity_id`` is injected from the path so callers cannot
+    override it via query string.
+
+    Requires authentication. Response shape = S7 TemporalEventsListResponse
+    ``{events: [...], total}`` (pass-through).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    params: dict[str, str] = {
+        "entity_id": str(entity_id),
+        "active_only": "true" if active_only else "false",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    if event_type is not None:
+        params["event_type"] = event_type
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/temporal-events",
+        params=params,
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
 
 
 @router.post("/search/relations")
@@ -346,7 +462,7 @@ async def search_relations(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/claims/search")
@@ -367,7 +483,7 @@ async def search_claims(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity Intelligence, Narratives, Paths (PLAN-0074 Wave G) ────────────────
@@ -456,7 +572,7 @@ async def get_entity_intelligence(
             # Fail-open: caching is best-effort.
             logger.warning("intelligence_cache_write_failed", entity_id=str(entity_id))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -492,7 +608,7 @@ async def get_entity_narratives(
         params=params,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post(
@@ -552,7 +668,7 @@ async def trigger_entity_narrative_generation(
         f"/api/v1/entities/{entity_id}/narratives/generate",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity refresh trigger (REQ-003 / TASK-W0-06) ─────────────────────────────
@@ -631,7 +747,7 @@ async def trigger_entity_refresh(
         content=body_bytes if body_bytes else None,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -707,7 +823,720 @@ async def get_entity_paths(
         except Exception:
             logger.warning("paths_cache_write_failed", entity_id=str(entity_id))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+# ── Pairwise pathfinding (PLAN-0112 W4) ──────────────────────────────────────
+
+
+@router.get(
+    "/paths/between",
+    summary="On-demand pairwise pathfinding — is A connected to B, and how? (PLAN-0112 W4)",
+)
+async def get_paths_between(
+    request: Request,
+    source: UUID = Query(..., description="Source entity UUID."),
+    target: UUID = Query(..., description="Target entity UUID (must differ from source)."),
+    max_hops: int = Query(default=3, ge=1, le=3),
+    limit: int = Query(default=5, ge=1, le=20),
+    meaningful_only: bool = Query(default=False),
+) -> Any:
+    """Proxy GET /api/v1/paths/between → S7 Knowledge Graph (PRD-0112 §6.2).
+
+    On-demand bounded pairwise search reusing S7's staged-VLE engine. Returns a
+    ``connected`` flag, the ``shortest_hops`` count, and up to ``limit`` paths
+    ranked by ``weirdness`` (desc) then ``hop_count`` (asc).
+
+    Caching strategy (5-minute TTL, tenant-scoped):
+      - Cache key: ``pathbetween:<tenant>:<source>:<target>:<max_hops>:<limit>:<meaningful_only>``
+      - Pairwise results are deterministic between graph refreshes; 5 min is safe.
+      - Non-2xx responses are never cached.
+      - Fail-open on Valkey errors.
+
+    Requires authentication (the shared RateLimitMiddleware applies the standard
+    per-user request budget — no extra per-route limit needed). Errors flow
+    through from S7: 400 (source==target), 404 (entity missing), 422 (bad
+    params), 503 (AGE traversal timeout).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    cache_key = f"pathbetween:{tenant_id}:{source}:{target}:{max_hops}:{limit}:{int(meaningful_only)}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit ────────────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            logger.warning("paths_between_cache_read_failed", source=str(source), target=str(target))
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/paths/between",
+        params={
+            "source": str(source),
+            "target": str(target),
+            "max_hops": max_hops,
+            "limit": limit,
+            "meaningful_only": "true" if meaningful_only else "false",
+        },
+        headers=headers,
+    )
+
+    # ── Cache store (only 2xx) ───────────────────────────────────────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            await valkey.set(cache_key, resp.content.decode(), ex=300)
+        except Exception:
+            logger.warning("paths_between_cache_write_failed", source=str(source), target=str(target))
+
+    return proxy_json_response(request, resp)
+
+
+# ── Global weird-connections feed (PLAN-0112 W5) ─────────────────────────────
+
+
+@router.get(
+    "/connections/weird",
+    summary="Global feed of the most surprising connections in the graph (PLAN-0112 W5)",
+)
+async def get_weird_connections(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    min_weirdness: float = Query(default=0.0, ge=0.0, le=1.0),
+    since_days: int | None = Query(default=None, ge=1, le=365),
+    entity_type: str | None = Query(default=None),
+) -> Any:
+    """Proxy GET /api/v1/connections/weird → S7 Knowledge Graph (PRD-0112 §6.2).
+
+    Returns the globally most-weird precomputed connections (FR-7), read from
+    ``path_insights`` and ranked by ``weirdness`` descending, deduped to distinct
+    (src, dst) endpoint pairs.
+
+    Caching strategy (5-minute TTL, tenant-scoped):
+      - Cache key:
+        ``weird:<tenant>:<limit>:<offset>:<min_weirdness>:<since_days>:<entity_type>``
+      - Paths are recomputed by the KG scheduler; 5 min is safe.
+      - Non-2xx responses are never cached.
+      - Fail-open on Valkey errors.
+
+    Requires authentication.  Errors flow through from S7: 422 (bad params).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    # Build a deterministic, tenant-scoped cache key from all query params.
+    cache_key = f"weird:{tenant_id}:{limit}:{offset}:{min_weirdness}:{since_days or ''}:{entity_type or ''}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit ────────────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            logger.warning("weird_connections_cache_read_failed", tenant_id=tenant_id)
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # Forward only the params the caller actually set (None ⇒ omit so S7 applies
+    # its own defaults / null semantics).
+    params: dict[str, Any] = {
+        "limit": limit,
+        "offset": offset,
+        "min_weirdness": min_weirdness,
+    }
+    if since_days is not None:
+        params["since_days"] = since_days
+    if entity_type is not None:
+        params["entity_type"] = entity_type
+
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/connections/weird",
+        params=params,
+        headers=headers,
+    )
+
+    # ── Cache store (5 min — feed changes on scheduler cadence) ──────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            await valkey.set(cache_key, resp.content.decode(), ex=300)
+        except Exception:
+            logger.warning("weird_connections_cache_write_failed", tenant_id=tenant_id)
+
+    return proxy_json_response(request, resp)
+
+
+# ── Intelligence-tab bundle (PLAN-0099 H) ────────────────────────────────────
+
+
+# Default graph parameters for the bundle's depth=2 leg. These mirror the
+# frontend's GraphColumn cold-start request so the hydrated cache slot matches
+# the per-widget query key the GraphColumn issues (qk.instruments.entityGraph(id, 2)).
+# WHY limit=40: GraphColumn caps at 40 nodes for sigma.js WebGL comfort
+# (knowledge-graph.ts:70). Lower would force a refetch; higher wastes payload.
+# WHY min_confidence=0.0: Intelligence-tab full view shows all edges.
+_BUNDLE_GRAPH_DEPTH = 2
+_BUNDLE_GRAPH_LIMIT = 40
+# WHY default paths params: match the PathInsightsBlock's `limit=3` default
+# (PathInsightsBlock.tsx:38) and S7's path defaults — these are the values the
+# UI fetches on cold start so the cache hydrates the exact same call signature.
+# Note: useEntityPaths uses an empty PathFilters object by default — calling
+# with no params yields the S9 defaults (limit=10, min_score=0.3, hops 2-5).
+_BUNDLE_PATHS_LIMIT = 10
+_BUNDLE_PATHS_MIN_SCORE = 0.3
+_BUNDLE_PATHS_MIN_HOPS = 2
+_BUNDLE_PATHS_MAX_HOPS = 5
+
+
+async def _bundle_fetch_json(
+    client: Any,
+    path: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, Any] | None = None,
+    leg: str,
+) -> dict[str, Any] | None:
+    """Fetch one bundle leg; return None on any failure (typed dict or None).
+
+    WHY swallow Exception broadly: per-leg failures must not poison the whole
+    bundle. The frontend renders skeletons / "—" for null legs. Mirrors the
+    fail-soft pattern in clients/dashboard_bundle.py.
+
+    WHY timeout=15.0 here (PLAN-0099 W4 perf fix): the outer asyncio.wait_for
+    wrapping the gather uses timeout=20s. The httpx global client default is 30s.
+    If wait_for cancels at 20s but httpx is still in its read phase, the cancelled
+    coroutine holds the connection pool slot open for 10 more seconds (30-20).
+    With 6 concurrent legs this exhausts the shared connection pool and causes
+    ALL other endpoints to queue for 30s (BP-XXX). Setting per-request timeout
+    to 15s ensures httpx closes the TCP connection cleanly BEFORE the asyncio
+    outer cap fires — no zombie connections, pool stays healthy.
+    """
+    try:
+        resp = await client.get(path, params=params, headers=headers, timeout=15.0)
+        if resp.status_code >= 400:
+            logger.warning(
+                "entity_intelligence_bundle_leg_non2xx",
+                leg=leg,
+                path=path,
+                status=resp.status_code,
+            )
+            return None
+        data: dict[str, Any] = resp.json()
+        return data
+    except Exception:
+        logger.warning("entity_intelligence_bundle_leg_failed", leg=leg, path=path)
+        return None
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence-bundle",
+    response_model=EntityIntelligenceBundleResponse,
+    response_model_exclude_none=False,
+    summary="Entity Intelligence tab composite bundle (PLAN-0099 H)",
+)
+async def get_entity_intelligence_bundle(
+    entity_id: UUID,
+    request: Request,
+) -> Any:
+    """Collapse the 4-5 Intelligence-tab queries into one round-trip.
+
+    See ``EntityIntelligenceBundleResponse`` for the field contract. Each leg
+    is fetched via ``asyncio.gather(return_exceptions=True)`` and degrades
+    independently to None on failure — the page hydrates per-widget caches
+    and renders skeletons for null legs.
+
+    Legs:
+      detail               : S7 GET /api/v1/entities/{id}
+      brief                : S8 GET /api/v1/briefings/instrument/{id}
+      graph_d2             : S7 GET /api/v1/entities/{id}/graph?depth=2 (transformed
+                             via _transform_graph_response so the shape matches the
+                             frontend's getEntityGraph cache slot).
+      paths                : S7 GET /api/v1/entities/{id}/paths
+      intelligence_summary : S7 GET /api/v1/entities/{id}/intelligence
+
+    Caching strategy (5-minute TTL, cache key v2):
+      - Cache key: ``entity:bundle:v2:<entity_id>`` (TTL = 300 s).
+      - WHY bundle-level cache even though legs already cache individually:
+        the AGE graph traversal (depth=2) is the dominant cost (~2-3 s) and
+        is NOT cached at the individual /graph endpoint.  Caching the whole
+        serialised bundle avoids 6 fan-out HTTP calls on warm requests,
+        cutting p50 from ~5 s to < 50 ms.
+      - WHY 300 s: news ingestion runs hourly; entity data changes at most
+        once per hour.  5-minute TTL balances freshness with latency reduction.
+      - WHY v2 suffix: invalidates any stale v1 keys left from earlier builds.
+      - Fail-open: Valkey errors are silently swallowed so the request always
+        proceeds to the live backends.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # ── Bundle-level Valkey cache (5 min TTL) ───────────────────────────────
+    # WHY entity_id only (no tenant_id): intelligence bundles are public data
+    # (no user-private fields) so a per-entity cache key is safe across tenants
+    # and maximises cache hit rate.
+    cache_key = f"entity:bundle:v2:{entity_id}"
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            # Fail-open: Valkey error must not block the request.
+            logger.warning("bundle_cache_read_failed", entity_id=str(entity_id))
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # WHY str(entity_id) once: UUID-to-str repeated under N tasks is cheap but
+    # consistent stringification avoids a future refactor accidentally feeding
+    # the raw UUID object into f-strings (PYC's `repr` would not match).
+    eid = str(entity_id)
+
+    # ── Fan out all 6 legs concurrently via asyncio.gather ───────────────────
+    # WHY 6 legs (not 5): the B-2 fix requires a depth=1 graph fetch to merge
+    # into the depth=2 result so depth-1 neighbors are never orphaned. The
+    # prior implementation fetched this serially AFTER the 5-leg gather, adding
+    # a full KG round-trip (~1-2 s) to the critical path. By including it as a
+    # 6th concurrent leg the merge fetch overlaps with detail / brief / paths /
+    # intelligence — total wall time is bounded by the slowest single leg.
+    #
+    # WHY return_exceptions=False: _bundle_fetch_json already swallows exceptions
+    # and returns None, so no leg will ever raise into gather. Using False (not
+    # True) avoids the isinstance(result, BaseException) checks below and keeps
+    # the semantics clear: all results are dict | None.
+    # WHY wait_for(timeout=20): the gather has no outer deadline. If AGE stalls on
+    # a depth=2 Cypher query, all 6 legs complete except graph_t, and the connection
+    # hangs open for the full httpx read timeout (30 s by default on the S9 client).
+    # 20 s is generous: depth=1 SQL ≈ 500ms, depth=2 warm ≈ 2-4s, depth=2 cold ≈ 8s,
+    # depth=3 cold ≈ 12s. Beyond 20 s something is truly stuck. GraphColumn already
+    # shows a per-depth timeout UI (GRAPH_TIMEOUT_MS_BY_DEPTH) so a 504 from S9 maps
+    # gracefully to the "Graph timed out" empty state. (PLAN-0099 W4 investigation)
+    _gather = asyncio.gather(
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}",
+            headers=headers,
+            leg="detail",
+        ),
+        _bundle_fetch_json(
+            clients.rag_chat,
+            f"/api/v1/briefings/instrument/{eid}",
+            headers=headers,
+            leg="brief",
+        ),
+        # graph_d2 — S7 raw. We transform below so the shape matches the
+        # frontend cache slot (EntityGraph {entity_id, nodes, edges}).
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/graph",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_GRAPH_LIMIT,
+                "depth": _BUNDLE_GRAPH_DEPTH,
+                "min_confidence": 0.0,
+                "confidence_breakdown": "true",
+            },
+            leg="graph_d2",
+        ),
+        # graph_d1 — depth=1 SQL path (no AGE). Fetched concurrently so the
+        # B-2 merge does not add serial latency. No `depth` param → S7 default.
+        # WHY needed: at depth=2 S7 fills the entity LIMIT with depth-2 nodes;
+        # depth-1 neighbors may be absent from `entities`, which causes the
+        # orphan-edge filter to drop every edge → 0 edges. Merging depth=1 first
+        # guarantees center↔neighbor edges survive the orphan filter.
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/graph",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_GRAPH_LIMIT,
+                "min_confidence": 0.0,
+                "confidence_breakdown": "true",
+                # No `depth` param → S7 defaults to depth=1 SQL path.
+            },
+            leg="graph_d2_depth1_merge",
+        ),
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/paths",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_PATHS_LIMIT,
+                "min_score": _BUNDLE_PATHS_MIN_SCORE,
+                "min_hops": _BUNDLE_PATHS_MIN_HOPS,
+                "max_hops": _BUNDLE_PATHS_MAX_HOPS,
+            },
+            leg="paths",
+        ),
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/intelligence",
+            headers=headers,
+            leg="intelligence_summary",
+        ),
+        return_exceptions=False,
+    )
+    try:
+        detail_t, brief_t, graph_t, graph_d1_t, paths_t, intel_t = await asyncio.wait_for(_gather, timeout=20.0)
+    except TimeoutError:
+        logger.warning("intelligence_bundle_outer_timeout", entity_id=eid)
+        raise HTTPException(status_code=504, detail="Intelligence bundle timeout")  # noqa: B904
+
+    # WHY transform graph after fetch: _transform_graph_response converts the
+    # S7 {center, relations, entities} payload to the frontend's EntityGraph
+    # {entity_id, nodes, edges}. Same transform the /graph proxy applies, so
+    # the hydrated cache slot is byte-for-byte what a direct call would yield.
+    #
+    # B-2 fix: graph_d1_t (fetched concurrently above) is merged into the
+    # depth=2 result here in-memory — zero extra network latency.
+    #
+    # BP-694 / 2026-06-23 "intelligence graph empty" fix: the depth=2 leg
+    # (graph_t) runs an AGE variable-length traversal ``-[r*1..2]-`` over the
+    # whole ``entity`` vertex table.  On a DENSE HUB like AAPL (28k vertices,
+    # 157 incident edges) the AGE planner builds a Nested-Loop that removes
+    # ~291M rows via ``age_match_vle_terminal_edge`` and takes ~26-30 s — far
+    # beyond the per-leg httpx timeout (15 s), so graph_t comes back None.
+    # Previously graph_d2 was built ONLY inside ``if graph_t is not None`` and
+    # the depth=1 merge happened INSIDE that block, so when the depth=2 leg
+    # timed out we threw away the perfectly good depth=1 result (graph_d1_t,
+    # ~500 ms SQL with all 131 direct edges) and shipped graph_d2=null.  The
+    # frontend then rendered "No connections found" even though the DOSSIER rail
+    # (detail / intelligence / paths legs) populated — the exact reported
+    # symptom.  Fix: build graph_d2 from whichever leg(s) succeeded, preferring
+    # depth=2 but FALLING BACK to depth=1 when depth=2 is missing.
+    graph_d2: dict[str, Any] | None = None
+    try:
+        # Transform whichever legs succeeded.  Either may be None (timeout /
+        # 5xx) — _transform_graph_response is only called on non-None payloads.
+        t2 = _transform_graph_response(graph_t) if graph_t is not None else None
+        t1 = _transform_graph_response(graph_d1_t) if graph_d1_t is not None else None
+
+        # Base = depth=2 when available, otherwise the depth=1 fallback.  This is
+        # the single line that prevents the "empty graph on dense hub" bug: a
+        # depth=2 timeout no longer discards the depth=1 edges.
+        graph_d2 = t2 if t2 is not None else t1
+
+        # Merge depth=1 INTO depth=2 (B-2) only when BOTH succeeded — this keeps
+        # depth-1 neighbours from being orphaned by the depth=2 orphan filter.
+        # When depth=2 timed out, graph_d2 already IS t1, so no merge is needed.
+        # WHY operate on the local ``t2`` (not graph_d2) here: mypy narrows
+        # ``t2`` to non-None inside this guard, whereas ``graph_d2`` is dict|None.
+        if t2 is not None and t1 is not None:
+            existing_node_ids = {n["id"] for n in t2["nodes"]}
+            existing_edge_ids = {e["id"] for e in t2["edges"]}
+            for n in t1["nodes"]:
+                if n["id"] not in existing_node_ids:
+                    t2["nodes"].append(n)
+                    existing_node_ids.add(n["id"])
+            for e in t1["edges"]:
+                if e["id"] not in existing_edge_ids:
+                    t2["edges"].append(e)
+                    existing_edge_ids.add(e["id"])
+            # Re-apply orphan filter after merge (new edges may validate
+            # previously-orphan nodes; new nodes may validate orphan edges).
+            node_id_set2 = {n["id"] for n in t2["nodes"]}
+            t2["edges"] = [e for e in t2["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2]
+            edge_eps2: set[str] = set()
+            for e in t2["edges"]:
+                edge_eps2.add(e["source"])
+                edge_eps2.add(e["target"])
+            t2["nodes"] = [n for n in t2["nodes"] if n["id"] == eid or n["id"] in edge_eps2]
+            graph_d2 = t2
+
+        if graph_t is None and graph_d1_t is not None:
+            # Observability: a depth=2 timeout that fell back to depth=1 is a
+            # silent degradation worth tracking (dense-hub AGE perf — BP-694).
+            logger.info("intelligence_bundle_graph_depth1_fallback", entity_id=eid)
+    except Exception:
+        # Defensive: malformed S7 payload should not poison the bundle.
+        logger.warning("entity_intelligence_bundle_graph_transform_failed", entity_id=eid)
+        graph_d2 = None
+
+    bundle: dict[str, Any] = {
+        "detail": detail_t,
+        "brief": brief_t,
+        "graph_d2": graph_d2,
+        "paths": paths_t,
+        "intelligence_summary": intel_t,
+    }
+
+    # ── Cache store (5 min TTL) ──────────────────────────────────────────────
+    # Serialise the assembled bundle once and cache as raw JSON bytes so warm
+    # hits bypass both the 6-leg fan-out AND the graph transform CPU work.
+    if valkey is not None:
+        try:
+            await valkey.set(cache_key, json.dumps(bundle), ex=300)
+        except Exception:
+            # Fail-open: caching is best-effort.
+            logger.warning("bundle_cache_write_failed", entity_id=str(entity_id))
+
+    return Response(
+        content=json.dumps(bundle).encode(),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+# ── Intelligence-tab bundle SSE stream (PLAN-0099 W4 follow-up R2) ───────────
+#
+# WHY a streaming variant: even after R1 dropped graph_d2 from the non-streaming
+# bundle, paths + intelligence_summary still serialize against the slowest leg
+# in the gather. Above-the-fold widgets (detail / brief) resolve in well under
+# 200 ms but pay the worst-case latency of the rest. The streaming endpoint
+# fans out the same 5 legs (graph_d2 restored — analysts who want it can opt
+# into the stream variant) and yields each leg as it completes via
+# asyncio.wait/FIRST_COMPLETED, letting the frontend hydrate per-widget caches
+# the instant each leg is ready.
+#
+# SSE WIRE FORMAT (per spec § DELIVERABLES):
+#     event: leg
+#     data: {"leg": "<name>", "value": <json|null>, "error": "<msg>"?}
+#     <blank>
+#     ...
+#     event: done
+#     data: {"partial": <bool>}
+#     <blank>
+#
+# Per-leg semantics: failed legs surface as {value: null, error: <msg>} rather
+# than aborting the stream.
+#
+# Outer timeout: 20 s. On expiry we cancel pending legs and emit a final
+# event: done with partial: true so the frontend can decide whether to fall
+# back to the non-streaming bundle for the missing legs.
+#
+# WHY StreamingResponse (not EventSourceResponse): per task spec we use the
+# native FastAPI primitive. sse-starlette is not an api-gateway dependency.
+
+
+# Outer deadline applied to the whole fan-out. Tuned against the longest
+# observed cold-start of graph_d2 (~18 s on a freshly restarted KG container).
+_BUNDLE_STREAM_TIMEOUT_S = 20.0
+
+
+def _format_sse(event: str, payload: dict[str, Any]) -> str:
+    """Format one SSE block per RFC 8895.
+
+    Returns the full block including the terminating blank line.  Centralised
+    so the wire format is defined in exactly one place — any future change
+    (e.g. adding ``id:`` for resumability) lands here.
+
+    WHY ensure_ascii=False: JSON payloads carry user-facing entity names
+    which may contain non-ASCII characters. The SSE transport is UTF-8 by
+    default; ASCII escaping would inflate payloads and make debugging via
+    curl harder.
+    """
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+async def _leg_task(
+    name: str,
+    coro: Any,
+) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Wrap a leg coroutine so failures surface as a typed result tuple.
+
+    Returns ``(leg_name, value_or_None, error_or_None)``. Never raises —
+    callers iterate results without try/except.
+
+    WHY return tuple (not raise): ``asyncio.wait`` does not propagate
+    exceptions from awaited tasks; ``task.result()`` raises lazily. Catching
+    here gives a single uniform fail-soft shape per leg.
+    """
+    try:
+        value = await coro
+        return (name, value, None)
+    except Exception as exc:  # — fail-soft per leg by design
+        logger.warning(
+            "entity_intelligence_bundle_stream_leg_failed",
+            leg=name,
+            error=type(exc).__name__,
+        )
+        return (name, None, type(exc).__name__)
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence-bundle/stream",
+    summary="Entity Intelligence tab composite bundle (SSE streaming variant)",
+    # WHY response_class=StreamingResponse: with ``from __future__ import
+    # annotations`` the return-type hint is a ForwardRef string at import
+    # time — FastAPI tries to use it as a response model and pydantic blows
+    # up on the unresolved name. Declaring the response class here bypasses
+    # response-model generation and signals the SSE content type up-front.
+    response_class=StreamingResponse,
+)
+async def get_entity_intelligence_bundle_stream(
+    entity_id: UUID,
+    request: Request,
+) -> Any:
+    """Streaming variant of the Intelligence-tab bundle endpoint.
+
+    Same 5 legs as ``/intelligence-bundle`` (detail / brief / graph_d2 /
+    paths / intelligence_summary) but yields one SSE ``leg`` event per leg
+    as it resolves. Terminates with ``event: done``.
+
+    See module-level wire-format docstring for the exact framing.
+
+    Requires authentication (401 without a valid JWT). Per-leg failures
+    surface as ``{"leg": "<name>", "value": null, "error": "<msg>"}`` rather
+    than aborting the stream.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    eid = str(entity_id)
+
+    # ── Build the 5 leg coroutines ──────────────────────────────────────────
+    # ``_bundle_fetch_json`` already swallows non-2xx + exceptions and returns
+    # None; ``_leg_task`` additionally normalises any unexpected raise into
+    # ("name", None, "ExcType").
+    leg_specs: list[tuple[str, Any]] = [
+        (
+            "detail",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}",
+                headers=headers,
+                leg="detail",
+            ),
+        ),
+        (
+            "brief",
+            _bundle_fetch_json(
+                clients.rag_chat,
+                f"/api/v1/briefings/instrument/{eid}",
+                headers=headers,
+                leg="brief",
+            ),
+        ),
+        (
+            "graph_d2",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/graph",
+                headers=headers,
+                params={
+                    "limit": _BUNDLE_GRAPH_LIMIT,
+                    "depth": _BUNDLE_GRAPH_DEPTH,
+                    "min_confidence": 0.0,
+                    "confidence_breakdown": "true",
+                },
+                leg="graph_d2",
+            ),
+        ),
+        (
+            "paths",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/paths",
+                headers=headers,
+                params={
+                    "limit": _BUNDLE_PATHS_LIMIT,
+                    "min_score": _BUNDLE_PATHS_MIN_SCORE,
+                    "min_hops": _BUNDLE_PATHS_MIN_HOPS,
+                    "max_hops": _BUNDLE_PATHS_MAX_HOPS,
+                },
+                leg="paths",
+            ),
+        ),
+        (
+            "intelligence_summary",
+            _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/intelligence",
+                headers=headers,
+                leg="intelligence_summary",
+            ),
+        ),
+    ]
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        # WHY real Tasks: ``asyncio.wait`` requires Futures; wrapping in Task
+        # means we can cancel them deterministically on the outer timeout
+        # path (raw coroutines can't be cancelled until scheduled).
+        tasks = [asyncio.create_task(_leg_task(name, coro)) for name, coro in leg_specs]
+        partial = False
+        try:
+            pending: set[asyncio.Task[Any]] = set(tasks)
+            deadline = asyncio.get_event_loop().time() + _BUNDLE_STREAM_TIMEOUT_S
+            while pending:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    partial = True
+                    break
+                done, pending = await asyncio.wait(
+                    pending,
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    # Outer deadline hit with no new completions → partial.
+                    partial = True
+                    break
+                for task in done:
+                    name, value, error = task.result()
+                    # Apply the graph transform inline so the streamed payload
+                    # matches the per-widget cache shape (EntityGraph).
+                    if name == "graph_d2" and value is not None:
+                        try:
+                            value = _transform_graph_response(value)
+                        except Exception:
+                            logger.warning(
+                                "entity_intelligence_bundle_stream_graph_transform_failed",
+                                entity_id=eid,
+                            )
+                            value = None
+                            error = error or "transform_failed"
+                    payload: dict[str, Any] = {"leg": name, "value": value}
+                    if error is not None:
+                        payload["error"] = error
+                    yield _format_sse("leg", payload).encode("utf-8")
+        finally:
+            # Cancel any still-pending tasks so the underlying httpx calls
+            # don't outlive the response. Suppress CancelledError to keep
+            # the generator's exit clean.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                if not task.done():
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+        yield _format_sse("done", {"partial": partial}).encode("utf-8")
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        # WHY explicit no-buffer headers: many reverse proxies (nginx default)
+        # buffer text/event-stream responses unless told otherwise.
+        # X-Accel-Buffering=no is the nginx-specific opt-out; Cache-Control
+        # prevents intermediate caches from collapsing the stream.
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
@@ -759,7 +1588,7 @@ async def list_prediction_markets(
         params=forwarded,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/signals/prediction-markets/categories")
@@ -783,7 +1612,7 @@ async def get_prediction_market_categories(request: Request) -> Any:
         "/api/v1/prediction-markets/categories",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get(
@@ -813,7 +1642,7 @@ async def get_prediction_market(
         f"/api/v1/prediction-markets/{market_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/signals/prediction-markets/{market_id}/history")
@@ -835,7 +1664,7 @@ async def get_prediction_market_history(
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Entity Sentiment Timeseries (PLAN-0091 Wave A-2 / E-2, T-A-2-02) ─────────
@@ -863,4 +1692,4 @@ async def get_entity_sentiment_timeseries(
         params={"days": days},
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

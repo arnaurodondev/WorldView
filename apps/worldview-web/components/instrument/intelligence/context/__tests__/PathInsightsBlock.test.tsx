@@ -67,4 +67,56 @@ describe("PathInsightsBlock", () => {
     render(<Wrapper><PathInsightsBlock entityId="ent-001" /></Wrapper>);
     expect(screen.getByText("Path insights unavailable.")).toBeDefined();
   });
+
+  // ── PLAN-0112 T-5-03: weirdness relabel + null back-compat ──────────────────
+
+  it("shows the weirdness chip when a weirdness score is present", async () => {
+    const paths = [{
+      insight_id: "p1",
+      hop_count: 2,
+      weirdness: 0.71, // → "weird 71%"
+      path_nodes: [
+        { entity_id: "n1", name: "Apple", entity_type: "company" },
+        { entity_id: "n2", name: "Anthropic", entity_type: "company" },
+      ],
+      path_edges: [{ relation_type: "PARTNER_OF" }],
+    }];
+    mockUseEntityPaths.mockReturnValue({ data: { paths }, isLoading: false, isError: false } as never);
+    render(<Wrapper><PathInsightsBlock entityId="ent-001" /></Wrapper>);
+    await waitFor(() => screen.getByText("weird 71%"));
+  });
+
+  it("falls back to composite_score when weirdness is absent (back-compat)", async () => {
+    const paths = [{
+      insight_id: "p1",
+      hop_count: 1,
+      composite_score: 0.4, // legacy field only → "weird 40%"
+      path_nodes: [
+        { entity_id: "n1", name: "Apple", entity_type: "company" },
+        { entity_id: "n2", name: "TSMC", entity_type: "company" },
+      ],
+      path_edges: [{ relation_type: "SUPPLIER_OF" }],
+    }];
+    mockUseEntityPaths.mockReturnValue({ data: { paths }, isLoading: false, isError: false } as never);
+    render(<Wrapper><PathInsightsBlock entityId="ent-001" /></Wrapper>);
+    await waitFor(() => screen.getByText("weird 40%"));
+  });
+
+  it("omits the weirdness chip entirely when BOTH score fields are missing (old rows)", async () => {
+    const paths = [{
+      insight_id: "p1",
+      hop_count: 2,
+      // no weirdness, no composite_score → chip omitted, row still renders
+      path_nodes: [
+        { entity_id: "n1", name: "Apple", entity_type: "company" },
+        { entity_id: "n2", name: "ASML", entity_type: "company" },
+      ],
+      path_edges: [{ relation_type: "CUSTOMER_OF" }],
+    }];
+    mockUseEntityPaths.mockReturnValue({ data: { paths }, isLoading: false, isError: false } as never);
+    render(<Wrapper><PathInsightsBlock entityId="ent-001" /></Wrapper>);
+    await waitFor(() => screen.getByText("Apple → ASML"));
+    // No chip rendered for a fully-unscored legacy row.
+    expect(screen.queryByText(/weird \d+%/)).toBeNull();
+  });
 });

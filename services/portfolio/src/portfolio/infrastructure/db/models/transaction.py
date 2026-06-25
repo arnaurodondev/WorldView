@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,4 +43,13 @@ class TransactionModel(Base):
     # Nullable — not all brokers or activity types populate this. None when SnapTrade omits it.
     # Column added Alembic 0020; historical rows are NULL (nullable, no server_default).
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # PLAN-0108: BUY or SELL side for TRADE-type transactions; NULL for all other types.
+    # VARCHAR(4) is sufficient for "BUY" (3 chars) and "SELL" (4 chars).
+    # A CHECK constraint in Alembic 0021 enforces the allowed values at the DB level.
+    trade_side: Mapped[str | None] = mapped_column(
+        String(4),
+        nullable=True,
+        default=None,
+        comment="BUY or SELL for TRADE-type rows; NULL for all others",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

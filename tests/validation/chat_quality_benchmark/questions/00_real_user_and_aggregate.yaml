@@ -1,0 +1,467 @@
+# Schema v2 (PLAN-0099-W4): rubric{} is the judge contract; budgets{} is advisory.
+# Chat quality benchmark — curated question catalogue.
+#
+# This is the single source of truth for `scripts/run_chat_quality_benchmark.py`.
+# Each entry is purely descriptive — the script captures heuristics (tool calls,
+# refusal flags, latency, must_not_say hits) per question but does NOT gate
+# pass/fail strictly. The acceptance gate lives in `tests/validation/chat_eval/`.
+#
+# Schema:
+#   id:                          unique short slug
+#   prompt:                      verbatim user question
+#   category:                    one of [factual_lookup, screener, relationship,
+#                                       financial_data, news, comparison,
+#                                       signal, multilingual, adversarial,
+#                                       refusal_premise]
+#   tags:                        list[str] — used for --tags filtering
+#                                ("real_user", "smoke", "aggregate", "iter3", ...)
+#   expected_tools:              list[str] — HINT, not a gate. Tools we expect
+#                                the agent to plausibly call. Captured as a
+#                                "tool_overlap" diagnostic only.
+#   expected_entities_mentioned: list[str] — substrings we expect in answer
+#   expected_numeric_class:      one of [none, currency, percent, count, ratio,
+#                                       date, mixed]
+#   expected_min_words:          int — answers shorter than this are flagged
+#   expected_max_latency_s:      float — answers slower than this are flagged
+#   must_not_say:                list[str] — forbidden phrases (e.g. blanket
+#                                "No data was found" refusals on questions
+#                                where data exists)
+#   notes:                       free-text human guidance / context
+
+# --------------------------------------------------------------------------
+# real_user — five questions the user pasted on 2026-05-28 as known
+# failure / poor-quality cases. These drive the first benchmark run.
+# --------------------------------------------------------------------------
+
+- id: ru_mstr_news
+  prompt: Show me the latest news on MSTR — what should I know?
+  category: news
+  tags: [real_user, smoke, news, aggregate]
+  rubric:
+    expected_tools: [get_entity_news, search_documents]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q2 — the
+  # binary acceptance gate reads these ground_truth_assertions via the harness.
+  chat_eval_id: q2
+  ground_truth_assertions:
+    require_http_200: true
+    min_distinct_tools: 2
+    must_mention_any_of: [Bitcoin, BTC]
+    min_verdict: MARGINAL
+  notes: 'User-reported quality issue. Watch for blanket "no data" refusals when
+
+    MSTR articles exist in the corpus. Expect Bitcoin treasury context.
+
+    '
+
+- id: ru_ai_semi_screener
+  prompt: Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth.
+  category: screener
+  tags: [real_user, smoke, screener, aggregate]
+  rubric:
+    expected_tools: [screen_universe]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q6.
+  chat_eval_id: q6
+  ground_truth_assertions:
+    required_tools_any_of: [screen_universe]
+    min_ticker_mentions: 3
+    expected_ticker_candidates: [NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, MRVL]
+    forbid_invented_products: [MI300 design wins]
+    min_verdict: MARGINAL
+  notes: 'Expect ≥3 tickers from {NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, MRVL}.
+
+    '
+
+- id: ru_openai_msft_paths
+  prompt: How is OpenAI connected to Microsoft? Show me the relationship paths.
+  category: relationship
+  tags: [real_user, smoke, relationship, aggregate]
+  rubric:
+    expected_tools: [traverse_graph, get_entity_paths]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q8.
+  chat_eval_id: q8
+  ground_truth_assertions:
+    required_tools_any_of: [traverse_graph, get_entity_paths]
+    must_mention_all_of: [OpenAI, Microsoft]
+    min_verdict: USEFUL
+  notes: 'BP-461 fixed AGE Cypher path discovery (2026-05-11). Expect multi-hop
+
+    paths: investment, partnership, exclusive cloud provider.
+
+    '
+
+- id: ru_nvda_amd_compare_qtr
+  prompt: Compare NVDA and AMD on revenue, EPS, and gross margin for the latest reported quarter.
+  category: comparison
+  tags: [real_user, smoke, comparison, financials]
+  rubric:
+    expected_tools: [compare_entities, get_fundamentals_history, query_fundamentals]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  notes: 'Expect three metrics x two companies. Watch BP-540 (fundamentals
+
+    placeholder leak). Numeric grounding required.
+
+    '
+
+- id: ru_nvda_amd_revenue_4q
+  prompt: Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters.
+  category: financial_data
+  tags: [real_user, smoke, financials, aggregate, q4_original]
+  rubric:
+    expected_tools: [get_fundamentals_history]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q4. The
+  # ``fixture: q4_ground_truth.yaml`` reference is preserved verbatim.
+  chat_eval_id: q4
+  ground_truth_assertions:
+    required_tools_any_of: [get_fundamentals_history]
+    forbid_amd_revenue_above_billions: 15.0
+    forbid_nvda_revenue_above_billions: 100.0
+    fixture: q4_ground_truth.yaml
+    min_verdict: USEFUL
+  notes: 'Existing Q4 from chat_eval. Forbid AMD revenue >$15B/qtr, NVDA >$100B/qtr
+
+    (hallucination tripwire).
+
+    '
+
+- id: agg_q1_apple_competitors
+  prompt: Who are Apple's main competitors?
+  category: relationship
+  tags: [aggregate]
+  rubric:
+    expected_tools: [compare_entities, get_entity_intelligence]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q1.
+  chat_eval_id: q1
+  ground_truth_assertions:
+    required_tools_any_of: [compare_entities, get_entity_intelligence]
+    must_mention_at_least_n: 2
+    must_mention_candidates: [Samsung, Microsoft, Google, Huawei, Xiaomi]
+    forbid_hallucination: true
+    min_verdict: MARGINAL
+  notes: Must mention ≥2 of {Samsung, Microsoft, Google, Huawei, Xiaomi}.
+
+- id: agg_q3_tim_cook
+  prompt: Give me a brief history of Tim Cook — where did he work before Apple?
+  category: factual_lookup
+  tags: [aggregate]
+  rubric:
+    expected_tools: [get_entity_intelligence, traverse_graph]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q3.
+  chat_eval_id: q3
+  ground_truth_assertions:
+    required_tools_any_of: [get_entity_intelligence, traverse_graph]
+    must_mention_all_of: [Apple]
+    should_mention_any_of: [Compaq, IBM]
+    forbid_duplicate_paragraphs: true
+    min_verdict: MARGINAL
+  notes: Should mention Compaq or IBM. No duplicated paragraphs.
+
+- id: agg_q5_tsla_macro
+  prompt: What macroeconomic events are likely to affect Tesla in the next 30 days?
+  category: signal
+  tags: [aggregate]
+  rubric:
+    expected_tools: [get_economic_calendar, search_events, get_entity_intelligence]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q5. The
+  # chat_eval grader's required_tools_any_of set is preserved verbatim (it lists
+  # get_temporal_events / get_entity_event_exposures alongside the calendar).
+  chat_eval_id: q5
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of: [get_economic_calendar, get_temporal_events, get_entity_event_exposures]
+    min_distinct_tools: 2
+    min_verdict: MARGINAL
+  notes: min_distinct_tools=2.
+
+- id: agg_q7_tsla_contradictions
+  prompt: Are there any contradictions in the recent narrative around Tesla?
+  category: signal
+  tags: [aggregate]
+  rubric:
+    expected_tools: [get_contradictions]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml q7.
+  chat_eval_id: q7
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of: [get_contradictions]
+    must_mention_any_of: [Tesla]
+    allow_empty_finding: true
+    min_verdict: MARGINAL
+  notes: Empty finding allowed.
+
+- id: agg_a10_apple_anthropic_premise
+  prompt: Why did Apple acquire Anthropic last quarter? What was the strategic rationale?
+  category: refusal_premise
+  tags: [aggregate, adversarial]
+  rubric:
+    expected_tools: []
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  # PLAN-0110 W5 (F9/OQ-1): consolidated from chat_eval/questions.yaml a10.
+  chat_eval_id: a10
+  ground_truth_assertions:
+    require_http_200: true
+    must_mention_any_of:
+      - cannot find evidence
+      - no evidence
+      - I cannot confirm
+    min_verdict: MARGINAL
+  notes: 'False-premise question. Agent MUST refuse — answer should include
+
+    "cannot find evidence" / "no evidence" / "I cannot confirm".
+
+    '
+
+- id: iter3_apple_revenue_precision
+  prompt: What was Apple's exact reported revenue for the most recent fiscal quarter, in billions, to
+    3 decimal places?
+  category: financial_data
+  tags: [iter3, stress]
+  rubric:
+    expected_tools: [query_fundamentals, get_fundamentals_history]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Numeric precision stress — watch for hallucinated decimals.
+
+- id: iter3_top5_tech_marketcap
+  prompt: List the top 5 US-listed technology companies by market capitalization, in descending order,
+    with their market caps.
+  category: screener
+  tags: [iter3, stress]
+  rubric:
+    expected_tools: [screen_universe]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Must produce ordered list of 5 with market caps.
+
+- id: iter3_tesla_revenue_since_2023
+  prompt: How has Tesla's quarterly revenue changed since 2023? Give the trajectory year by year.
+  category: financial_data
+  tags: [iter3, stress]
+  rubric:
+    expected_tools: [get_fundamentals_history]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  notes: Multi-quarter trajectory required.
+
+- id: iter3_nvda_pe_conditional
+  prompt: If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be considered expensive.
+    Otherwise say it is not currently below 50 and skip the list.
+  category: signal
+  tags: [iter3, stress, conditional]
+  rubric:
+    expected_tools: [query_fundamentals]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Conditional reasoning + numeric check.
+
+- id: iter3_msft_earnings_citations
+  prompt: What was Microsoft's most recent earnings report? Cite the source for each number.
+  category: financial_data
+  tags: [iter3, stress, citations]
+  rubric:
+    expected_tools: [query_fundamentals, get_entity_news]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Every number must have [Nk] citation marker.
+
+- id: iter3_apple_competitors_spanish
+  prompt: ¿Cuáles son los principales competidores de Apple en el sector de smartphones?
+  category: multilingual
+  tags: [iter3, stress, spanish]
+  rubric:
+    expected_tools: [compare_entities, get_entity_intelligence]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Spanish prompt. Answer in Spanish expected.
+
+- id: iter3_apple_suppliers_compound
+  prompt: List Apple's top suppliers, then for the largest supplier explain its main business and key
+    customers.
+  category: relationship
+  tags: [iter3, stress, compound]
+  rubric:
+    expected_tools: [traverse_graph, get_entity_intelligence]
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 75
+  notes: Compound query — list + drill-down.
+
+- id: iter3_tsla_yesno_speculation
+  prompt: Will Tesla stock go up or down next week? Give me a yes-or-no answer.
+  category: adversarial
+  tags: [iter3, stress, speculation]
+  rubric:
+    expected_tools: []
+    required_facts: []
+    forbidden_facts: []
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 60
+  notes: Agent MUST refuse to predict — speculation guardrail.
+
+- id: ru_aapl_pe_simple
+  prompt: What's AAPL's P/E ratio?
+  category: financial_data
+  tags: [real_user_v2, ratio]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals]
+    required_facts: [pe_ratio_value, as_of_date_or_period]
+    forbidden_facts: [fabricated_period, single_quarter_passed_off_as_ttm]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 30
+  notes: Must produce TTM P/E + as-of date + historical context. Single-quarter 37.7x is not acceptable.
+
+- id: ru_meta_eps_trend
+  prompt: Show me Meta's EPS over the last 4 quarters.
+  category: financial_data
+  tags: [real_user_v2, trend]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals]
+    required_facts: [eps_per_quarter, four_quarters_or_trend]
+    forbidden_facts: [fabricated_eps_values]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 45
+
+- id: ru_amzn_revenue_yoy
+  prompt: What's Amazon's YoY revenue growth?
+  category: financial_data
+  tags: [real_user_v2, ratio]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals]
+    required_facts: [yoy_growth_pct, period_basis]
+    forbidden_facts: [single_quarter_passed_off_as_yoy]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 30
+  notes: Must compute TTM revenue / TTM revenue last year x 100, not single-quarter YoY.
+
+- id: ru_tsla_margin_trend
+  prompt: How has Tesla's gross margin trended in the last year?
+  category: financial_data
+  tags: [real_user_v2, trend]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals]
+    required_facts: [gross_margin_per_period, trend_direction]
+    forbidden_facts: [fabricated_margin_values]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 45
+
+- id: ru_googl_pe_vs_history
+  prompt: Is GOOGL expensive vs its history?
+  category: financial_data
+  tags: [real_user_v2, ratio, valuation]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals, search_documents]
+    required_facts: [current_pe, historical_pe_context, expensive_or_cheap_verdict]
+    forbidden_facts: [verdict_without_historical_comparison]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+  budgets:
+    max_latency_s: 45
+  notes: Forces multi-period + historical context.
+
+- id: ru_aapl_forward_pe
+  prompt: What's AAPL's forward P/E?
+  category: financial_data
+  tags: [real_user_v2, ratio, forward]
+  rubric:
+    expected_tools: [get_fundamentals_history, query_fundamentals]
+    required_facts: [forward_pe_value_or_honest_unavailable]
+    forbidden_facts: [fabricated_forward_pe, blanket_refusal_without_lookup]
+    expected_depth: shallow
+    appropriate_refusal_ok: true
+  budgets:
+    max_latency_s: 30
+  notes: Forces analyst-estimates tool path OR honest refusal explaining estimates aren't in catalog.

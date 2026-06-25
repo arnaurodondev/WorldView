@@ -40,6 +40,32 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# BP-NEW asyncpg pool resilience (Final-QA-3-deep):
+# Tuple of exception classes that signal the underlying asyncpg connection
+# was killed out from under SQLAlchemy (typical after a Postgres restart).
+# Import lazily and guard with try/except — ``libs/messaging`` does not
+# hard-depend on asyncpg, but every consumer in worldview happens to use it.
+# When asyncpg is not installed (tests, alternate drivers) we still want the
+# consumer to be importable; the empty tuple makes the ``except`` clause a
+# no-op which is the correct fallback.
+try:
+    # Cover BOTH codes: import-not-found (asyncpg absent) AND import-untyped
+    # (asyncpg installed but ships no stubs — the case in CI's mypy env).
+    from asyncpg.exceptions import (  # type: ignore[import-not-found, import-untyped]
+        ConnectionDoesNotExistError as _AsyncpgConnDoesNotExist,
+    )
+    from asyncpg.exceptions import (  # type: ignore[import-not-found, import-untyped]
+        InterfaceError as _AsyncpgInterfaceError,
+    )
+
+    _ASYNCPG_CONN_ERRORS: tuple[type[BaseException], ...] = (
+        _AsyncpgConnDoesNotExist,
+        _AsyncpgInterfaceError,
+    )
+except ImportError:  # pragma: no cover - defensive
+    _ASYNCPG_CONN_ERRORS = ()
+
+
 # ── LIB-002 / TASK-W2-06: dead-letter topic emission ──────────────────────────
 #
 # Suffix appended to the original topic name to derive the canonical DLQ
@@ -47,6 +73,115 @@ logger = get_logger(__name__)
 # of truth.  Following the worldview ``<domain>.<entity>.<verb>.v<version>``
 # convention, ``.dead-letter.v1`` is appended verbatim.
 DLQ_TOPIC_SUFFIX: str = ".dead-letter.v1"
+
+
+# ── F-2 / Fix-3 (2026-06-11): cross-service dead-letter metric ────────────────
+#
+# A single global Prometheus counter so operators can alert on dead-letter
+# bursts across every consumer in one expression:
+#
+#   rate(kafka_messages_dead_lettered_total[5m]) > 0
+#
+# Registered on the default global REGISTRY at import time with the same
+# duplicate-registration guard used for ``KAFKA_CONSUMER_MESSAGES`` in
+# ``observability.metrics`` (a test may re-import this module under a reloaded
+# registry).  ``prometheus_client`` is imported guardedly: ``libs/messaging``
+# pulls it in transitively via ``observability``, but the guard keeps the
+# module importable (metric becomes a no-op) in any stripped-down environment
+# so the dead-letter counting never crashes a consumer.
+try:
+    from prometheus_client import REGISTRY as _PROM_REGISTRY
+    from prometheus_client import Counter as _PromCounter
+
+    try:
+        KAFKA_MESSAGES_DEAD_LETTERED = _PromCounter(
+            "kafka_messages_dead_lettered_total",
+            "Total Kafka messages dead-lettered by this client (cross-service rollup).",
+            labelnames=("service", "topic", "reason"),
+        )
+    except ValueError:
+        # Already registered (re-import / test reload) — fetch the existing one.
+        _existing_dl = _PROM_REGISTRY._names_to_collectors.get("kafka_messages_dead_lettered_total")
+        if _existing_dl is None:
+            raise
+        KAFKA_MESSAGES_DEAD_LETTERED = _existing_dl  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive (prometheus_client absent)
+
+    class _NoOpDeadLetterMetric:
+        """Fallback so dead-letter counting never raises when prometheus is absent."""
+
+        def labels(self, **_kwargs: str) -> _NoOpDeadLetterMetric:
+            return self
+
+        def inc(self, _amount: float = 1.0) -> None:
+            pass
+
+    KAFKA_MESSAGES_DEAD_LETTERED = _NoOpDeadLetterMetric()  # type: ignore[assignment]
+
+
+# ── Consumer liveness heartbeat (2026-06-16, BP-700) ──────────────────────────
+#
+# Mirror of the dispatcher-side ``{ns}_outbox_last_delivery_timestamp`` staleness
+# gauge (commit f3b5eb14c).  Every consumer publishes a single global gauge
+# ``kafka_consumer_last_progress_timestamp`` (unix seconds) that is refreshed on
+# EVERY poll cycle — whether or not a message was returned — so a HEALTHY but
+# idle consumer still heartbeats, while a DEAD poll loop (the silent-consumer-
+# death incident) goes stale.  A container healthcheck / Prometheus alert can
+# then fire on staleness:
+#
+#   time() - kafka_consumer_last_progress_timestamp{...} > 300
+#
+# The ``group_id`` label lets operators pinpoint the wedged consumer.  Same
+# duplicate-registration guard + no-op fallback as the dead-letter counter above
+# so the heartbeat never crashes a consumer in a stripped-down environment.
+try:
+    from prometheus_client import REGISTRY as _PROM_REGISTRY_HB
+    from prometheus_client import Gauge as _PromGauge
+
+    try:
+        KAFKA_CONSUMER_LAST_PROGRESS = _PromGauge(
+            "kafka_consumer_last_progress_timestamp",
+            "Unix timestamp of this consumer's last poll-loop progress (liveness heartbeat).",
+            labelnames=("service", "group_id"),
+        )
+    except ValueError:
+        _existing_hb = _PROM_REGISTRY_HB._names_to_collectors.get("kafka_consumer_last_progress_timestamp")
+        if _existing_hb is None:
+            raise
+        KAFKA_CONSUMER_LAST_PROGRESS = _existing_hb  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive (prometheus_client absent)
+
+    class _NoOpHeartbeatGauge:
+        """Fallback so heartbeat updates never raise when prometheus is absent."""
+
+        def labels(self, **_kwargs: str) -> _NoOpHeartbeatGauge:
+            return self
+
+        def set(self, _value: float) -> None:
+            pass
+
+    KAFKA_CONSUMER_LAST_PROGRESS = _NoOpHeartbeatGauge()  # type: ignore[assignment]
+
+
+# Tuple of exception type NAMES (matched on the class name, since librdkafka
+# wraps everything in ``confluent_kafka.KafkaException``/``KafkaError`` and we
+# do not want a hard import dependency on confluent_kafka at module import time)
+# plus the stdlib transient types that signal a *transient broker/transport*
+# problem the consumer should RECONNECT through rather than die on.  Used by
+# :meth:`BaseKafkaConsumer._is_transient_broker_error`.
+_TRANSIENT_BROKER_ERROR_NAMES: frozenset[str] = frozenset(
+    {
+        "KafkaException",
+        "KafkaError",
+        "TimeoutError",
+        "ConnectionError",
+        "ConnectionResetError",
+        "ConnectionRefusedError",
+        "BrokerNotAvailableError",
+        "NodeNotReadyError",
+        "CoordinatorNotAvailableError",
+    }
+)
 
 
 @runtime_checkable
@@ -158,6 +293,65 @@ class ConsumerConfig:
     # Reference: KIP-429 (incremental cooperative rebalancing) and
     # librdkafka >=1.6 cooperative-sticky support.
     partition_assignment_strategy: str = "cooperative-sticky"
+    # F-2 / Fix-3 (2026-06-11): opt-in persistent retry counter.
+    #
+    # When False (the DEFAULT) the consumer behaves EXACTLY as it did before
+    # this flag existed — ``_handle_failure`` uses a hardcoded attempt=1, never
+    # seeks back, and only ``FatalError`` ever dead-letters (the historical,
+    # known-broken-but-stable behaviour).  This guarantees byte-for-byte
+    # behaviour-equivalence for the 30 consumers that do NOT opt in.
+    #
+    # When True the consumer:
+    #   * reads a PERSISTED attempt count keyed by (group_id, event_id) via
+    #     :meth:`_get_attempt_count` (subclass-provided; default returns 0),
+    #   * dead-letters AND commits the offset once attempts are exhausted (so
+    #     the offset advances past the now-dead-lettered poison message),
+    #   * otherwise records the attempt, does NOT commit, and SEEKS BACK to the
+    #     failed offset so librdkafka redelivers it (with exponential backoff)
+    #     instead of silently skipping it on the next successful message.
+    #
+    # Rollout is per-consumer and deliberately separate from this commit — a
+    # consumer must also provide a durable ``failed_events`` table + override
+    # :meth:`_get_attempt_count` / :meth:`_record_attempt` before flipping this
+    # to True, otherwise attempt counts reset to 0 every redelivery and the
+    # message loops until ``dead_letter_cap`` trips.  See docs/libs/messaging.md.
+    enable_persistent_retry: bool = False
+    # Kafka static group membership (KIP-345). When set, this value is passed
+    # to librdkafka as ``group.instance.id``. Static membership prevents
+    # unnecessary rebalances on consumer restarts — useful for consumers with
+    # long processing times. None (the default) uses the original dynamic
+    # membership behaviour.
+    group_instance_id: str | None = None
+    # ── FAILURE MODE 2: consumer connection-setup resilience ──────────────────
+    # The wedge incident surfaced as
+    #   ``GroupCoordinator: kafka:29092: Connection setup timed out in state
+    #     CONNECT (after ~31000ms)``
+    # — i.e. the librdkafka shared base ``socket.connection.setup.timeout.ms``
+    # of 30_000 (30s, +jitter ≈ 31s) is the exact knob that fired. A coordinator
+    # blip should self-heal in *seconds*, not block a full 31s per attempt before
+    # the BP-700 reconnect loop even gets a turn. We lower it to 10s **for
+    # consumers only** (this value is spread on top of the shared base in
+    # ``to_dict``, so it overrides the base without touching producer config,
+    # which other owners control). Settings-driven so an operator can retune.
+    socket_connection_setup_timeout_ms: int = 10_000
+    # Close idle broker sockets after this long so a half-dead connection that
+    # survived a host-sleep / NAT-timeout is torn down and re-established on the
+    # next use instead of hanging until a poll fails. 9 minutes < the common
+    # 10-minute cloud LB idle cutoff, so we drop the socket before the LB does.
+    connections_max_idle_ms: int = 540_000
+    # CPU-bottleneck fix (2026-06-21 cpu-profile): when a consumer is wedged off
+    # the broker (network-path break / CPU-starved handshake), librdkafka's
+    # background thread retries the connection. Without an explicit, generous
+    # backoff CAP it reconnects aggressively and can busy-spin at ~90% CPU at ZERO
+    # throughput (observed live: 4 market-data consumers + the temporal-event
+    # consumer pegged a core EACH while processing 0 messages — see
+    # docs/audits/2026-06-21-*-cpu-profile.md). Pinning a 1s floor and a 20s cap
+    # makes a disconnected client back off (one attempt per ≤20s) instead of
+    # hot-spinning, bounding the wasted CPU AND easing the reconnect load on an
+    # already-stressed broker. Healthy connections are unaffected (these only
+    # apply while disconnected). Settings-driven so an operator can retune.
+    reconnect_backoff_ms: int = 1_000
+    reconnect_backoff_max_ms: int = 20_000
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -175,18 +369,38 @@ class ConsumerConfig:
         # PLAN-0093 Wave A-2 (F-LOG-003): prepend the rdkafka base config so
         # every consumer carries broker.address.ttl=30s + family=v4.  User
         # keys are spread on top → per-consumer overrides still win.
-        return apply_base_rdkafka_config(
-            {
-                "bootstrap.servers": self.bootstrap_servers,
-                "group.id": self.group_id,
-                "auto.offset.reset": self.auto_offset_reset,
-                "enable.auto.commit": self.enable_auto_commit,
-                "session.timeout.ms": self.session_timeout_ms,
-                "heartbeat.interval.ms": self.heartbeat_interval_ms,
-                "max.poll.interval.ms": self.max_poll_interval_ms,
-                "partition.assignment.strategy": self.partition_assignment_strategy,
-            }
-        )
+        cfg: dict[str, object] = {
+            "bootstrap.servers": self.bootstrap_servers,
+            "group.id": self.group_id,
+            "auto.offset.reset": self.auto_offset_reset,
+            "enable.auto.commit": self.enable_auto_commit,
+            "session.timeout.ms": self.session_timeout_ms,
+            "heartbeat.interval.ms": self.heartbeat_interval_ms,
+            "max.poll.interval.ms": self.max_poll_interval_ms,
+            "partition.assignment.strategy": self.partition_assignment_strategy,
+            # FAILURE MODE 2: consumer-local connection-setup resilience. These
+            # are spread on top of the shared base in ``apply_base_rdkafka_config``
+            # (caller keys win), so they override the base 30s setup-timeout for
+            # consumers ONLY — producers keep the shared base value. A coordinator
+            # connect that hangs is failed fast (10s) so the BP-700 reconnect loop
+            # retries promptly instead of burning ~31s per attempt.
+            "socket.connection.setup.timeout.ms": self.socket_connection_setup_timeout_ms,
+            "connections.max.idle.ms": self.connections_max_idle_ms,
+            # Reconnect backoff (see field docs): bound the disconnected-client
+            # reconnect spin so a wedged consumer backs off instead of pegging a
+            # core at zero throughput.
+            "reconnect.backoff.ms": self.reconnect_backoff_ms,
+            "reconnect.backoff.max.ms": self.reconnect_backoff_max_ms,
+        }
+        # KIP-345 static group membership: only set if configured so consumers
+        # that omit it retain the original dynamic membership behaviour. The
+        # settings-driven scopes default to an empty string ("") rather than
+        # None (pydantic ``str = ""`` fields), so a falsy guard — not ``is not
+        # None`` — is required for empty to stay a true no-op (PLAN-0113 NFR-3:
+        # the key must be ABSENT from the rdkafka payload for dynamic members).
+        if self.group_instance_id:
+            cfg["group.instance.id"] = self.group_instance_id
+        return apply_base_rdkafka_config(cfg)
 
 
 @dataclasses.dataclass
@@ -201,6 +415,11 @@ class FailureInfo(Generic[TFailure]):
         attempt: Current attempt count (1-based).
         last_error: The most recent exception.
         record: Optional failure record for persistence (subclass-defined).
+        raw_payload: Original Kafka message bytes (``msg.value()``).  P0-①
+            (2026-06-18): carried through to :meth:`_dead_letter_impl` so a
+            subclass can persist a REQUEUE-ABLE payload (the original doc_id /
+            minio_silver_key) into its DLQ table instead of a metadata-only
+            stub.  ``None`` when the raw bytes were unavailable at failure time.
     """
 
     event_id: str
@@ -210,6 +429,7 @@ class FailureInfo(Generic[TFailure]):
     attempt: int
     last_error: BaseException
     record: TFailure | None = None
+    raw_payload: bytes | None = None
 
 
 class UnitOfWorkProtocol(ABC):
@@ -288,6 +508,17 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         self._lag_calculator: LagCalculator | None = (
             LagCalculator() if backpressure_policy is not None and backpressure_policy.enabled else None
         )
+        # BP-700 liveness heartbeat: monotonic-ish wall-clock timestamp (unix
+        # seconds) of the last poll-loop progress.  Refreshed every poll cycle
+        # (idle OR message) so an alive-but-idle consumer still heartbeats while
+        # a dead loop goes stale.  ``-1.0`` means "not yet started".  Exposed via
+        # :meth:`seconds_since_progress` for an in-process liveness healthcheck.
+        self._last_progress_ts: float = -1.0
+        # BP-700 reconnect bookkeeping: number of consecutive transient-error
+        # reconnect cycles.  Drives exponential backoff and the terminal-stop
+        # ceiling so a permanently-down broker still eventually force-exits for a
+        # fresh container (instead of spinning a reconnect loop forever).
+        self._reconnect_attempts: int = 0
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
@@ -451,10 +682,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         return json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
 
-    async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
+    async def dead_letter(self, failure: FailureInfo[TFailure], reason: str | None = None) -> None:
         """Move a failure record to the dead-letter store with cap enforcement.
 
-        Increments the internal dead-letter counter and delegates to
+        Increments the internal dead-letter counter, emits the cross-service
+        ``kafka_messages_dead_lettered_total`` metric, and delegates to
         :meth:`_dead_letter_impl`.  If the counter exceeds
         ``config.dead_letter_cap``, a :exc:`RuntimeError` is raised to crash
         the consumer and trigger a container restart — preventing a runaway
@@ -462,11 +694,29 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
 
         Args:
             failure: :class:`FailureInfo` that exceeded max retries.
+            reason: Optional dead-letter reason for the metric ``reason`` label
+                (e.g. ``"fatal"``, ``"max_retries"``, ``"timeout"``).  When
+                ``None`` it is derived from the failure's error type so every
+                call site — including the historical FatalError path that never
+                opted into persistent retry — produces a sensible label.
 
         Raises:
             RuntimeError: When the dead-letter count exceeds the configured cap.
         """
         self._dead_letter_count += 1
+        # Emit the metric BEFORE the cap check so the message that trips the cap
+        # is still counted as dead-lettered (it WAS routed here as a DLQ event).
+        # This path fires for EVERY dead-letter — including the FatalError path
+        # that already dead-letters today — so non-opted consumers also gain the
+        # metric without any behaviour change.
+        metric_reason = reason or (
+            "fatal" if isinstance(failure.last_error, FatalError) else type(failure.last_error).__name__
+        )
+        KAFKA_MESSAGES_DEAD_LETTERED.labels(
+            service=(self._metrics.service_name if self._metrics is not None else self._config.group_id),
+            topic=failure.topic,
+            reason=metric_reason,
+        ).inc()
         if self._dead_letter_count > self._config.dead_letter_cap:
             logger.critical(
                 "dead_letter_cap_exceeded",
@@ -588,6 +838,132 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             self._consumer.close()
             logger.info("kafka_consumer_stopped", group_id=self._config.group_id)
 
+    # ── BP-700: liveness heartbeat + transient-error reconnect ────────────────
+
+    def _record_progress(self) -> None:
+        """Refresh the liveness heartbeat (gauge + instance timestamp).
+
+        Called every poll cycle — on an idle poll (no message) AND after a
+        successful consume — so a HEALTHY but idle consumer still heartbeats
+        while a DEAD poll loop (the silent-consumer-death incident) goes stale.
+        A staleness alert / healthcheck then catches the dead loop that the
+        HTTP-only healthcheck never could.
+        """
+        now = time.time()
+        self._last_progress_ts = now
+        KAFKA_CONSUMER_LAST_PROGRESS.labels(
+            service=(self._metrics.service_name if self._metrics is not None else self._config.group_id),
+            group_id=self._config.group_id,
+        ).set(now)
+
+    def seconds_since_progress(self) -> float | None:
+        """Return seconds since the last poll-loop progress, or ``None``.
+
+        ``None`` before the loop has made its first progress tick (so a probe
+        does not flag a just-started consumer).  Exposed so an in-process
+        liveness endpoint / CLI healthcheck can fail when the loop is stale —
+        the load-bearing signal that prevents a dead loop from ever again
+        looking "healthy".
+        """
+        if self._last_progress_ts < 0:
+            return None
+        return time.time() - self._last_progress_ts
+
+    @staticmethod
+    def _is_transient_broker_error(exc: BaseException) -> bool:
+        """Classify *exc* as a transient broker/transport error worth reconnecting.
+
+        We match on the exception class name (and its MRO) rather than importing
+        ``confluent_kafka`` at module scope — librdkafka wraps connectivity
+        problems in ``KafkaException``/``KafkaError``, and a connection setup
+        timeout surfaces as a stdlib ``TimeoutError`` / ``ConnectionError``.
+        A transient classification triggers a bounded-backoff RECONNECT instead
+        of a terminal stop; anything unrecognised falls through to the normal
+        failure/DLQ path (so a genuine application bug is never masked as a
+        broker blip).
+        """
+        return any(klass.__name__ in _TRANSIENT_BROKER_ERROR_NAMES for klass in type(exc).__mro__)
+
+    def _reset_consumer(self) -> None:
+        """Tear down the cached consumer so the next cycle rebuilds a fresh one.
+
+        Mirror of the dispatcher's ``_reset_producer()`` (commit f3b5eb14c): on
+        a transient broker error the cached ``confluent_kafka.Consumer`` may hold
+        a half-open connection that never recovers.  We best-effort ``close()``
+        it (swallowing errors — it is already broken) and null the reference so
+        :meth:`_reconnect_with_backoff` builds a brand-new consumer with a fresh
+        DNS lookup + group rejoin.  Paused-partition tracking is cleared because
+        the new consumer starts with an empty assignment.
+        """
+        old = self._consumer
+        self._consumer = None
+        self._paused_partitions.clear()
+        if old is not None:
+            try:
+                old.close()
+            except Exception as exc:  # pragma: no cover - best-effort teardown
+                logger.warning(
+                    "kafka_consumer_reset_close_failed",
+                    group_id=self._config.group_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+    async def _reconnect_with_backoff(self) -> bool:
+        """Reconnect the consumer after a transient broker error, with backoff.
+
+        Returns ``True`` once a fresh consumer is subscribed, or ``False`` if the
+        stop event fired during the backoff (graceful shutdown).  Increments
+        :attr:`_reconnect_attempts` and sleeps an exponential, jittered backoff
+        before rebuilding so a flapping broker is not hammered.  When the attempt
+        count crosses :attr:`_reconnect_max_attempts` the consumer FORCE-EXITS
+        (``sys.exit(2)``) so the orchestrator restarts the container with a fresh
+        process — a truly unrecoverable broker outage degrades to a loud restart,
+        never a silent zombie.
+        """
+        self._reconnect_attempts += 1
+        if self._reconnect_attempts > self._reconnect_max_attempts:
+            logger.critical(
+                "kafka_consumer_reconnect_exhausted",
+                group_id=self._config.group_id,
+                attempts=self._reconnect_attempts,
+                action="exiting_with_code_2_for_fresh_container",
+            )
+            sys.exit(2)
+        backoff = self._compute_backoff(self._reconnect_attempts)
+        logger.warning(
+            "kafka_consumer_reconnecting",
+            group_id=self._config.group_id,
+            attempt=self._reconnect_attempts,
+            backoff_seconds=round(backoff, 2),
+        )
+        # Interruptible backoff — a stop signal during the wait ends cleanly.
+        try:
+            await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+            return False  # stop fired during backoff → graceful shutdown
+        except TimeoutError:
+            pass
+        self._reset_consumer()
+        try:
+            self._init_kafka()
+        except Exception as exc:
+            # Rebuild itself failed (e.g. broker still down) — log and let the
+            # NEXT loop iteration retry via this same path; do not crash.
+            logger.warning(
+                "kafka_consumer_reconnect_init_failed",
+                group_id=self._config.group_id,
+                attempt=self._reconnect_attempts,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return False
+        logger.info(
+            "kafka_consumer_reconnected",
+            group_id=self._config.group_id,
+            attempt=self._reconnect_attempts,
+        )
+        return True
+
     def _compute_backoff(self, attempt: int) -> float:
         """Return back-off duration in seconds for the given *attempt*.
 
@@ -646,14 +1022,39 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     await self.process_message(key, value, headers)
                 await uow.commit()
                 await self.mark_processed(event_id)
-            except TimeoutError:
+            except TimeoutError as timeout_exc:
                 # BP-302 watchdog: poison message hung processing for timeout_s.
-                # Dump a stack trace, dead-letter the message, and continue so
-                # the consumer does not stall on re-delivery of the same message.
+                # Dump a stack trace so the hung frame is captured, then roll back
+                # the whole-article unit of work (no partial-progress checkpoint).
                 import faulthandler
 
                 faulthandler.dump_traceback(file=sys.stderr)
                 await uow.rollback()
+
+                # P0-② (2026-06-18): the watchdog used to FORCE attempt=max_retries
+                # and dead-letter the message INLINE, turning a transient host /
+                # GLiNER saturation into permanent data loss (2,236 of 2,316
+                # historical dead-letters).  For consumers that opt into the
+                # durable attempt-count retry path (enable_persistent_retry=True),
+                # RE-RAISE the timeout as a NetworkTimeoutError so it flows through
+                # ``_handle_failure`` exactly like any other transient failure —
+                # counting as ONE attempt, seeking back with backoff, and dead-
+                # lettering ONLY after genuinely exhausting max_retries.  Poison
+                # protection is preserved: a message that ALWAYS times out reaches
+                # max_retries via the durable counter and is then dead-lettered.
+                #
+                # NetworkTimeoutError is a RetryableError, so the OFF path (legacy
+                # consumers with attempt hardcoded to 1) would loop forever on it —
+                # there the historical terminal-inline-dead-letter is preserved
+                # byte-for-byte below.
+                from messaging.kafka.consumer.errors import NetworkTimeoutError
+
+                if self._config.enable_persistent_retry:
+                    raise NetworkTimeoutError(
+                        f"message_processing_timeout after {timeout_s}s",
+                    ) from timeout_exc
+
+                # ── Legacy OFF path: terminal inline dead-letter (unchanged) ──
                 _timeout_failure: FailureInfo[TFailure] = FailureInfo(
                     event_id=event_id,
                     topic=topic,
@@ -661,6 +1062,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     offset=msg.offset(),
                     attempt=self._config.max_retries,
                     last_error=TimeoutError(f"message_processing_timeout after {timeout_s}s"),
+                    raw_payload=raw_value,
                 )
                 await self.dead_letter(_timeout_failure)
                 logger.error(  # type: ignore[no-any-return]
@@ -688,12 +1090,116 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             consumer_group=self._config.group_id,
         ).inc()
 
+    # ── F-2 / Fix-3: persistent attempt-count hooks (opt-in) ──────────────────
+    #
+    # These default to no-ops so the 30 existing consumers are completely
+    # unaffected.  A consumer opts in by (a) setting
+    # ``ConsumerConfig.enable_persistent_retry=True`` AND (b) overriding both
+    # methods to read/write a durable ``failed_events`` table keyed by
+    # ``(group_id, event_id)``.  Without a durable store the attempt count
+    # resets to 0 on every redelivery and the message loops until the
+    # ``dead_letter_cap`` trips — hence rollout requires the table first.
+
+    async def _get_attempt_count(self, event_id: str) -> int:
+        """Return the number of FAILED attempts already recorded for *event_id*.
+
+        Default implementation returns 0 (no persistence).  Override in a
+        consumer that opts into ``enable_persistent_retry`` to read the count
+        from a durable ``failed_events(consumer_group, event_id, attempt, ...)``
+        table.  The returned value is the count of PRIOR failures; the current
+        attempt is therefore ``returned_count + 1``.
+
+        Args:
+            event_id: The idempotency event id of the failing message.
+        """
+        return 0
+
+    async def _record_attempt(self, event_id: str, attempt: int, error: BaseException) -> None:
+        """Persist (upsert) the latest *attempt* count + *error* for *event_id*.
+
+        Default implementation is a no-op.  Override alongside
+        :meth:`_get_attempt_count` to upsert a row into the durable
+        ``failed_events`` table so the count survives redelivery.
+
+        Args:
+            event_id: The idempotency event id of the failing message.
+            attempt: The 1-based attempt number that just failed.
+            error: The exception raised on this attempt.
+        """
+        return None
+
+    def _seek_back(self, msg: Any, attempt: int) -> None:
+        """Seek the consumer back to *msg*'s offset so it is redelivered.
+
+        Used only on the opted-in retryable path.  Without this seek, the
+        failed message's offset is NOT committed but librdkafka's in-memory
+        position has already advanced past it — the next successful message
+        would then commit PAST the failed offset, silently skipping it.
+        Seeking back to ``msg.offset()`` resets the in-memory position so the
+        very next ``poll()`` redelivers the SAME message.
+
+        A bounded blocking ``sleep`` provides exponential backoff between
+        redeliveries to avoid a hot loop.  The backoff is capped by
+        ``max_backoff_seconds`` via :meth:`_compute_backoff`.
+
+        Args:
+            msg: The raw Confluent Kafka message that failed.
+            attempt: The 1-based attempt number that just failed (drives backoff).
+        """
+        from confluent_kafka import TopicPartition
+
+        tp = TopicPartition(msg.topic(), msg.partition(), msg.offset())
+        try:
+            self._consumer.seek(tp)
+        except Exception as exc:
+            # Seek can fail if the partition was just revoked in a rebalance.
+            # That is acceptable: on reassignment the uncommitted offset is
+            # redelivered anyway.  Log and continue — never crash the loop.
+            logger.warning(
+                "consumer.retry.seek_back_failed",
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+                error=str(exc),
+            )
+            return
+        # Exponential backoff with full jitter before the next redelivery so a
+        # persistently-failing message does not spin the CPU.  Bounded by
+        # max_backoff_seconds (full-jitter handled by _compute_backoff).
+        backoff = self._compute_backoff(attempt)
+        time.sleep(backoff)
+
     async def _handle_failure(
         self,
         msg: Any,
         exc: BaseException,
-    ) -> None:
+    ) -> bool:
         """Handle a failed message — retry or dead-letter.
+
+        Two code paths, selected by ``ConsumerConfig.enable_persistent_retry``:
+
+        * **OFF (default)** — historical behaviour, byte-for-byte: attempt is
+          hardcoded to 1, the offset is never committed and never seeked, and
+          only ``FatalError`` ever dead-letters (the ``attempt >= max_retries``
+          clause is unreachable with a constant attempt of 1).
+
+        * **ON (opt-in)** — the real attempt count is read from the durable
+          store (``_get_attempt_count`` + 1).  On exhaustion or a FatalError the
+          message is dead-lettered AND its offset committed so it advances past
+          the poison message.  Otherwise the attempt is recorded and the
+          consumer SEEKS BACK to the failed offset (with backoff) so the message
+          is redelivered instead of silently skipped.
+
+        Returns:
+            ``True`` when the offset is SETTLED and may advance — i.e. the OFF
+            path (historical: failure was logged and treated as handled), or the
+            ON path dead-lettered the message (it was committed past).  ``False``
+            when the ON path SEEKED BACK for redelivery — the offset must NOT
+            advance (a batch consumer must treat it as a commit barrier so it
+            does not skip the still-retrying message).  The serial base ``run``
+            loop ignores the return value (it never commits after a failure); the
+            value exists for batch-dispatching subclasses (e.g. the nlp-pipeline
+            article consumer) that DO own the contiguous-offset commit decision.
 
         Args:
             msg: Raw Confluent Kafka message.
@@ -710,32 +1216,122 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         except Exception:
             event_id = f"{topic}/{partition}/{offset}"
 
-        failure: FailureInfo[TFailure] = FailureInfo(
+        # ── OFF path: exactly the historical behaviour (no seek, no commit) ───
+        if not self._config.enable_persistent_retry:
+            failure: FailureInfo[TFailure] = FailureInfo(
+                event_id=event_id,
+                topic=topic,
+                partition=partition,
+                offset=offset,
+                attempt=1,
+                last_error=exc,
+                # P0-①: carry the ORIGINAL message bytes so a subclass
+                # ``_dead_letter_impl`` can persist a requeue-able payload.
+                raw_payload=raw_value,
+            )
+            # BP-700: the dead-letter / store_failure persistence below writes to
+            # the consuming service's DB.  During the incident a concurrent
+            # asyncpg ``TimeoutError`` raised HERE (while dead-lettering a timed-
+            # out message) escaped ``_handle_failure`` entirely, propagated out of
+            # ``run()``, and silently killed the consumer.  A downstream DLQ/retry
+            # WRITE failure must NEVER terminate the consume loop — wrap it,
+            # log loud, and treat the message as handled (the offset advances,
+            # exactly as the historical commit-as-handled OFF path did).  The
+            # message is re-deliverable via the dedup table if needed.
+            try:
+                if isinstance(exc, FatalError) or failure.attempt >= self._config.max_retries:
+                    await self.dead_letter(failure)
+                    logger.error(
+                        "kafka_message_dead_lettered",
+                        event_id=event_id,
+                        error=str(exc),
+                        topic=topic,
+                    )
+                else:
+                    failure.record = await self.store_failure(failure)
+                    logger.warning(
+                        "kafka_message_failed_retryable",
+                        event_id=event_id,
+                        attempt=failure.attempt,
+                        error=str(exc),
+                        topic=topic,
+                    )
+            except RuntimeError:
+                # The dead_letter cap-exceeded RuntimeError is an INTENTIONAL
+                # poison-storm crash signal — re-raise so the loop force-restarts.
+                raise
+            except Exception as persist_exc:
+                logger.error(
+                    "kafka_failure_persist_failed",
+                    event_id=event_id,
+                    topic=topic,
+                    original_error=str(exc),
+                    persist_error=str(persist_exc),
+                    persist_error_type=type(persist_exc).__name__,
+                )
+            # OFF path is historically commit-as-handled: the offset advances.
+            return True
+
+        # ── ON path: persisted attempt count + seek-back / commit-on-DLQ ──────
+        attempt = await self._get_attempt_count(event_id) + 1
+        failure = FailureInfo(
             event_id=event_id,
             topic=topic,
             partition=partition,
             offset=offset,
-            attempt=1,
+            attempt=attempt,
             last_error=exc,
+            # P0-①: carry the ORIGINAL message bytes so a subclass
+            # ``_dead_letter_impl`` can persist a requeue-able payload.
+            raw_payload=raw_value,
         )
 
-        if isinstance(exc, FatalError) or failure.attempt >= self._config.max_retries:
-            await self.dead_letter(failure)
+        if isinstance(exc, FatalError) or attempt >= self._config.max_retries:
+            reason = "fatal" if isinstance(exc, FatalError) else "max_retries"
+            await self.dead_letter(failure, reason=reason)
+            # Commit the offset so the consumer advances PAST the now-dead-
+            # lettered poison message instead of redelivering it forever.
+            if not self._config.enable_auto_commit and self._consumer is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self._consumer.commit, msg)
+                except Exception as commit_exc:
+                    # If the commit fails the message will be redelivered and
+                    # dead-lettered again (idempotent via the dedup table) —
+                    # never crash the loop on a commit error.
+                    logger.warning(
+                        "consumer.retry.dead_letter_commit_failed",
+                        event_id=event_id,
+                        topic=topic,
+                        error=str(commit_exc),
+                    )
             logger.error(
                 "kafka_message_dead_lettered",
                 event_id=event_id,
                 error=str(exc),
                 topic=topic,
+                attempt=attempt,
             )
-        else:
-            failure.record = await self.store_failure(failure)
-            logger.warning(
-                "kafka_message_failed_retryable",
-                event_id=event_id,
-                attempt=failure.attempt,
-                error=str(exc),
-                topic=topic,
-            )
+            # Dead-lettered + committed: the offset is settled and may advance.
+            return True
+
+        # Record the attempt durably so the NEXT redelivery sees attempt+1.
+        await self._record_attempt(event_id, attempt, exc)
+        logger.warning(
+            "kafka_message_failed_retryable",
+            event_id=event_id,
+            attempt=attempt,
+            error=str(exc),
+            topic=topic,
+        )
+        # Seek back so the message is redelivered (with backoff) instead of
+        # being silently skipped by the next successful commit.  Do NOT
+        # commit here — the offset must stay uncommitted.
+        self._seek_back(msg, attempt)
+        # SEEKED BACK for redelivery: the offset must NOT advance.  A batch
+        # consumer must treat this offset as a commit barrier so the still-
+        # retrying message is not skipped by a later contiguous commit.
+        return False
 
     async def _retry_failure(self, failure: FailureInfo[TFailure]) -> None:
         """Attempt to re-process a single *failure*.
@@ -823,6 +1419,57 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         except Exception:  # noqa: S110
             # Non-critical — don't break the consumer loop on lag polling failure.
             pass
+
+    def _compute_total_lag(self) -> int | None:
+        """Sum lag across the current assignment (blocking librdkafka calls).
+
+        Returns ``None`` when the consumer/assignment is not ready or on any
+        broker error, so the caller can SKIP the sample rather than mistake an
+        unreadable broker for a healthy zero-lag consumer.  Mirrors the
+        watermark arithmetic in :meth:`_record_consumer_lag` but aggregates to a
+        single number for the stall detector.
+        """
+        consumer = self._consumer
+        if consumer is None:
+            return None
+        try:
+            assignment = consumer.assignment()
+            if not assignment:
+                return None
+            total = 0
+            for tp in assignment:
+                _low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
+                position_list = consumer.position([tp])
+                if position_list and position_list[0].offset >= 0:
+                    total += max(0, high - position_list[0].offset)
+            return total
+        except Exception:
+            return None
+
+    def _evaluate_lag_stall(self, total_lag: int) -> bool:
+        """Update stall state from ``total_lag``; return ``True`` to fire an alert.
+
+        A *stall* is lag at/above :attr:`_lag_stall_threshold` that has not
+        decreased for :attr:`_lag_stall_probes` consecutive samples — i.e. the
+        consumer is connected but frozen or falling behind.  Decreasing lag
+        (even if still large) is healthy drain and never alerts.  After firing
+        we reset the counter so the NEXT sustained window re-alerts instead of
+        spamming a line every probe.
+        """
+        prev = self._prev_total_lag
+        self._prev_total_lag = total_lag
+        if total_lag < self._lag_stall_threshold:
+            self._lag_stall_count = 0
+            return False
+        # Above threshold.  Only treat it as a stall if lag is NOT draining.
+        if prev >= 0 and total_lag < prev:
+            self._lag_stall_count = 0  # shrinking → healthy backlog drain
+            return False
+        self._lag_stall_count += 1
+        if self._lag_stall_count >= self._lag_stall_probes:
+            self._lag_stall_count = 0
+            return True
+        return False
 
     def _maybe_apply_backpressure(self) -> None:
         """Pause/resume partitions based on the configured backpressure policy.
@@ -966,6 +1613,36 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     _probe_failure_threshold: int = 3
     _probe_list_topics_timeout: float = 5.0
 
+    # BP-700: maximum consecutive transient-error RECONNECT cycles before the
+    # consumer force-exits for a fresh container.  Reserves terminal stop for a
+    # truly unrecoverable broker outage while letting an ordinary blip recover
+    # in-place.  At the jittered exponential backoff (capped by
+    # ``max_backoff_seconds``, default 60 s) 10 attempts spans several minutes —
+    # comfortably longer than a typical broker restart / leader election, yet
+    # bounded so a permanently-dead broker still ends in a loud restart rather
+    # than an infinite reconnect loop.  Class attr for the no-per-service-drift
+    # reason as the probe knobs above.
+    _reconnect_max_attempts: int = 10
+
+    # ── Lag-stall early warning (2026-06-15, BP-699) ────────────────────────
+    # The connectivity probe above only catches a DISCONNECTED broker.  It does
+    # NOT catch a consumer that is connected and assigned but no longer making
+    # progress — a wedged poll loop, a slow handler, a partition stuck behind a
+    # poison message, or (the case that motivated this) a broker the container
+    # could reach for ``list_topics`` metadata yet not actually consume from.
+    # That let an OHLCV consumer fall ~19k messages behind for three days
+    # unnoticed: the ``kafka_consumer_lag`` gauge existed but nothing ALERTED
+    # on it.  We sample total lag on each successful probe and emit a single
+    # CRITICAL ``kafka_consumer_lag_stalled`` once lag has stayed at/above the
+    # threshold WITHOUT decreasing for ``_lag_stall_probes`` consecutive samples
+    # (~5 min at the 60 s cadence).  Class attrs for the same no-per-service-
+    # drift reason as the probe knobs above; the two ints become instance attrs
+    # on first assignment (safe — immutable, never shared/mutated in place).
+    _lag_stall_threshold: int = 5_000  # messages behind before we care
+    _lag_stall_probes: int = 5  # consecutive non-draining samples → alert
+    _prev_total_lag: int = -1
+    _lag_stall_count: int = 0
+
     async def _connectivity_probe_loop(self) -> None:
         """Periodically probe the broker; force-exit on sustained failure.
 
@@ -1016,6 +1693,22 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # success resets the counter, so a single good probe wipes
                 # out two prior misses (matches the spec).
                 consecutive_failures = 0
+                # BP-699: the broker is reachable for metadata — now sample lag
+                # for the stall early-warning.  ``get_watermark_offsets`` is a
+                # blocking librdkafka call, so hop it onto the executor exactly
+                # like the connectivity probe.  A ``None`` sample (assignment not
+                # ready / broker hiccup) is skipped, not counted as healthy.
+                total_lag = await loop.run_in_executor(None, self._compute_total_lag)
+                if total_lag is not None and self._evaluate_lag_stall(total_lag):
+                    logger.critical(
+                        "kafka_consumer_lag_stalled",
+                        group_id=self._config.group_id,
+                        total_lag=total_lag,
+                        threshold=self._lag_stall_threshold,
+                        sustained_probes=self._lag_stall_probes,
+                        probe_interval_seconds=self._probe_interval_seconds,
+                        action="consumer_connected_but_not_draining_check_handler_or_force_recreate",
+                    )
             except Exception as exc:
                 consecutive_failures += 1
                 logger.warning(
@@ -1087,11 +1780,42 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # is configured; otherwise rate-limits to once per
                 # ``check_interval_seconds`` so the cost is negligible.
                 self._maybe_apply_backpressure()
-                msg = await loop.run_in_executor(
-                    None,
-                    self._consumer.poll,
-                    self._config.poll_timeout_seconds,
-                )
+                # BP-700: a transient broker blip (connection setup timeout,
+                # transport failure, coordinator unavailable) must trigger a
+                # bounded-backoff RECONNECT and resume — NOT a silent terminal
+                # stop.  ``poll`` itself rarely raises (it returns an error
+                # message), but ``_init_kafka`` after a reset, the executor hop,
+                # or a wedged client CAN raise; classify and reconnect here so a
+                # broker hiccup can never again kill the loop.  The connectivity
+                # probe remains the independent last-resort force-exit.
+                # A prior reconnect could not rebuild the consumer — retry the
+                # bounded-backoff reconnect before polling again.
+                if self._consumer is None and not await self._reconnect_with_backoff():
+                    continue
+                try:
+                    msg = await loop.run_in_executor(
+                        None,
+                        self._consumer.poll,
+                        self._config.poll_timeout_seconds,
+                    )
+                except Exception as poll_exc:
+                    if self._is_transient_broker_error(poll_exc):
+                        logger.warning(
+                            "kafka_poll_transient_error_reconnecting",
+                            group_id=self._config.group_id,
+                            error=str(poll_exc),
+                            error_type=type(poll_exc).__name__,
+                        )
+                        await self._reconnect_with_backoff()
+                    else:
+                        logger.exception("kafka_poll_unexpected_error", error=str(poll_exc))
+                    continue
+                # Healthy poll cycle (idle OR message) → refresh the liveness
+                # heartbeat and reset the reconnect counter so an isolated blip
+                # does not erode the terminal-stop budget over the consumer's
+                # lifetime.
+                self._record_progress()
+                self._reconnect_attempts = 0
                 if msg is None:
                     continue
                 if msg.error():
@@ -1104,7 +1828,38 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     continue
 
                 try:
-                    await self._handle_message(msg)
+                    # BP-NEW asyncpg pool resilience (Final-QA-3-deep):
+                    # When Postgres restarts (operator-initiated or otherwise),
+                    # every connection in SQLAlchemy's pool becomes stale.
+                    # ``pool_pre_ping=True`` covers most cases by re-validating
+                    # checked-out connections, but the pre-ping itself can
+                    # raise ``asyncpg.ConnectionDoesNotExistError`` /
+                    # ``InterfaceError`` on the very first attempt after the
+                    # restart (the underlying socket is half-closed; the next
+                    # ROUND-TRIP is what surfaces the failure).  Without this
+                    # wrapper the message handler exception path dead-letters
+                    # the message and the consumer can crash before the pool
+                    # has a chance to recycle.  One retry with a brief sleep
+                    # gives the pool a chance to discard the stale connection
+                    # and hand out a fresh one — the second attempt either
+                    # succeeds or falls through to the normal error path.
+                    try:
+                        await self._handle_message(msg)
+                    except _ASYNCPG_CONN_ERRORS as conn_exc:
+                        logger.warning(
+                            "consumer_db_connection_lost_retrying",
+                            error=str(conn_exc),
+                            error_type=type(conn_exc).__name__,
+                            topic=msg.topic(),
+                            partition=msg.partition(),
+                            offset=msg.offset(),
+                        )
+                        # Give the pool a moment to evict the dead connection
+                        # before the second attempt — `pool_pre_ping` will
+                        # validate the next checkout and the pool will refill
+                        # with a live socket on demand.
+                        await asyncio.sleep(1.0)
+                        await self._handle_message(msg)
                     # Commit after successful processing (manual offset management)
                     if not self._config.enable_auto_commit:
                         await loop.run_in_executor(None, self._consumer.commit, msg)

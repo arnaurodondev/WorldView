@@ -159,3 +159,59 @@ class TestEntityNameGroundingValidator:
         assert result.passed, [u.name for u in result.unsupported]
         # And specifically, "Here" must not appear as a candidate at all.
         assert not any(u.normalized == "here" for u in result.unsupported)
+
+
+class TestBP670HeadingAndToolTextGrounding:
+    """BP-670 — live Apple-news false positives (2026-06-11).
+
+    The validator flagged 19 "ungrounded entities" in a correctly-cited news
+    answer: markdown section headings ("Recent Headlines", "Product
+    Launches", "Siri Overhaul") parsed as COMPANY candidates, and proper
+    nouns the LLM copied verbatim from retrieved article titles ("Morgan
+    Stanley", "Siri") missing from the structured grounded set. The repair
+    rewrite then timed out (+15s) and the user got the
+    "validator timeout" banner on a good answer.
+    """
+
+    def test_month_abbreviations_are_stop_nouns(self) -> None:
+        """BP-670: '(Jun 10)' date stamps must not yield a 'Jun' COMPANY candidate."""
+        validator = EntityNameGroundingValidator()
+        response = "Apple EU AI Delay Puts Spotlight on Valuation *(Jun 10)* and more *(Sept 3)*."
+        result = validator.validate(response, {"Apple Inc", "AAPL", "Apple", "EU AI Delay Puts Spotlight"})
+        assert all(u.name not in ("Jun", "Sept") for u in result.unsupported), [u.name for u in result.unsupported]
+
+    def test_markdown_heading_lines_are_not_entity_candidates(self) -> None:
+        validator = EntityNameGroundingValidator()
+        response = (
+            "### Apple News Roundup\n"
+            "**Recent Headlines & Developments**\n"
+            "**Key Catalysts to Watch:**\n"
+            "Apple shipped a new product this quarter.\n"
+        )
+        result = validator.validate(response, {"Apple Inc", "AAPL", "Apple"})
+        assert result.passed, [u.name for u in result.unsupported]
+
+    def test_inline_bold_inside_sentence_is_still_validated(self) -> None:
+        """Only WHOLE-line bold headings are stripped — inline bold still checks."""
+        validator = EntityNameGroundingValidator()
+        response = "The filing shows **Hallucinated Globocorp** beat estimates."
+        result = validator.validate(response, {"Apple Inc"})
+        assert not result.passed
+        assert any("Globocorp" in u.name for u in result.unsupported)
+
+    def test_tool_text_verbatim_name_is_grounded(self) -> None:
+        """A name copied straight out of a retrieved article title is grounded."""
+        validator = EntityNameGroundingValidator()
+        response = "Morgan Stanley warns that Siri may be held back by aging devices."
+        tool_text = "Apple's AI Siri will be held back by aging devices, Morgan Stanley says"
+        result = validator.validate(response, {"Apple Inc", "AAPL"}, tool_text=tool_text)
+        assert result.passed, [u.name for u in result.unsupported]
+
+    def test_name_absent_from_tool_text_still_flagged(self) -> None:
+        """tool_text must not weaken the check for genuinely invented names."""
+        validator = EntityNameGroundingValidator()
+        response = "Hallucinated Globocorp announced a merger."
+        tool_text = "Apple's AI Siri will be held back by aging devices, Morgan Stanley says"
+        result = validator.validate(response, {"Apple Inc", "AAPL"}, tool_text=tool_text)
+        assert not result.passed
+        assert any("Globocorp" in u.name for u in result.unsupported)

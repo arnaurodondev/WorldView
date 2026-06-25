@@ -165,8 +165,22 @@ export function ThreadItem({
       // Density bundle 2026-05-09: px-3 py-2.5 → px-2 py-1.5 (Bloomberg
       // sidebar row density). Each thread row drops from ~46px to ~36px,
       // letting one more thread fit in a 12-thread sidebar without scrolling.
-      className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-2 py-1.5 transition-colors hover:bg-muted"
-      style={isActive ? { backgroundColor: "rgba(232,163,23,0.08)" } : undefined}
+      className={cn(
+        "group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-2 py-1.5 transition-colors",
+        // Round 3 color-token migration: the active row previously used an
+        // inline style `rgba(232,163,23,0.08)` — a hardcoded copy of the OLD
+        // amber primary that silently diverges if the palette token changes
+        // (the DS §15.11 no-paint/stale-paint bug class). bg-primary/10 tracks
+        // the live --primary token. Active rows pin their tint on hover too
+        // (the inline style used to win over hover:bg-muted; the class
+        // version must reproduce that precedence explicitly).
+        isActive ? "bg-primary/10 hover:bg-primary/10" : "hover:bg-muted",
+        // Round 3 focus polish: the row is keyboard-focusable (tabIndex=0,
+        // Enter/Space select) but previously had NO focus visual — keyboard
+        // users couldn't see which row was focused. Tier-1 inset hairline
+        // (FocusRing.T1_TABLE_ROW pattern) keeps data rows chrome-free.
+        "focus-visible:outline-1 focus-visible:outline-primary focus-visible:outline-offset-[-1px]",
+      )}
       onClick={() => !isEditing && onSelect(thread.thread_id)}
       role="button"
       aria-pressed={isActive}

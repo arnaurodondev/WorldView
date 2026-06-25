@@ -64,6 +64,47 @@ class PgQuoteRepository(QuoteRepository):
         row = result.scalar_one()
         return self._to_domain(row)
 
+    async def upsert_if_newer(self, quote: Quote) -> bool:
+        """Conditionally upsert: only overwrite when the incoming quote is newer.
+
+        Used by the OHLCV 1m write-through (Option B): bars can be re-delivered
+        out of order (Kafka rebalance, batch replays), so the UPDATE arm is
+        guarded with ``WHERE quotes.timestamp < EXCLUDED.timestamp``.  A fresh
+        row is always inserted; an existing row is only updated when the
+        incoming timestamp is strictly newer.
+
+        Returns:
+            True if a row was inserted or updated, False if the existing row
+            was newer (no-op).
+        """
+        insert_stmt = insert(QuoteModel).values(
+            instrument_id=quote.instrument_id,
+            bid=quote.bid,
+            ask=quote.ask,
+            last=quote.last,
+            volume=quote.volume,
+            timestamp=quote.timestamp,
+            updated_at=quote.updated_at,
+        )
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["instrument_id"],
+            set_={
+                "bid": quote.bid,
+                "ask": quote.ask,
+                "last": quote.last,
+                "volume": quote.volume,
+                "timestamp": quote.timestamp,
+                "updated_at": quote.updated_at,
+            },
+            # NULL-safe: quotes.timestamp is nullable; a NULL row must always
+            # accept the incoming quote (NULL < x is NULL, which would skip).
+            where=QuoteModel.timestamp.is_(None) | (QuoteModel.timestamp < insert_stmt.excluded.timestamp),
+        ).returning(QuoteModel.instrument_id)
+        result = await self._session.execute(stmt)
+        # RETURNING yields a row only when the INSERT or the conditional
+        # UPDATE actually fired; a guarded no-op returns zero rows.
+        return result.scalar_one_or_none() is not None
+
     async def find_by_instrument(self, instrument_id: str) -> Quote | None:
         result = await self._session.execute(select(QuoteModel).where(QuoteModel.instrument_id == instrument_id))
         row = result.scalar_one_or_none()

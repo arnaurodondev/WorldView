@@ -115,8 +115,8 @@ class TestFakeRepositoryIdempotency:
             portfolio_id=portfolio_id,
             tenant_id=tenant_id,
             snapshot_date=snap_date,
-            total_value=Decimal("1000"),
-            total_cost=Decimal("900"),
+            total_value=Decimal(1000),
+            total_cost=Decimal(900),
         )
         await uow.portfolio_value_snapshots.upsert(first)
         await uow.portfolio_value_snapshots.upsert(first)
@@ -141,8 +141,8 @@ class TestFakeRepositoryIdempotency:
                 portfolio_id=portfolio_id,
                 tenant_id=tenant_id,
                 snapshot_date=snap_date,
-                total_value=Decimal("1000"),
-                total_cost=Decimal("900"),
+                total_value=Decimal(1000),
+                total_cost=Decimal(900),
             ),
         )
         await uow.portfolio_value_snapshots.upsert(
@@ -150,14 +150,14 @@ class TestFakeRepositoryIdempotency:
                 portfolio_id=portfolio_id,
                 tenant_id=tenant_id,
                 snapshot_date=snap_date,
-                total_value=Decimal("1500"),
-                total_cost=Decimal("900"),
+                total_value=Decimal(1500),
+                total_cost=Decimal(900),
             ),
         )
 
         latest = await uow.portfolio_value_snapshots.get_latest(portfolio_id)
         assert latest is not None
-        assert latest.total_value == Decimal("1500")
+        assert latest.total_value == Decimal(1500)
 
     @pytest.mark.asyncio
     async def test_list_range_filters_by_portfolio_and_date(self) -> None:
@@ -171,8 +171,8 @@ class TestFakeRepositoryIdempotency:
                     portfolio_id=pid_a,
                     tenant_id=tenant_id,
                     snapshot_date=d,
-                    total_value=Decimal("1"),
-                    total_cost=Decimal("1"),
+                    total_value=Decimal(1),
+                    total_cost=Decimal(1),
                 ),
             )
         await uow.portfolio_value_snapshots.upsert(
@@ -180,8 +180,8 @@ class TestFakeRepositoryIdempotency:
                 portfolio_id=pid_b,
                 tenant_id=tenant_id,
                 snapshot_date=date(2026, 4, 27),
-                total_value=Decimal("999"),
-                total_cost=Decimal("999"),
+                total_value=Decimal(999),
+                total_cost=Decimal(999),
             ),
         )
 
@@ -208,7 +208,7 @@ class TestComputePortfolioValueUseCase:
         await uow.holdings.save(h2)
 
         prices = _FakePriceClient(
-            {h1.instrument_id: Decimal("150"), h2.instrument_id: Decimal("250")},
+            {h1.instrument_id: Decimal(150), h2.instrument_id: Decimal(250)},
         )
         uc = ComputePortfolioValueUseCase(prices)
 
@@ -222,15 +222,15 @@ class TestComputePortfolioValueUseCase:
         )
 
         # value = 10*150 + 5*250 = 1500 + 1250 = 2750
-        assert snap.total_value == Decimal("2750")
+        assert snap.total_value == Decimal(2750)
         # cost = 10*100 + 5*200 = 2000
-        assert snap.total_cost == Decimal("2000")
+        assert snap.total_cost == Decimal(2000)
         assert snap.cash_value == Decimal(0)
 
         # Persisted via upsert
         latest = await uow.portfolio_value_snapshots.get_latest(portfolio_id)
         assert latest is not None
-        assert latest.total_value == Decimal("2750")
+        assert latest.total_value == Decimal(2750)
 
     @pytest.mark.asyncio
     async def test_missing_price_falls_back_to_cost_basis_and_flags_partial(self) -> None:
@@ -251,7 +251,7 @@ class TestComputePortfolioValueUseCase:
 
         # h2 has no price on any date — the lookback exhausts and the use
         # case falls back to cost basis (5 * 200 = 1000).
-        prices = _FakePriceClient({h1.instrument_id: Decimal("150"), h2.instrument_id: None})
+        prices = _FakePriceClient({h1.instrument_id: Decimal(150), h2.instrument_id: None})
         uc = ComputePortfolioValueUseCase(prices)
 
         snap = await uc.execute(
@@ -264,8 +264,8 @@ class TestComputePortfolioValueUseCase:
         )
 
         # h1 contributes 10 * 150 = 1500. h2 falls back to cost = 5 * 200 = 1000.
-        assert snap.total_value == Decimal("2500")
-        assert snap.total_cost == Decimal("2000")
+        assert snap.total_value == Decimal(2500)
+        assert snap.total_cost == Decimal(2000)
         # F-401: any fallback must downgrade data_quality.
         assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
 
@@ -278,7 +278,7 @@ class TestComputePortfolioValueUseCase:
         h1 = _make_holding(portfolio_id, tenant_id, qty="10", cost="100")
         await uow.holdings.save(h1)
 
-        prices = _FakePriceClient({h1.instrument_id: Decimal("150")})
+        prices = _FakePriceClient({h1.instrument_id: Decimal(150)})
         uc = ComputePortfolioValueUseCase(prices)
 
         snap = await uc.execute(
@@ -334,7 +334,7 @@ class TestComputePortfolioValueUseCase:
         )
 
         # Stale-price fallback contributes the 4/27 close, not zero, not cost.
-        assert snap.total_value == Decimal("25") * Decimal("261.76")
+        assert snap.total_value == Decimal(25) * Decimal("261.76")
         # Flagged as partial because the close was not on as_of_date.
         assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
 
@@ -374,7 +374,7 @@ class TestComputePortfolioValueUseCase:
         # 6 attempts: as_of_date + 5 lookback days.
         assert prices.calls == 6
         # Cost-basis fallback: 10 * 50 = 500.
-        assert snap.total_value == Decimal("500")
+        assert snap.total_value == Decimal(500)
         assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
 
     @pytest.mark.asyncio
@@ -494,7 +494,7 @@ class TestPortfolioSnapshotWorkerRunOnce:
         h = _make_holding(p1.id, tenant, qty="10", cost="100")
         await uow.holdings.save(h)
 
-        prices = _FakePriceClient({h.instrument_id: Decimal("150")})
+        prices = _FakePriceClient({h.instrument_id: Decimal(150)})
         _patch_worker_uow(monkeypatch, uow)
 
         worker = PortfolioSnapshotWorker(
@@ -509,14 +509,14 @@ class TestPortfolioSnapshotWorkerRunOnce:
         s2 = await uow.portfolio_value_snapshots.get_latest(p2.id)
         s_root = await uow.portfolio_value_snapshots.get_latest(root.id)
 
-        assert s1 is not None and s1.total_value == Decimal("1500")
+        assert s1 is not None and s1.total_value == Decimal(1500)
         # F-210: p2 has no holdings → no snapshot written.
         assert s2 is None
         # Phase 2: root sums non-root snapshots for the owner. Only p1 has
         # one, so the root sum equals p1's snapshot.
         assert s_root is not None
-        assert s_root.total_value == Decimal("1500")
-        assert s_root.total_cost == Decimal("1000")
+        assert s_root.total_value == Decimal(1500)
+        assert s_root.total_cost == Decimal(1000)
 
     @pytest.mark.asyncio
     async def test_phase2_writes_zero_root_when_no_subportfolios(
@@ -570,7 +570,7 @@ class TestPortfolioSnapshotWorkerRunOnce:
 
         uow.holdings.list_by_portfolio = flaky  # type: ignore[method-assign]
 
-        prices = _FakePriceClient({h.instrument_id: Decimal("100")})
+        prices = _FakePriceClient({h.instrument_id: Decimal(100)})
         _patch_worker_uow(monkeypatch, uow)
 
         worker = PortfolioSnapshotWorker(
@@ -584,7 +584,7 @@ class TestPortfolioSnapshotWorkerRunOnce:
         good_snap = await uow.portfolio_value_snapshots.get_latest(good.id)
         bad_snap = await uow.portfolio_value_snapshots.get_latest(bad.id)
         assert good_snap is not None
-        assert good_snap.total_value == Decimal("200")
+        assert good_snap.total_value == Decimal(200)
         assert bad_snap is None
 
 
@@ -652,9 +652,9 @@ class TestReplayUntil:
             _txn(iid, direction="OUTFLOW", qty="5", price="0", on=date(2026, 4, 20)),
         ]
         positions = _replay_until(txns, date(2026, 4, 25))
-        assert positions[iid].quantity == Decimal("15")
+        assert positions[iid].quantity == Decimal(15)
         # Avg cost on accumulation: (10*100 + 10*200) / 20 = 150 — survives partial sell.
-        assert positions[iid].avg_cost == Decimal("150")
+        assert positions[iid].avg_cost == Decimal(150)
 
     def test_replay_excludes_future_transactions(self) -> None:
         _replay_until = _load_replay_until()
@@ -666,8 +666,8 @@ class TestReplayUntil:
         ]
         # Cutoff is BEFORE the second transaction
         positions = _replay_until(txns, date(2026, 4, 5))
-        assert positions[iid].quantity == Decimal("10")
-        assert positions[iid].avg_cost == Decimal("100")
+        assert positions[iid].quantity == Decimal(10)
+        assert positions[iid].avg_cost == Decimal(100)
 
     def test_full_close_resets_avg_cost(self) -> None:
         _replay_until = _load_replay_until()

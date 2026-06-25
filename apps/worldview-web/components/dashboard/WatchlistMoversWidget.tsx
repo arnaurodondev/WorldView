@@ -42,16 +42,23 @@
 // the bearer token, useState for period + sector pill state, and useRouter
 // for row navigation.
 
-import { useMemo, useState } from "react";
+// W4 pagination: useRef/useEffect added for the IntersectionObserver sentinel
+// that windows the gainers/losers columns in blocks of 30 (client-side).
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Eye } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+// Round 3 (item 4): the panel-level no-watchlist state migrates from the
+// legacy DashboardEmptyState (components/ui — still used by workspace and
+// screener surfaces) onto the shared EmptyState primitive (§15.12).
+// InlineEmptyState stays for the in-column "No gainers"/"No losers" lines.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 // ── PLAN-0059 E-5 — extracted sub-components + ranking logic ─────────────
@@ -77,6 +84,18 @@ import {
 // constants/predicate guarantees consistent ordering, labels, and matching
 // rules across every movers widget in the dashboard.
 import { SECTOR_PILLS, ALL_SECTORS_VALUE } from "@/lib/sectors";
+
+/**
+ * PAGE_SIZE — block size for the client-side infinite-scroll window.
+ *
+ * W4 pagination (user report 2026-06-12 "display in blocks of 30"): the
+ * gainers/losers columns previously hard-capped each side at 5 (via
+ * splitGainersLosers' default topN). They now reveal in blocks of 30 per side
+ * via an IntersectionObserver sentinel inside the panel's own scroll area —
+ * the watchlist members + insights come back in one round-trip, so this windows
+ * a client-side array (same pattern as HoldingsMoversWidget / Top Positions).
+ */
+const PAGE_SIZE = 30;
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -195,10 +214,57 @@ export function WatchlistMoversWidget() {
     () => applySectorFilter(movers, selectedSector),
     [movers, selectedSector],
   );
-  const { gainers, losers } = useMemo(
-    () => splitGainersLosers(rankByAbsChangePct(filtered)),
+  // W4 pagination: split into the FULL ranked columns (topN = Infinity, no
+  // longer the default 5) so deeper movers stay available; the visible slice is
+  // windowed below by the infinite-scroll state.
+  const { gainers: allGainers, losers: allLosers } = useMemo(
+    () => splitGainersLosers(rankByAbsChangePct(filtered), Number.POSITIVE_INFINITY),
     [filtered],
   );
+
+  // ── Infinite-scroll window state (W4 pagination) ──────────────────────────
+  // visibleCount grows by PAGE_SIZE per sentinel intersection and applies to
+  // BOTH columns symmetrically (the scroll area is shared).
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const hasMore =
+    visibleCount < allGainers.length || visibleCount < allLosers.length;
+
+  // WHY reset on data identity / period / sector changing: those rebuild the
+  // movers — rewind the window so the user starts at the top of the new list.
+  const moversIdentity =
+    `${period}:${selectedSector}:${allGainers.length}:${allLosers.length}:` +
+    `${allGainers[0]?.instrumentId ?? ""}:${allLosers[0]?.instrumentId ?? ""}`;
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [moversIdentity]);
+
+  const gainers = useMemo(
+    () => allGainers.slice(0, visibleCount),
+    [allGainers, visibleCount],
+  );
+  const losers = useMemo(
+    () => allLosers.slice(0, visibleCount),
+    [allLosers, visibleCount],
+  );
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ───────────────────────
+  // A 1px row after the columns inside the shared overflow-auto container;
+  // scrolling it into view reveals the next PAGE_SIZE rows in both columns.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore) {
+          setVisibleCount((c) => c + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore]);
 
   // ── 7. Loading composition ────────────────────────────────────────────
   // WHY combine watchlist + insights + (period-specific data) loading: the
@@ -241,11 +307,13 @@ export function WatchlistMoversWidget() {
             <button
               key={p}
               onClick={() => setPeriod(p)}
+              // Round 3 (item 5): bg-muted hover convention + keyboard ring.
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               // WHY aria-pressed: these are toggle buttons — aria-pressed
               // communicates the selected state to assistive tech.
@@ -279,7 +347,9 @@ export function WatchlistMoversWidget() {
                 onClick={() => setSelectedSector(pill.value)}
                 className={cn(
                   // WHY rounded-[2px]: design system mandates 2px radius; bare `rounded` = 4px default
+                  // Round 3 (item 5): keyboard focus ring on the pill toggles.
                   "shrink-0 rounded-[2px] border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   isSelected
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-muted/70",
@@ -338,7 +408,9 @@ export function WatchlistMoversWidget() {
           inside the bounded grid cell — the spec's "independent-scroll
           per cell" rule. Without min-h-0 the flex item's intrinsic size
           would prevent the overflow-auto from clipping. */}
-      <div className="flex min-h-0 flex-1 overflow-auto">
+      {/* W4: flex-COL so the two-column row + the infinite-scroll sentinel
+          stack vertically inside the shared overflow-auto scroll area. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
 
         {/* ── Error state ────────────────────────────────────────────────── */}
         {/* WHY min-h-[140px]: 5 rows × h-7 (28px) = 140px; prevents the
@@ -362,10 +434,21 @@ export function WatchlistMoversWidget() {
             empty-state pattern after this. */}
         {!isError && noWatchlist && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No watchlist yet"
-              message="Add instruments to your watchlist to see daily movers here."
-              cta={{ label: "Browse Screener →", href: "/screener" }}
+            {/* Round 3 (item 4): shared EmptyState primitive — copy key keeps
+                the test-pinned "No watchlist yet" title; the action Link keeps
+                the Browse-Screener CTA with a keyboard focus ring. */}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-watchlist"
+              icon={Eye}
+              action={
+                <Link
+                  href="/screener"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Browse Screener →
+                </Link>
+              }
             />
           </div>
         )}
@@ -374,20 +457,27 @@ export function WatchlistMoversWidget() {
         {!isError && !noWatchlist && isLoading && (
           <div className="flex flex-1 gap-0">
             <div className="flex-1 divide-y divide-border/30">
+              {/* Round 3 (item 3): h-7 matches the loaded WatchlistMoverRow
+                  height (28px — NOT the dashboard's usual 22px, see the row
+                  component's WHY) and the 4 cells mirror its column slots
+                  (ticker 40 · name flex · price 52 · %chg 52) so rows swap
+                  in without any height or column shift. */}
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`g-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                <div key={`g-skel-${i}`} className="flex h-7 items-center gap-1.5 px-2">
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
             <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`l-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                <div key={`l-skel-${i}`} className="flex h-7 items-center gap-1.5 px-2">
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
@@ -405,50 +495,78 @@ export function WatchlistMoversWidget() {
             </div>
           )}
 
-        {/* Data: gainers column */}
+        {/* Data: two-column row (gainers | losers) + infinite-scroll sentinel.
+            W4: wrapped in a row so the sentinel below spans the full width
+            beneath both columns. */}
         {!isError && !noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
-          <div className="flex-1 divide-y divide-border/30">
-            {gainers.map((m) => (
-              <WatchlistMoverRow
-                key={`g-${m.instrumentId}`}
-                mover={m}
-                side="gainer"
-                showEnrichmentBadges={period === "1D"}
-                // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-                onClick={() =>
-                  router.push(`/instruments/${m.ticker || m.instrumentId}`)
-                }
-              />
-            ))}
-            {gainers.length === 0 && (
-              <div className="px-2">
-                <InlineEmptyState message="No gainers" />
+          <>
+            <div className="flex">
+              {/* Gainers column */}
+              <div className="flex-1 divide-y divide-border/30">
+                {gainers.map((m) => (
+                  <WatchlistMoverRow
+                    key={`g-${m.instrumentId}`}
+                    mover={m}
+                    side="gainer"
+                    showEnrichmentBadges={period === "1D"}
+                    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+                    onClick={() =>
+                      router.push(`/instruments/${m.ticker || m.instrumentId}`)
+                    }
+                  />
+                ))}
+                {gainers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No gainers" />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
+              {/* Losers column */}
+              <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
+                {losers.map((m) => (
+                  <WatchlistMoverRow
+                    key={`l-${m.instrumentId}`}
+                    mover={m}
+                    side="loser"
+                    showEnrichmentBadges={period === "1D"}
+                    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+                    onClick={() =>
+                      router.push(`/instruments/${m.ticker || m.instrumentId}`)
+                    }
+                  />
+                ))}
+                {losers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No losers" />
+                  </div>
+                )}
+              </div>
+            </div>
 
-        {/* Data: losers column */}
-        {!isError && !noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
-          <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
-            {losers.map((m) => (
-              <WatchlistMoverRow
-                key={`l-${m.instrumentId}`}
-                mover={m}
-                side="loser"
-                showEnrichmentBadges={period === "1D"}
-                // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-                onClick={() =>
-                  router.push(`/instruments/${m.ticker || m.instrumentId}`)
-                }
-              />
-            ))}
-            {losers.length === 0 && (
-              <div className="px-2">
-                <InlineEmptyState message="No losers" />
+            {/* ── Infinite-scroll sentinel + footer (W4 pagination) ──────────
+                1px sentinel beneath both columns inside the SAME overflow-auto
+                scroll area; scrolling reveals the next PAGE_SIZE rows in both
+                columns. Caption shows how many of each side are shown. */}
+            {hasMore ? (
+              <div
+                ref={sentinelRef}
+                data-testid="watchlist-movers-sentinel"
+                className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim"
+                aria-hidden
+              >
+                <span className="font-mono tabular-nums">
+                  {Math.min(visibleCount, allGainers.length)}/{allGainers.length} ·{" "}
+                  {Math.min(visibleCount, allLosers.length)}/{allLosers.length} · scroll for more
+                </span>
               </div>
+            ) : (
+              (allGainers.length > PAGE_SIZE || allLosers.length > PAGE_SIZE) && (
+                <div className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
+                  <span className="font-mono tabular-nums">all shown</span>
+                </div>
+              )
             )}
-          </div>
+          </>
         )}
       </div>
 
@@ -459,7 +577,7 @@ export function WatchlistMoversWidget() {
           ticker they "added" isn't here — it's in another list). */}
       {!isError && !noWatchlist && firstWatchlist && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-          <span className="text-[10px] text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground-dim">
             {firstWatchlist.name}
             {period === "1D" ? " · today" : period === "1W" ? " · 1W" : " · 1M"}
           </span>

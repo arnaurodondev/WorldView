@@ -91,14 +91,66 @@ class TestChatQualityJudge:
         assert "}}" not in rendered
 
     def test_identifier_format(self) -> None:
-        # v1.1 — brace-escape edit bumped the version and changed content_hash.
-        # Semantics (grading behaviour) are unchanged from v1.0.
+        # v3.0 — BREAKING (PLAN-0110 W3): deleted "PRESUME GROUNDED"; numeric
+        # grounding is now cross-checked deterministically. v2.0 schema keys
+        # (reason→feedback, notes→reviewer_summary, length-agnostic framing) are
+        # carried forward unchanged.
         ident = CHAT_QUALITY_JUDGE.identifier()
-        assert ident.startswith("chat_quality_judge@1.1#")
+        assert ident.startswith("chat_quality_judge@3.0#")
         assert len(ident.split("#")[1]) == 12
+
+    def test_v3_deletes_presume_grounded_instruction(self) -> None:
+        # v3.0 (PLAN-0110 W3 / FR-7): the "PRESUME GROUNDED → award 20-25"
+        # instruction is GONE — numeric grounding is verified deterministically
+        # against the captured grounding_sample, not presumed by the LLM. A
+        # re-introduction of the presume-and-award shortcut must trip this test.
+        body = CHAT_QUALITY_JUDGE.render()
+        assert "PRESUMED\n" not in body  # the old "is PRESUMED\n GROUNDED" award block
+        assert "is\n                             PRESUMED" not in body
+        # The exact award shortcut string must be absent.
+        assert "PRESUMED\n                             GROUNDED. Award grounding 20-25" not in body
+        # The new division-of-labour + presumed-band language must be present.
+        assert "NUMERIC VALUE VERIFICATION IS NOT YOUR JOB" in body
+        assert "GROUNDING SAMPLE" in body
+        assert "presumed band" in body.lower()
 
     def test_content_hash_stable_across_import(self) -> None:
         first = CHAT_QUALITY_JUDGE.content_hash
         mod = importlib.import_module("prompts.evaluation.chat_quality_judge")
         importlib.reload(mod)
         assert mod.CHAT_QUALITY_JUDGE.content_hash == first
+
+    def test_v2_output_schema_uses_feedback_not_reason(self) -> None:
+        # v2.0 BREAKING: per-dim JSON key renamed reason→feedback. The OUTPUT
+        # block must show the new key; the legacy ``reason`` key must NOT be
+        # the documented contract any more (it's only in the parser as a
+        # back-compat fallback).
+        body = CHAT_QUALITY_JUDGE.render()
+        # OUTPUT block (between "OUTPUT" header and the WRITE FEEDBACK note).
+        output_block = body.split("OUTPUT", 1)[1].split("WRITE FEEDBACK", 1)[0]
+        assert '"feedback"' in output_block
+        # Spelled out so a careless re-introduction of {"score": .., "reason": ..}
+        # in the JSON example trips this test.
+        assert '"reason"' not in output_block
+
+    def test_v2_output_schema_uses_reviewer_summary_not_notes(self) -> None:
+        # v2.0 BREAKING: top-level paragraph renamed notes→reviewer_summary.
+        body = CHAT_QUALITY_JUDGE.render()
+        output_block = body.split("OUTPUT", 1)[1].split("WRITE FEEDBACK", 1)[0]
+        assert '"reviewer_summary"' in output_block
+        assert '"notes"' not in output_block
+
+    def test_framing_is_length_agnostic(self) -> None:
+        # The framing dimension MUST contain the LENGTH-AGNOSTIC declaration
+        # and the explicit "word counts are irrelevant" injunction so the
+        # judge stops marking down short factual answers.
+        body = CHAT_QUALITY_JUDGE.render()
+        assert "LENGTH-AGNOSTIC" in body
+        assert "WORD COUNTS ARE IRRELEVANT" in body
+
+    def test_framing_pins_aapl_pe_worked_example(self) -> None:
+        # The worked example pins short factual answers at framing=25 — this
+        # is the load-bearing calibration that prevents v1.x's false WARNs
+        # on simple "what is X's P/E ratio?" answers.
+        body = CHAT_QUALITY_JUDGE.render()
+        assert "P/E ratio for AAPL is 37.73x" in body

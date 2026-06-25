@@ -49,7 +49,8 @@ def _mock_session_with_rows(rows: list[dict]) -> AsyncMock:
     for row_data in rows:
         row = MagicMock()
         # CanonicalEntityRepository.get_batch indexes rows by positional index
-        # in the SELECT — entity_id row[0], canonical_name row[1], …, sector row[8].
+        # in the SELECT — entity_id row[0], canonical_name row[1], …, sector row[8],
+        # industry row[9] (PLAN-0099).
         ordered = [
             row_data["entity_id"],
             row_data.get("canonical_name"),
@@ -60,6 +61,7 @@ def _mock_session_with_rows(rows: list[dict]) -> AsyncMock:
             row_data.get("metadata"),
             row_data.get("description"),
             row_data.get("sector"),
+            row_data.get("industry"),
         ]
         row.__getitem__ = lambda self, i, ordered=ordered: ordered[i]
         fake_rows.append(row)

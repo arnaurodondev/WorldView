@@ -14,6 +14,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -55,6 +56,15 @@ async def main() -> None:
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     dispatcher = create_dispatcher(settings, write_factory)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "portfolio-dispatcher",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+        },
+    )
 
     try:
         dispatch_task = asyncio.create_task(dispatcher.run())

@@ -53,19 +53,39 @@ _WINDOW_DAYS = 90
 async def run_insider_rollup_once(session: AsyncSession) -> dict[str, int]:
     """Execute one rollup pass; return a small stats dict for logging.
 
-    The statement performs the SUM and UPSERT in one round-trip:
+    The statement computes a rollup for EVERY instrument that has at least one
+    ``insider_transactions`` row (regardless of recency), then UPSERTs in one
+    round-trip:
 
-      WITH agg AS (
+      WITH have_data AS (                       -- every instrument with raw data
+        SELECT DISTINCT instrument_id FROM insider_transactions
+      ),
+      agg AS (                                  -- in-window net flow (may be empty)
         SELECT instrument_id, SUM(net_value_usd) AS total_90d
         FROM insider_transactions
         WHERE transaction_date >= :window_start AND net_value_usd IS NOT NULL
         GROUP BY instrument_id
       )
       INSERT INTO instrument_fundamentals_snapshot (instrument_id, insider_net_buy_90d, updated_at)
-      SELECT instrument_id, total_90d, now() FROM agg
+      SELECT hd.instrument_id, COALESCE(agg.total_90d, 0), now()
+      FROM have_data hd LEFT JOIN agg USING (instrument_id)
       ON CONFLICT (instrument_id) DO UPDATE
         SET insider_net_buy_90d = EXCLUDED.insider_net_buy_90d,
             updated_at          = now();
+
+    WHY ``COALESCE(..., 0)`` over the ``have_data`` set (BP-insider-staleness):
+      The prior version only UPSERTed instruments that had in-window
+      transactions. When an instrument's 90-day window emptied (its last filing
+      aged past 90 days), its ``insider_net_buy_90d`` was left at the *stale*
+      prior value forever — a silent-staleness bug (live: 9 instruments showed a
+      non-null rollup with zero in-window data, 2026-06-18). For an instrument
+      that HAS insider history but no activity in the trailing 90 days, the
+      correct value is ``0`` (net-flat over the window), which is a *legitimate
+      distinct value* from ``NULL`` ("no insider data ever"). Driving the UPSERT
+      off ``have_data`` (not ``agg``) means every instrument with raw rows gets a
+      computed value, and emptied windows correctly decay to ``0`` instead of
+      lying with a frozen number. NULL is still reserved for instruments with no
+      raw insider data at all (never touched here).
 
     Returns ``{"instruments": N, "window_days": 90}`` so the scheduler can
     log a meaningful summary. NOTE: ``N`` is the row-count returned by
@@ -76,7 +96,11 @@ async def run_insider_rollup_once(session: AsyncSession) -> dict[str, int]:
 
     sql = text(
         """
-        WITH agg AS (
+        WITH have_data AS (
+            SELECT DISTINCT instrument_id
+            FROM insider_transactions
+        ),
+        agg AS (
             SELECT instrument_id, SUM(net_value_usd) AS total_90d
             FROM insider_transactions
             WHERE transaction_date >= :window_start
@@ -85,8 +109,9 @@ async def run_insider_rollup_once(session: AsyncSession) -> dict[str, int]:
         )
         INSERT INTO instrument_fundamentals_snapshot
             (instrument_id, insider_net_buy_90d, updated_at)
-        SELECT instrument_id, total_90d, now()
-        FROM agg
+        SELECT hd.instrument_id, COALESCE(agg.total_90d, 0), now()
+        FROM have_data hd
+        LEFT JOIN agg ON agg.instrument_id = hd.instrument_id
         ON CONFLICT (instrument_id) DO UPDATE
             SET insider_net_buy_90d = EXCLUDED.insider_net_buy_90d,
                 updated_at          = now()

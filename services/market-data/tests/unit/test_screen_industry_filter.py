@@ -25,10 +25,19 @@ pytestmark = pytest.mark.unit
 
 
 def _make_capture_session() -> tuple[MagicMock, list[Any]]:
-    """Return (session, captured_statements) — every ``execute`` call is recorded."""
+    """Return (session, captured_statements) — every ``execute`` call is recorded.
+
+    WHY filter out SET LOCAL: query_screen issues ``SET LOCAL statement_timeout``
+    before the screener query (PLAN-0099 timeout guard). We skip it so
+    ``captured[-1]`` is always the screener SELECT regardless of cache state.
+    """
     captured: list[Any] = []
 
     async def _capture(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         result.all = MagicMock(return_value=[])  # empty result-set short-circuits
@@ -62,9 +71,11 @@ async def test_query_screen_industry_filter_adds_where_clause() -> None:
     # Empty result-set short-circuits, but the statement was issued and captured.
     assert results == []
     assert total == 0
-    assert len(captured) == 1, "expected exactly one execute() call"
+    # WHY >= 1 (not == 1): if _AVAILABLE_SNAP_FIELDS is uncached, query_screen
+    # fires an extra introspection call. The screener SELECT is always last.
+    assert len(captured) >= 1, "expected at least one execute() call"
 
-    sql = _compiled_sql(captured[0])
+    sql = _compiled_sql(captured[-1])
     # The industry filter must surface as a WHERE predicate against instruments.industry.
     assert "industry" in sql.lower(), f"industry column missing from SQL: {sql}"
     assert "Semiconductors" in sql, f"industry value missing from SQL: {sql}"
@@ -81,7 +92,7 @@ async def test_query_screen_omits_industry_clause_when_none() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=30.0, sector="Technology")]
     await query_screen(session, filters, limit=50, offset=0)
 
-    sql = _compiled_sql(captured[0])
+    sql = _compiled_sql(captured[-1])
     # Sector predicate is present; no instruments.industry = ... predicate.
     assert "Technology" in sql
     assert "Semiconductors" not in sql
@@ -104,6 +115,6 @@ async def test_query_screen_industry_and_sector_combined() -> None:
     ]
     await query_screen(session, filters, limit=50, offset=0)
 
-    sql = _compiled_sql(captured[0])
+    sql = _compiled_sql(captured[-1])
     assert "Technology" in sql
     assert "Semiconductors" in sql

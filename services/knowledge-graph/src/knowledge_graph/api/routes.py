@@ -24,10 +24,13 @@ from knowledge_graph.api.dependencies import (
     CypherNeighborhoodUseCaseDep,
     EntityAliasRepoDep,
     EntityGraphReposDep,
+    GetRelationDetailUseCaseDep,
 )
 from knowledge_graph.api.schemas import (
     GraphNeighborhoodResponse,
     GraphStatsResponse,
+    RelationDetailResponse,
+    RelationEvidenceItem,
     RelationResponse,
     RelationsListResponse,
 )
@@ -288,7 +291,11 @@ async def get_entity_graph(
             _log.warning("graph_depth_cypher_timeout", entity_id=str(entity_id), depth=depth)
             raise HTTPException(
                 status_code=504,
-                detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the 5 s statement_timeout"},
+                # PLAN-0099 W4: corrected stale copy — the neighbourhood use case's
+                # statement_timeout is 20 s (_STATEMENT_TIMEOUT_MS in
+                # cypher_neighborhood.py), not 5 s. The old "5 s" string misled
+                # anyone debugging depth=3 timeouts on dense hubs (e.g. Apple).
+                detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the statement_timeout"},
             ) from exc
         return _map_cypher_to_graph_response(result)
 
@@ -368,6 +375,93 @@ async def list_relations(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+# ── Relation detail (PLAN-0099 edge detail) ───────────────────────────────────
+
+
+@router.get("/relations/{relation_id}", response_model=RelationDetailResponse)
+async def get_relation_detail(
+    relation_id: UUID,
+    repos: EntityGraphReposDep,
+    uc: GetRelationDetailUseCaseDep,
+    evidence_limit: int = Query(default=25, ge=1, le=100),
+) -> RelationDetailResponse:
+    """Return the full detail for a single relation (graph edge) + evidence.
+
+    Powers the Intelligence-tab edge-click panel:
+    - relation metadata (type, semantic_mode, decay_class, confidence,
+      temporal validity window, contradiction stats, audit timestamps)
+    - the current LLM summary (relation_summaries)
+    - subject/object entity summaries
+    - up to ``evidence_limit`` evidence items, newest first, each with
+      ``evidence_text`` (the chunk where the relation appeared) and source
+      provenance (``document_id``, ``source_name``, ``source_type``).
+
+    Article title/url/published_at are NOT included — intelligence_db has no
+    article metadata (R9: lives in S5/S6); clients resolve ``document_id``
+    via the gateway document/news endpoints when needed.
+
+    - 200: relation found (summary/evidence may be empty)
+    - 404: relation does not exist
+    - 422: invalid UUID
+
+    Uses the read-replica session (R27).
+    """
+    result = await uc.execute(
+        relation_repo=repos.relation_repo,  # type: ignore[arg-type]
+        evidence_repo=repos.evidence_repo,  # type: ignore[arg-type]
+        summary_repo=repos.summary_repo,  # type: ignore[arg-type]
+        entity_repo=repos.entity_repo,  # type: ignore[arg-type]
+        relation_id=relation_id,
+        evidence_limit=evidence_limit,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Relation not found")
+
+    rel = result.relation
+    summary = result.summary or {}
+    return RelationDetailResponse(
+        relation_id=rel["relation_id"],  # type: ignore[arg-type]
+        canonical_type=str(rel["canonical_type"]),
+        semantic_mode=str(rel["semantic_mode"]),
+        decay_class=str(rel["decay_class"]),
+        confidence=rel.get("confidence"),
+        confidence_stale=bool(rel["confidence_stale"]),
+        summary_authority=float(rel.get("summary_authority") or 0.0),
+        evidence_count=int(rel["evidence_count"]),
+        first_evidence_at=rel["first_evidence_at"],
+        latest_evidence_at=rel["latest_evidence_at"],
+        valid_from=rel.get("valid_from"),
+        valid_to=rel.get("valid_to"),
+        relation_period_type=rel.get("relation_period_type"),
+        strongest_contra_score=rel.get("strongest_contra_score"),
+        latest_contra_at=rel.get("latest_contra_at"),
+        relation_source=rel.get("relation_source"),
+        created_at=rel.get("created_at"),
+        updated_at=rel.get("updated_at"),
+        relation_summary=summary.get("summary_text"),
+        summary_generated_at=summary.get("generated_at"),
+        summary_model_id=summary.get("model_id"),
+        subject=_entity_summary(result.subject_row) if result.subject_row else None,
+        object=_entity_summary(result.object_row) if result.object_row else None,
+        evidence=[
+            RelationEvidenceItem(
+                raw_id=ev["raw_id"],
+                evidence_text=ev.get("evidence_text"),
+                document_id=ev["source_document_id"],
+                source_name=ev.get("source_name"),
+                source_type=ev.get("source_type"),
+                polarity=ev.get("polarity"),
+                evidence_date=ev["evidence_date"],
+                extraction_confidence=float(ev["extraction_confidence"]),
+                source_trust_weight=float(ev["source_trust_weight"]),
+                is_backfill=bool(ev.get("is_backfill") or False),
+                extracted_at=ev.get("extracted_at"),
+            )
+            for ev in result.evidence
+        ],
     )
 
 

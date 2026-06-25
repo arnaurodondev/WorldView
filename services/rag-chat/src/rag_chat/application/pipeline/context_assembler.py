@@ -52,16 +52,28 @@ class ContextAssembler:
     """Build the numbered context block from reranked items.
 
     Token budget: 8000 context tokens (~32,000 chars at 0.25 tok/char).
-    Truncation strategy: trim lowest-fusion-score items first.
+    Truncation strategy: trim trailing (lowest-ranked) items first — the
+    caller passes items already ranked best-first (BP-669 order contract).
     """
 
     def assemble(self, items: list[RetrievedItem]) -> str:
-        """Return the numbered context block string for injection into the prompt."""
+        """Return the numbered context block string for injection into the prompt.
+
+        ORDER CONTRACT (BP-669, 2026-06-11): items are numbered [1..N] in the
+        EXACT order given. The caller passes the reranked list and later maps
+        the LLM's ``[N]`` citation markers back into the SAME list
+        (``OutputProcessor.process``). This method previously re-sorted by
+        ``fusion_score`` before numbering, so the prompt said "[5] = Morgan
+        Stanley article" while the citation builder resolved ``[5]`` to a
+        different item in cross-encoder order — every citation pointed at the
+        wrong source whenever rerank order != fusion order. Do NOT re-sort
+        here; ordering is the caller's responsibility.
+        """
         if not items:
             return ""
 
-        # Sort by fusion_score DESC (items should already be ranked, but be safe)
-        ranked = sorted(items, key=lambda x: x.fusion_score, reverse=True)
+        # BP-669: trust the caller's order — see ORDER CONTRACT above.
+        ranked = items
 
         lines: list[str] = []
         total_chars = 0

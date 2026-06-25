@@ -4,9 +4,29 @@ This runs AFTER Layer 1 (InputValidator regex + PII checks) passes. It calls a
 small LLM to semantically classify whether the user message is a jailbreak
 attempt, privilege escalation, prompt injection, or data exfiltration attempt.
 
-Fail-closed design: any error (timeout, parse error, network, API error) causes
-the classifier to return True (UNSAFE) and log a warning. This is intentional —
-a transient LLM error is far less costly than allowing an injection through.
+Verdict semantics (two distinct failure classes — do NOT conflate them):
+
+* The classifier RAN and produced a verdict → ``classify()`` returns
+  ``True`` (UNSAFE / injection) or ``False`` (SAFE). Genuine PARSE failures and
+  unexpected labels (the model answered, but with garbage) remain fail-closed
+  as ``True`` — a corrupt classifier *response* is treated as a possible
+  injection signal.
+
+* The classifier could NOT RUN because its provider was unavailable or the
+  transport failed (HTTP 402/429/5xx, connect error, network error). This is
+  raised as ``ClassifierUnavailableError`` — NEVER mislabelled as injection.
+  The API layer maps it to a distinct ``CLASSIFIER_UNAVAILABLE`` error ("input
+  safety check temporarily unavailable, please retry"), not "Semantic injection
+  detected". Default policy is still fail-closed (reject), but HONEST. Set
+  ``RAG_CHAT_CLASSIFIER_FAIL_OPEN=true`` to fail open during an incident; we
+  NEVER default to fail-open (that would let injections through during an
+  outage).
+
+WHY this design (the bug it fixes): the old code caught EVERY exception and
+returned ``True`` (UNSAFE). A DeepInfra ``402 Payment Required`` billing blip
+therefore rejected EVERY chat request as ``[PROMPT_INJECTION] Semantic injection
+detected`` — a misleading message that hid a billing/outage incident behind a
+fake security signal.
 
 When the API key is not configured the classifier is disabled (returns False =
 SAFE) and logs a warning. Operators should configure INJECTION_CLASSIFIER_MODEL
@@ -24,7 +44,11 @@ from typing import TYPE_CHECKING
 import structlog
 from prompts.chat.safety_classifier import INJECTION_SAFETY_CLASSIFIER
 
-from rag_chat.application.metrics.prometheus import rag_injection_classifier_indeterminate
+from rag_chat.application.metrics.prometheus import (
+    rag_injection_classifier_indeterminate,
+    rag_injection_classifier_unavailable,
+)
+from rag_chat.domain.errors import ClassifierUnavailableError
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.cost_recorder import CostRecorder
@@ -81,6 +105,52 @@ _CLASSIFY_TIMEOUT_S = 10.0
 _DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 
+class _ClassifierTransportError(Exception):
+    """Internal sentinel: the classifier provider was unavailable / transport failed.
+
+    Raised inside ``_call_llm`` for HTTP status errors (402/429/5xx and any other
+    non-2xx) and connect/network errors. ``classify()`` catches it to apply the
+    fail-open/closed policy and surface ``ClassifierUnavailableError`` to the
+    caller — distinct from a genuine injection verdict.
+
+    Carries a bounded ``reason`` ("http_status" | "connect_error" |
+    "network_error" | "unknown_transport_error") and an optional ``status`` HTTP
+    code for metric labelling.
+    """
+
+    def __init__(self, reason: str, *, status: int | None = None, detail: str = "") -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+        self.status = status
+        self.detail = detail
+
+
+def _classifier_fail_open() -> bool:
+    """Read the RAG_CHAT_CLASSIFIER_FAIL_OPEN hot-toggle (default: fail-closed).
+
+    Per-call env read (same pattern as DEBUG_SKIP_CLASSIFIER /
+    RAG_COMPLETION_CACHE_DISABLED) so ops can flip the closed-vs-open policy
+    during a provider incident without a redeploy. ANY value other than an
+    explicit truthy spelling means fail-closed-but-honest — we NEVER default to
+    fail-open.
+    """
+    return os.environ.get("RAG_CHAT_CLASSIFIER_FAIL_OPEN", "").strip().lower() in ("1", "true", "yes")
+
+
+def _classifier_retry_attempts() -> int:
+    """Read RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS (default 1, clamped to [0, 3]).
+
+    Bounded retry on a transient transport failure BEFORE declaring the
+    classifier unavailable. Clamped defensively so a fat-fingered env var cannot
+    turn the safety gate into a latency amplifier.
+    """
+    raw = os.environ.get("RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS", "1").strip()
+    try:
+        return max(0, min(3, int(raw)))
+    except ValueError:
+        return 1
+
+
 class LLMInjectionClassifier:
     """Semantic injection classifier using a small LLM on DeepInfra.
 
@@ -90,7 +160,12 @@ class LLMInjectionClassifier:
         if is_unsafe:
             raise PromptInjectionError("Semantic injection detected")
 
-    Fail-closed: any exception → returns True (UNSAFE).
+    Verdict vs availability (do NOT conflate):
+      * Genuine verdict → returns True (UNSAFE) / False (SAFE).
+      * Parse failure / unexpected label → fail-closed True (verdict-side).
+      * Provider unavailable / transport error → raises
+        ``ClassifierUnavailableError`` (default fail-closed-but-honest; set
+        ``RAG_CHAT_CLASSIFIER_FAIL_OPEN=true`` to fail open instead).
     No API key → returns False (disabled path) with warning logged.
     """
 
@@ -117,11 +192,23 @@ class LLMInjectionClassifier:
         """Classify *message* for injection risk.
 
         Returns:
-            True  — UNSAFE (injection detected or classifier error)
-            False — SAFE (message passed semantic check, or classifier disabled)
+            True  — UNSAFE: a genuine injection verdict, OR a corrupt classifier
+                    response (parse failure / unexpected label → fail-closed).
+            False — SAFE: message passed the semantic check, classifier is
+                    disabled (no API key), timed out (fail-open), or the
+                    classifier was unavailable AND fail-open policy is active.
 
-        This method NEVER raises — all exceptions are caught and cause a
-        fail-closed True return.
+        Raises:
+            ClassifierUnavailableError — the classifier could NOT RUN (provider
+                unavailable / transport error: HTTP 402/429/5xx, connect or
+                network error) AND the default fail-closed-but-honest policy is
+                active (``RAG_CHAT_CLASSIFIER_FAIL_OPEN`` unset/false). This is
+                DISTINCT from a genuine injection verdict — callers must surface
+                it as ``CLASSIFIER_UNAVAILABLE``, never as injection.
+
+        This method never raises for a genuine injection verdict (returns True)
+        nor for parse/timeout errors — only the provider-unavailability path can
+        raise, and only under the fail-closed-but-honest policy.
         """
         # ── PLAN-0097 W2 T-W2-04 / W3 fold: DEBUG_SKIP_CLASSIFIER short-circuit ─
         # Eval harness needs a deterministic way to bypass the Layer 2 LLM
@@ -151,39 +238,112 @@ class LLMInjectionClassifier:
             )
             return False  # disabled → treat as SAFE
 
-        # ── LLM classification with asyncio timeout ────────────────────────────
-        # WHY timeout is fail-open (not fail-closed): DeepInfra latency for the
-        # classifier model occasionally exceeds 10s under load. Fail-closing on
-        # timeout blocks ALL user queries whenever the model is slow — that cost
-        # is higher than the marginal security risk of letting one timed-out
-        # request through Layer 2 (Layer 1 regex still ran). Parse/API errors
-        # remain fail-closed because they may indicate a compromised response.
-        try:
-            result = await asyncio.wait_for(
-                self._call_llm(message),
-                timeout=_CLASSIFY_TIMEOUT_S,
-            )
-            return result
-        except TimeoutError:
+        # ── LLM classification with asyncio timeout + bounded retry ────────────
+        # Three distinct outcomes are handled below — they are NOT the same:
+        #
+        #   1. TIMEOUT → fail-OPEN (return False). DeepInfra latency for the
+        #      classifier occasionally exceeds 10s under load; blocking ALL user
+        #      queries whenever the model is slow costs more than the marginal
+        #      risk of one timed-out request slipping past Layer 2 (Layer 1 regex
+        #      still ran). Unchanged behaviour.
+        #
+        #   2. TRANSPORT / PROVIDER UNAVAILABILITY (HTTP 402/429/5xx, connect or
+        #      network error) → the classifier COULD NOT RUN. This is NOT an
+        #      injection signal. We retry a bounded number of times, then apply
+        #      the fail-open/closed policy and raise ClassifierUnavailableError
+        #      (default) so the user sees an ACCURATE "safety check temporarily
+        #      unavailable" message — never "Semantic injection detected". This
+        #      is the bug fix.
+        #
+        #   3. PARSE / UNEXPECTED-LABEL (the model answered with garbage) → still
+        #      fail-CLOSED as an injection verdict (return True). A corrupt
+        #      classifier *response* may indicate a compromised/poisoned answer.
+        #
+        # ``_call_llm`` raises ``_ClassifierTransportError`` for case 2 and
+        # returns a bool for cases 1/3.
+        _max_retries = _classifier_retry_attempts()
+        _last_transport: _ClassifierTransportError | None = None
+        for _attempt in range(_max_retries + 1):
+            try:
+                result = await asyncio.wait_for(
+                    self._call_llm(message),
+                    timeout=_CLASSIFY_TIMEOUT_S,
+                )
+                return result
+            except TimeoutError:
+                log.warning(  # type: ignore[no-any-return]
+                    "llm_injection_classifier_timeout_safe",
+                    reason="timeout",
+                    timeout_s=_CLASSIFY_TIMEOUT_S,
+                )
+                return False  # fail-open on timeout — Layer 1 already ran
+            except _ClassifierTransportError as exc:
+                # Provider unavailable / transport failure — retry within budget,
+                # then fall through to the unavailability policy below.
+                _last_transport = exc
+                if _attempt < _max_retries:
+                    log.warning(  # type: ignore[no-any-return]
+                        "llm_injection_classifier_transport_retry",
+                        reason=exc.reason,
+                        status=exc.status,
+                        attempt=_attempt + 1,
+                        max_retries=_max_retries,
+                    )
+                    continue
+                break
+            except Exception as exc:
+                # Genuine parse / unexpected-response error (NOT a transport
+                # failure) — fail-closed as an injection verdict. A corrupt
+                # classifier response is treated as a possible injection signal.
+                log.warning(  # type: ignore[no-any-return]
+                    "llm_injection_classifier_fail_closed",
+                    reason="exception",
+                    error=str(exc),
+                )
+                return True  # fail-closed on unexpected (non-transport) errors
+
+        # ── Classifier UNAVAILABLE: provider/transport error, retries exhausted ─
+        assert _last_transport is not None  # loop only breaks here with a transport error
+        rag_injection_classifier_unavailable.labels(
+            reason=_last_transport.reason,
+            status=str(_last_transport.status) if _last_transport.status is not None else "n/a",
+        ).inc()
+
+        if _classifier_fail_open():
+            # Operator opted into fail-open for the duration of the incident.
             log.warning(  # type: ignore[no-any-return]
-                "llm_injection_classifier_timeout_safe",
-                reason="timeout",
-                timeout_s=_CLASSIFY_TIMEOUT_S,
+                "llm_injection_classifier_unavailable_fail_open",
+                reason=_last_transport.reason,
+                status=_last_transport.status,
+                policy="fail_open",
             )
-            return False  # fail-open on timeout — Layer 1 already ran
-        except Exception as exc:
-            log.warning(  # type: ignore[no-any-return]
-                "llm_injection_classifier_fail_closed",
-                reason="exception",
-                error=str(exc),
-            )
-            return True  # fail-closed on unexpected errors
+            return False  # SAFE — Layer 1 regex/PII already ran
+
+        # Default policy: fail-closed-but-HONEST. Reject the request, but with an
+        # accurate, distinct error — NOT a fake "injection detected" verdict.
+        log.warning(  # type: ignore[no-any-return]
+            "llm_injection_classifier_unavailable_fail_closed",
+            reason=_last_transport.reason,
+            status=_last_transport.status,
+            policy="fail_closed_honest",
+        )
+        raise ClassifierUnavailableError(
+            "Input safety check temporarily unavailable, please retry.",
+            details={"reason": _last_transport.reason, "status": _last_transport.status},
+        )
 
     async def _call_llm(self, message: str) -> bool:
         """Make the DeepInfra API call and parse the JSON response.
 
         Returns True if the model labels the message UNSAFE, False if SAFE.
-        Raises on any API error or parse failure (caller wraps in try/except).
+
+        Raises:
+            _ClassifierTransportError — provider unavailable / transport failure
+                (HTTP 402/429/5xx or any non-2xx, connect error, network error).
+                Signals "the classifier could not run" — NOT an injection. The
+                caller maps this to the fail-open/closed unavailability policy.
+            Exception — genuine parse failures (malformed JSON, missing keys)
+                propagate so the caller fails CLOSED as an injection verdict.
         """
         import httpx
 
@@ -217,8 +377,26 @@ class LLMInjectionClassifier:
             # hang indefinitely if the server accepts the connection but stalls.
             timeout=httpx.Timeout(15.0),
         ) as client:
-            response = await client.post("/chat/completions", json=payload)
-            response.raise_for_status()
+            # Transport / provider-availability errors (the bug fix): a non-2xx
+            # status (402 Payment Required, 429 rate-limit, 5xx outage) or a
+            # connect/network failure means the classifier COULD NOT RUN. We
+            # re-raise these as _ClassifierTransportError so classify() can apply
+            # the unavailability policy instead of mislabelling them as injection.
+            try:
+                response = await client.post("/chat/completions", json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # 402/429/5xx and any other non-2xx — provider rejected/failed.
+                _status = exc.response.status_code if exc.response is not None else None
+                raise _ClassifierTransportError("http_status", status=_status, detail=str(exc)) from exc
+            except httpx.ConnectError as exc:
+                raise _ClassifierTransportError("connect_error", detail=str(exc)) from exc
+            except httpx.TransportError as exc:
+                # Covers ReadTimeout, network errors, protocol errors, etc.
+                raise _ClassifierTransportError("network_error", detail=str(exc)) from exc
+            except httpx.HTTPError as exc:
+                # Any other httpx-layer error not caught above — still "could not run".
+                raise _ClassifierTransportError("unknown_transport_error", detail=str(exc)) from exc
 
         data = response.json()
 

@@ -21,6 +21,7 @@ from observability.logging import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.domain.entities.polling_policy import PollingPolicy
+    from market_ingestion.domain.entities.watermark import Watermark
 
 logger = get_logger(__name__)
 
@@ -46,6 +47,39 @@ _EODHD_CREDIT_COST: dict[str, float] = {
 
 # Intraday timeframes that hit /api/intraday (5 credits each).
 _INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
+
+# EOD OHLCV timeframes (daily/weekly/monthly) are routed to Yahoo Finance as the
+# PRIMARY provider (config routing_ohlcv_eod = "yahoo_finance:100,eodhd:80"); EODHD
+# is only a zero-bar FAILOVER.  In steady state these tasks consume ZERO EODHD
+# credits, so the scheduler must NOT pre-charge the EODHD token bucket for them.
+# Pre-charging (the old behaviour) burned ~2_200 phantom EODHD credits/day on the
+# 554 enabled `eodhd ohlcv 1d` policies and — because the budget gate stops at the
+# first exhaustion — could STARVE the genuinely-EODHD fundamentals tasks (priority
+# 2, ranked *below* ohlcv-1d priority 5) under quota pressure.  EODHD failover is
+# still guarded at execution time by the circuit breaker and the monthly quota
+# service, so skipping the scheduler pre-charge does not let a Yahoo outage flood
+# EODHD uncontrolled (BP-EODHD-QUOTA).
+_YAHOO_ROUTED_EOD_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
+
+# FIX-INTRADAY-DEDUP: all intraday OHLCV timeframes whose incremental tasks must
+# use a per-minute dedupe bucket instead of a per-day bucket.  With day-truncated
+# range_start:range_end the dedupe_key is identical for every scheduler tick of
+# the same UTC day, so ON CONFLICT DO NOTHING swallows every re-enqueue and the
+# pipeline fetches intraday bars exactly once per day (~2% of expected bars).
+# Daily-and-slower timeframes keep the day bucket (original FIX-DEDUP intent).
+_INTRADAY_DEDUP_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
+# CATCH-UP (2026-06-16): cap on how far back an INCREMENTAL task may resume its
+# range_start from the data high-water mark after a gap.  Before this, range_start
+# was hard-pinned to today-midnight, so a multi-day outage (e.g. the 2026-06-13..15
+# platform-down window) was never backfilled — incremental fetches only ever asked
+# for "today".  We now resume from the watermark's last-fetched day, bounded by this
+# cap so a long-dormant policy issues one bounded catch-up request rather than an
+# unbounded range; gaps wider than this should use the explicit backfill path
+# (``backfill_enabled`` + ``backfill_start_date``).  Alpaca batches up to 10k bars
+# per symbol/call, so a one-week catch-up is a single request, and bar upserts are
+# idempotent so re-fetching the boundary day is a no-op.
+_MAX_CATCHUP_DAYS: int = 7
 
 
 @dataclass
@@ -186,8 +220,15 @@ class ScheduleDueTasksUseCase:
                     tasks.extend(backfill_tasks)
                     backfill_policies.append(policy)
             else:
-                # Incremental mode — schedule if due and no active task exists
-                if policy.is_due(watermark.current_bar_ts):
+                # Incremental mode — schedule if due and no active task exists.
+                # FIX-WALLCLOCK: is_due() expects the WALL-CLOCK time of the last
+                # run, not a data timestamp.  current_bar_ts is the data high-water
+                # mark (e.g. tomorrow-midnight for a full-day range), which made
+                # every policy "not due" until the next UTC day — pinning all
+                # incremental policies to exactly one fetch per day.
+                # last_success_at is written by the worker on every successful
+                # fetch (watermark_repository.save) and is the correct clock.
+                if policy.is_due(watermark.last_success_at):
                     # FIX-VARIANT: task_variant (computed above for watermark)
                     # must also be passed to has_active_task so fundamentals
                     # tasks (variant="annual") are detected as active.
@@ -207,7 +248,7 @@ class ScheduleDueTasksUseCase:
                             symbol=symbol,
                         )
                         continue
-                    task = self._build_incremental_task(policy, symbol, now)
+                    task = self._build_incremental_task(policy, symbol, now, watermark)
                     if task is not None:
                         tasks.append(task)
 
@@ -227,8 +268,15 @@ class ScheduleDueTasksUseCase:
         policy: PollingPolicy,
         symbol: str,
         now: datetime,
+        watermark: Watermark | None = None,
     ) -> IngestionTask | None:
-        """Create one incremental task for a due policy."""
+        """Create one incremental task for a due policy.
+
+        ``watermark`` (optional, backward-compatible) supplies the data
+        high-water mark used for staleness-proportional catch-up after a gap —
+        see ``_MAX_CATCHUP_DAYS``.  When omitted the legacy today-only range is
+        used.
+        """
         from datetime import timedelta
 
         # FIX-DEDUP: Truncate to UTC-day boundaries so the dedupe_key stays
@@ -237,7 +285,34 @@ class ScheduleDueTasksUseCase:
         # ON CONFLICT DO NOTHING never fires, causing unbounded task growth.
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         range_start = today
-        range_end = today + timedelta(days=1)
+
+        # CATCH-UP: when the data high-water mark lags behind today (an outage
+        # or a long dormant period), resume range_start from the last-fetched
+        # day instead of today, bounded by _MAX_CATCHUP_DAYS, so the gap is
+        # actually refetched.  range_start stays day-truncated so the dedupe key
+        # is stable across same-day ticks until a successful fetch advances the
+        # watermark; once it does, the next tick's range_start advances with it.
+        if watermark is not None and watermark.current_bar_ts is not None:
+            wm_day = watermark.current_bar_ts.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            if wm_day < today:
+                range_start = max(wm_day, today - timedelta(days=_MAX_CATCHUP_DAYS))
+        if policy.dataset_type == DatasetType.OHLCV and (policy.timeframe or "") in _INTRADAY_DEDUP_TIMEFRAMES:
+            # FIX-INTRADAY-DEDUP: bucket intraday tasks per MINUTE, not per day.
+            # A day-stable dedupe_key makes ON CONFLICT DO NOTHING swallow every
+            # same-day re-enqueue, so intraday policies fetched once per day.
+            # Truncating range_end to the minute gives each scheduler tick in a
+            # new minute a distinct dedupe_key while still deduping ticks that
+            # land within the same minute.  range_start stays at day-start: the
+            # full-day refetch is cheap (Alpaca batches 1000 symbols/call) and
+            # downstream bar upserts are idempotent.
+            range_end = now.replace(second=0, microsecond=0)
+            if range_end <= range_start:
+                # Guard for ticks in the 00:00 UTC minute — DateRange requires
+                # start < end strictly.
+                range_end = range_start + timedelta(minutes=1)
+        else:
+            # Daily-and-slower datasets keep the stable full-day bucket.
+            range_end = today + timedelta(days=1)
         date_range = DateRange(start=range_start, end=range_end)
 
         if policy.dataset_type == DatasetType.OHLCV:
@@ -401,6 +476,19 @@ class ScheduleDueTasksUseCase:
                 budget.refill(elapsed)
 
             for task in ptasks:
+                # EOD OHLCV (daily/weekly/monthly) routes to Yahoo Finance, not
+                # EODHD — do NOT charge the EODHD bucket for it (see
+                # _YAHOO_ROUTED_EOD_TIMEFRAMES note above).  These tasks are kept
+                # unconditionally; their real cost is borne by Yahoo (free) and
+                # any EODHD failover is guarded downstream at execution time.
+                if (
+                    provider == Provider.EODHD
+                    and str(task.dataset_type) == DatasetType.OHLCV.value
+                    and task.timeframe in _YAHOO_ROUTED_EOD_TIMEFRAMES
+                ):
+                    kept.append(task)
+                    continue
+
                 # Consume credits proportional to the EODHD endpoint cost so
                 # the budget accurately throttles expensive endpoints (e.g.
                 # fundamentals = 10 credits) not just task count (BP-183).

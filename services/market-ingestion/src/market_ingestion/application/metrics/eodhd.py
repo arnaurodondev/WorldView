@@ -86,20 +86,10 @@ eodhd_monthly_credits_limit: prom.Gauge = prom.Gauge(
 )
 
 # ── Response cache ────────────────────────────────────────────────────────────
-
-#: Valkey response cache hits by endpoint.
-eodhd_cache_hits_total: prom.Counter = prom.Counter(
-    "s2_eodhd_cache_hits_total",
-    "Valkey response cache hits",
-    labelnames=["endpoint"],
-)
-
-#: Valkey response cache misses by endpoint.
-eodhd_cache_misses_total: prom.Counter = prom.Counter(
-    "s2_eodhd_cache_misses_total",
-    "Valkey response cache misses",
-    labelnames=["endpoint"],
-)
+# PLAN-0107 A-5: the legacy EODHD-named cache Counters were removed because
+# no cache existed in the request path to emit them. Provider-agnostic
+# replacements live in ``market_ingestion.application.metrics.cache`` and
+# are wired from ``MarketDataCache`` (Wave A-2).
 
 # ── Quota enforcement ─────────────────────────────────────────────────────────
 

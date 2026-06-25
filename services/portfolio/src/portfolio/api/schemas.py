@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Generic, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_serializer, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_serializer, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -91,6 +91,9 @@ class PortfolioResponse(BaseModel):
     # backfilled to 'manual' for historical rows).
     kind: str
     created_at: datetime
+    # PLAN-0114 W6: per-portfolio cost basis accounting method. Default "FIFO"
+    # keeps backwards-compat with clients that don't yet read this field.
+    cost_basis_method: str = "FIFO"
 
 
 class PortfolioRenameRequest(BaseModel):
@@ -100,14 +103,32 @@ class PortfolioRenameRequest(BaseModel):
 class RecordTransactionRequest(BaseModel):
     portfolio_id: UUID
     instrument_id: UUID
-    transaction_type: str
-    direction: str
+    # PLAN-0108: tightened from bare str to an exhaustive Literal so unknown
+    # types yield 422 (Pydantic validation) instead of 500 (ValueError inside
+    # the use case after the enum lookup fails with a KeyError/ValueError).
+    transaction_type: Literal["BUY", "SELL", "DIVIDEND", "DEPOSIT", "WITHDRAWAL", "FEE", "INTEREST", "TRADE"]
+    # PLAN-0108: direction is INFLOW/OUTFLOW; reject anything else at the
+    # schema layer before it reaches the domain enum constructor.
+    direction: Literal["INFLOW", "OUTFLOW"] | None = None
+    # PLAN-0108: BUY/SELL side only for transaction_type=TRADE. The model
+    # validator below enforces the coupling: TRADE requires trade_side,
+    # non-TRADE must omit it (or pass null).
+    trade_side: Literal["BUY", "SELL"] | None = None
     quantity: Decimal
     price: Decimal
     fees: Decimal = Decimal(0)
     currency: str
     executed_at: datetime
     external_ref: str | None = None
+
+    @model_validator(mode="after")
+    def validate_trade_side(self) -> RecordTransactionRequest:
+        # WHY: TRADE transactions use trade_side to derive direction server-side
+        # (BUY → INFLOW, SELL → OUTFLOW). Requiring trade_side here avoids a
+        # silent 500 in the route handler when direction is None for TRADE rows.
+        if self.transaction_type == "TRADE" and self.trade_side is None:
+            raise ValueError("trade_side is required when transaction_type is TRADE")
+        return self
 
     @field_validator("currency")
     @classmethod
@@ -141,6 +162,9 @@ class RecordTransactionResponse(BaseModel):
     currency: str
     executed_at: datetime
     created_at: datetime
+    # PLAN-0108: echoed back so the frontend can display BUY/SELL without
+    # needing to infer it from direction (which is INFLOW/OUTFLOW).
+    trade_side: str | None = None
 
     @field_serializer("quantity", "price", "fees")
     def serialize_decimal(self, v: Decimal) -> str:
@@ -158,10 +182,48 @@ class HoldingResponse(BaseModel):
     ticker: str | None = None
     name: str | None = None
     entity_id: UUID | None = None
+    # 2026-06-10 (frontend-enhancement sprint, gap #1): asset_class joins the
+    # enrichment set so the holdings table can render the ASSET column without
+    # cross-referencing the transactions page (which only covers instruments
+    # with a transaction on the current page — everything else showed "—").
+    # Forward-compatible add (R11): nullable with default, never required.
+    asset_class: str | None = None
 
     @field_serializer("quantity", "average_cost")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+class HoldingsListResponse(BaseModel):
+    """Holdings response envelope with brokerage connection metadata (W3 - FR-4, FR-7).
+
+    WHY a dedicated response model instead of reusing ``PaginatedResponse[HoldingResponse]``:
+    the holdings endpoint does not paginate (a portfolio rarely exceeds ~50 positions)
+    so bolting ``brokerage_last_synced_at`` and ``brokerage_sync_error_count`` onto a
+    generic pagination envelope would require either:
+
+    (a) Extending ``PaginatedResponse`` with optional domain-specific fields - which
+        would leak portfolio domain knowledge into a generic schema.
+    (b) Nesting an inner object - which would break existing frontend consumers that
+        already unpack ``{items, total, limit, offset}``.
+
+    This model extends the established shape with two additive nullable fields.
+    Forward-compatible per R11: ``brokerage_last_synced_at`` is nullable (None for
+    non-BROKERAGE portfolios), ``brokerage_sync_error_count`` defaults to 0. Existing
+    consumers that ignore unknown fields continue to work.
+    """
+
+    items: list[HoldingResponse]
+    total: int
+    limit: int
+    offset: int
+    # UTC ISO-8601 timestamp of the last successful brokerage sync.
+    # None for MANUAL/ROOT portfolios or a BROKERAGE portfolio whose connection
+    # has never completed a sync (new connection, pending first sync).
+    brokerage_last_synced_at: datetime | None = None
+    # Total count of brokerage sync errors for this portfolio's connection.
+    # 0 for MANUAL/ROOT portfolios or a BROKERAGE portfolio with no errors.
+    brokerage_sync_error_count: int = 0
 
 
 class TransactionListItem(BaseModel):
@@ -526,6 +588,10 @@ class ExposureResponse(BaseModel):
     renders a yellow "Prices stale" badge above the gross-exposure number
     so the user understands the figure may not reflect today's market.
     ``prices_as_of`` is reserved for v2 (see ExposureResult docstring).
+
+    ``buying_power`` (2026-06-10, gap #5): v1 semantics — equals ``cash``
+    because margin is not modelled. Explicit field so the frontend renders
+    a server-stated value instead of inferring it. Forward-compatible add.
     """
 
     invested: Decimal
@@ -535,10 +601,56 @@ class ExposureResponse(BaseModel):
     leverage: Decimal
     prices_stale: bool = False
     prices_as_of: datetime | None = None
+    # v1: always equals cash (no margin). Defaulted for wire compatibility.
+    buying_power: Decimal = Decimal(0)
 
-    @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage")
+    @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage", "buying_power")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+# ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ────────
+
+
+class TwrPointResponse(BaseModel):
+    """One day on the TWR curve.
+
+    ``twr_cum_pct`` — cumulative time-weighted return since the first
+    snapshot in the window, in percent (first point is always 0.0).
+    ``nav`` — the raw daily snapshot value, serialised as an 8-dp string
+    to match every other Decimal in the API.
+    """
+
+    date: date
+    twr_cum_pct: float
+    nav: Decimal
+
+    @field_serializer("nav")
+    def serialize_nav(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class TwrResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/twr`` response.
+
+    Daily time-weighted return series, geometrically linked between
+    external cash flows (see ``ComputeTwrUseCase`` for the formula and
+    the flow-classification rules). ``flow_days`` counts sub-periods that
+    had a non-zero external flow — a sanity-check signal for the caller.
+
+    BP-665 (additive): ``flow_dates`` lists the snapshot dates of those
+    flow-adjusted sub-periods, aligned to ``points[].date`` (a flow on a
+    non-snapshot day reports the snapshot date it folded into), so the
+    frontend's flow-artifact detector can rely on ground truth instead
+    of NAV-jump heuristics. ``len(flow_dates) == flow_days``.
+    """
+
+    portfolio_id: UUID
+    from_date: date
+    to_date: date
+    points: list[TwrPointResponse]
+    flow_days: int
+    flow_dates: list[date] = []
 
 
 # ── PLAN-0051 Wave A — Realised P&L (T-A-1-04) ────────────────────────────────
@@ -667,3 +779,13 @@ class ConcentrationResponse(BaseModel):
     @field_serializer("top_3_share_pct")
     def _decimals(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+class PortfolioPatchRequest(BaseModel):
+    """Partial update payload for PATCH /portfolios/{id}.
+
+    PLAN-0114 / T-W1: allows updating mutable portfolio settings without a
+    full PUT. All fields are optional — absent fields are not updated.
+    """
+
+    cost_basis_method: str | None = None

@@ -104,6 +104,29 @@ export interface PortfolioKPIStripProps {
   buyingPower?: number | null;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * signedPrice — explicit "+$X" / "-$X" rendering for P&L values.
+ *
+ * WHY explicit sign (R1 sprint): colour alone is not enough — colour-blind
+ * users and anyone scanning quickly needs the +/- prefix to read direction
+ * (formatPercent already does this for percentages; this brings dollar P&L
+ * values in line). formatPrice() already emits "-$X" for negatives, so we
+ * only need to prepend "+" for strictly positive values.
+ *
+ * WHY zero stays unsigned ("$0.00", not "+$0.00"): a flat day has no
+ * direction — signing it would falsely imply a gain.
+ *
+ * R3 polish: EXPORTED so every other portfolio surface that renders a
+ * dollar P&L (e.g. the watchlist CHG$ column) uses the exact same sign
+ * convention instead of re-implementing `v >= 0 ? "+" : ""` (which wrongly
+ * signs zero). Single source of truth for the signed-dollar display.
+ */
+export function signedPrice(value: number): string {
+  return value > 0 ? `+${formatPrice(value)}` : formatPrice(value);
+}
+
 // ── KPI tile ──────────────────────────────────────────────────────────────────
 
 /**
@@ -172,6 +195,15 @@ function KPITile({
       className="flex flex-col px-3 py-1.5 flex-1 min-w-0"
       title={hoverTitle}
       data-testid={dataTestId}
+      // R4 hardening (a11y): role="group" + aria-label NAME the tile so the
+      // value below is announced under its label ("Day P&L, group, +$120").
+      // Visually the 10px caps label sits above the value, but with no
+      // programmatic association a screen reader linearising the strip heard
+      // 8 labels and 8 values as 16 disconnected strings. role="group" is
+      // required for the aria-label to be exposed at all (a bare div with
+      // aria-label has no role and most AT ignores the name).
+      role="group"
+      aria-label={label}
     >
       {/* Label: 10px ALL CAPS muted — consistent with table header style */}
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground truncate">
@@ -270,7 +302,9 @@ export function PortfolioKPIStrip({
        */}
       <KPITile
         label="Day P&L"
-        value={dayPnl == null ? "" : formatPrice(dayPnl)}
+        // R1 sprint: signedPrice gives the explicit "+" prefix on gains so
+        // direction is readable without relying on colour alone.
+        value={dayPnl == null ? "" : signedPrice(dayPnl)}
         valueNode={
           dayPnl == null ? (
             // WHY h-3 w-16: matches the ~14px font-medium height of the
@@ -283,10 +317,13 @@ export function PortfolioKPIStrip({
         dataTestId="kpi-day-pnl"
       />
 
-      {/* Tile 3: Unrealised P&L — absolute amount + percentage */}
+      {/* Tile 3: Unrealised P&L — absolute amount + percentage.
+          R1 sprint: the dollar amount is now explicitly signed (signedPrice)
+          to match the percentage (formatPercent has always signed). Before,
+          "$2,500.00 (+2.50%)" mixed an unsigned dollar with a signed percent. */}
       <KPITile
         label="Unrealised P&L"
-        value={`${formatPrice(unrealisedPnl)} (${pnlPctFormatted})`}
+        value={`${signedPrice(unrealisedPnl)} (${pnlPctFormatted})`}
         positive={unrealisedPnl > 0}
         negative={unrealisedPnl < 0}
       />
@@ -329,8 +366,10 @@ export function PortfolioKPIStrip({
         // T-A-1-05 — gracefully fall back to em-dash when the endpoint
         // erroed AND the client couldn't compute anything either. Showing
         // "$0" would mislead.
+        // R1 sprint: signedPrice for consistency with the Day/Unrealised
+        // tiles — every P&L dollar value in the strip now carries its sign.
         const display =
-          realizedPnl == null ? "—" : formatPrice(realizedPnl);
+          realizedPnl == null ? "—" : signedPrice(realizedPnl);
 
         return (
           <KPITile

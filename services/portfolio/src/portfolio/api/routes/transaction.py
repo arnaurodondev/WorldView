@@ -6,9 +6,11 @@ verified RS256 JWT (PRD-0025, F-CRIT-001 remediation).
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
@@ -17,10 +19,65 @@ from portfolio.api.schemas import (
     RecordTransactionResponse,
     TransactionListItem,
 )
+from portfolio.application.use_cases.export_transactions import ExportTransactionsUseCase
 from portfolio.application.use_cases.read_models import ListTransactionsUseCase
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
+from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
+from portfolio.domain.value_objects import TransactionFilter
 
 router = APIRouter(tags=["transactions"])
+
+
+def _parse_transaction_types(transaction_type: list[str] | None) -> list[TransactionType]:
+    """Convert raw string values from query params to ``TransactionType`` enums.
+
+    PLAN-0114 / T-W2-04. Invalid values raise 422 (FastAPI handles validation
+    for Query params, but we also guard here to return a clear message when
+    the value is not in the enum).
+    """
+    if not transaction_type:
+        return []
+    result: list[TransactionType] = []
+    for raw in transaction_type:
+        try:
+            result.append(TransactionType(raw.upper()))
+        except ValueError:
+            valid = ", ".join(t.value for t in TransactionType)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid transaction_type '{raw}'. Valid values: {valid}",
+            ) from None
+    return result
+
+
+def _build_tx_filter(
+    from_date: date | None,
+    to_date: date | None,
+    transaction_type: list[str] | None,
+    ticker: str | None,
+    limit: int,
+    offset: int,
+) -> TransactionFilter | None:
+    """Build a ``TransactionFilter`` VO from query params, or return None.
+
+    PLAN-0114 / T-W2-04. Returns None when no filter params are supplied so
+    ``ListTransactionsUseCase`` falls through to the unfiltered code path
+    (backward compatible). Raises HTTP 400 when the date range exceeds 5 years.
+    """
+    types = _parse_transaction_types(transaction_type)
+    if from_date is None and to_date is None and not types and ticker is None:
+        return None  # no filter — use original unfiltered path
+    try:
+        return TransactionFilter(
+            from_date=from_date,
+            to_date=to_date,
+            transaction_types=types,
+            ticker=ticker,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _extract_tenant_id(request: Request) -> UUID:
@@ -52,7 +109,19 @@ async def record_transaction(
 ) -> RecordTransactionResponse:
     x_tenant_id = _extract_tenant_id(request)
     x_owner_id = _extract_owner_id(request)
-    from portfolio.domain.enums import TransactionDirection, TransactionType
+
+    # PLAN-0108: TRADE transactions derive direction from trade_side so the
+    # frontend doesn't need to know the INFLOW/OUTFLOW convention.
+    # All other transaction types still require an explicit direction field.
+    if body.transaction_type == "TRADE":
+        direction = TransactionDirection.INFLOW if body.trade_side == "BUY" else TransactionDirection.OUTFLOW
+        trade_side = TradeSide(body.trade_side)  # type: ignore[arg-type]
+    else:
+        # The schema validator already ensures direction is non-None for non-TRADE,
+        # but we provide a fallback to avoid a runtime AttributeError if direction
+        # is absent from older clients (results in 422 via Pydantic before this point).
+        direction = TransactionDirection(body.direction or "INFLOW")
+        trade_side = None
 
     uc = RecordTransactionUseCase()
     result = await uc.execute(
@@ -62,7 +131,8 @@ async def record_transaction(
             owner_id=x_owner_id,
             instrument_id=body.instrument_id,
             transaction_type=TransactionType(body.transaction_type),
-            direction=TransactionDirection(body.direction),
+            direction=direction,
+            trade_side=trade_side,
             quantity=body.quantity,
             price=body.price,
             fees=body.fees,
@@ -86,6 +156,7 @@ async def record_transaction(
         currency=t.currency,
         executed_at=t.executed_at,
         created_at=t.created_at,
+        trade_side=str(t.trade_side) if t.trade_side else None,
     )
 
 
@@ -142,12 +213,111 @@ async def list_transactions(
     portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    from_date: date | None = Query(default=None),
+    to_date: date | None = Query(default=None),
+    transaction_type: list[str] | None = Query(default=None),
+    # max_length=20: tickers are rarely longer than 10 chars; caps ILIKE pattern size
+    # to prevent expensive wildcard amplification on the transactions table.
+    # pattern restricts to valid ticker characters — rejects injection attempts.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     x_owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
+    # PLAN-0114 / T-W2-04: build filter if any param is supplied; else use
+    # unfiltered path for backward compatibility.
+    tx_filter = _build_tx_filter(from_date, to_date, transaction_type, ticker, limit, offset)
     uc = ListTransactionsUseCase()
-    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    transactions, total = await uc.execute(
+        portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset, tx_filter=tx_filter
+    )
     return _build_transaction_response(transactions, total, limit, offset)
+
+
+# PLAN-0114 / T-W2-06: CSV export endpoint.
+# IMPORTANT: this route MUST be declared BEFORE
+# ``/portfolios/{portfolio_id}/transactions`` to prevent FastAPI from
+# treating "export" as a UUID value for ``portfolio_id`` in the more
+# general route below.
+@router.get("/portfolios/{portfolio_id}/transactions/export")
+async def export_transactions(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    from_date: date | None = Query(default=None),
+    to_date: date | None = Query(default=None),
+    transaction_type: list[str] | None = Query(default=None),
+    # max_length=20 + pattern: especially important on the export path (limit=999_999)
+    # where an expensive ILIKE pattern would scan the entire transactions table.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
+) -> StreamingResponse:
+    """Stream all matching transactions as a CSV file.
+
+    PLAN-0114 / T-W2-06 (FR-3). The response is a ``StreamingResponse`` so
+    large exports are not buffered in memory. FIFO cost-basis replay is done
+    inside ``ExportTransactionsUseCase`` so the CSV carries ``cost_basis_per_unit``
+    and ``realized_pnl`` columns per SELL row.
+
+    Security: date range is capped at 5 years (1826 days) — a 400 is returned
+    if exceeded. CSV injection guard: cells starting with ``=``, ``+``, ``-``,
+    ``@`` are prefixed with ``'`` (OWASP A03:2021).
+    """
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    types = _parse_transaction_types(transaction_type)
+    try:
+        tx_filter = TransactionFilter(
+            from_date=from_date,
+            to_date=to_date,
+            transaction_types=types,
+            ticker=ticker,
+            # No limit/offset — export fetches everything.
+            limit=999_999,
+            offset=0,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    uc = ExportTransactionsUseCase()
+    csv_iter = await uc.execute(
+        portfolio_id=portfolio_id,
+        owner_id=x_owner_id,
+        tenant_id=x_tenant_id,
+        tx_filter=tx_filter,
+        uow=uow,
+    )
+    filename = f"transactions_{portfolio_id}"
+    if from_date:
+        filename += f"_{from_date}"
+    if to_date:
+        filename += f"_{to_date}"
+    filename += ".csv"
+    # SEC-106: use RFC 6266 filename* encoding (UTF-8 percent-encoded) alongside
+    # the legacy filename= fallback for browsers that only understand RFC 2183.
+    # WHY both: RFC 6266 §5 recommends the dual form for maximum compatibility.
+    # The filename* parameter takes precedence in RFC 6266-aware browsers
+    # (Chrome 20+, Firefox 20+, Safari 7+). Older/minimal clients fall back to
+    # the quoted filename= form.
+    # WHY this matters even though the current filename only contains ASCII safe
+    # chars (UUID hex + ISO dates): future-proofing — if a portfolio name or
+    # ticker with non-ASCII chars were ever added to the filename the quoted form
+    # alone would malform the header.  filename* is always the correct approach.
+    # NOTE: urllib.parse.quote() with safe='' percent-encodes everything except
+    # letters/digits/_ . - ~ per RFC 3986 §2.3 — safe for header values.
+    from urllib.parse import quote as _url_quote  # local import to keep module-level clean
+
+    filename_encoded = _url_quote(filename, safe="")
+    return StreamingResponse(
+        csv_iter,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename_encoded}"),
+            # Defence-in-depth: prevent MIME-sniffing by Chromium-based browsers.
+            # Although _sanitize_csv_cell guards against CSV injection, older
+            # Chromium builds may treat a text/csv response as HTML if opened
+            # inline without this header (OWASP A05:2021 Security Misconfiguration).
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # F-012 (QA 2026-04-28): canonical REST-nested form. The flat
@@ -166,15 +336,24 @@ async def list_transactions_nested(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    from_date: date | None = Query(default=None),
+    to_date: date | None = Query(default=None),
+    transaction_type: list[str] | None = Query(default=None),
+    # Same ticker guard as GET /transactions — caps ILIKE amplification risk.
+    ticker: str | None = Query(default=None, max_length=20, pattern=r"^[A-Za-z0-9.\^-]*$"),
 ) -> PaginatedResponse[TransactionListItem]:
     """Nested alias for ``GET /transactions?portfolio_id=...``.
 
     Keeps the API surface uniform across the portfolio analytics endpoints
     that already use the nested form. The flat endpoint remains as the
-    canonical path during the transition.
+    canonical path during the transition. PLAN-0114 / T-W2-04: now accepts
+    the same filter query params as the flat endpoint.
     """
     x_owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
+    tx_filter = _build_tx_filter(from_date, to_date, transaction_type, ticker, limit, offset)
     uc = ListTransactionsUseCase()
-    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    transactions, total = await uc.execute(
+        portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset, tx_filter=tx_filter
+    )
     return _build_transaction_response(transactions, total, limit, offset)

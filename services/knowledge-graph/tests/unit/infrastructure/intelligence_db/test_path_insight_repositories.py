@@ -236,6 +236,15 @@ def _make_insight_row(
         None,  # 10: llm_explanation
         None,  # 11: explanation_model
         _NOW,  # 12: computed_at
+        # PLAN-0112 W3: the 7 new weirdness columns.  NULL here exercises the
+        # backward-compat path (old rows pre-migration deserialize to defaults).
+        None,  # 13: dst_entity_id
+        None,  # 14: reliability
+        None,  # 15: unexpectedness
+        None,  # 16: semantic_distance
+        None,  # 17: novelty
+        None,  # 18: weirdness
+        None,  # 19: scorer_version
     )
 
 
@@ -346,8 +355,9 @@ class TestPathInsightRepository:
         assert params["min_hops"] == 3
         assert params["max_hops"] == 4
 
-    def test_list_by_anchor_sorted_by_composite_score_desc(self) -> None:
-        """list_by_anchor SQL orders by composite_score DESC."""
+    def test_list_by_anchor_sorted_by_weirdness_desc(self) -> None:
+        """PLAN-0112 W3: list_by_anchor ranks by weirdness (COALESCE-ing to the
+        legacy composite_score for un-backfilled rows)."""
         from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
             PathInsightRepository,
         )
@@ -357,7 +367,7 @@ class TestPathInsightRepository:
         repo = PathInsightRepository(session)
         asyncio.run(repo.list_by_anchor(anchor))
         sql_str = str(session.execute.call_args_list[0][0][0]).lower()
-        assert "composite_score desc" in sql_str
+        assert "coalesce(weirdness, composite_score) desc" in sql_str
 
     def test_update_explanation_calls_update(self) -> None:
         """update_explanation issues an UPDATE SQL."""
@@ -389,3 +399,33 @@ class TestPathInsightRepository:
         assert len(results) == 1
         assert isinstance(results[0], PathInsight)
         assert results[0].hop_count == 2
+
+
+class TestEdgeForwardRoundTrip:
+    """_edges_to_json / _parse_edges persist + restore the ``forward`` flag."""
+
+    def test_forward_roundtrips_through_json(self) -> None:
+        from knowledge_graph.domain.entities.path_insight import PathEdge
+        from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+            _edges_to_json,
+            _parse_edges,
+        )
+
+        edges = (
+            PathEdge(relation_type="ACQUIRED_BY", confidence=0.9, forward=False),
+            PathEdge(relation_type="COMPETES_WITH", confidence=0.8, forward=True),
+        )
+        restored = _parse_edges(_edges_to_json(edges))
+        assert [e.forward for e in restored] == [False, True]
+
+    def test_legacy_row_without_forward_defaults_true(self) -> None:
+        """Rows persisted before the fix have no ``forward`` key → default True."""
+        import json
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+            _parse_edges,
+        )
+
+        legacy = json.dumps([{"relation_type": "ACQUIRED_BY", "confidence": 0.9}])
+        restored = _parse_edges(legacy)
+        assert restored[0].forward is True

@@ -1,14 +1,18 @@
 /**
- * sidebar/AnalystConsensusPanel.tsx — Analyst consensus bucket bar + analyst count
+ * sidebar/AnalystConsensusPanel.tsx — Analyst consensus bucket bar
  *
  * WHY THIS EXISTS (T-17): The top-of-sidebar panel condenses Wall Street's
- * consensus into a single 5-bucket color bar (Strong Buy → Strong Sell). The
- * "N analysts" subline gives context for the bar's statistical weight — a
- * bar from 2 analysts reads differently than one from 45.
+ * consensus into a single colour bar (Buy / Hold / Sell collapse of the 5
+ * EODHD buckets) with a colour-coded textual breakdown.
  *
  * WHY REUSE AnalystMiniBar: T-B-02 owns the palette, null handling, and the
- * Bloomberg 5-bucket color gradient. Duplicating it here would fragment the
- * design system and add two test surfaces for the same visual invariant.
+ * bucket-collapse logic. Duplicating it here would fragment the design
+ * system and add two test surfaces for the same visual invariant.
+ *
+ * WAVE-2 NOTE: the panel's own "{N} analysts" subline was REMOVED — the
+ * Wave-2 AnalystMiniBar now renders the sample size itself (right-aligned
+ * "{total} analysts"), so the panel line had become a duplicate. The bar
+ * also owns the zero-coverage state ("No analyst coverage").
  *
  * WHO USES IT: AnalystSidebar.tsx (T-24).
  * DATA SOURCE: analyst_*_count fields from Fundamentals (pre-passed by AnalystSidebar).
@@ -33,14 +37,16 @@ export function AnalystConsensusPanel({
   sell,
   strongSell,
 }: AnalystConsensusPanelProps) {
-  const total =
-    (strongBuy ?? 0) + (buy ?? 0) + (hold ?? 0) + (sell ?? 0) + (strongSell ?? 0);
-
   return (
     <div className="flex flex-col gap-2 px-2 py-2 border-b border-border">
-      <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+      {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
+          marker (label-level because padded sidebar
+          panels have no dedicated header row to tint). */}
+      <span className="border-l-2 border-l-primary pl-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
         ANALYST CONSENSUS
       </span>
+      {/* The bar owns BOTH the breakdown and the right-aligned sample size
+          ("{N} analysts") since Wave-2 — nothing else to render here. */}
       <AnalystMiniBar
         strongBuy={strongBuy}
         buy={buy}
@@ -48,11 +54,6 @@ export function AnalystConsensusPanel({
         sell={sell}
         strongSell={strongSell}
       />
-      {total > 0 && (
-        <span className="text-[10px] text-muted-foreground/60 font-mono tabular-nums">
-          {total} analyst{total !== 1 ? "s" : ""}
-        </span>
-      )}
     </div>
   );
 }

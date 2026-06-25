@@ -49,12 +49,24 @@ def canonicalize_task(
     """
     raw_data = json.loads(fetch_result.raw_data.decode())
 
+    # SOURCE-PROVENANCE FIX (2026-06-17): stamp the canonical ``source`` with the
+    # provider that ACTUALLY produced this fetch (``fetch_result.provider``), not
+    # the provider the task was scheduled for (``task.provider``).  EOD OHLCV is
+    # scheduled as ``eodhd`` but re-routed to Yahoo at execution time; the raw
+    # ``source`` baked into the canonical JSONL is what market-data (S3) stores in
+    # ``ohlcv_bars.source`` (its ``bar.source or provider_str`` logic prefers this
+    # per-bar value).  Using ``task.provider`` mislabelled every Yahoo-fetched
+    # daily bar as ``source = eodhd`` and resolved its priority to EODHD's — the
+    # root cause of "Yahoo produces 0 daily bars" and the EODHD-daily over-count.
+    # ``fetch_result.provider`` is always set by the adapter; fall back to the
+    # scheduled provider only defensively.
+    actual_source = fetch_result.provider.value if fetch_result.provider is not None else str(task.provider)
+
     if task.dataset_type == DatasetType.OHLCV:
         # EODHD (and most providers) return a JSON array at the top level.
         bars = raw_data if isinstance(raw_data, list) else raw_data.get("data", [raw_data])
         enriched = [
-            {**bar, "symbol": task.symbol, "exchange": task.exchange or "", "source": str(task.provider)}
-            for bar in bars
+            {**bar, "symbol": task.symbol, "exchange": task.exchange or "", "source": actual_source} for bar in bars
         ]
         canon = serializer.serialize_ohlcv(enriched)
         lines = [line for line in canon.split(b"\n") if line.strip()]
@@ -65,7 +77,7 @@ def canonicalize_task(
         # Normalise to a list and remap provider-specific field names to canonical
         # names so CanonicalQuote.from_dict() can parse the result.
         raw_quotes = raw_data if isinstance(raw_data, list) else [raw_data]
-        enriched_quotes = [_remap_quote(q, task.symbol, task.exchange or "", str(task.provider)) for q in raw_quotes]
+        enriched_quotes = [_remap_quote(q, task.symbol, task.exchange or "", actual_source) for q in raw_quotes]
         canon = serializer.serialize_quotes(enriched_quotes)
         lines = [line for line in canon.split(b"\n") if line.strip()]
         return canon, len(lines)
@@ -102,16 +114,46 @@ def canonicalize_task(
 # ---------------------------------------------------------------------------
 
 
+def _num(value: object) -> float | None:
+    """Coerce a provider numeric field to float, or None when unparseable.
+
+    EODHD returns the literal string ``"NA"`` for fields it has no data for
+    (e.g. delisted or unsupported tickers).  ``"NA"`` is truthy, so a bare
+    ``raw.get("last") or raw.get("close")`` would happily pass it downstream
+    and crash CanonicalQuote/Decimal parsing.  Treat "NA", "", and None — and
+    anything else float() rejects — as "no data" (None).
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    """Coerce a provider integer field (e.g. volume) to int, or None.
+
+    Goes through float() first so "1234.0" (EODHD sometimes sends floats for
+    volume) still parses; "NA"/""/garbage → None.
+    """
+    parsed = _num(value)
+    return int(parsed) if parsed is not None else None
+
+
 def _remap_quote(raw: dict, symbol: str, exchange: str, source: str) -> dict:
     """Normalise a provider quote dict to CanonicalQuote field names.
 
     EODHD real-time response uses ``close`` for the last price and carries a
     Unix epoch ``timestamp``.  CanonicalQuote requires ``last`` and an ISO-8601
     ``timestamp`` string, plus ``bid`` / ``ask`` which EODHD does not supply
-    (we fall back to ``close``).
+    (we fall back to ``close``).  All numeric fields go through ``_num`` first
+    because EODHD reports missing data as the truthy string ``"NA"``.
     """
-    # Resolve last price: prefer explicit "last", fall back to "close"
-    last = raw.get("last") or raw.get("close", 0.0)
+    # Resolve last price: prefer explicit "last", fall back to "close".
+    # _num() must run BEFORE the `or` fallback: "NA" is truthy and would
+    # otherwise short-circuit past a valid "close".
+    last = _num(raw.get("last")) or _num(raw.get("close")) or 0.0
 
     if not last:
         # FIX-Q1: Log — do not raise; data may be legitimately halted
@@ -125,28 +167,35 @@ def _remap_quote(raw: dict, symbol: str, exchange: str, source: str) -> dict:
         )
         last = 0.0
 
-    # Convert Unix epoch timestamp to ISO-8601 if necessary
+    # Convert Unix epoch timestamp to ISO-8601 if necessary.
+    # EODHD can also report timestamp as "NA" — fall back to now() so the
+    # canonical record stays parseable (a literal "NA" string would crash
+    # CanonicalQuote.from_dict downstream).
     ts_raw = raw.get("timestamp")
-    if isinstance(ts_raw, int | float):
+    if isinstance(ts_raw, int | float) and not isinstance(ts_raw, bool):
         timestamp = datetime.fromtimestamp(ts_raw, tz=UTC).isoformat()
+    elif isinstance(ts_raw, str) and ts_raw.strip() and ts_raw != "NA":
+        # Either an epoch-as-string or an ISO-8601 string from the provider.
+        epoch = _num(ts_raw)
+        timestamp = datetime.fromtimestamp(epoch, tz=UTC).isoformat() if epoch is not None else ts_raw
     else:
-        timestamp = str(ts_raw) if ts_raw is not None else datetime.now(tz=UTC).isoformat()
+        timestamp = datetime.now(tz=UTC).isoformat()
 
     return {
         "symbol": symbol,
         "exchange": exchange,
         "source": source,
-        "bid": raw.get("bid") or last,
-        "ask": raw.get("ask") or last,
+        "bid": _num(raw.get("bid")) or last,
+        "ask": _num(raw.get("ask")) or last,
         "last": last,
-        "volume": raw.get("volume", 0),
+        "volume": _int_or_none(raw.get("volume", 0)),
         "timestamp": timestamp,
         "bid_size": raw.get("bid_size"),
         "ask_size": raw.get("ask_size"),
-        "high": raw.get("high"),
-        "low": raw.get("low"),
-        "open": raw.get("open"),
-        "prev_close": raw.get("prev_close") or raw.get("previousClose"),
+        "high": _num(raw.get("high")),
+        "low": _num(raw.get("low")),
+        "open": _num(raw.get("open")),
+        "prev_close": _num(raw.get("prev_close")) or _num(raw.get("previousClose")),
     }
 
 

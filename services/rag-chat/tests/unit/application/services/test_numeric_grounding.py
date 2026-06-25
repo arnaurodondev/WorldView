@@ -513,3 +513,432 @@ class TestQueryFundamentalsEnvelopeEndToEnd:
             u for u in result.unsupported if u.field_kind is FieldKind.RATIO and abs(u.value - 37.73) < 0.5
         ]
         assert not ratio_failures, result.unsupported
+
+
+# ── Bug 3 fix (PLAN-0099 W4) — unit normalisation + prose citations ─────────
+
+
+from decimal import Decimal  # (deliberately late import — section-scoped)
+
+from rag_chat.application.services.numeric_grounding import (
+    _has_grounding_citation,
+    _normalize_numeric,
+)
+
+
+class TestNormalizeNumeric:
+    """``_normalize_numeric`` must convert every common financial token shape
+    into a single :class:`Decimal` so cross-format comparisons (``$24.7B``
+    vs raw ``24700000000``) collapse to equality."""
+
+    def test_dollar_with_billion_suffix(self) -> None:
+        assert _normalize_numeric("$24.7B") == Decimal("24700000000.0")
+
+    def test_dollar_with_trillion_suffix(self) -> None:
+        # Mega-cap market cap (Apple etc.) — exact-equality matters.
+        assert _normalize_numeric("$4.97T") == Decimal("4970000000000.00")
+
+    def test_dollar_with_million_suffix(self) -> None:
+        assert _normalize_numeric("$845.2M") == Decimal("845200000.0")
+
+    def test_thousands_separators(self) -> None:
+        assert _normalize_numeric("24,700,000,000") == Decimal("24700000000")
+
+    def test_ratio_x_suffix_unchanged_magnitude(self) -> None:
+        # P/E ratios: 31.5x means "31.5 multiplier", no scaling applied.
+        assert _normalize_numeric("31.5x") == Decimal("31.5")
+
+    def test_parenthesised_negative(self) -> None:
+        # GAAP convention: (45.2) = -45.2.
+        assert _normalize_numeric("(45.2)") == Decimal("-45.2")
+
+    def test_explicit_negative_sign(self) -> None:
+        assert _normalize_numeric("-1.5B") == Decimal("-1500000000.0")
+
+    def test_percent_unchanged(self) -> None:
+        # Tools that emit percents emit them as percents — no /100.
+        assert _normalize_numeric("50%") == Decimal("50")
+
+    def test_non_numeric_returns_none(self) -> None:
+        assert _normalize_numeric("hello") is None
+
+    def test_empty_returns_none(self) -> None:
+        assert _normalize_numeric("") is None
+        assert _normalize_numeric("   ") is None
+
+    def test_none_returns_none(self) -> None:
+        assert _normalize_numeric(None) is None  # type: ignore[arg-type]
+
+    def test_lowercase_suffix(self) -> None:
+        # LLMs are inconsistent — accept lowercase too.
+        assert _normalize_numeric("24.7b") == Decimal("24700000000.0")
+
+    def test_cross_format_equality(self) -> None:
+        # The whole point of the helper: '$24.7B' compares equal to raw.
+        a = _normalize_numeric("$24.7B")
+        b = _normalize_numeric("24,700,000,000")
+        assert a == b
+
+
+class TestProseCitationRecognition:
+    """``_has_grounding_citation`` must accept bracket AND prose forms so
+    answers that cite their tools as ``(source: query_fundamentals row 0)``
+    or ``per get_fundamentals_history`` do not falsely trip the banner."""
+
+    def test_bracket_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B [query_fundamentals row 0]."
+        # Token "$24.7B" starts at position 13, ends at 18.
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_source_paren_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B (source: query_fundamentals row 0)."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_per_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B per query_fundamentals row 0."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_according_to_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B according to query_fundamentals."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_citation_outside_window_rejected(self) -> None:
+        # Citation 200 chars away — far outside the 50-char window.
+        filler = "x" * 200
+        text = f"Revenue was $24.7B{filler} [query_fundamentals row 0]."
+        assert not _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_cited_tool_not_called_rejected(self) -> None:
+        # The cited tool wasn't in the called set → reject (defence
+        # against LLM-invented tool names).
+        text = "Revenue was $24.7B [made_up_tool row 0]."
+        assert not _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_empty_called_tools_is_permissive_for_brackets(self) -> None:
+        # Bracket form is unambiguous (emitted by the tool layer), so it
+        # always suppresses even without a called-tools set.
+        text = "Revenue was $24.7B [anything row 0]."
+        assert _has_grounding_citation(text, 13, 18, frozenset())
+
+    def test_empty_called_tools_rejects_prose_form(self) -> None:
+        # Prose form requires cross-validation: ``according to filings``
+        # must NOT suppress when no called-tools context is available,
+        # otherwise the AMD-style hallucination regression returns.
+        text = "Q2 revenue was $34.6B according to filings."
+        assert not _has_grounding_citation(text, 16, 21, frozenset())
+
+
+class TestValidatorIntegrationBug3:
+    """End-to-end validator behaviour after Bug 3 fixes — the high-level
+    contract that closes the user-facing issue."""
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_unit_suffix_vs_raw_value_matches(self) -> None:
+        """Answer says ``$24.7B``; tool row carries raw ``24700000000``
+        as REVENUE — the validator must accept this (it already does via
+        ``_decode_token``, but this is the regression guard for Bug 3)."""
+        rows = [_row_with_value(24_700_000_000, FieldKind.REVENUE)]
+        result = self.v.validate("Revenue was $24.7B last quarter.", rows)
+        assert result.passed, result.unsupported
+
+    def test_prose_cited_unsupported_number_is_suppressed(self) -> None:
+        """A number the validator can't match against any tool row but
+        with a prose citation to a real tool → NOT flagged. This is the
+        exact false-positive the Bug 3 banner was firing on."""
+        # No matching tool value, but the prose citation points at a tool
+        # that was actually called.
+        rows = [_row_with_value(1_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Q3 revenue was $24.7B per query_fundamentals row 0.",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        # Citation suppression kicks in → no unsupported entry for $24.7B.
+        revenue_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert not revenue_failures, result.unsupported
+
+    def test_uncited_unsupported_number_still_flagged(self) -> None:
+        """Negative-space check: a fabricated number with NO citation
+        still trips the validator (no false negatives)."""
+        rows = [_row_with_value(10_253_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Q2 revenue was $34.6B according to filings.",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        assert not result.passed
+        assert any(u.field_kind is FieldKind.REVENUE for u in result.unsupported)
+
+    def test_normalisation_plus_citation_together(self) -> None:
+        """Both fixes active: answer uses ``$24.7B`` (normalised form),
+        tool returns raw ``24700000000``, and the answer also has a
+        prose citation. Validator must pass cleanly."""
+        rows = [_row_with_value(24_700_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Revenue was $24.7B (source: query_fundamentals row 0).",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        assert result.passed, result.unsupported
+
+
+# ── PLAN-0107 v2.0 LOW fix #1: _PROSE_CITATION_RE alternation coverage ──────
+#
+# Pure regex tests — keep them in this module so future drift between the
+# orchestrator's ``_W50_CITATION_RE`` and this regex is caught locally.
+# Both regexes share the same alternation list; if a new shape is added in
+# one, mirror it in the other and add a row here.
+class TestProseCitationRegex:
+    """Coverage for ``_PROSE_CITATION_RE`` (mirrors orchestrator W50 regex)."""
+
+    @pytest.fixture(autouse=True)
+    def _load_regex(self) -> None:
+        # Import lazily so a stray import-time error surfaces as a test
+        # failure (not a collection error) — easier to diagnose in CI.
+        from rag_chat.application.services.numeric_grounding import _PROSE_CITATION_RE
+
+        self.regex = _PROSE_CITATION_RE
+
+    # ── Legacy shapes (must continue to match) ───────────────────────────
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "[get_fundamentals]",
+            "[get_fundamentals row 0]",
+            "(source: query_fundamentals row 1)",
+            "per query_fundamentals [row 3]",
+            "from query_fundamentals [row 3]",
+            "according to query_fundamentals [row 3]",
+        ],
+    )
+    def test_legacy_bracket_and_paren_patterns_match(self, text: str) -> None:
+        """Regression: v2.0 original shapes still match after italic extension."""
+        assert self.regex.search(text) is not None, f"legacy pattern not matched: {text!r}"
+
+    # ── New italic/underscore/prose shapes (the actual smoke failures) ───
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "*Source: get_fundamentals_history for NVDA, rows 0–3 (most recent quarters)*",  # noqa: RUF001
+            "*Source: query_fundamentals row 0*",
+            "_source: tool_name row 5_",
+            "Body sentence with Source: query_fundamentals row 0 referenced inline.",
+        ],
+    )
+    def test_italic_and_prose_source_patterns_match(self, text: str) -> None:
+        """PLAN-0107 v2.0 LOW #1: the actual benchmark citation shapes match."""
+        assert self.regex.search(text) is not None, f"new pattern not matched: {text!r}"
+
+    # ── Negative cases (must NOT match — guards against over-eager regex) ─
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "random sentence with no citation at all",
+            "the source of the data is unclear",  # bare "source" word, no colon+tool
+            "[]",  # empty bracket
+        ],
+    )
+    def test_non_citations_do_not_match(self, text: str) -> None:
+        """Regex stays conservative — bare ``source`` word is not enough."""
+        assert self.regex.search(text) is None, f"false positive on: {text!r}"
+
+
+class TestNonClaimNumberShapes:
+    """BP-670 — prose-structure numbers must never be extracted as claims.
+
+    Live failure (2026-06-11 Apple-news turn): the validator flagged 9
+    "unsupported numbers" in a correctly-cited news summary — markdown list
+    ordinals (1.-5.), month-day date fragments "(Jun 9)" / "(Jun 10)", and
+    the relative window "(Last 14 Days)". The resulting 16.5s LLM rewrite
+    REPLACED the good answer with a hallucinated one, which then failed
+    entity grounding and burned a further 15s rewrite-timeout (50s turn).
+    """
+
+    def _unsupported_values(self, response: str) -> list[float]:
+        validator = NumericGroundingValidator()
+        result = validator.validate(response, [_row_with_text("no numbers here")])
+        return [u.value for u in result.unsupported]
+
+    def test_markdown_list_ordinals_are_skipped(self) -> None:
+        response = (
+            "Here are the latest headlines:\n\n"
+            "1. **Apple Will Run Advanced AI Model on Nvidia GPUs**\n"
+            "2. **Morgan Stanley warns on Siri**\n"
+            "3. **EU AI delay draws attention**\n"
+        )
+        assert self._unsupported_values(response) == []
+
+    def test_month_day_date_fragments_are_skipped(self) -> None:
+        response = "**Apple EU AI Delay** *(Jun 9)* — and another *(Jun 10)* item from June 11."
+        assert self._unsupported_values(response) == []
+
+    def test_relative_time_windows_are_skipped(self) -> None:
+        response = "### Apple News (Last 14 Days)\nCoverage over the past 5 trading days and a 30-day window."
+        assert self._unsupported_values(response) == []
+
+    def test_real_financial_claims_still_flagged(self) -> None:
+        """The canonical AMD fabrication ($34.6B) must still fail validation."""
+        validator = NumericGroundingValidator()
+        result = validator.validate(
+            "AMD revenue was $34.6B with EPS of $0.45.",
+            [_row_with_text("AMD revenue: $23.7B | EPS: $0.92")],
+        )
+        assert not result.passed
+        assert any(u.value == pytest.approx(34.6e9) for u in result.unsupported)
+
+    def test_currency_and_percent_near_date_words_still_extracted(self) -> None:
+        """Narrowness guard: '$14B' and '9%' are claims even next to time words."""
+        validator = NumericGroundingValidator()
+        result = validator.validate(
+            "Revenue of $14B over 14 days, with margins at 9% in June.",
+            [_row_with_text("nothing relevant")],
+        )
+        flagged = {u.snippet for u in result.unsupported}
+        assert "$14B" in flagged
+        assert any("9" in s and "%" in s for s in flagged)
+
+
+class TestProseAcronymEntityScope:
+    """BP-670 — prose acronyms must not become entity scopes.
+
+    Live failure: "(likely WWDC or AI-related developments)" preceded
+    "35% Return" → _nearest_entity_tag picked "AI" → empty candidate pool →
+    a verbatim-from-title number failed validation.
+    """
+
+    def test_ai_acronym_does_not_scope_the_candidate_pool(self) -> None:
+        validator = NumericGroundingValidator()
+        response = (
+            "BofA issued a note (likely WWDC or AI-related developments). "
+            "If Apple Stock Stabilizes, This Iron Condor Sets Up A 35% Return In Five Weeks."
+        )
+        tool_text = "If Apple Stock Stabilizes, This Iron Condor Sets Up A 35% Return In Five Weeks\n  Source: news"
+        result = validator.validate(response, [_row_with_text(tool_text)])
+        assert result.passed, [u.snippet for u in result.unsupported]
+
+
+class TestEntityTagTickerPreference:
+    """BP-670 — ticker-style tags must beat UUID tags.
+
+    The response-side scope extractor only yields ticker-shaped tokens; a
+    UUID-prefix tag can never match it, permanently emptying the candidate
+    pool for items that carry both entity_id and a ticker entity_name.
+    """
+
+    def test_entity_name_wins_over_entity_id(self) -> None:
+        from rag_chat.application.services.numeric_grounding import _entity_tag_for
+
+        @dataclass
+        class _CM:
+            entity_name: str
+
+        @dataclass
+        class _Row:
+            entity_id: str
+            item_id: str
+            citation_meta: _CM
+
+        row = _Row(
+            entity_id="01900000-0000-7000-8000-000000001001",
+            item_id="tool:entity_news:019eb4a1",
+            citation_meta=_CM(entity_name="AAPL"),
+        )
+        assert _entity_tag_for(row) == "aapl"
+
+    def test_month_day_range_tail_is_skipped(self) -> None:
+        """'(June 9–10, 2026)' must not flag the bare '10'."""  # noqa: RUF002
+        validator = NumericGroundingValidator()
+        response = "### Top Stories (June 9–10, 2026)\nApple news summary."  # noqa: RUF001
+        tool_text = "Apple article\n  Published: 2026-06-10T12:08:41+00:00"
+        result = validator.validate(response, [_row_with_text(tool_text)])
+        assert result.passed, [u.snippet for u in result.unsupported]
+
+
+# ── Phantom-citation gate (2026-06-12 root-cause audit, Theme A) ──────────────
+#
+# VERBATIM artifacts from
+# tests/validation/chat_quality_benchmark/runs/run_20260612T183758Z/. These
+# answers cite ``[tool row N]`` provenance tags for tools that were NEVER called
+# — the dominant fabrication mechanism. ``find_phantom_tool_citations`` returns
+# the disjoint set so the orchestrator can refuse them.
+class TestPhantomToolCitations:
+    def test_dividend_yielders_phantom_query_fundamentals(self) -> None:
+        """tc_portfolio_dividend_yielders cites [query_fundamentals row N], only get_portfolio_context ran."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "| **Apple (AAPL)** | 0.46% [query_fundamentals row 0] |\n"
+            "| **Microsoft (MSFT)** | 0.72% [query_fundamentals row 1] |"
+        )
+        called = ["get_portfolio_context"]
+        assert find_phantom_tool_citations(answer, called) == {"query_fundamentals"}
+
+    def test_tsla_macro_phantom_query_macro(self) -> None:
+        """agg_q5_tsla_macro cites [query_macro row N]; only get_economic_calendar/search_documents ran."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "The Federal Reserve is expected to hold interest rates steady at "
+            "4.25%-4.50% [query_macro row 0]. The U.S. economy is projected to "
+            "grow at 1.8% [query_macro row 1]."
+        )
+        called = ["get_economic_calendar", "search_documents", "get_entity_news"]
+        assert find_phantom_tool_citations(answer, called) == {"query_macro"}
+
+    def test_apple_suppliers_phantom_invented_tools(self) -> None:
+        """iter3_apple_suppliers_compound cites two fully-invented tools."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = (
+            "Apple's top suppliers include TSMC [supplier_list row 0]. "
+            "TSMC's main business is semiconductor foundry services [tsmc_business row 0]."
+        )
+        called = ["get_entity_intelligence", "search_entity_relations", "search_documents", "get_entity_graph"]
+        assert find_phantom_tool_citations(answer, called) == {"supplier_list", "tsmc_business"}
+
+    def test_real_called_tool_citation_not_phantom(self) -> None:
+        """da_msft cites [get_fundamentals_history row N] for a CALLED tool — not phantom."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = "Revenue was $64.7B [get_fundamentals_history row 0]."
+        called = ["get_fundamentals_history", "search_claims", "search_documents", "search_events"]
+        assert find_phantom_tool_citations(answer, called) == set()
+
+    def test_unverified_marker_is_not_a_phantom_tool(self) -> None:
+        """[unverified] is a legitimate marker, not a [tool row N] provenance tag."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        # ``[unverified]`` lacks the ``row N`` form so it is never read as a tool cite.
+        answer = "The forward P/E is 28.5 [unverified]."
+        assert find_phantom_tool_citations(answer, ["get_fundamentals_history"]) == set()
+
+    def test_empty_called_set_flags_every_tool_row_tag(self) -> None:
+        """When no tool ran, every [tool row N] tag is phantom."""
+        from rag_chat.application.services.numeric_grounding import find_phantom_tool_citations
+
+        answer = "Revenue was $24.7B [query_fundamentals row 0]."
+        assert find_phantom_tool_citations(answer, []) == {"query_fundamentals"}
+
+
+class TestEmptyPoolHelpers:
+    def test_response_has_numeric_claims(self) -> None:
+        from rag_chat.application.services.numeric_grounding import response_has_numeric_claims
+
+        assert response_has_numeric_claims("Revenue was $24.7B last quarter.")
+        # Citation markers are stripped before extraction, so [N7] is not a number.
+        assert not response_has_numeric_claims("No data was found for this entity [N7].")
+
+    def test_flatten_tool_values_count_empty_pool(self) -> None:
+        """Tools that returned no structured numeric rows → pool count 0."""
+        from rag_chat.application.services.numeric_grounding import flatten_tool_values_count
+
+        # Text-only rows with no value/field_kind contribute no numeric pool values.
+        assert flatten_tool_values_count([_row_with_text("no rows returned")]) == 0
+        assert flatten_tool_values_count([]) == 0
+
+    def test_flatten_tool_values_count_nonempty(self) -> None:
+        from rag_chat.application.services.numeric_grounding import flatten_tool_values_count
+
+        assert flatten_tool_values_count([_row_with_value(24.7e9, FieldKind.REVENUE)]) >= 1

@@ -12,6 +12,8 @@ import type {
   GridReadyEvent,
   GetRowIdParams,
   RowClickedEvent,
+  CellMouseOverEvent,
+  CellMouseOutEvent,
   CellContextMenuEvent,
   SortChangedEvent,
 } from "ag-grid-community";
@@ -33,6 +35,20 @@ export interface AgGridBaseProps<TData extends object> {
   /** When true, suppresses the browser's native right-click context menu. */
   preventDefaultOnContextMenu?: boolean;
   /**
+   * Fires when the pointer moves over a cell (once per cell, not per pixel).
+   * Use this for row-hover affordances: the event carries `data` (row) and
+   * `rowIndex` so the caller can compute the row's bounding rect via the
+   * AG Grid API (e.g. `gridApi.getDisplayedRowAtIndex(rowIndex)?.setExpanded()`).
+   *
+   * WHY CellMouseOverEvent (not a custom RowMouseOver):
+   *   AG Grid v35 does not expose onRowMouseOver/onRowMouseOut at the grid
+   *   option level. CellMouseOverEvent fires on every cell entry and reliably
+   *   carries both `data` and the native MouseEvent for bounding rect needs.
+   */
+  onCellMouseOver?: (event: CellMouseOverEvent<TData>) => void;
+  /** Fires when the pointer leaves a cell. Use to hide row-hover overlays. */
+  onCellMouseOut?: (event: CellMouseOutEvent<TData>) => void;
+  /**
    * WHY pinnedBottomRowData: AG Grid renders pinned rows inside the grid DOM,
    * keeping them in sync with column widths, pinning, and horizontal scroll
    * automatically. Use this instead of a sibling <div> footer for totals rows.
@@ -40,6 +56,44 @@ export interface AgGridBaseProps<TData extends object> {
    * the TICKER column is pinned left.
    */
   pinnedBottomRowData?: TData[];
+  /**
+   * Data-row height in px. Default 28 (the historical hardcoded value).
+   *
+   * WHY THIS PROP EXISTS (Round-2 cross-surface request): DESIGN_SYSTEM.md §2.1
+   * defines `--data-row-height: 22px` (PRD-0031 density pass), but every AG Grid
+   * instance was pinned to the hardcoded 28px inside this wrapper, so tables
+   * could not adopt the token. Surfaces opt in per call site with
+   * `rowHeight={22}` — the default stays 28 so existing grids do not reflow
+   * until their owning agent adopts the denser row deliberately (column
+   * content like sparklines/badges may need a height audit first).
+   *
+   * WHY a number prop (not reading the CSS var here): AG Grid virtualises rows
+   * with JS math — it needs a concrete px number at construction, not a CSS
+   * variable. The token's value (22) is mirrored here by the caller; see
+   * DESIGN_SYSTEM.md §15.10 for the adoption path.
+   */
+  rowHeight?: number;
+  /**
+   * Header-row height in px. Default 28 (matches the historical value).
+   * Usually adopted together with `rowHeight` so the header does not look
+   * taller than the data rows it labels (Bloomberg keeps them equal).
+   */
+  headerHeight?: number;
+  /**
+   * Arbitrary data object passed to all cell renderers via `params.context`.
+   *
+   * WHY context (not cellRendererParams): `context` is the AG Grid-idiomatic
+   * channel for passing cross-column, shared state to renderers (e.g. a
+   * Record<ticker, series[]> map used by the SPARK column, or a
+   * Record<instrument_id, assetClass> map for the ASSET column). Using
+   * cellRendererParams would require duplicating the data on every ColDef;
+   * context is a single reference shared across all columns' renderers.
+   *
+   * Type is `unknown` here because the context shape varies per use-site.
+   * Each cell renderer casts `params.context` to its own interface — this is
+   * the documented AG Grid pattern for typed context consumption.
+   */
+  context?: unknown;
 }
 
 /**
@@ -57,9 +111,11 @@ export interface AgGridBaseProps<TData extends object> {
  * legacy theme API (still shipped in v35 Community) and gives us full control
  * with one CSS file.
  *
- * WHY rowHeight=28, headerHeight=28: Bloomberg terminal row height is ~24–28px.
- * 28px gives one row per ~11px font line + comfortable padding without wasting
- * vertical space the way Alpine's default 42px does.
+ * WHY DEFAULT rowHeight=28, headerHeight=28: Bloomberg terminal row height is
+ * ~24–28px. 28px gives one row per ~11px font line + comfortable padding
+ * without wasting vertical space the way Alpine's default 42px does. Surfaces
+ * targeting the denser `--data-row-height: 22px` token (DESIGN_SYSTEM.md §2.1)
+ * pass `rowHeight={22} headerHeight={22}` explicitly — see §15.10.
  */
 export function AgGridBase<TData extends object>({
   rowData,
@@ -73,6 +129,14 @@ export function AgGridBase<TData extends object>({
   onColumnStateChanged,
   preventDefaultOnContextMenu,
   pinnedBottomRowData,
+  onCellMouseOver,
+  onCellMouseOut,
+  context,
+  // WHY defaults here (not inside the JSX): destructuring defaults keep the
+  // props genuinely optional for every existing call site — zero visual change
+  // until a surface opts in. 28 is the exact value previously hardcoded below.
+  rowHeight = 28,
+  headerHeight = 28,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -89,8 +153,9 @@ export function AgGridBase<TData extends object>({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
-        rowHeight={28}
-        headerHeight={28}
+        context={context}
+        rowHeight={rowHeight}
+        headerHeight={headerHeight}
         groupHeaderHeight={22}
         getRowId={getRowId}
         onGridReady={onGridReady}
@@ -103,6 +168,8 @@ export function AgGridBase<TData extends object>({
         }
         onCellContextMenu={onCellContextMenu}
         onSortChanged={onSortChanged}
+        onCellMouseOver={onCellMouseOver}
+        onCellMouseOut={onCellMouseOut}
         onColumnResized={colStateHandler ? () => colStateHandler() : undefined}
         onColumnVisible={colStateHandler ? () => colStateHandler() : undefined}
         onColumnMoved={colStateHandler ? () => colStateHandler() : undefined}

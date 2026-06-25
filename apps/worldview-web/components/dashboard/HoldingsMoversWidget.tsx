@@ -34,22 +34,49 @@
 "use client";
 // WHY "use client": uses useQuery, useQueries, useState, useRouter.
 
-import { useMemo, useState } from "react";
+// W4 pagination: useRef/useEffect added for the IntersectionObserver sentinel
+// that windows the gainers/losers columns in blocks of 30 (client-side).
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Briefcase } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
+// Round 4 (item 3b): central query-key factory for the shared portfolios key.
+import { qk } from "@/lib/query/keys";
 import { useAuth } from "@/hooks/useAuth";
+// 2026-06-10: shared active-portfolio resolution — follows the TopBar chip.
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+// Round 3 (item 4): the panel-level no-portfolio / no-holdings states migrate
+// from the legacy DashboardEmptyState (components/ui — now consumed only by
+// workspace/screener surfaces) onto the shared EmptyState primitive (§15.12).
+// InlineEmptyState stays for the in-column "No gainers"/"No losers" lines —
+// that's exactly the in-list use case it documents.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
-// HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses ≥$1M prices to a suffix ("$1.20M") so they
+// never overflow the fixed slot. formatChangePct: bounds extreme % moves to fit
+// the fixed w-[52px] %-change slot (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 
 type Period = "1D" | "1W" | "1M";
+
+/**
+ * PAGE_SIZE — block size for the client-side infinite-scroll window.
+ *
+ * W4 pagination (user report 2026-06-12 "display in blocks of 30"): the
+ * gainers/losers columns previously hard-capped each side at 5 with no way to
+ * see the rest of a larger book's movers. They now reveal in blocks of 30 per
+ * side via an IntersectionObserver sentinel inside the panel's own scroll area
+ * (same windowing pattern as WatchlistQuickViewWidget — the holdings list is
+ * already fetched in ONE response, so this windows a client-side array rather
+ * than paging the server).
+ */
+const PAGE_SIZE = 30;
 
 /**
  * HoldingsMover — internal row shape. Same general layout as the watchlist
@@ -78,24 +105,35 @@ export function HoldingsMoversWidget() {
   // WHY first by created_at: matches the WatchlistMovers "default
   // watchlist" heuristic — there is no `is_default` flag, so the oldest
   // portfolio approximates the user's main book.
+  // Round 4 (item 3b, query-key drift): key aligned from the widget-private
+  // ["dashboard-holdings-movers-portfolios"] to the shared qk.portfolios.list()
+  // — identical queryFn/shape to PortfolioSummary's list query, so the private
+  // key duplicated a fetch already in the cache whenever the user opened the
+  // HOLDINGS tab. Sharing the key makes the tab switch a cache hit.
   const { data: portfolios, isLoading: portfoliosLoading, isError: portfoliosError, refetch: refetchPortfolios } = useQuery({
-    queryKey: ["dashboard-holdings-movers-portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000,
   });
 
-  const firstPortfolio = useMemo(() => {
-    if (!portfolios || portfolios.length === 0) return null;
-    const sorted = [...portfolios].sort(
-      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
-    );
-    return sorted[0] ?? null;
-  }, [portfolios]);
+  // 2026-06-10 PortfolioSwitcher fix: resolve via the shared contract
+  // (active-portfolio context first, fallback portfolios[0]) instead of the
+  // widget-private created_at sort. Before this, picking a portfolio in the
+  // TopBar chip changed PortfolioSummary but NOT this widget — two panels on
+  // the same dashboard silently described different books.
+  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
+  const firstPortfolio = useMemo(
+    () => portfolios?.find((p) => p.portfolio_id === resolvedPortfolioId) ?? null,
+    [portfolios, resolvedPortfolioId],
+  );
 
   // ── 2. Holdings ────────────────────────────────────────────────────────
+  // Round 4 (item 3b): aligned to the shared ["holdings", id] key family
+  // (PortfolioSummary / WatchlistQuickViewWidget) — same queryFn + shape,
+  // so when this widget resolves the same portfolio the cache is reused.
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["dashboard-holdings-movers-holdings", firstPortfolio?.portfolio_id],
+    queryKey: ["holdings", firstPortfolio?.portfolio_id],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolio!.portfolio_id),
     enabled: !!accessToken && !!firstPortfolio,
@@ -109,8 +147,13 @@ export function HoldingsMoversWidget() {
   );
 
   // ── 3. 1D path: batch quotes ───────────────────────────────────────────
+  // Round 4 (item 3b): aligned to the shared ["holdings-quotes", ids] key
+  // family — instrumentIds derives from the SAME holdings response in the
+  // same order as PortfolioSummary's, so the array (and therefore the key)
+  // matches and the 1D quotes fetch dedupes against the always-mounted
+  // PortfolioSummary observer instead of firing its own.
   const { data: quotes, isLoading: quotesLoading } = useQuery({
-    queryKey: ["dashboard-holdings-movers-batch-quotes", instrumentIds.join(",")],
+    queryKey: ["holdings-quotes", instrumentIds],
     queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
     enabled: !!accessToken && period === "1D" && instrumentIds.length > 0,
     // 60s refresh — same cadence as WatchlistMovers (matches typical
@@ -177,20 +220,63 @@ export function HoldingsMoversWidget() {
     });
   }, [movers]);
 
-  const gainers = useMemo(
-    () =>
-      sorted
-        .filter((m) => m.changePct != null && m.changePct > 0)
-        .slice(0, 5),
+  // W4 pagination: keep the FULL ranked gainers/losers (no longer .slice(0,5))
+  // so deeper movers stay available; the visible slice is windowed below.
+  const allGainers = useMemo(
+    () => sorted.filter((m) => m.changePct != null && m.changePct > 0),
     [sorted],
+  );
+  const allLosers = useMemo(
+    () => sorted.filter((m) => m.changePct != null && m.changePct < 0),
+    [sorted],
+  );
+
+  // ── Infinite-scroll window state (W4 pagination) ──────────────────────────
+  // visibleCount grows by PAGE_SIZE per sentinel intersection and applies to
+  // BOTH columns symmetrically (the scroll area is shared). hasMore is true
+  // while either side still has rows beyond the window.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const hasMore =
+    visibleCount < allGainers.length || visibleCount < allLosers.length;
+
+  // WHY reset on the data identity changing: switching portfolio or period
+  // rebuilds the movers — rewind the window so the user starts at the top of
+  // the new list instead of mid-scroll. Keyed on lengths + first ids (cheap).
+  const moversIdentity =
+    `${period}:${allGainers.length}:${allLosers.length}:` +
+    `${allGainers[0]?.instrumentId ?? ""}:${allLosers[0]?.instrumentId ?? ""}`;
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [moversIdentity]);
+
+  const gainers = useMemo(
+    () => allGainers.slice(0, visibleCount),
+    [allGainers, visibleCount],
   );
   const losers = useMemo(
-    () =>
-      sorted
-        .filter((m) => m.changePct != null && m.changePct < 0)
-        .slice(0, 5),
-    [sorted],
+    () => allLosers.slice(0, visibleCount),
+    [allLosers, visibleCount],
   );
+
+  // ── Infinite-scroll sentinel (IntersectionObserver) ───────────────────────
+  // A 1px row after the columns inside the shared overflow-auto container;
+  // scrolling it into view reveals the next PAGE_SIZE rows in both columns.
+  // Purely client-side — the holdings array is already fully fetched.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore) {
+          setVisibleCount((c) => c + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore]);
 
   // ── 7. Loading composition ──────────────────────────────────────────────
   const periodDataLoading =
@@ -225,11 +311,13 @@ export function HoldingsMoversWidget() {
             <button
               key={p}
               onClick={() => setPeriod(p)}
+              // Round 3 (item 5): bg-muted hover convention + keyboard ring.
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               aria-pressed={period === p}
             >
@@ -255,8 +343,9 @@ export function HoldingsMoversWidget() {
         </div>
       )}
 
-      {/* Content */}
-      <div className="flex min-h-0 flex-1 overflow-auto">
+      {/* Content — W4: flex-COL so the two-column row + the infinite-scroll
+          sentinel stack vertically inside the shared overflow-auto scroll area. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {/* ── Error state ────────────────────────────────────────────────── */}
         {/* WHY min-h-[140px]: 5 rows × h-7 (28px) = 140px; prevents the
             widget from collapsing when the portfolio fetch fails cold. */}
@@ -270,23 +359,42 @@ export function HoldingsMoversWidget() {
           </div>
         )}
 
-        {/* No-portfolio empty state — primary CTA is brokerage connection. */}
+        {/* No-portfolio empty state — primary CTA is brokerage connection.
+            Round 3 (item 4): shared EmptyState primitive — same copy key as
+            PortfolioSummary's no-portfolio state so both "my money" panels
+            speak with one voice; the action Link keeps the brokerage CTA. */}
         {!isError && noPortfolio && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No portfolio yet"
-              message="Connect a brokerage to see your top movers."
-              cta={{ label: "Connect brokerage →", href: "/portfolio" }}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-portfolio"
+              icon={Briefcase}
+              action={
+                <Link
+                  href="/portfolio"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Connect brokerage →
+                </Link>
+              }
             />
           </div>
         )}
 
         {!isError && !noPortfolio && noHoldings && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No holdings"
-              message="Add holdings or sync a brokerage to see daily movers here."
-              cta={{ label: "Open portfolio →", href: "/portfolio" }}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-holdings-movers"
+              icon={Briefcase}
+              action={
+                <Link
+                  href="/portfolio"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Open portfolio →
+                </Link>
+              }
             />
           </div>
         )}
@@ -299,9 +407,12 @@ export function HoldingsMoversWidget() {
                   key={`g-skel-${i}`}
                   className="flex h-[22px] items-center gap-2 px-2"
                 >
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                  {/* Round 3 (item 3): 4 cells mirror MoverRow's columns
+                      (ticker 40 · name flex · price 52 · %chg 52). */}
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
@@ -311,9 +422,12 @@ export function HoldingsMoversWidget() {
                   key={`l-skel-${i}`}
                   className="flex h-[22px] items-center gap-2 px-2"
                 >
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                  {/* Round 3 (item 3): 4 cells mirror MoverRow's columns
+                      (ticker 40 · name flex · price 52 · %chg 52). */}
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
@@ -333,36 +447,66 @@ export function HoldingsMoversWidget() {
 
         {!isError && !noPortfolio && !noHoldings && !isLoading && (gainers.length > 0 || losers.length > 0) && (
           <>
-            <div className="flex-1 divide-y divide-border/30">
-              {gainers.map((m) => (
-                <MoverRow
-                  key={`g-${m.instrumentId}`}
-                  mover={m}
-                  side="gainer"
-                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
-                />
-              ))}
-              {gainers.length === 0 && (
-                <div className="px-2">
-                  <InlineEmptyState message="No gainers" />
-                </div>
-              )}
+            {/* Two-column row (gainers | losers) — wrapped so the sentinel below
+                spans the full width beneath both columns. */}
+            <div className="flex">
+              <div className="flex-1 divide-y divide-border/30">
+                {gainers.map((m) => (
+                  <MoverRow
+                    key={`g-${m.instrumentId}`}
+                    mover={m}
+                    side="gainer"
+                    onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                  />
+                ))}
+                {gainers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No gainers" />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
+                {losers.map((m) => (
+                  <MoverRow
+                    key={`l-${m.instrumentId}`}
+                    mover={m}
+                    side="loser"
+                    onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                  />
+                ))}
+                {losers.length === 0 && (
+                  <div className="px-2">
+                    <InlineEmptyState message="No losers" />
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
-              {losers.map((m) => (
-                <MoverRow
-                  key={`l-${m.instrumentId}`}
-                  mover={m}
-                  side="loser"
-                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
-                />
-              ))}
-              {losers.length === 0 && (
-                <div className="px-2">
-                  <InlineEmptyState message="No losers" />
+
+            {/* ── Infinite-scroll sentinel + footer (W4 pagination) ──────────
+                The 1px sentinel sits beneath both columns inside the SAME
+                overflow-auto scroll area; scrolling toward it reveals the next
+                PAGE_SIZE rows in both columns. The caption tells the user how
+                many of each side are shown; when everything is revealed the
+                sentinel is gone and the caption reads "all shown". */}
+            {hasMore ? (
+              <div
+                ref={sentinelRef}
+                data-testid="holdings-movers-sentinel"
+                className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim"
+                aria-hidden
+              >
+                <span className="font-mono tabular-nums">
+                  {Math.min(visibleCount, allGainers.length)}/{allGainers.length} ·{" "}
+                  {Math.min(visibleCount, allLosers.length)}/{allLosers.length} · scroll for more
+                </span>
+              </div>
+            ) : (
+              (allGainers.length > PAGE_SIZE || allLosers.length > PAGE_SIZE) && (
+                <div className="flex items-center justify-center py-1 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
+                  <span className="font-mono tabular-nums">all shown</span>
                 </div>
-              )}
-            </div>
+              )
+            )}
           </>
         )}
       </div>
@@ -371,7 +515,7 @@ export function HoldingsMoversWidget() {
           the data context at a glance ("which portfolio?"). */}
       {!noPortfolio && !noHoldings && firstPortfolio && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-          <span className="text-[10px] text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground-dim">
             {firstPortfolio.name}
             {period === "1D" ? " · today" : period === "1W" ? " · 1W" : " · 1M"}
           </span>
@@ -396,7 +540,11 @@ interface MoverRowProps {
 function MoverRow({ mover, side, onClick }: MoverRowProps) {
   return (
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // Round 3 (item 5): inset focus-visible ring for keyboard tabbing.
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden CLIP overflow within the
+      // 22px row so the two-column layout (gainers | losers) never bleeds across
+      // the column divider (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-[22px] min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
@@ -408,24 +556,27 @@ function MoverRow({ mover, side, onClick }: MoverRowProps) {
       {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
           rendering on dark themes — 600-weight is the maximum for terminal chrome text
           at small sizes (Bloomberg density rule) */}
-      <span className="w-[40px] shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">
+      {/* overflow-hidden + whitespace-nowrap: clip a long fallback ticker to
+          40px instead of bleeding into the name span. */}
+      <span className="w-[40px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] font-semibold tabular-nums text-foreground">
         {mover.ticker}
       </span>
       <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
         {mover.name}
       </span>
-      <span className="w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {formatPrice(mover.price)}
+      {/* whitespace-nowrap + compact price: keep on one line, fit the 52px slot. */}
+      <span className="w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {formatPriceCompact(mover.price)}
       </span>
       <span
         className={cn(
-          "w-[52px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[52px] shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums",
           side === "gainer" ? "text-positive" : "text-negative",
         )}
       >
-        {mover.changePct != null
-          ? `${mover.changePct >= 0 ? "+" : ""}${mover.changePct.toFixed(2)}%`
-          : "—"}
+        {/* formatChangePct returns "—" for null and bounds extreme moves so the
+            string always fits this fixed 52px slot. */}
+        {formatChangePct(mover.changePct)}
       </span>
     </div>
   );

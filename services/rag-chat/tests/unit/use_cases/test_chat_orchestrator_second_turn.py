@@ -169,3 +169,61 @@ class TestSecondTurnFallback:
         joined = "".join(token_texts)
         assert joined.strip(), "fallback must stream tokens, not just emit final_answer"
         assert "get_fundamentals_history" in joined, joined
+
+
+class TestSynthesisTurnKwargs:
+    """PLAN-0107 follow-up: regressions for synthesis-turn quality.
+
+    The final ``stream_chat`` call (after the ReAct tool loop exits) must:
+    1. Forbid function calling by passing ``tools=[]`` so the model can't emit
+       `<tool_call>` JSON XML as visible text (DeepSeek V4 Flash reasoning_effort
+       symptom).
+    2. Use ``temperature=0.0`` (was hardcoded 0.1 overriding env defaults).
+    3. Forward ``request.seed`` for eval-mode reproducibility.
+    """
+
+    def test_synthesis_stream_chat_passes_tools_temp_seed(self) -> None:
+        """Capture kwargs on the synthesis-turn ``stream_chat`` and assert
+        ``tools=[]``, ``temperature=0.0``, and ``seed`` forwarding."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("get_fundamentals_history", {"ticker": "AAPL", "periods": 4})
+        iter0 = _make_llm_tool_response(tool_calls=[tool_block])
+        iter1 = _make_llm_tool_response(text="")  # forces final stream_chat synthesis
+        pipeline = _make_pipeline(first_llm_response=iter0)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+        pipeline.emitter.emit_final_answer = MagicMock(
+            side_effect=lambda text: {"event": "final_answer", "data": json.dumps({"text": text})}
+        )
+
+        captured_kwargs: list[dict] = []
+
+        async def _capturing_stream(messages: list, **kwargs: Any):
+            captured_kwargs.append(kwargs)
+            yield "AAPL revenue grew."
+
+        pipeline.llm_chain.stream_chat = _capturing_stream
+
+        recovered = _make_retrieved_item("AAPL FY2025 Q4 revenue 119.6B.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        # Pass an explicit seed to verify pass-through.
+        request = _make_chat_request()
+        # ChatRequest is frozen — rebuild with seed=42 via dataclasses.replace.
+        from dataclasses import replace
+
+        request = replace(request, seed=42)
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        # The synthesis-turn stream_chat must have been called at least once.
+        assert captured_kwargs, "expected at least one stream_chat synthesis call"
+        synth = captured_kwargs[0]
+        assert synth.get("tools") == [], f"synthesis must pass tools=[], got {synth.get('tools')!r}"
+        assert synth.get("temperature") == 0.0, f"synthesis temperature must be 0.0, got {synth.get('temperature')!r}"
+        assert synth.get("seed") == 42, f"synthesis must forward request.seed=42, got {synth.get('seed')!r}"

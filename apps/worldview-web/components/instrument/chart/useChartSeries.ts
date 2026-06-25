@@ -1,32 +1,40 @@
 /**
  * components/instrument/chart/useChartSeries.ts — lightweight-charts series management hook
- * Manages: chart init, all indicator series refs, data-update effect, visibility effects.
- * Series creation is delegated to createChartSeries.ts (plain async factory).
- * PLAN REFERENCE: PLAN-0089 Wave D-1 | WHO USES IT: OHLCVChart.tsx
+ *
+ * Manages: chart init, core (pane-0) series refs, LAZY oscillator panes,
+ * data-update effect, and visibility effects. Series creation is delegated to
+ * createChartSeries.ts (plain factories — independently unit-testable).
+ *
+ * ── 2026-06-10 PANE REBUILD ──────────────────────────────────────────────────
+ * The previous version created 5 permanent oscillator panes at init and tried
+ * to hide them with a non-existent `pane.setOptions({height})` API (silent
+ * no-op via optional chaining) — producing the broken "thin candles band +
+ * three giant empty panes + floating 0.00 axis" chart. The rebuild:
+ *
+ *   - init creates ONLY pane-0 series (price + volume overlay + MA/BB/VWAP):
+ *     the price chart owns the full canvas by default;
+ *   - enabling an oscillator (RSI/MACD/ATR/STOCH/OBV) lazily creates its pane
+ *     via createOscillatorSeries() and feeds it data from the bars cached in
+ *     `formattedBarsRef`;
+ *   - disabling it calls chart.removePane() (which DOES exist in v5.2.0,
+ *     contrary to the old comment) so the price pane reclaims the space.
+ *
+ * PLAN REFERENCE: PRD-0088 Quote-tab redesign Wave 2 | WHO USES IT: OHLCVChart.tsx
  */
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
-import { createAllChartSeries } from "@/components/instrument/chart/createChartSeries";
-
-/**
- * CoordinateConverter — minimal surface needed for price↔pixel mapping.
- *
- * WHY INLINED HERE: PLAN-0090 T-E-01 deletes the legacy DrawingCanvas component
- * (PRD-0088 removes the drawing-tools workflow), so the interface that used to
- * live there is now defined locally. The struct is intentionally narrow — the
- * remaining chart code only needs the two refs to wire indicators into the
- * lightweight-charts series. If a future feature reintroduces price↔pixel math
- * outside this hook, promote this back to a shared types module.
- */
-export interface CoordinateConverter {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  chart: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  series: any;
-}
+import {
+  createCoreSeries,
+  createOscillatorSeries,
+  removeOscillatorPane,
+  type CoreSeriesHandles,
+  type OscillatorHandles,
+  type OscillatorId,
+  type SeriesDefs,
+} from "@/components/instrument/chart/createChartSeries";
 import {
   computeRSI,
   computeMACD,
@@ -45,7 +53,18 @@ import {
 import { CHART_HEIGHT, CHART_THEME, computeMA, toTime, setSeriesData } from "@/lib/chart-adapter";
 import type { OHLCVBar } from "@/types/api";
 
-// ── Props / Return types ───────────────────────────────────────────────────────
+/**
+ * CoordinateConverter — minimal surface needed for price↔pixel mapping.
+ * Kept for API compatibility with OHLCVChart (legacy DrawingCanvas interface).
+ */
+export interface CoordinateConverter {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  chart: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  series: any;
+}
+
+// ── Props / Return types ──────────────────────────────────────────────────────
 
 export interface UseChartSeriesOptions {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -75,6 +94,76 @@ export interface UseChartSeriesReturn {
   chartError: boolean;
 }
 
+// ── Oscillator data feed ──────────────────────────────────────────────────────
+//
+// WHY a plain function (module scope): feeding data into an oscillator's
+// series happens from TWO places — the lazy-create path (user toggles RSI on
+// after bars loaded) and the data-update effect (new bars arrive while RSI is
+// live). One function guarantees the two paths can never drift.
+//
+// The `lines` array ordering matches createOscillatorSeries: MACD registers
+// [histogram, line, signal]; STOCH registers [%K, %D]; the rest are single.
+
+function feedOscillator(handles: OscillatorHandles, bars: FormattedBar[]): void {
+  switch (handles.id) {
+    case "RSI":
+      setSeriesData(handles.lines[0] as ISeriesApi<"Line">, computeRSI(bars, 14));
+      break;
+    case "MACD": {
+      const macd = computeMACD(bars, 12, 26, 9);
+      setSeriesData(
+        handles.lines[0] as ISeriesApi<"Histogram">,
+        macd.map((d) => ({
+          time: d.time, value: d.histogram,
+          // Green above zero, red below — the universal MACD histogram cue.
+          color: d.histogram >= 0 ? "#26A69A80" : "#EF535080",
+        })),
+      );
+      setSeriesData(handles.lines[1] as ISeriesApi<"Line">, macd.map((d) => ({ time: d.time, value: d.macd })));
+      setSeriesData(handles.lines[2] as ISeriesApi<"Line">, macd.map((d) => ({ time: d.time, value: d.signal })));
+      break;
+    }
+    case "ATR":
+      setSeriesData(handles.lines[0] as ISeriesApi<"Line">, computeATR(bars, 14));
+      break;
+    case "STOCHASTIC": {
+      const stoch = computeStochastic(bars, 14, 3, 3);
+      setSeriesData(handles.lines[0] as ISeriesApi<"Line">, stoch.map((d) => ({ time: d.time, value: d.k })));
+      setSeriesData(handles.lines[1] as ISeriesApi<"Line">, stoch.map((d) => ({ time: d.time, value: d.d })));
+      break;
+    }
+    case "OBV":
+      setSeriesData(handles.lines[0] as ISeriesApi<"Line">, computeOBV(bars));
+      break;
+  }
+}
+
+/** The pane-hosted indicator subset of IndicatorId (VWAP is a pane-0 overlay). */
+const OSCILLATOR_IDS: readonly OscillatorId[] = ["RSI", "MACD", "ATR", "STOCHASTIC", "OBV"];
+
+// ── Memoized chart-library import ─────────────────────────────────────────────
+//
+// WHY a module-scope singleton promise (Wave-3 orphan-chart fix, 2026-06-11):
+// React StrictMode mounts effects twice in dev, so chart init issues TWO
+// dynamic `import("lightweight-charts")` calls concurrently. A real browser
+// dedupes those to one module record, but module runners are not obliged to —
+// vitest 2.x's mock interception, for one, returns the REAL module to the
+// second concurrent request (bypassing vi.mock). One shared promise means one
+// request in every environment: deterministic tests, marginally faster
+// remounts, and no double network fetch of the chunk on slow connections.
+let chartLibPromise: Promise<typeof import("lightweight-charts")> | null = null;
+
+function loadChartLib(): Promise<typeof import("lightweight-charts")> {
+  // WHY clear on rejection: a transient chunk-load failure (flaky network)
+  // must not poison every future mount with a cached rejected promise — the
+  // next mount retries the import from scratch.
+  chartLibPromise ??= import("lightweight-charts").catch((err: unknown) => {
+    chartLibPromise = null;
+    throw err;
+  });
+  return chartLibPromise;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useChartSeries({
@@ -88,27 +177,21 @@ export function useChartSeries({
   // WHY refs (not state): series handles are mutable; storing in state would
   // cause an infinite loop (setState → re-render → setData → setState).
   const chartRef = useRef<IChartApi | null>(null);
+  const coreRef = useRef<CoreSeriesHandles | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const ma50SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const ma200SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-
-  // ── Indicator series refs ──────────────────────────────────────────────────
-  const rsiPaneRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const atrRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const stochKRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const stochDRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const obvRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const volMA20Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const compareSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  // ── Lazy oscillator state ──────────────────────────────────────────────────
+  // Map of LIVE oscillator panes. An entry exists ⟺ the pane exists on the
+  // chart. Created/destroyed by the sync effect below.
+  const oscRef = useRef<Partial<Record<OscillatorId, OscillatorHandles>>>({});
+  // Resolved series-definition constants from the dynamic import — needed by
+  // the lazy-create path long after init.
+  const defsRef = useRef<SeriesDefs | null>(null);
+  // Latest filtered/formatted bars — the lazy-create path feeds a freshly
+  // created pane from here without waiting for the next data-update effect.
+  const formattedBarsRef = useRef<FormattedBar[]>([]);
 
   // ── State returned to parent ───────────────────────────────────────────────
   const [converters, setConverters] = useState<CoordinateConverter | null>(null);
@@ -129,23 +212,29 @@ export function useChartSeries({
   useEffect(() => {
     if (!containerRef.current) return;
     let chart: IChartApi | null = null;
+    // WHY a disposed flag (Wave-3 orphan-chart fix, 2026-06-11): the cleanup
+    // below can run BEFORE the async import resolves (React StrictMode's
+    // mount→unmount→remount in dev; fast tab switches in prod). The old
+    // `!containerRef.current` guard does NOT catch the StrictMode case —
+    // React re-attaches the ref on remount, so the STALE initChart from the
+    // first mount saw a live container and created a second, orphaned chart
+    // on the same node (an empty canvas stacked above the real one — the
+    // "chart fills the slot but shows no candles" dev symptom). The flag is
+    // scoped per effect instance, so a cancelled init can never attach.
+    let disposed = false;
 
     async function initChart() {
       try {
         const { createChart, CandlestickSeries, LineSeries, HistogramSeries } =
-          await import("lightweight-charts");
+          await loadChartLib();
 
-        // WHY null check after await: component may have unmounted during the import.
-        if (!containerRef.current) return;
+        // WHY both checks after await: `disposed` covers cleanup-before-import
+        // (StrictMode remount); the ref null-check covers a genuine unmount.
+        if (disposed || !containerRef.current) return;
 
-        // WHY clientHeight || CHART_HEIGHT (PLAN-0090 Y-axis scaling fix):
-        // QuoteTab places the chart inside a `flex-1 min-h-0` slot that grows
-        // to fill the left column (~600-800px). Hard-coding height=CHART_HEIGHT
-        // (280px) made the chart render only in the top ~20% of its slot,
-        // leaving the rest as empty container background with stray "0.00"
-        // gridlines. Reading the live container height lets the chart canvas
-        // match the slot. Fallback to CHART_HEIGHT if clientHeight is 0 (e.g.
-        // the slot has not been laid out yet — never happened in testing).
+        // WHY clientHeight || CHART_HEIGHT: QuoteTab places the chart inside a
+        // `flex-1 min-h-0` slot; reading the live container height lets the
+        // canvas fill the slot. CHART_HEIGHT is only the never-laid-out fallback.
         chart = createChart(containerRef.current, {
           width: containerRef.current.clientWidth,
           height: containerRef.current.clientHeight || CHART_HEIGHT,
@@ -156,43 +245,27 @@ export function useChartSeries({
           timeScale: { borderColor: "#111113", timeVisible: true },
         });
 
-        // Delegate all series creation to the factory — keeps this hook concise.
-        const handles = await createAllChartSeries(
-          chart, LineSeries, HistogramSeries, CandlestickSeries,
-        );
+        // Persist the resolved series definitions for the lazy oscillator path.
+        defsRef.current = { LineSeries, HistogramSeries, CandlestickSeries } as SeriesDefs;
 
-        // Assign all series handles to refs
+        // PANE REBUILD: register pane-0 series ONLY. No oscillator panes are
+        // created here — they are created lazily by the sync effect when (and
+        // only when) the user enables them. This is what fixes the "empty
+        // panes eat the viewport" bug.
+        const core = createCoreSeries(chart, defsRef.current);
         chartRef.current = chart;
-        seriesRef.current = handles.series;
-        volumeSeriesRef.current = handles.volumeSeries;
-        ma50SeriesRef.current = handles.ma50Series;
-        ma200SeriesRef.current = handles.ma200Series;
-        rsiPaneRef.current = handles.rsiSeries;
-        macdLineRef.current = handles.macdLine;
-        macdSignalRef.current = handles.macdSignal;
-        macdHistRef.current = handles.macdHist;
-        bbUpperRef.current = handles.bbUpper;
-        bbMiddleRef.current = handles.bbMiddle;
-        bbLowerRef.current = handles.bbLower;
-        atrRef.current = handles.atrSeries;
-        stochKRef.current = handles.stochK;
-        stochDRef.current = handles.stochD;
-        obvRef.current = handles.obvSeries;
-        vwapRef.current = handles.vwapSeries;
-        volMA20Ref.current = handles.volMA20Series;
-        vwapLineRef.current = handles.vwapLineSeries;
+        coreRef.current = core;
+        seriesRef.current = core.series;
+        volumeSeriesRef.current = core.volumeSeries;
 
-        setIsChartReady(true); // signals data-update effect re-run (BP-450)
+        setIsChartReady(true); // signals data-update + osc-sync effects to re-run (BP-450)
         chart.priceScale("right").applyOptions({ mode: logScaleRef.current ? 1 : 0 });
-        setConverters({ chart, series: handles.series });
+        setConverters({ chart, series: core.series });
         if (pendingScrollToRealTime.current) {
           pendingScrollToRealTime.current = false;
           // WHY assign flag AFTER scrollToRealTime (T-B-01 scroll-to-1985 fix):
-          // setting flag=true BEFORE the call created a race in which a later
-          // render observed flag=true but the scroll had not yet executed
-          // against the real bar dataset → viewport stuck at the oldest bar
-          // (e.g. 1985). Order swapped so the flag only records a scroll that
-          // actually ran.
+          // the flag must only record a scroll that actually ran against the
+          // real bar dataset — see BP-376.
           chart.timeScale().scrollToRealTime();
           hasScrolledToRealTime.current = true;
         }
@@ -204,11 +277,8 @@ export function useChartSeries({
 
     void initChart();
 
-    // WHY also track height (PLAN-0090 Y-axis scaling fix): previously only
-    // width was synced, so when the parent flex slot was taller than 280px the
-    // chart canvas stayed pinned at its initial height, leaving most of the
-    // available vertical space blank. Mirroring height keeps the chart filling
-    // its flex slot as it grows (e.g. on viewport resize / fullscreen toggle).
+    // WHY track height as well as width: the chart canvas must mirror its
+    // flex slot as the viewport resizes (PLAN-0090 Y-axis scaling fix).
     const observer = new ResizeObserver(() => {
       if (chartRef.current && containerRef.current && !isFullscreenRef.current) {
         chartRef.current.applyOptions({
@@ -220,77 +290,89 @@ export function useChartSeries({
     observer.observe(containerRef.current);
 
     return () => {
+      disposed = true; // cancel any in-flight initChart (see flag rationale above)
       observer.disconnect();
+      // chart.remove() destroys every pane + series — no per-series cleanup needed.
       chart?.remove();
-      chartRef.current = null; seriesRef.current = null; volumeSeriesRef.current = null;
-      ma50SeriesRef.current = null; ma200SeriesRef.current = null; rsiPaneRef.current = null;
-      macdLineRef.current = null; macdSignalRef.current = null; macdHistRef.current = null;
-      bbUpperRef.current = null; bbMiddleRef.current = null; bbLowerRef.current = null;
-      atrRef.current = null; stochKRef.current = null; stochDRef.current = null;
-      obvRef.current = null; vwapRef.current = null; volMA20Ref.current = null;
-      vwapLineRef.current = null; compareSeriesRef.current = null;
+      chartRef.current = null;
+      coreRef.current = null;
+      seriesRef.current = null;
+      volumeSeriesRef.current = null;
+      compareSeriesRef.current = null;
+      oscRef.current = {};
+      defsRef.current = null;
       setConverters(null);
     };
-  }, []); // empty deps: chart init runs once on mount, cleanup on unmount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // WHY empty deps + disable: chart init must run exactly ONCE per mount —
+    // re-running on indicators/ref identity changes would destroy and
+    // recreate the canvas (visible flash). The refs the effect reads are
+    // stable by construction; `indicators` is intentionally read lazily by
+    // the per-oscillator sync effects below, never by init.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Update chart data when bars change ────────────────────────────────────
   useEffect(() => {
-    if (!seriesRef.current || !data?.bars) return;
+    const core = coreRef.current;
+    if (!core || !data?.bars) return;
 
-    const formattedBars: FormattedBar[] = data.bars.map((bar) => ({
-      time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
-      open: bar.open, high: bar.high, low: bar.low, close: bar.close,
-      volume: bar.volume ?? 0,
-    }));
+    // Round-4 hardening (item 1d): drop bars whose OHLC legs are not finite
+    // numbers BEFORE they reach lightweight-charts. A degraded ingest row
+    // carrying null/NaN crashes the candlestick autoscale and poisons every
+    // derived indicator. OHLCVChart separately renders a named "not enough
+    // data" state when <2 bars survive.
+    const formattedBars: FormattedBar[] = data.bars
+      .filter(
+        (bar) =>
+          Number.isFinite(bar.open) && Number.isFinite(bar.high) &&
+          Number.isFinite(bar.low) && Number.isFinite(bar.close) &&
+          // An unparseable timestamp would produce a NaN time key, which
+          // lightweight-charts rejects with a hard throw.
+          Number.isFinite(new Date(bar.timestamp).getTime()),
+      )
+      .map((bar) => ({
+        time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
+        open: bar.open, high: bar.high, low: bar.low, close: bar.close,
+        // WHY finite guard: volume is the one leg that may be honestly null
+        // (some venues omit it); zero renders as "no volume bar".
+        volume: Number.isFinite(bar.volume) ? bar.volume : 0,
+      }));
 
-    setSeriesData(seriesRef.current, formattedBars);
+    // Cache for the lazy oscillator path (toggle-on after data already loaded).
+    formattedBarsRef.current = formattedBars;
+
+    // ── Core pane-0 series ───────────────────────────────────────────────────
+    setSeriesData(core.series, formattedBars);
     // Volume: per-bar color (up=transparent green, down=transparent red)
-    setSeriesData(volumeSeriesRef.current, formattedBars.map((bar) => ({
+    setSeriesData(core.volumeSeries, formattedBars.map((bar) => ({
       time: bar.time, value: bar.volume,
       color: bar.close >= bar.open ? "#26A69A40" : "#EF535040",
     })));
-    setSeriesData(ma50SeriesRef.current, computeMA(formattedBars, 50));
-    setSeriesData(ma200SeriesRef.current, computeMA(formattedBars, 200));
-    // All indicators computed upfront: user can enable any without a refetch.
-    setSeriesData(rsiPaneRef.current, computeRSI(formattedBars, 14));
+    setSeriesData(core.ma50Series, computeMA(formattedBars, 50));
+    setSeriesData(core.ma200Series, computeMA(formattedBars, 200));
 
-    if (macdLineRef.current || macdSignalRef.current || macdHistRef.current) {
-      const macdData = computeMACD(formattedBars, 12, 26, 9);
-      setSeriesData(macdLineRef.current, macdData.map((d) => ({ time: d.time, value: d.macd })));
-      setSeriesData(macdSignalRef.current, macdData.map((d) => ({ time: d.time, value: d.signal })));
-      setSeriesData(macdHistRef.current, macdData.map((d) => ({
-        time: d.time, value: d.histogram,
-        color: d.histogram >= 0 ? "#26A69A80" : "#EF535080",
-      })));
-    }
+    const bbData = computeBollinger(formattedBars, 20, 2);
+    setSeriesData(core.bbUpper, bbData.map((d) => ({ time: d.time, value: d.upper })));
+    setSeriesData(core.bbMiddle, bbData.map((d) => ({ time: d.time, value: d.middle })));
+    setSeriesData(core.bbLower, bbData.map((d) => ({ time: d.time, value: d.lower })));
 
-    if (bbUpperRef.current || bbMiddleRef.current || bbLowerRef.current) {
-      const bbData = computeBollinger(formattedBars, 20, 2);
-      setSeriesData(bbUpperRef.current, bbData.map((d) => ({ time: d.time, value: d.upper })));
-      setSeriesData(bbMiddleRef.current, bbData.map((d) => ({ time: d.time, value: d.middle })));
-      setSeriesData(bbLowerRef.current, bbData.map((d) => ({ time: d.time, value: d.lower })));
-    }
-
-    setSeriesData(atrRef.current, computeATR(formattedBars, 14));
-    if (stochKRef.current || stochDRef.current) {
-      const stochData = computeStochastic(formattedBars, 14, 3, 3);
-      setSeriesData(stochKRef.current, stochData.map((d) => ({ time: d.time, value: d.k })));
-      setSeriesData(stochDRef.current, stochData.map((d) => ({ time: d.time, value: d.d })));
-    }
-    setSeriesData(obvRef.current, computeOBV(formattedBars));
     const vwapData = computeVWAP(formattedBars);
-    setSeriesData(vwapRef.current, vwapData);
-    setSeriesData(vwapLineRef.current, vwapData);
-    setSeriesData(volMA20Ref.current, computeVolumeMA(formattedBars, 20));
+    setSeriesData(core.vwapSeries, vwapData);
+    setSeriesData(core.vwapLineSeries, vwapData);
+    setSeriesData(core.volMA20Series, computeVolumeMA(formattedBars, 20));
     onVolumeProfileBuckets(computeVolumeProfile(formattedBars, 24));
 
-    // Scroll to right edge on first load only (BP-376)
-    // WHY assign flag AFTER scrollToRealTime (T-B-01 scroll-to-1985 fix):
-    // the previous order set flag=true first, which on a fast re-render path
-    // caused a subsequent invocation to short-circuit even though the
-    // scroll-to-real-time had not yet executed against the loaded bars,
-    // leaving the chart viewport pinned to the oldest bar (e.g. 1985).
+    // ── Live oscillator panes (only the ones the user has enabled) ──────────
+    // WHY iterate the ref map (not `indicators`): the map is the source of
+    // truth for which panes EXIST; the sync effect below reconciles it with
+    // the `indicators` prop. Feeding only live panes means disabled
+    // oscillators cost zero compute (the old code computed all 6 every time).
+    for (const handles of Object.values(oscRef.current)) {
+      if (handles) feedOscillator(handles, formattedBars);
+    }
+
+    // Scroll to right edge on first load only (BP-376) — flag assigned AFTER
+    // the scroll actually runs (scroll-to-1985 fix).
     if (formattedBars.length > 0 && !hasScrolledToRealTime.current) {
       if (chartRef.current) { chartRef.current.timeScale().scrollToRealTime(); hasScrolledToRealTime.current = true; }
       else { pendingScrollToRealTime.current = true; }
@@ -298,33 +380,67 @@ export function useChartSeries({
   // isChartReady in deps: re-fires after async init if bars arrived early (BP-450)
   }, [data?.bars, isChartReady, onVolumeProfileBuckets]);
 
-  // ── Visibility toggle effects ──────────────────────────────────────────────
-  useEffect(() => { volumeSeriesRef.current?.applyOptions({ visible: showVolume }); }, [showVolume]);
-  useEffect(() => { ma50SeriesRef.current?.applyOptions({ visible: showMA50 }); }, [showMA50]);
-  useEffect(() => { ma200SeriesRef.current?.applyOptions({ visible: showMA200 }); }, [showMA200]);
-  useEffect(() => { rsiPaneRef.current?.applyOptions({ visible: indicators.RSI.enabled }); }, [indicators.RSI.enabled]);
-  useEffect(() => {
-    const e = indicators.MACD.enabled;
-    macdLineRef.current?.applyOptions({ visible: e });
-    macdSignalRef.current?.applyOptions({ visible: e });
-    macdHistRef.current?.applyOptions({ visible: e });
-  }, [indicators.MACD.enabled]);
+  // ── Oscillator pane reconciliation ────────────────────────────────────────
+  //
+  // syncOscillator — create or destroy ONE oscillator pane so the chart
+  // matches `indicators[id].enabled`. Idempotent: calling it when the chart
+  // already matches is a no-op.
+  const syncOscillator = useCallback((id: OscillatorId, enabled: boolean) => {
+    const chart = chartRef.current;
+    const defs = defsRef.current;
+    if (!chart || !defs) return; // chart not initialised yet — the isChartReady effect below re-runs us
+    const live = oscRef.current[id];
+
+    if (enabled && !live) {
+      // Toggle ON: create the pane + series, then feed it the cached bars so
+      // the indicator paints immediately (no wait for the next data effect).
+      const handles = createOscillatorSeries(chart, defs, id);
+      oscRef.current[id] = handles;
+      if (formattedBarsRef.current.length > 0) {
+        feedOscillator(handles, formattedBarsRef.current);
+      }
+    } else if (!enabled && live) {
+      // Toggle OFF: destroy the pane — the price pane reclaims the height.
+      removeOscillatorPane(chart, live);
+      delete oscRef.current[id];
+    }
+  }, []);
+
+  // One effect per oscillator: each re-runs ONLY when its own enabled flag
+  // flips (or when the chart finishes async init — isChartReady covers the
+  // "user had RSI persisted in localStorage before the chart existed" case).
+  useEffect(() => { syncOscillator("RSI", indicators.RSI.enabled); },
+    [indicators.RSI.enabled, isChartReady, syncOscillator]);
+  useEffect(() => { syncOscillator("MACD", indicators.MACD.enabled); },
+    [indicators.MACD.enabled, isChartReady, syncOscillator]);
+  useEffect(() => { syncOscillator("ATR", indicators.ATR.enabled); },
+    [indicators.ATR.enabled, isChartReady, syncOscillator]);
+  useEffect(() => { syncOscillator("STOCHASTIC", indicators.STOCHASTIC.enabled); },
+    [indicators.STOCHASTIC.enabled, isChartReady, syncOscillator]);
+  useEffect(() => { syncOscillator("OBV", indicators.OBV.enabled); },
+    [indicators.OBV.enabled, isChartReady, syncOscillator]);
+
+  // Defensive: if the OSCILLATOR_IDS list and the effects above ever drift,
+  // fail loudly in dev rather than silently leaking a pane.
+  if (process.env.NODE_ENV !== "production" && OSCILLATOR_IDS.length !== 5) {
+    throw new Error("OSCILLATOR_IDS drifted from the per-oscillator effects");
+  }
+
+  // ── Pane-0 overlay visibility toggles ─────────────────────────────────────
+  // These series live on pane 0 permanently; `visible` is the correct toggle
+  // (no pane bookkeeping needed — they never create panes).
+  useEffect(() => { coreRef.current?.volumeSeries.applyOptions({ visible: showVolume }); }, [showVolume]);
+  useEffect(() => { coreRef.current?.ma50Series.applyOptions({ visible: showMA50 }); }, [showMA50]);
+  useEffect(() => { coreRef.current?.ma200Series.applyOptions({ visible: showMA200 }); }, [showMA200]);
   useEffect(() => {
     const e = indicators.BOLLINGER.enabled;
-    bbUpperRef.current?.applyOptions({ visible: e });
-    bbMiddleRef.current?.applyOptions({ visible: e });
-    bbLowerRef.current?.applyOptions({ visible: e });
+    coreRef.current?.bbUpper.applyOptions({ visible: e });
+    coreRef.current?.bbMiddle.applyOptions({ visible: e });
+    coreRef.current?.bbLower.applyOptions({ visible: e });
   }, [indicators.BOLLINGER.enabled]);
-  useEffect(() => { atrRef.current?.applyOptions({ visible: indicators.ATR.enabled }); }, [indicators.ATR.enabled]);
-  useEffect(() => {
-    const e = indicators.STOCHASTIC.enabled;
-    stochKRef.current?.applyOptions({ visible: e });
-    stochDRef.current?.applyOptions({ visible: e });
-  }, [indicators.STOCHASTIC.enabled]);
-  useEffect(() => { obvRef.current?.applyOptions({ visible: indicators.OBV.enabled }); }, [indicators.OBV.enabled]);
-  useEffect(() => { vwapRef.current?.applyOptions({ visible: indicators.VWAP.enabled }); }, [indicators.VWAP.enabled]);
-  useEffect(() => { volMA20Ref.current?.applyOptions({ visible: showVolMA20 }); }, [showVolMA20]);
-  useEffect(() => { vwapLineRef.current?.applyOptions({ visible: showVWAPLine }); }, [showVWAPLine]);
+  useEffect(() => { coreRef.current?.vwapSeries.applyOptions({ visible: indicators.VWAP.enabled }); }, [indicators.VWAP.enabled]);
+  useEffect(() => { coreRef.current?.volMA20Series.applyOptions({ visible: showVolMA20 }); }, [showVolMA20]);
+  useEffect(() => { coreRef.current?.vwapLineSeries.applyOptions({ visible: showVWAPLine }); }, [showVWAPLine]);
 
   // Log-scale (mode 0=Normal, 1=Logarithmic) and fullscreen resize
   useEffect(() => {
@@ -332,9 +448,15 @@ export function useChartSeries({
   }, [logScale]);
   useEffect(() => {
     if (!chartRef.current || !containerRef.current) return;
+    // WHY clientHeight || CHART_HEIGHT on fullscreen EXIT: the container div's
+    // own size never changed (only the canvas), so the ResizeObserver does not
+    // fire — mirror the init-path logic and read the live container height.
     chartRef.current.applyOptions(isFullscreen
       ? { width: window.innerWidth, height: window.innerHeight - 60 }
-      : { width: containerRef.current.clientWidth, height: CHART_HEIGHT });
+      : {
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight || CHART_HEIGHT,
+        });
   }, [isFullscreen, containerRef]);
 
   return { chartRef, seriesRef, volumeSeriesRef, compareSeriesRef, converters, isChartReady, chartError };

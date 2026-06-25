@@ -20,6 +20,8 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -31,6 +33,10 @@ async def main() -> None:
     from content_store.infrastructure.db.session import _build_factories
     from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
         StoredArticleDedupConsumer,
+    )
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
     )
 
     settings = Settings()
@@ -45,9 +51,14 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # F-005/BP-704: bind a liveness probe so /healthz turns 503 when the poll
+    # loop wedges or the run() task dies — otherwise a wedged consumer keeps a
+    # GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="content-store-dedup-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -69,23 +80,32 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="content-store-dedup-consumer",
         session_factory=write_factory,
+        # PLAN-0113 FIX-2: opt-in static-membership identity (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_dedup_consumer_instance_id,
+    )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "content-store-dedup-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+        },
     )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # F-005/BP-704 FAILURE MODE 2 supervision: a crashed run() no longer
+        # hangs main() behind a green healthcheck — it raises ConsumerExited so
+        # we exit non-zero and Docker restarts the container.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("stored_article_dedup_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("stored_article_dedup_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("stored_article_dedup_consumer_stopped")
     finally:
         await _engine.dispose()
         if _read_engine is not _engine:
@@ -94,6 +114,7 @@ async def main() -> None:
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("stored_article_dedup_consumer_stopped")
 
 
 if __name__ == "__main__":

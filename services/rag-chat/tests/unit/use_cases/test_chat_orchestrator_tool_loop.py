@@ -89,6 +89,9 @@ def _make_pipeline(
         return_value={"event": "thinking", "data": json.dumps({"stage": "tool_classification"})}
     )
     pipeline.emitter.emit_token = MagicMock(side_effect=lambda t: {"event": "token", "data": json.dumps({"text": t})})
+    pipeline.emitter.emit_final_answer = MagicMock(
+        side_effect=lambda t: {"event": "final_answer", "data": json.dumps({"text": t})}
+    )
     pipeline.emitter.emit_citations = MagicMock(return_value={"event": "citations", "data": "[]"})
     pipeline.emitter.emit_contradictions = MagicMock(return_value={"event": "contradictions", "data": "[]"})
     pipeline.emitter.emit_metadata = MagicMock(return_value={"event": "metadata", "data": "{}"})
@@ -96,12 +99,17 @@ def _make_pipeline(
     pipeline.emitter.emit_tool_call = MagicMock(
         side_effect=lambda name, inp, **kw: {"event": "tool_call", "data": json.dumps({"tool": name})}
     )
+    # **kw absorbs the optional enrichment kwargs (duration_ms, result_preview,
+    # reason, status_code, elapsed_ms) — these tests assert on the core triple.
     pipeline.emitter.emit_tool_result = MagicMock(
-        side_effect=lambda name, status="ok", item_count=0: {
+        side_effect=lambda name, status="ok", item_count=0, **kw: {
             "event": "tool_result",
             "data": json.dumps({"tool": name, "status": status, "item_count": item_count}),
         }
     )
+    # build_result_preview must return a JSON-serialisable list (a bare
+    # MagicMock would crash json.dumps inside the real emitter when used).
+    pipeline.emitter.build_result_preview = MagicMock(return_value=[])
     pipeline.emitter.emit_error = MagicMock(
         side_effect=lambda code, msg: {"event": "error", "data": json.dumps({"code": code, "message": msg})}
     )
@@ -370,8 +378,69 @@ class TestToolCallsEmitted:
         event_types = [e.get("event") for e in events]
 
         assert "tool_result" in event_types
+
+        # tool_result enrichment: the orchestrator must pass the
+        # server-measured duration_ms + a result_preview to the emitter
+        # (frontend prefers duration_ms over its own client-side timing).
+        result_calls = pipeline.emitter.emit_tool_result.call_args_list
+        assert result_calls, "expected at least one emit_tool_result call"
+        _kwargs = result_calls[0].kwargs
+        assert isinstance(_kwargs.get("duration_ms"), int)
+        assert "result_preview" in _kwargs
+
+        # Server-derived follow-up suggestions: exactly 3 strings, emitted
+        # after the answer (default-on; RAG_CHAT_SUGGESTIONS_ENABLED=false
+        # disables).
+        pipeline.emitter.emit_suggestions.assert_called_once()
+        _suggestions = pipeline.emitter.emit_suggestions.call_args.args[0]
+        assert len(_suggestions) == 3
+        assert all(isinstance(s, str) and s for s in _suggestions)
+
         # tool_call must appear before tool_result
         assert event_types.index("tool_call") < event_types.index("tool_result")
+
+    def test_orchestrator_passes_grounding_sample(self) -> None:
+        """PLAN-0110 W2 (PRD-0091 FR-5): the orchestrator builds a grounding
+        sample from the executed tool's items and plumbs it into
+        ``emit_tool_result`` as the ``grounding_sample`` kwarg.
+
+        The emitter itself decides whether to ATTACH the sample to the wire
+        frame (flag + status gating, tested in the SSE unit suite); here we only
+        assert the plumbing — the sample is computed from ``(tool_name, items)``
+        and passed through. This is a no-op behaviour change when the flag is
+        off, so it cannot regress the legacy frame.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("get_fundamentals_history")
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+
+        # Spy: build_grounding_sample returns a sentinel so we can assert it is
+        # threaded verbatim into emit_tool_result.
+        _sentinel_sample = {"fields": {"ticker": "AAPL"}, "sampled_rows": 1, "total_rows": 1, "truncated": False}
+        pipeline.emitter.build_grounding_sample = MagicMock(return_value=_sentinel_sample)
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        # build_grounding_sample was called with the executed tool's name + items.
+        pipeline.emitter.build_grounding_sample.assert_called()
+        _gs_call = pipeline.emitter.build_grounding_sample.call_args
+        assert _gs_call.args[0] == "get_fundamentals_history"
+        assert _gs_call.args[1] == [item]
+
+        # The sentinel sample was threaded into emit_tool_result.
+        _result_calls = pipeline.emitter.emit_tool_result.call_args_list
+        assert _result_calls, "expected at least one emit_tool_result call"
+        assert _result_calls[0].kwargs.get("grounding_sample") == _sentinel_sample
 
     def test_orchestrator_execute_all_called_with_tool_blocks(self) -> None:
         """ToolExecutor.execute_all is called with the tool_use blocks from LLM response.
@@ -554,10 +623,15 @@ class TestToolCallsEmitted:
 
 class TestAllToolsFailed:
     def test_orchestrator_all_tools_failed_returns_early(self) -> None:
-        """When all tools return None, the orchestrator emits error and stops.
+        """When all tools return None, the orchestrator emits a WORDED refusal and stops.
 
         CRITICAL: second LLM turn must NOT be called when all tools fail.
         Without this guard the LLM would hallucinate from empty context.
+
+        2026-06-12 root-cause audit Theme E (fix #3): the orchestrator no longer
+        hard-returns an EMPTY error body (``safety_unknown_ticker`` read as a
+        crash). It now streams a worded "I couldn't find a match…" answer
+        (token + final_answer + done) so the body is never empty.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -584,15 +658,19 @@ class TestAllToolsFailed:
         events = asyncio.run(_collect_events(orch, request, uow))
         event_types = [e.get("event") for e in events]
 
-        # Must emit error and NOT call second turn
-        assert "error" in event_types
+        # Must NOT call second turn, and the answer body must be worded (never empty).
         assert second_turn_called[0] is False
+        assert "final_answer" in event_types
+        final = next(e for e in events if e.get("event") == "final_answer")
+        assert "couldn't find a match" in json.loads(final["data"])["text"]
+        # No bare error event — the empty-body crash UX is gone.
+        assert "error" not in event_types
 
-    def test_orchestrator_all_tools_failed_error_code(self) -> None:
-        """all_tools_failed guard must emit error code 'all_tools_failed'."""
+    def test_orchestrator_all_tools_failed_emits_worded_body(self) -> None:
+        """all_tools_failed path streams a worded body (token + final_answer), not an empty error."""
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
-        tool_block = _make_tool_use_block("get_price_history")
+        tool_block = _make_tool_use_block("get_price_history", {"ticker": "ZZZQQQ"})
         first_resp = _make_llm_tool_response(tool_calls=[tool_block])
         pipeline = _make_pipeline(first_llm_response=first_resp)
 
@@ -604,11 +682,15 @@ class TestAllToolsFailed:
         uow = MagicMock()
 
         events = asyncio.run(_collect_events(orch, request, uow))
-        error_events = [e for e in events if e.get("event") == "error"]
-
-        assert len(error_events) >= 1
-        error_data = json.loads(error_events[0]["data"])
-        assert error_data["code"] == "all_tools_failed"
+        # The worded message echoes the not-found ticker pulled from the tool input.
+        final_events = [e for e in events if e.get("event") == "final_answer"]
+        assert len(final_events) == 1
+        body = json.loads(final_events[0]["data"])["text"]
+        assert "ZZZQQQ" in body
+        assert body.strip() != ""
+        # Token stream carried the body too (UI never sees an empty stream).
+        token_text = "".join(json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token")
+        assert "ZZZQQQ" in token_text
 
     def test_orchestrator_partial_tool_failure_continues(self) -> None:
         """Mixed results (some None, some items) → second LLM turn runs.

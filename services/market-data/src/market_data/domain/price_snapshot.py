@@ -146,6 +146,34 @@ def _prev_daily_close(bars: list[OHLCVBar], latest: OHLCVBar) -> Decimal | None:
     return candidates[0].close if candidates else None
 
 
+def _prior_session_close(bars: list[OHLCVBar], price_timestamp: datetime) -> Decimal | None:
+    """Return the close of the latest 1d bar from a session BEFORE ``price_timestamp``'s day.
+
+    2026-06-10 day-change fix (frontend audit "+0.00% everywhere"): the quote
+    and intraday resolution paths never passed ``prev_close`` into ``_build``,
+    so every FRESH_QUOTE / BULK_QUOTE / INTRADAY_5M / INTRADAY_1H snapshot
+    carried ``price_change=None`` — which S9 coerces to ``0.0`` for the
+    frontend Quote shape. Only the DAILY_CLOSE path computed a real change.
+
+    WHY date comparison (not ``bar_date < price_timestamp``): derived 1d bars
+    are floored to midnight UTC of the session they belong to, so a price taken
+    DURING session day D must be compared against the close of the latest bar
+    strictly BEFORE day D — comparing raw timestamps would wrongly select day
+    D's own (partial) bar as the "previous close" and report a near-zero change.
+
+    Returns None when no earlier-session 1d bar exists (e.g. only one session
+    ingested) — the snapshot then truthfully reports ``price_change=None``
+    ("unknown") instead of a fake 0.00.
+    """
+    ref_day = price_timestamp.astimezone(UTC).date()
+    candidates = sorted(
+        [b for b in bars if b.timeframe == Timeframe.ONE_DAY and b.bar_date.astimezone(UTC).date() < ref_day],
+        key=lambda b: b.bar_date,
+        reverse=True,
+    )
+    return candidates[0].close if candidates else None
+
+
 class PriceSnapshotResolver:
     """Pure domain service — resolves the best available PriceSnapshot.
 
@@ -214,6 +242,14 @@ class PriceSnapshotResolver:
                     source=source,
                     freshness=freshness,
                     stale_reason=None,
+                    # Day-change fix (2026-06-10): compare against the prior
+                    # session's daily close so price_change is non-null on the
+                    # quote path (was always None → rendered as +0.00%).
+                    prev_close=_prior_session_close(ohlcv_bars, price_timestamp),
+                    # B-Q bid/ask plumbing (2026-06-10): only quote-sourced
+                    # snapshots carry order-book context (see contract docstring).
+                    bid=quote.bid,
+                    ask=quote.ask,
                 )
 
             if age < _BULK_QUOTE_MAX_AGE_SEC:
@@ -232,6 +268,13 @@ class PriceSnapshotResolver:
                     source=source,
                     freshness=freshness,
                     stale_reason=None,
+                    # Day-change fix (2026-06-10): see FRESH_QUOTE path above.
+                    prev_close=_prior_session_close(ohlcv_bars, price_timestamp),
+                    # B-Q bid/ask plumbing (2026-06-10): a 5-15 min old bid/ask
+                    # is still actionable order-book context; older quotes never
+                    # reach this branch.
+                    bid=quote.bid,
+                    ask=quote.ask,
                 )
 
         # ── Step 3: Try 5-minute OHLCV bar ───────────────────────────────────
@@ -251,6 +294,8 @@ class PriceSnapshotResolver:
                     source=source,
                     freshness=freshness,
                     stale_reason=None,
+                    # Day-change fix (2026-06-10): intraday price vs prior session close.
+                    prev_close=_prior_session_close(ohlcv_bars, bar_5m.bar_date),
                 )
 
         # ── Step 4: Try 1-hour OHLCV bar ─────────────────────────────────────
@@ -270,6 +315,8 @@ class PriceSnapshotResolver:
                     source=source,
                     freshness=freshness,
                     stale_reason=None,
+                    # Day-change fix (2026-06-10): intraday price vs prior session close.
+                    prev_close=_prior_session_close(ohlcv_bars, bar_1h.bar_date),
                 )
 
         # ── Step 5: Try daily OHLCV bar (no age limit — EOD is always valid) ─
@@ -342,6 +389,8 @@ class PriceSnapshotResolver:
         freshness: FreshnessStatus,
         stale_reason: str | None,
         prev_close: Decimal | None = None,
+        bid: Decimal | None = None,
+        ask: Decimal | None = None,
     ) -> PriceSnapshot:
         """Construct a PriceSnapshot from resolved components."""
         price_change: Decimal | None = None
@@ -363,4 +412,6 @@ class PriceSnapshotResolver:
             stale_reason=stale_reason,
             refresh_available=True,
             refresh_cooldown_remaining_sec=0,
+            bid=bid,
+            ask=ask,
         )

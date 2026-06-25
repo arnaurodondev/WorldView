@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Feature-complete — PLAN-0018 all 10 waves done, PLAN-0072/0074/0076 complete
+> **Status**: Feature-complete — PLAN-0018 (build-out), PLAN-0072/0074/0076 (quality/arch), PLAN-0099 (entity/relation detail), PLAN-0112 (weird-path connection discovery) all complete
 
 ---
 
@@ -38,13 +38,17 @@ knowledge_graph/
 │   ├── claims.py           # /claims/search
 │   ├── cypher.py           # /graph/cypher/path, /graph/cypher/neighborhood
 │   ├── events.py           # /events/search
-│   ├── narratives.py       # /entities/{id}/narratives
-│   ├── paths.py            # /entities/{id}/paths
+│   ├── narratives.py       # /entities/{id}/narratives (+ /generate)
+│   ├── entity_refresh.py   # POST /entities/{id}/refresh
+│   ├── paths.py            # /entities/{id}/paths, /paths/between
+│   ├── connections.py      # /connections/weird
 │   ├── search.py           # /search/relations
 │   ├── temporal_events.py  # /temporal-events
 │   ├── dlq.py              # /admin/dlq/*
 │   ├── health.py           # /healthz, /readyz, /metrics
-│   └── internal_costs.py   # /internal/v1/llm-costs
+│   ├── internal_costs.py   # /internal/v1/llm-costs
+│   ├── internal_intelligence_rollup.py  # /internal/v1/instruments/{id}/intelligence-rollup-7d
+│   └── internal_sectors.py # /internal/v1/entities/sectors
 ├── application/
 │   ├── blocks/             # canonicalization.py, graph_write.py, contradiction.py
 │   ├── use_cases/          # GetEntityGraph, GetEntityPaths, GetEntityIntelligence, ...
@@ -63,12 +67,13 @@ knowledge_graph/
     ├── llm/                # FallbackChainClient (DeepInfra → Ollama → Gemini)
     ├── eodhd/              # EODHD REST clients (economic events, macro indicators)
     ├── http/               # MarketDataClient (OHLCV fetcher)
-    ├── messaging/          # Kafka consumers + outbox dispatcher
-    │   └── consumers/      # enriched_consumer.py, entity_consumer.py,
-    │                       #   instrument_consumer.py, temporal_event_consumer.py,
-    │                       #   narrative_refresh.py, provisional_queued_consumer.py
+    ├── messaging/          # Kafka consumers + outbox dispatcher + direct_producer.py
+    │   └── consumers/      # enriched, entity, instrument, instrument_discovered,
+    │                       #   fundamentals, temporal_event, provisional_queued,
+    │                       #   structured_enrichment, narrative_refresh (main only),
+    │                       #   + {earnings_calendar,economic_events,insider_transactions,macro_indicator}_dataset
     ├── scheduler/          # KnowledgeGraphScheduler (APScheduler) + scheduler_main.py
-    ├── workers/            # All 15 Block 13 workers
+    ├── workers/            # Block 13 derived-semantics workers (~20 modules incl. path-insight, promoter, dataset workers)
     └── metrics/            # Prometheus counters
 ```
 
@@ -82,7 +87,13 @@ knowledge_graph/
 | `knowledge-graph-enriched-consumer` | `consumers/enriched_consumer_main.py` | Consumes `nlp.article.enriched.v1` |
 | `knowledge-graph-entity-consumer` | `consumers/entity_consumer_main.py` | Consumes `entity.canonical.created.v1` |
 | `knowledge-graph-instrument-consumer` | `consumers/instrument_consumer_main.py` | Consumes `market.instrument.created` |
-| `knowledge-graph-fundamentals-consumer` | `consumers/fundamentals_consumer_main.py` | Consumes `market.dataset.fetched` |
+| `knowledge-graph-instrument-discovered-consumer` | `consumers/instrument_discovered_consumer_main.py` | Consumes `market.instrument.discovered.v1` (placeholder seeder) |
+| `knowledge-graph-fundamentals-consumer` | `consumers/fundamentals_consumer_main.py` | Consumes `market.dataset.fetched` (fundamentals) |
+| `knowledge-graph-temporal-event-consumer` | `consumers/temporal_event_consumer_main.py` | Consumes `intelligence.temporal_event.v1` |
+| `knowledge-graph-narrative-refresh-consumer` | `consumers/narrative_refresh_consumer_main.py` | Consumes `entity.narrative.generated.v1` |
+| `knowledge-graph-provisional-queued-consumer` | `consumers/provisional_queued_consumer_main.py` | Consumes `entity.provisional.queued.v1` (hot-path 13E) |
+| `knowledge-graph-structured-enrichment-consumer` | `consumers/structured_enrichment_consumer_main.py` | Consumes `nlp.article.enriched.v1` for structured enrichment |
+| `knowledge-graph-{economic-events,macro-indicator,insider-transactions,earnings-calendar}-dataset-consumer` | `consumers/*_dataset_consumer_main.py` | Consume `market.dataset.fetched` (one consumer group per dataset type) |
 | `knowledge-graph-path-insight-worker` | `workers/path_insight_worker_main.py` | Pre-computes multi-hop paths |
 
 ---
@@ -124,13 +135,13 @@ All workers run via `APScheduler` (`AsyncIOScheduler`) in `knowledge-graph-sched
 |----|--------|----------|-------|---------------|
 | 13A | `ConfidenceWorker` | 15 min | 8 partitions | 4-step confidence formula per `partition_key`; marks evidence rows processed |
 | 13B | `ContradictionBatchWorker` | 30 min | 100 claims | Subject-based scan; inserts `contradictions` via `ON CONFLICT DO NOTHING` |
-| 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence hash change detection; LLM summary via `FallbackChainClient`; 3-phase session isolation |
+| 13C | `SummaryWorker` | 10 min | 20 relations | SHA-256 evidence hash change detection; LLM summary via `FallbackChainClient`; 3-phase session isolation |
 | 13D-1 | `DefinitionRefreshWorker` | 90-day + event-triggered | 50 | SHA-256 description change detection; Gemini/DeepInfra for description; 3-phase R24 compliance |
 | 13D-2 | `NarrativeRefreshWorker` | 7-day poll + Kafka | 50 | Deterministic template (no LLM); truncated to 512 tokens |
-| 13D-3 | `NarrativeGenerationWorker` | Sunday 03:00 UTC weekly | 500 | LLM narrative generation; SHA-256 idempotency; publishes `entity.narrative.generated.v1` |
-| 13D-4 | `FundamentalsRefreshWorker` | 30-day | 50 | Fetches OHLCV/fundamentals from market-data REST; skip on S3 error |
+| 13D-3 | `NarrativeGenerationWorker` | Sunday 03:00 UTC weekly | 500 | LLM narrative generation (`narrative_llm_model_id` default `deepseek-ai/DeepSeek-V4-Flash`); SHA-256 idempotency; publishes `entity.narrative.generated.v1` |
+| 13D-4 | `FundamentalsRefreshWorker` | 5 min | 50 | Fetches OHLCV/fundamentals from market-data REST; skip on S3 error |
 | 13E | `ProvisionalEnrichmentWorker` | 5 min (catch-up) | 500 | Two-layer noise filter + LLM entity enrichment; creates `canonical_entities` + 3 embedding rows |
-| 13F | `EmbeddingRefreshWorker` | 3h | unlimited | Embeds `relation_summaries` where `summary_embedding IS NULL` |
+| 13F | `EmbeddingRefreshWorker` | 5 min | unlimited | Embeds `relation_summaries` where `summary_embedding IS NULL` |
 | 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS for monthly partitions; prunes > 24 months |
 | 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent yearly partition management |
 | 13J | `AgeSyncWorker` | 15 min | 1k entities / 5k relations | Watermark-based sync of relations to Apache AGE graph; guarded by `KNOWLEDGE_GRAPH_CYPHER_ENABLED` |
@@ -156,6 +167,64 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
+### Connection Discovery — Weird-Path Engine + Metric (PLAN-0112)
+
+The path-insight feature surfaces **surprising, reliable connections** between entities. It has
+three parts: a traversal engine, a scorer, and degree materialisation.
+
+**`GraphPathEngine` port + `AgeGraphPathEngine` adapter** (`application/ports/graph_path_engine.py`,
+`infrastructure/age/graph_path_engine.py`) — the single traversal abstraction. Methods:
+`path_exists(source, target, max_hops) -> int|None` (shortest hop or None),
+`find_paths_between(source, target, ...)` (pairwise, both ends bound),
+`find_paths_from_anchor(entity_id, ...)` (per-anchor discovery, target free). It uses AGE's
+**variable-length-edge (VLE) `-[*L..L]-` staged probe** (BP-687) — probe `*1..1`, `*2..2`, … and
+stop at the first non-empty depth (never `ORDER BY length(p)` before LIMIT) — and parses
+`nodes(p)`/`relationships(p)` from agtype **text** (BP-SA5-003 applies only to prepared-statement
+agtype *list* binding, not text-parsed columns). This replaced the retired explicit untyped-edge
+form `MATCH (n0)-[r1]-(n1)` (`path_discovery.py::_build_2hop/_build_3hop`), which forced AGE to
+seq-scan all ~30 edge-label tables — **18.4 s for one 1-hop fetch** vs **0.24 s** for VLE
+(76× — **BP-689**).
+
+> **Build correction (BP-689 fix).** AGE 1.5 has **no multi-label VLE** (`-[:A|B*L..L]-` is a hard
+> parse error at `|`), so membership pruning is **not** a typed allow-list on the pattern. The
+> engine emits an **untyped VLE `-[*L..L]-`** and applies a **post-hoc Python membership filter**
+> dropping any path whose `rel_types` intersect `MEMBERSHIP_RELATIONS`
+> (`IS_IN_SECTOR`/`LISTED_ON`/`OPERATES_IN_COUNTRY`/`HEADQUARTERED_IN`, the 4 low-information
+> "47%-of-edges" hub relations, uppercase AGE-label strings in `domain/constants.py`). Because the
+> filter prunes *results* not the traversal *frontier*, `path_max_hops` is **capped at 3**
+> (hop-4/5 blow up; W2 spike measured). GUCs are applied as session-scoped `SET statement_timeout`
+> + `SET max_parallel_workers_per_gather = 0` (NOT `SET LOCAL` — that evaporated before the
+> traversal transaction, which was the original Postgres-flood bug).
+
+**`WeirdnessScorer`** (`application/services/weirdness_scorer.py`) — pure application service (no
+infra imports). Scores each `RawPath` independently of sibling paths (replaces the saturated,
+locally-normalised `surprise_score`, old p50 ≈ 0.95):
+
+```
+weirdness = reliability × (w_U·unexpectedness + w_S·semantic_distance + w_N·novelty)   clamp [0,1]
+```
+
+- **reliability** = harmonic mean of edge confidences (multiplicative gate — extraction noise
+  can't rank high; zeros clamped to 1e-6).
+- **unexpectedness** = mean per-edge configuration-model surprise `clamp01(-log(min(1, deg(u)·deg(v)/2m))/NORM)`
+  from `node_degree` + `graph_stats` (high-degree endpoints ⇒ low surprise → native hub demotion,
+  replaces `hub_penalty`). Adamic-Adar variant available behind the
+  `weirdness_unexpectedness_mode` flag (shipped default `config_model`, AD-3/OQ-2).
+- **semantic_distance** = `clamp01((1−cosine(emb(src),emb(dst)))/2)` on the `definition` embedding
+  view; missing embedding → entity_type fallback (1.0 different / 0.3 same) + `scorer_version`
+  suffix `+typefallback`.
+- **novelty** = fraction of edges whose first-seen is within `novelty_window_days` (default 7). The
+  first-seen lookup uses `COALESCE(relations.first_evidence_at, MIN(relation_evidence.evidence_date))`
+  to bridge the AGE↔relations sync gap (FR-13) — without the COALESCE, novelty was uniformly 0.
+- Self-loop / non-distinct-node paths → `weirdness = 0` (filtered before persist; mitigates the
+  duplicate-canonical FR-11 problem without dedup).
+
+**Validated live (2026-06-13)**: weirdness p10-p90 ≈ 0.23-0.78 (discriminating; target spread >0.5),
+top results are genuine cross-domain bridges with no sector-hub/self-loop noise (quality gate 0/20
+auto-flagged; `docs/audits/2026-06-13-weird-path-quality-sample.md`). Read-only eval tools:
+`scripts/eval/weird_path_quality_sample.py`, `scripts/eval/weirdness_ablation.py`,
+`scripts/eval/measure_maxhops_pruned.py`.
+
 ---
 
 ## API Endpoints
@@ -168,12 +237,17 @@ is not supported by read-replica connections.
 | GET | `/readyz` | — | Readiness: `SELECT 1` on `intelligence_db`; 503 if degraded |
 | GET | `/metrics` | — | Prometheus text format |
 | GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood. Params: `min_confidence`, `semantic_mode`, `limit` (1–200, default 50), `evidence_snippets_limit` (1–10, default 3), `depth` (1–3, default 1). `depth=2/3` uses AGE Cypher (requires `CYPHER_ENABLED=true`); silently falls back to depth=1 when disabled. 504 on AGE 5s timeout. |
+| GET | `/api/v1/entities/{entity_id}` | — | Canonical entity detail with enrichment (description, metadata, data_completeness, enriched_at). PLAN-0099: also returns `health_score`, active `aliases`, `top_relations` (top 5 by `summary_authority`, annotated with `direction` + counterpart entity name/type + current LLM summary) and `relation_count`. Article/mention counts intentionally absent (nlp_db owns them — R9). |
 | GET | `/api/v1/entities/{entity_id}/contradictions` | — | Active contradictions. Params: `claim_type`, `top_k` (1–100, default 20). Returns empty list (NOT 404) when none exist. |
 | GET | `/api/v1/entities/{entity_id}/intelligence` | X-Internal-JWT | Aggregated entity intelligence: narrative, confidence breakdown, key metrics, data completeness. 404 if entity not found. |
-| GET | `/api/v1/entities/{entity_id}/narratives` | X-Internal-JWT | Cursor-paginated narrative version history. Params: `limit` (1–100, default 20), `cursor`. Returns empty list (not 404) when no narratives exist. |
+| GET | `/api/v1/entities/{entity_id}/narratives` | X-Internal-JWT | Cursor-paginated narrative version history. Params: `limit` (1–100, default 20), `cursor`. Returns empty list (not 404) when no narratives exist. NOTE (PLAN-0099 audit): narrative versions have NO `sentiment` field — `intelligence_db` carries no sentiment signal anywhere (article-level sentiment lives in `nlp_db`/S6, exposed via the gateway `GET /v1/entities/{id}/sentiment-timeseries`). Adding sentiment here would require a cross-service call at generation time or new ML work — intentionally deferred. |
 | POST | `/api/v1/entities/{entity_id}/narratives/generate` | X-Internal-JWT | Manual narrative generation trigger. Rate-limited to 1/hr per entity+tenant via Valkey `set_nx`. Returns 202 when queued; 429 + `Retry-After: 3600` when rate-limited. |
+| POST | `/api/v1/entities/{entity_id}/refresh` | X-Internal-JWT | Manual entity re-enrichment trigger. Body `{refresh_type: "description"\|"narrative"\|"all"}` (default `all`; body optional). Persists an outbox event consumed by S6. Rate-limited 1/hr per user+tenant via Valkey `set_nx` (fail-open if Valkey down). 202 queued; 404 entity missing; 422 bad refresh_type; 429 + `Retry-After: 3600`. |
 | GET | `/api/v1/entities/{entity_id}/paths` | — | Pre-computed multi-hop paths. Params: `limit` (1–50, default 10), `min_score` (0–1, default 0.3), `min_hops` (2–5, default 2), `max_hops` (2–5, default 5). Paths with `llm_explanation=null` trigger fire-and-forget explanation generation; `explanation_pending=true` is set for those. |
+| GET | `/api/v1/paths/between` | — | On-demand pairwise pathfinding (PLAN-0112 W4, FR-8). "Is A connected to B, and how?" Params: `source` (UUID), `target` (UUID, ≠ source), `max_hops` (1–`path_max_hops`=3, default 3), `limit` (1–20, default 5), `meaningful_only` (bool, default false → prune membership edges). Reuses the staged-VLE engine (BP-687) for the existence/shortest-hop probe and the WeirdnessScorer for ranking (weirdness desc, hop_count asc). Returns `{source_entity_id, target_entity_id, connected, shortest_hops (null when disconnected), paths[PathBetweenPublic], computed_at}`. 400 (source==target), 404 (entity missing), 422 (bad params), 503 (AGE traversal timeout). AGE traversal needs a write session for `LOAD 'age'` (documented R27 exception). |
+| GET | `/api/v1/connections/weird` | — | Global "weird connections" feed (PLAN-0112 W5, FR-7). Reads precomputed `path_insights` ranked by `weirdness` desc, deduped to distinct (src, dst) endpoint pairs (highest-weirdness path kept per pair, OQ-6). Params: `limit` (1–100, default 20), `offset` (≥0, default 0), `min_weirdness` (0–1, default 0.0), `since_days` (1–365, optional — recent-edge proxy: keeps paths with `novelty > 0`), `entity_type` (optional enum — paths whose src OR dst endpoint matches the type). Returns `{connections[WeirdConnectionPublic = PathBetweenPublic + src_entity_id + dst_entity_id + computed_at], total, freshness_ts}`. 422 (bad params / unknown entity_type). Pure `path_insights` SELECT (no AGE) → read replica (R27). |
 | GET | `/api/v1/relations` | — | Paginated filtered relations. Params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
+| GET | `/api/v1/relations/{relation_id}` | — | Full relation (edge) detail (PLAN-0099). Returns relation metadata (type, semantic_mode, decay_class, confidence, temporal validity, contra stats, created/updated_at), the current LLM summary (+ `summary_model_id`, `summary_generated_at`), subject/object `EntitySummary`, and up to `evidence_limit` (1–100, default 25) evidence items from `relation_evidence_raw` (newest first) with `evidence_text`, `document_id`, `source_name`, `source_type`, `polarity`. Article title/url/published_at are NOT available (no article metadata in `intelligence_db` — R9; resolve `document_id` via S5/S6 through the gateway). 404 if relation missing. |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entities, relations, evidence, stale confidence, contradictions, semantic_mode breakdown |
 | GET | `/api/v1/temporal-events` | — | Active/historical temporal events. Params: `scope`, `entity_id`, `active_only`, `event_type`, `region`, `from_date`, `to_date`, `limit` (1–200), `offset`. `lifecycle_phase` computed at query time. |
 
@@ -207,6 +281,8 @@ is not supported by read-replica connections.
 |--------|------|------|-------------|
 | GET | `/internal/v1/entities/{entity_id}/intelligence` | X-Internal-JWT (system) | Same as public intelligence endpoint; consumed by S8 rag-chat |
 | GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates. Params: `period` (YYYY-MM), `provider`, `breakdown` |
+| GET | `/internal/v1/instruments/{instrument_id}/intelligence-rollup-7d` | X-Internal-JWT (system) | Small intelligence rollup (`recent_contradiction_count` over last 7d) for the screener nightly sync (L-5b). Non-failing: returns `0`/200 when no canonical entity or no contradictions. |
+| GET | `/internal/v1/entities/sectors` | X-Internal-JWT (system) | Batch sector/industry lookup. Param: `entity_ids` (1–100 UUIDs). Returns `{results:[{entity_id, sector, industry}]}`. Missing entities silently omitted (R9). Per-entity Valkey cache, 1h TTL. |
 
 ### `summary_authority` computed field
 
@@ -226,12 +302,12 @@ Returns 0.0 when confidence is null.
 
 | Topic | Consumer Group | Purpose |
 |-------|----------------|---------|
-| `nlp.article.enriched.v1` | `kg-service-group` | Hot-path Block 11→12 pipeline; at-least-once with Valkey dedup (24h TTL) |
-| `entity.canonical.created.v1` | `kg-entity-group` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
-| `market.instrument.created` | `kg-instrument-group` | Worker 13D-4: create canonical entity + full alias suite |
-| `market.instrument.discovered.v1` | `kg-instrument-discovered-group` | Lightweight placeholder canonical seeder (13D-4b) |
-| `market.dataset.fetched` | `kg-fundamentals-group`, `kg-economic-events-dataset-group`, `kg-macro-indicator-dataset-group`, `kg-insider-transactions-dataset-group` | Multiple workers for fundamentals, macro events, insider transactions |
-| `intelligence.temporal_event.v1` | `kg-temporal-event-group` | Upserts temporal events and entity exposures |
+| `nlp.article.enriched.v1` | `kg-service-group-enriched` + `kg-structured-enrichment-group` | Hot-path Block 11→12 pipeline (enriched consumer) and structured-enrichment consumer; at-least-once with Valkey dedup (24h TTL) |
+| `entity.canonical.created.v1` | `kg-service-group-entity` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
+| `market.instrument.created` | `kg-service-group-instrument` | Worker 13D-4: create canonical entity + full alias suite |
+| `market.instrument.discovered.v1` | `kg-service-group-instrument-discovered` | Lightweight placeholder canonical seeder (13D-4b) |
+| `market.dataset.fetched` | `kg-service-group-fundamentals`, `kg-economic-events-dataset-group`, `kg-macro-indicator-dataset-group`, `kg-insider-transactions-dataset-group`, `kg-earnings-calendar-dataset-group` | Multiple workers for fundamentals, economic/macro events, insider transactions, earnings calendar |
+| `intelligence.temporal_event.v1` | `kg-service-group-temporal-event` | Upserts temporal events and entity exposures |
 | `entity.provisional.queued.v1` | `kg-provisional-queued-group` | Hot-path provisional entity enrichment (Worker 13E consumer path) |
 | `entity.narrative.generated.v1` | `kg-narrative-refresh-group` | Triggers immediate narrative embedding update |
 
@@ -273,8 +349,8 @@ marks it dispatched without re-delivering.
 |------|--------|
 | `SemanticMode` | `RELATION_STATE` (active state, e.g. employs) \| `TEMPORAL_CLAIM` (historical record) |
 | `DecayClass` | `STANDARD` \| `TEMPORAL` |
-| `RelationType` | 11 code-level values; 27+ total in `relation_type_registry` DB seeds |
-| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `other` |
+| `RelationType` | 16 code-level values; more total in `relation_type_registry` DB seeds |
+| `EventType` | `geopolitical`, `regulatory`, `macro`, `sanctions`, `natural_disaster`, `corporate`, `other` |
 | `EventScope` | `LOCAL`, `REGIONAL`, `NATIONAL`, `GLOBAL` |
 | `ExposureType` | `directly_affected`, `operationally_impacted`, `supply_chain`, `revenue_geography`, `sector_exposure` |
 
@@ -335,7 +411,9 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 | `temporal_events` | — | Geopolitical/macro events (from S2 and S7 workers) |
 | `entity_event_exposures` | — | Entity exposure to temporal events |
 | `provisional_entity_queue` | — | Unresolved entities awaiting Worker 13E enrichment; `next_retry_at` for exponential backoff |
-| `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker` |
+| `path_insights` | — | Pre-computed multi-hop paths scored by `PathInsightWorker`. PLAN-0112 (migration 0052) added `dst_entity_id` (far endpoint, FK CASCADE, nullable for old rows), `reliability`/`unexpectedness`/`semantic_distance`/`novelty`/`weirdness` (FLOAT, the WeirdnessScorer sub-scores), `scorer_version` (e.g. `weirdness-1.0`). `composite_score` now mirrors `weirdness` (ranking column). Indexes: `idx_path_insights_global_weird (weirdness DESC) WHERE weirdness IS NOT NULL` (global feed), `idx_path_insights_dst (dst_entity_id, weirdness DESC)` (endpoint filter). |
+| `node_degree` | — | PLAN-0112 (migration 0052). Precomputed undirected degree per graph vertex (`degree`, `degree_meaningful` excluding membership edges, `refreshed_at`); PK `entity_id` FK→`canonical_entities` CASCADE. Powers the WeirdnessScorer's configuration-model unexpectedness without per-query recompute. Refreshed each AGE-sync cycle via a fast `_ag_label_edge` SQL aggregation (~sub-second / ~2.7k entities). |
+| `graph_stats` | — | PLAN-0112 (migration 0052). Single-row (`id=1` CHECK) normaliser store: `total_edges`, `total_meaningful_edges`, `max_degree`, `refreshed_at` — the `2m` term for the configuration-model surprise. Upserted alongside `node_degree`. |
 | `outbox_events` | — | Transactional outbox for Kafka messages |
 | `dead_letter_queue` | — | Poison-pill events that exhausted retries |
 | `decay_class_config` | — | 6 seeded decay classes with `decay_alpha` |
@@ -351,6 +429,14 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
   on the triple `(subject_entity_id, object_entity_id, canonical_type)`.
 - `relation_evidence_raw` has NO `canonicalized_evidence_text` column. That column exists only
   on `relation_evidence` (the monthly-partitioned processed table).
+- `relation_evidence_raw` has TWO independent lifecycle markers — do not conflate them:
+  - `processed` / `processed_at` — owned by the **ConfidenceWorker** (Worker 13A); set after a
+    triple's confidence is recomputed. Does NOT mean "promoted".
+  - `promoted_at` (added in migration 0061) — owned by the **RelationEvidencePromoterWorker**
+    (Worker 13B); set in the same transaction as the INSERT into `relation_evidence`. The
+    promoter filters `promoted_at IS NULL` (partial index `idx_raw_evidence_unpromoted`) so it
+    scans only the unpromoted frontier instead of re-scanning the entire already-promoted backlog
+    every 5 minutes (the prior behaviour pinned Postgres for 7.5–12+ min/run — UI-timeout incident).
 
 ### Multi-View Embedding Architecture (`entity_embedding_state`)
 
@@ -371,14 +457,16 @@ SHA-256 change detection on all views: unchanged text never triggers re-embeddin
 
 ## ML Models
 
+Model IDs below are the **current config defaults** (`config.py`). They may be overridden per-env.
+
 | Model | Task | Provider | Notes |
 |-------|------|----------|-------|
-| `BAAI/bge-large-en-v1.5` | Entity embeddings (definition/narrative/fundamentals) + relation summary embeddings | DeepInfra (`KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER=deepinfra`) or Ollama | Must match S6 — same 1024-dim vector space |
-| `Qwen/Qwen3-235B-A22B-Instruct-2507` | Entity description generation, relation summary generation | DeepInfra (`KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY`) | Primary extraction model |
-| `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Description fallback, noise classification Layer 2 | DeepInfra | Confirmed available on project account |
-| `meta-llama/Meta-Llama-3.1-8B-Instruct` | Narrative generation (Worker 13D-3) | DeepInfra | Weekly Sunday batch |
+| `BAAI/bge-large-en-v1.5` | Entity embeddings (definition/narrative/fundamentals) + relation summary embeddings | DeepInfra (`KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER=deepinfra`) or Ollama (default `ollama`) | Must match S6 — same 1024-dim vector space |
+| `deepseek-ai/DeepSeek-V4-Flash-Thinking` | Entity relation extraction (`deepinfra_extraction_model_id`) + entity description generation (`description_deepinfra_model_id`, when `DESCRIPTION_PROVIDER=deepinfra`) | DeepInfra (`KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY`) | Primary extraction model. Description calls are **news-grounded** (see below) |
+| `Qwen/Qwen3.5-9B` | Description fallback (`description_deepinfra_fallback_model_id`) | DeepInfra | Secondary slot for the DeepInfra description adapter |
+| `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | Noise classification Layer 2 (Worker 13E, `_NOISE_CLASSIFIER_MODEL_ID`) | DeepInfra | Direct `httpx` call, NOT via `FallbackChainClient` |
+| `deepseek-ai/DeepSeek-V4-Flash` | Narrative generation (Worker 13D-3, `narrative_llm_model_id`) + SummaryWorker fallback (`summary_fallback_model_id`) | DeepInfra | Code-level fallback when config unset is `meta-llama/Meta-Llama-3.1-8B-Instruct` |
 | `gemini-3.1-flash-lite` | Entity descriptions (when `DESCRIPTION_PROVIDER=gemini`) | Google AI Studio (`KNOWLEDGE_GRAPH_GEMINI_API_KEY`) | Fallback to deterministic template when key empty |
-| `gemini-2.5-flash-lite` | SummaryWorker fallback | Google AI Studio | Third slot in FallbackChainClient (after DeepInfra → Ollama) |
 
 ### LLM Fallback Chain (`FallbackChainClient`)
 
@@ -387,11 +475,35 @@ All LLM calls (summary generation, entity descriptions, narrative generation) go
 
 1. **DeepInfra** (primary) — GPU-accelerated; 3 retries (30s / 60s / 120s delays)
 2. **Ollama** (CPU fallback) — 2 retries on DeepInfra failure
-3. **Gemini Flash Lite** (tertiary fallback) — when `summary_fallback_provider=gemini`
+3. **DeepInfra fallback model** / **Gemini Flash Lite** (tertiary) — `summary_fallback_provider` default `deepinfra` (model `deepseek-ai/DeepSeek-V4-Flash`); set `=gemini` to use Gemini Flash Lite instead
 4. **NULL** — all exhausted; logged to `llm_usage_log` with `success=False`
 
 When the entire chain fails, `SummaryWorker` still marks the relation summary as updated (clears
 `summary_stale=true`) to prevent retry storms. The stale flag is re-set when new evidence arrives.
+
+### Entity-description news-grounding (Worker 13J, Step 3)
+
+To stop the model fabricating biographies for obscure entities, `StructuredEnrichmentUseCase`
+grounds the description LLM call in the entity's own recent news **before** generating:
+
+1. **Fetch** — `EntityEnrichmentAdapter.fetch_recent_evidence(entity_id, limit=3)` runs a pure
+   read-replica `SELECT` over `relation_evidence_raw` (subject OR object, newest first), dedups
+   verbatim repeats preserving recency, and truncates each snippet to ~300 chars. The read is a
+   quick open/close — it is **not** held across the LLM I/O — and is best-effort: any error logs
+   `enrichment_news_fetch_failed` and degrades to `news_context=None` so enrichment is never blocked.
+2. **Inject** — the snippets are threaded through `generate_description(..., news_context=...)`
+   (DeepInfra / Gemini / chained adapters). The adapter appends a sanitized *"Recent news context"*
+   block to the user turn (snippets stripped of control chars + angle brackets — `relation_evidence_raw`
+   is untrusted news, a prompt-injection surface). The static system prompt is never mutated, so
+   DeepInfra's KV-cache still hits.
+3. **No-news guard** — when no corroborating news exists (the common case for obscure entities), the
+   adapter instead injects an explicit guard telling the model to describe only the entity's general
+   category/type and invent no roles, titles, affiliations, or biographical detail.
+
+Live A/B (`docs/audits/2026-06-17-description-volume-gemini-grounding.md`) cut obscure-person
+fabrication ~2.0→0.25 with no model swap (the audit was run on the then-current Qwen3-235B model;
+the current default extraction/description model is `deepseek-ai/DeepSeek-V4-Flash-Thinking`). The `news_context` arg is defaulted
+(`None`) and forward-compatible across the whole description-client surface.
 
 ### Provisional Enrichment — Two-Layer Noise Filter (Worker 13E)
 
@@ -469,7 +581,7 @@ All environment variables use the prefix `KNOWLEDGE_GRAPH_`. Loaded by `pydantic
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY` | `""` | DeepInfra API key (get from deepinfra.com). **Set via secret in K8s.** |
-| `KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | |
+| `KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID` | `deepseek-ai/DeepSeek-V4-Flash-Thinking` | |
 | `KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL` | `https://api.deepinfra.com/v1/openai` | |
 | `KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY` | `5` | Concurrent LLM calls |
 
@@ -480,8 +592,8 @@ All environment variables use the prefix `KNOWLEDGE_GRAPH_`. Loaded by `pydantic
 | `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER` | `none` | `deepinfra` \| `gemini` \| `none` (template only) |
 | `KNOWLEDGE_GRAPH_GEMINI_API_KEY` | `""` | Google AI Studio API key (required when `DESCRIPTION_PROVIDER=gemini`) |
 | `KNOWLEDGE_GRAPH_DESCRIPTION_MAX_MONTHLY_USD` | `10.0` | Monthly cost cap (USD) enforced via Valkey counter |
-| `KNOWLEDGE_GRAPH_DESCRIPTION_DEEPINFRA_MODEL_ID` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | |
-| `KNOWLEDGE_GRAPH_DESCRIPTION_DEEPINFRA_FALLBACK_MODEL_ID` | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_DEEPINFRA_MODEL_ID` | `deepseek-ai/DeepSeek-V4-Flash-Thinking` | |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_DEEPINFRA_FALLBACK_MODEL_ID` | `Qwen/Qwen3.5-9B` | |
 | `KNOWLEDGE_GRAPH_DESCRIPTION_DEEPINFRA_CONCURRENCY` | `4` | |
 
 ### Worker Intervals
@@ -490,11 +602,13 @@ All environment variables use the prefix `KNOWLEDGE_GRAPH_`. Loaded by `pydantic
 |----------|---------|-------------|
 | `KNOWLEDGE_GRAPH_WORKER_CONFIDENCE_INTERVAL_S` | `900` | 13A — Confidence recomputation (15 min) |
 | `KNOWLEDGE_GRAPH_WORKER_CONTRADICTION_INTERVAL_S` | `1800` | 13B — Contradiction detection (30 min) |
-| `KNOWLEDGE_GRAPH_WORKER_SUMMARY_INTERVAL_S` | `3600` | 13C — Relation summary generation (60 min) |
+| `KNOWLEDGE_GRAPH_WORKER_SUMMARY_INTERVAL_S` | `600` | 13C — Relation summary generation (10 min; FIX-LIVE-GG, was 3600) |
 | `KNOWLEDGE_GRAPH_WORKER_DEFINITION_REFRESH_INTERVAL_S` | `3600` | 13D-1 (60 min) |
 | `KNOWLEDGE_GRAPH_WORKER_NARRATIVE_REFRESH_INTERVAL_S` | `3600` | 13D-2 (60 min) |
-| `KNOWLEDGE_GRAPH_WORKER_FUNDAMENTALS_REFRESH_INTERVAL_S` | `7200` | 13D-4 (2h) |
-| `KNOWLEDGE_GRAPH_WORKER_EMBEDDING_REFRESH_INTERVAL_S` | `10800` | 13F (3h) |
+| `KNOWLEDGE_GRAPH_WORKER_FUNDAMENTALS_REFRESH_INTERVAL_S` | `300` | 13D-4 (5 min; FIX-LIVE-GG, was 7200) |
+| `KNOWLEDGE_GRAPH_WORKER_EMBEDDING_REFRESH_INTERVAL_S` | `300` | 13F (5 min; FIX-LIVE-GG, was 10800) |
+| `KNOWLEDGE_GRAPH_WORKER_EVIDENCE_PROMOTE_INTERVAL_S` | `300` | 13B promoter — `RelationEvidencePromoterWorker` (5 min) |
+| `KNOWLEDGE_GRAPH_WORKER_PARTITION_INTERVAL_S` | `86400` | 13G/13H partition management (24h + startup) |
 | `KNOWLEDGE_GRAPH_WORKER_PROVISIONAL_ENRICHMENT_INTERVAL_S` | `300` | 13E catch-up sweep (5 min) |
 | `KNOWLEDGE_GRAPH_WORKER_PROVISIONAL_ENRICHMENT_BATCH_SIZE` | `500` | Rows per cycle |
 | `KNOWLEDGE_GRAPH_WORKER_PROVISIONAL_ENRICHMENT_CONCURRENCY` | `5` | Concurrent LLM calls |
@@ -514,6 +628,18 @@ All environment variables use the prefix `KNOWLEDGE_GRAPH_`. Loaded by `pydantic
 |----------|---------|-------------|
 | `KNOWLEDGE_GRAPH_CYPHER_ENABLED` | `false` | Enable Apache AGE shadow sync and Cypher query endpoints. Set to `true` after AGE backfill is verified. |
 | `KNOWLEDGE_GRAPH_WORKER_AGE_SYNC_INTERVAL_S` | `900` | AGE sync cadence (15 min) |
+
+### Connection Discovery — Weird-Path (PLAN-0112)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KNOWLEDGE_GRAPH_PATH_MAX_HOPS` | `3` | Hard cap on traversal depth (pairwise + per-anchor discovery). Capped at 3 — hop-4/5 blow up because the post-hoc membership filter doesn't prune the traversal frontier (OQ-3/AD-5, W2 spike). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_UNEXPECTEDNESS` | `0.45` | Weight on the unexpectedness (link-surprise) term (OQ-1). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_SEMANTIC` | `0.40` | Weight on the semantic-distance term. |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_W_NOVELTY` | `0.15` | Weight on the novelty (recent-edge) term. |
+| `KNOWLEDGE_GRAPH_NOVELTY_WINDOW_DAYS` | `7` | Window for the novelty term; revisit as graph history grows (OQ-4). |
+| `KNOWLEDGE_GRAPH_WEIRDNESS_UNEXPECTEDNESS_MODE` | `config_model` | `config_model` (shipped) or `adamic_adar` (available behind flag, AD-3/OQ-2 — config_model wins on the live ablation, AA reranks toward megacap hubs). |
+| `KNOWLEDGE_GRAPH_PATH_INSIGHT_HUB_MIN_RELATIONS` | `5` | Minimum relation count for an anchor to qualify as a discovery hub (raised off the demo-era 2 in W1). |
 
 ### Valkey
 

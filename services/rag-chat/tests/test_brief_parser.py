@@ -572,3 +572,246 @@ def test_inject_missing_summary_returns_none_when_no_bullets() -> None:
     parser = _make_parser()
     _, out = parser.inject_missing_summary("narrative", [], summary_paragraph=None)
     assert out is None
+
+
+# ── Brief-quality eval 2026-06-14 regression tests ────────────────────────────
+
+
+def _instrument_ctx_many_events(
+    *,
+    n_news: int = 7,
+    n_events: int = 20,
+    with_fundamentals: bool = True,
+    narrative_generated_at: str | None = None,
+) -> object:
+    """Build a REAL instrument BriefingContext (not a MagicMock) with many events.
+
+    The KG/fundamentals citation paths in materialize_brief_citations are
+    isinstance-gated on the real dataclasses, so these tests must use the
+    concrete models (a MagicMock would skip those branches entirely).
+    """
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from rag_chat.application.models.briefing_context import (
+        BriefingContext,
+        EntityGraphSnapshot,
+        EventSummary,
+        FundamentalsSummary,
+        NewsArticleSummary,
+    )
+
+    eid = "11111111-1111-1111-1111-111111111111"
+    news = [
+        NewsArticleSummary(
+            article_id=uuid4(),
+            title=f"Distinct headline number {i}",
+            display_relevance_score=0.5,
+        )
+        for i in range(n_news)
+    ]
+    events = [
+        EventSummary(
+            event_id=uuid4(),
+            event_type="EVENT",
+            subject_entity_id=uuid4(),
+            event_text=f"Event body {i}",
+            extraction_confidence=0.9,
+        )
+        for i in range(n_events)
+    ]
+    eg = EntityGraphSnapshot(
+        entity_id=eid,
+        canonical_name="Apple Inc.",
+        entity_type="company",
+        ticker="AAPL",
+        description="Apple Inc. designs and markets smartphones and computers.",
+        relationships=[],
+    )
+    fundamentals = (
+        FundamentalsSummary(instrument_id="AAPL", data={"MarketCapitalization": 4_310_000_000_000, "PERatio": 35.4})
+        if with_fundamentals
+        else None
+    )
+    return BriefingContext.for_instrument(
+        entity_id=eid,
+        entity_graph=eg,
+        fundamentals=fundamentals,
+        news_articles=news,
+        active_alerts=[],
+        quotes={},
+        recent_events=events,
+        entity_narrative="Apple is a leading consumer-electronics and AI-platform company.",
+        entity_narrative_generated_at=narrative_generated_at,
+        gathered_at=datetime.now(tz=UTC),
+    )
+
+
+def test_bug1_kg_offset_advertised_equals_resolved_with_many_events() -> None:
+    """BUG 1: with 20 events the advertised KG [cN] index == the resolved index.
+
+    Before the fix kg_description_offset capped events at 6 while format_events
+    showed up to get_events_limit() (10), so the KG definition marker collided
+    with a real event citation. Now both use get_events_limit(), so the KG
+    definition/narrative markers the formatter advertises resolve to the KG
+    citations in materialize_brief_citations.
+    """
+    from rag_chat.application.use_cases.brief_context_formatter import (
+        BriefContextFormatter,
+        get_events_limit,
+    )
+
+    parser = _make_parser()
+    formatter = BriefContextFormatter()
+    ctx = _instrument_ctx_many_events(n_news=7, n_events=20)
+
+    # The formatter advertises the KG definition at offset+1, narrative at +2.
+    offset = formatter.kg_description_offset(ctx)
+    assert offset == 7 + get_events_limit()  # news + capped events (no alerts)
+    entity_text = formatter.format_entity_context(ctx)
+    # Extract the [cN] the formatter put on the Definition line.
+    import re
+
+    def_marker = re.search(r"\[c(\d+)\] Definition", entity_text)
+    narr_marker = re.search(r"\[c(\d+)\] Background thematic", entity_text)
+    assert def_marker is not None and narr_marker is not None
+    def_idx = int(def_marker.group(1))
+    narr_idx = int(narr_marker.group(1))
+
+    # The parser's citation list must resolve those exact indices to the KG items.
+    citations = parser.materialize_brief_citations(ctx)
+    assert citations[def_idx - 1].title == BriefContextFormatter._KG_DEFINITION_LABEL
+    assert citations[narr_idx - 1].title == BriefContextFormatter._KG_NARRATIVE_LABEL
+
+
+def test_bug1_kg_definition_bullet_resolves_in_full_pipeline() -> None:
+    """BUG 1: an Entity Overview bullet citing the KG definition resolves to it."""
+    from rag_chat.application.use_cases.brief_context_formatter import (
+        BriefContextFormatter,
+    )
+
+    parser = _make_parser()
+    formatter = BriefContextFormatter()
+    ctx = _instrument_ctx_many_events(n_news=7, n_events=20)
+    citations = parser.materialize_brief_citations(ctx)
+    offset = formatter.kg_description_offset(ctx)
+    def_cn = offset + 1  # definition is appended first after news/events/alerts
+
+    markdown = (
+        "## LEAD\nApple update [c1]\n\n---\n\n## DETAILS\n"
+        "### Entity Overview\n"
+        f"- Apple Inc. designs smartphones and computers [c{def_cn}]\n"
+        f"- It is a leading AI-platform company [c{def_cn + 1}]\n"
+    )
+    _, _, sections = parser.parse_sections_with_citations(markdown, citations)
+    sections = parser.backfill_uncited_bullets(sections, citations)
+    overview = next(s for s in sections if s.title == "Entity Overview")
+    titles = {c.title for b in overview.bullets for c in b.citations}
+    assert BriefContextFormatter._KG_DEFINITION_LABEL in titles
+    assert BriefContextFormatter._KG_NARRATIVE_LABEL in titles
+
+
+def test_bug2_price_and_fundamentals_section_survives_parsing() -> None:
+    """BUG 2: a Price & Fundamentals bullet survives even without a numeric [cN].
+
+    The LLM used to emit the literal [fundamentals_context] token (stripped by
+    the parser), leaving the bullet uncited → the whole section was dropped.
+    The fundamentals snapshot is now a citable structured-data source, and a
+    fundamentals-section bullet with no numeric marker is backed by it rather
+    than dropped.
+    """
+    parser = _make_parser()
+    ctx = _instrument_ctx_many_events(with_fundamentals=True)
+    citations = parser.materialize_brief_citations(ctx)
+
+    # LLM echoed the placeholder token (the failure mode) on the fundamentals bullet.
+    markdown = (
+        "## LEAD\nApple update [c1]\n\n---\n\n## DETAILS\n"
+        "### Recent Developments\n"
+        "- Apple shipped a record quarter [c1]\n"
+        "### Price & Fundamentals\n"
+        "- Market cap stands at $4.31T; P/E TTM is 35.4 [fundamentals_context]\n"
+    )
+    _, _, sections = parser.parse_sections_with_citations(markdown, citations)
+    sections = parser.backfill_uncited_bullets(sections, citations)
+    titles = [s.title for s in sections]
+    assert "Price & Fundamentals" in titles
+    pf = next(s for s in sections if s.title == "Price & Fundamentals")
+    assert len(pf.bullets) == 1
+    assert pf.bullets[0].citations  # backed by the fundamentals citation
+    assert "fundamentals_context" not in pf.bullets[0].text
+
+
+def test_bug2_fundamentals_bullet_with_real_cn_marker_resolves() -> None:
+    """BUG 2: when the LLM cites the advertised fundamentals [cN] it resolves."""
+    from rag_chat.application.use_cases.brief_context_formatter import (
+        BriefContextFormatter,
+    )
+
+    parser = _make_parser()
+    formatter = BriefContextFormatter()
+    ctx = _instrument_ctx_many_events(with_fundamentals=True)
+    citations = parser.materialize_brief_citations(ctx)
+    cn = formatter.fundamentals_citation_index(ctx)
+    assert cn is not None
+    assert citations[cn - 1].title == BriefContextFormatter._FUNDAMENTALS_LABEL
+
+    markdown = (
+        "## LEAD\nApple update [c1]\n\n---\n\n## DETAILS\n"
+        "### Recent Developments\n"
+        "- Apple shipped a record quarter [c1]\n"
+        "### Price & Fundamentals\n"
+        f"- Market cap stands at $4.31T [c{cn}]\n"
+    )
+    _, _, sections = parser.parse_sections_with_citations(markdown, citations)
+    sections = parser.backfill_uncited_bullets(sections, citations)
+    pf = next(s for s in sections if s.title == "Price & Fundamentals")
+    assert pf.bullets[0].citations[0].title == BriefContextFormatter._FUNDAMENTALS_LABEL
+
+
+def test_bug5_range_marker_stripped_and_not_resolved() -> None:
+    """BUG 5: a [cA-cB] range marker is stripped and never leaks as a token."""
+    parser = _make_parser()
+    citations = [_make_citation(i) for i in range(1, 21)]
+    markdown = (
+        "## LEAD\nMarket update [c1]\n\n---\n\n## DETAILS\n"
+        "### News That Matters To You\n"
+        "- Multiple GRAPH_CHANGE alerts fired overnight [c13-c20]\n"
+        "- A clean single-cited bullet [c2]\n"
+        "### Risks + Opportunities\n"
+        "- Concentration risk remains elevated [c3]\n"
+        "- Watch the macro print today [c4]\n"
+    )
+    _, _, sections = parser.parse_sections_with_citations(markdown, citations)
+    sections = parser.backfill_uncited_bullets(sections, citations)
+    all_text = " ".join(b.text for s in sections for b in s.bullets)
+    # The range marker must NOT appear in any rendered bullet text.
+    assert "c13-c20" not in all_text
+    assert "[c" not in all_text  # all singular markers stripped from display text too
+    # The range-marker bullet had no resolvable singular cite → dropped (no
+    # fabricated citation); the clean [c2] bullet survives.
+    news = next(s for s in sections if s.title == "News That Matters To You")
+    assert any("clean single-cited" in b.text for b in news.bullets)
+    assert not any("GRAPH_CHANGE" in b.text for b in news.bullets)
+
+
+def test_bug5_range_regex_strips_ascii_and_unicode_dashes() -> None:
+    """BUG 5: the range-marker regex removes [cA-cB] with ASCII and unicode dashes.
+
+    The displayed morning-brief narrative (no ``---`` divider) renders this raw
+    text, so the regex (applied in generate_briefing) must catch every dash form
+    the model emits while leaving singular [cN] markers untouched.
+    """
+    from rag_chat.application.use_cases.brief_parser import _CN_RANGE_MARKER_RE
+
+    samples = [
+        "Multiple alerts [c13-c20] fired",
+        "Multiple alerts [c13–c20] fired",  # en dash  # noqa: RUF001
+        "Multiple alerts [c13—c20] fired",  # em dash
+        "Bare numbers [c13-20] fired",
+    ]
+    for s in samples:
+        assert "c13" not in _CN_RANGE_MARKER_RE.sub("", s), s
+    # Singular markers must NOT be touched by the range regex.
+    keep = "A clean bullet [c2] and [c7] here"
+    assert _CN_RANGE_MARKER_RE.sub("", keep) == keep

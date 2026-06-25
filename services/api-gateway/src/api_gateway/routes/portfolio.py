@@ -9,6 +9,7 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid as _uuid
 from collections import defaultdict
@@ -17,13 +18,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import DownstreamError, get_watchlist_insights
-from api_gateway.routes.helpers import _auth_headers, _clients, _portfolio_headers, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _portfolio_headers, _system_headers, proxy_json_response
 from api_gateway.schemas import (
     DashboardSnapshotResponse,
     PortfolioBundleResponse,
     PortfolioResponse,
     PortfolioSectorAttributionResponse,
+    SectorBreakdownResponse,
+    SectorBreakdownSegment,
     SectorBucket,
     WatchlistResponse,
 )
@@ -54,7 +58,7 @@ async def initiate_brokerage_connection(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections")
@@ -73,7 +77,7 @@ async def list_brokerage_connections(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/brokerage-connections/{connection_id}", status_code=200)
@@ -91,7 +95,7 @@ async def disconnect_brokerage_connection(connection_id: str, request: Request) 
         f"/api/v1/brokerage-connections/{connection_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/callback")
@@ -110,7 +114,7 @@ async def brokerage_connection_callback(connection_id: str, request: Request) ->
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/sync-errors")
@@ -130,7 +134,7 @@ async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/brokerage-connections/{connection_id}/sync", status_code=202)
@@ -149,7 +153,7 @@ async def trigger_brokerage_connection_sync(connection_id: str, request: Request
         f"/api/v1/brokerage-connections/{connection_id}/sync",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/brokerage-connections/{connection_id}/balance")
@@ -169,7 +173,7 @@ async def get_brokerage_connection_balance(connection_id: str, request: Request)
         f"/api/v1/brokerage-connections/{connection_id}/balance",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
@@ -190,7 +194,7 @@ async def list_portfolios(request: Request) -> Any:
         "/api/v1/portfolios",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/portfolios", status_code=201)
@@ -235,7 +239,7 @@ async def create_portfolio(request: Request) -> Any:
         content=json.dumps(enriched_body).encode(),
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # F-013 (QA 2026-04-28) — DELETE proxy. S1 already exposes the handler
@@ -261,7 +265,7 @@ async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
     )
     # S1 returns 204 with no body on success. Pass status + body through
     # so the frontend can read the error envelope on failures.
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0070 C-1: Portfolio page bundle ─────────────────────────────────────
@@ -409,7 +413,62 @@ async def get_holdings(
         headers=headers,
         params={"include_closed": "true"} if include_closed else None,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    if resp.status_code != 200:
+        return proxy_json_response(request, resp)
+
+    # PLAN-0114 W6 / T-W6-04: fan-out to S3 to inject annualized_dividend_yield
+    # per holding. Fail-open: a None yield renders as "—" in the DIV YLD column.
+    try:
+        raw_holdings = json.loads(resp.content)
+    except Exception:
+        return Response(content=resp.content, status_code=200, media_type="application/json")
+
+    # Accept both bare list (legacy S1) and {items:[...]} paginated envelope.
+    is_envelope = isinstance(raw_holdings, dict) and "items" in raw_holdings
+    items: list[dict[str, Any]] = (
+        (raw_holdings.get("items") or []) if is_envelope else (raw_holdings if isinstance(raw_holdings, list) else [])
+    )
+
+    if items:
+        unique_iids: list[str] = list({str(h["instrument_id"]) for h in items if h.get("instrument_id") is not None})
+        s3_headers = _auth_headers(request)
+        valkey = getattr(request.app.state, "valkey", None)
+        div_yields = await _batch_fetch_dividend_yields(unique_iids, clients, s3_headers, valkey)
+        for holding in items:
+            iid = str(holding["instrument_id"]) if holding.get("instrument_id") is not None else ""
+            holding["annualized_dividend_yield"] = div_yields.get(iid)
+
+    # Re-wrap in the original envelope shape so callers that depend on {items:}
+    # continue to work without modification.
+    enriched: Any = {**raw_holdings, "items": items} if is_envelope else items
+    return Response(content=json.dumps(enriched), status_code=200, media_type="application/json")
+
+
+@router.patch("/portfolios/{portfolio_id}", status_code=200)
+async def patch_portfolio(portfolio_id: str, request: Request) -> Response:
+    """Proxy PATCH /api/v1/portfolios/{id} → S1 Portfolio service.
+
+    PLAN-0114 W6 / T-W6-02.
+
+    Partial-update of portfolio settings. Current fields: ``cost_basis_method``.
+    Requires authentication. Validates that ``portfolio_id`` is a valid UUID to
+    avoid proxying obviously bad requests downstream.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="portfolio_id must be a valid UUID") from exc
+    raw_body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        f"/api/v1/portfolios/{portfolio_id}",
+        content=raw_body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return proxy_json_response(request, resp)
 
 
 @router.get("/portfolios/{portfolio_id}/performance")
@@ -622,7 +681,42 @@ async def get_portfolio_value_history(portfolio_id: str, request: Request) -> An
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+# ── Flow-adjusted TWR (2026-06-10 frontend-enhancement sprint, gap #3) ────────
+
+
+@router.get("/portfolios/{portfolio_id}/twr")
+async def get_portfolio_twr(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/twr → S1 Portfolio service.
+
+    Daily flow-adjusted time-weighted-return series: sub-period returns
+    between external cash flows (transactions), geometrically linked.
+    Replaces the frontend's NAV-relative approximation. Forwards the
+    optional ``days`` query param (default 90 on the S1 side). Response:
+    ``{portfolio_id, from_date, to_date, points: [{date, twr_cum_pct,
+    nav}], flow_days}`` — see S1 ``ComputeTwrUseCase`` for the formula.
+
+    S1 returns 404 when the portfolio is missing or not owned by the
+    caller — surfaced unchanged to the frontend.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # WHY UUID validation: portfolio_id appears in a downstream URL —
+    # defensive parsing prevents path injection (same rule as /bundle).
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="portfolio_id must be a UUID")  # noqa: B904
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/twr",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return proxy_json_response(request, resp)
 
 
 # F-204 (QA iter-2): admin trigger so an operator can rebuild today's
@@ -652,7 +746,7 @@ async def recompute_portfolio_snapshot(portfolio_id: str, request: Request) -> A
         f"/api/v1/admin/portfolios/{portfolio_id}/recompute-snapshot",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0051 Wave A — realised P&L (T-A-1-04) ───────────────────────────────
@@ -685,12 +779,7 @@ async def get_portfolio_realized_pnl(portfolio_id: str, request: Request) -> Any
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=300"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 @router.get("/portfolios/{portfolio_id}/exposure")
@@ -699,16 +788,44 @@ async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
 
     PLAN-0046 Wave 5 / T-46-5-02. S1 itself reaches out to S3 over REST
     to fetch current prices (R9-compliant — no cross-service DB).
+
+    Valkey cache (60s TTL): portfolio exposure changes only when holdings or
+    prices change.  1-minute staleness is acceptable for this view and
+    eliminates the ~3s S1→S3 price fan-out on every page load.
+    Cache key is per-portfolio so different portfolios don't collide.
+    Cache is bypass-on-failure (fail-open) — a Valkey outage degrades to
+    the slow path, not an error.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    # ── Valkey cache check (fail-open) ────────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    _cache_key = f"portfolio:exposure:{portfolio_id}"
+    if valkey is not None:
+        try:
+            cached = await valkey.get(_cache_key)
+            if cached is not None:
+                body = cached.encode() if isinstance(cached, str) else cached
+                return Response(content=body, status_code=200, media_type="application/json")
+        except Exception:
+            logger.debug("exposure_cache_get_failed", portfolio_id=portfolio_id, exc_info=True)
+
     headers = _portfolio_headers(request)
     clients = _clients(request)
     resp = await clients.portfolio.get(
         f"/api/v1/portfolios/{portfolio_id}/exposure",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+    # ── Populate cache on success (fire-and-forget, fail-open) ───────────────
+    if resp.status_code == 200 and valkey is not None:
+        try:
+            await valkey.set(_cache_key, resp.content.decode(), ex=60)
+        except Exception:
+            logger.debug("exposure_cache_set_failed", portfolio_id=portfolio_id, exc_info=True)
+
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
@@ -744,12 +861,7 @@ async def get_holding_lots(portfolio_id: str, instrument_id: str, request: Reque
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=60"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 @router.get("/portfolios/{portfolio_id}/concentration")
@@ -775,27 +887,146 @@ async def get_portfolio_concentration(portfolio_id: str, request: Request) -> An
     response_headers: dict[str, str] = {}
     if resp.status_code == 200:
         response_headers["Cache-Control"] = "max-age=300"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        headers=response_headers,
-    )
+    return proxy_json_response(request, resp, extra_headers=response_headers or None)
 
 
 # ── Portfolio Sector Attribution (PLAN-0091 Wave A-2, T-A-2-03) ──────────────
 
 
+def _parse_holdings(raw: Any) -> list[dict[str, Any]]:
+    """Normalise S1 holdings response to a plain list.
+
+    S1 may return either a bare list (legacy) or a paginated envelope
+    ``{items: [...], total: N, ...}`` (current). Accept both.
+    """
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return raw.get("items") or []
+    return []
+
+
+async def _batch_fetch_dividend_yields(
+    instrument_ids: list[str],
+    clients: Any,
+    s3_headers: dict[str, str],
+    valkey: Any,
+) -> dict[str, float | None]:
+    """Return {instrument_id → annualised dividend yield as ratio} for each id.
+
+    PLAN-0114 W6 / T-W6-04.
+
+    WHY pct/100: S3 fundamentals stores dividend yield as a percentage
+    (e.g. 2.4 = 2.4 %).  The frontend and holdings-columns expect a ratio
+    (0.024) so that formatPercentUnsigned(yld) renders correctly.
+
+    WHY Valkey 900 s: fundamental data changes at most daily; a 15-minute
+    cache avoids hammering S3 on every holdings page load while staying
+    fresh enough for intraday users.
+
+    WHY fail-open (None): if S3 is unavailable or returns no yield data for
+    an instrument the column shows "—" — the rest of the holdings table is
+    unaffected.
+    """
+    _cache_ttl = 900  # seconds — 15 minutes (N806 suppressed: local const)
+
+    async def _fetch_one(iid: str) -> tuple[str, float | None]:
+        cache_key = f"portfolio:div_yield:{iid}"
+        # 1. Check Valkey cache first.
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return iid, float(cached)
+        except Exception:  # noqa: S110
+            pass  # cache miss → fall through to live fetch
+
+        # 2. Fetch from S3 fundamentals.
+        try:
+            resp = await clients.market_data.get(
+                f"/api/v1/fundamentals/{iid}/metrics",
+                headers=s3_headers,
+            )
+            if resp.status_code != 200:
+                return iid, None
+            data = json.loads(resp.content)
+            raw_pct = data.get("annualized_dividend_yield")
+            if raw_pct is None:
+                return iid, None
+            ratio = float(raw_pct) / 100.0
+            # 3. Populate cache (best-effort — write failure is non-fatal).
+            with contextlib.suppress(Exception):
+                await valkey.set(cache_key, str(ratio), ex=_cache_ttl)
+            return iid, ratio
+        except Exception:
+            return iid, None
+
+    results = await asyncio.gather(*(_fetch_one(iid) for iid in instrument_ids))
+    return dict(results)
+
+
+async def _batch_fetch_sectors(
+    instrument_ids: list[str],
+    clients: Any,
+    s3_headers: dict[str, str],
+) -> dict[str, str]:
+    """Return a mapping {instrument_id → sector_name} for every id in the list.
+
+    Uses GET /api/v1/instruments/lookup?id={iid}&extra_info=true instead of
+    GET /api/v1/fundamentals/{iid} because:
+      - instruments/lookup reads `instruments.sector` via a single indexed PK
+        lookup (~5-15ms per call) whereas fundamentals reads a heavy JSONB
+        column and the full EODHD response payload (~100-300ms per call).
+      - All N calls run concurrently via asyncio.gather so total latency ≈
+        single-call latency regardless of portfolio size.
+      - The `sector` field on InstrumentLookupDetailResponse is the canonical
+        source (same column the fundamentals consumer writes to).
+    Graceful degradation: any lookup failure → "Unknown" for that instrument.
+    """
+
+    async def _one(iid: str) -> tuple[str, str]:
+        try:
+            r = await clients.market_data.get(
+                "/api/v1/instruments/lookup",
+                params={"id": iid, "extra_info": "true"},
+                headers=s3_headers,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                # `sector` is the top-level field in InstrumentLookupDetailResponse.
+                # It is populated from instruments.sector (set by the fundamentals
+                # consumer from general.get("Sector")). Fall back to "Unknown" when
+                # the field is null or absent (instrument not yet enriched).
+                return iid, str(data.get("sector") or "Unknown")
+        except Exception:
+            logger.debug("sector_lookup_failed", instrument_id=iid, exc_info=True)
+        return iid, "Unknown"
+
+    results = await asyncio.gather(*[_one(iid) for iid in instrument_ids], return_exceptions=True)
+    return {r[0]: r[1] for r in results if isinstance(r, tuple)}
+
+
 @router.get("/portfolios/{portfolio_id}/sector-attribution", response_model=PortfolioSectorAttributionResponse)
 async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) -> Any:
-    """Composition: holdings (S1) + batch quotes (S3) + per-instrument sector (S3).
+    """Composition: holdings (S1) + batch prices (S3) + parallel sector lookups (S3).
 
-    Algorithm:
+    Algorithm (fixed — was N+1, now 2 concurrent HTTP calls + N parallel lookups):
       1. Fetch all holdings from S1 — quantity + average_cost per instrument
-      2. Fetch current price + day_change_pct via S3 /internal/v1/price/batch
-      3. Fetch sector for each unique instrument via S3 /api/v1/fundamentals/{id}
-         (parallel asyncio.gather, graceful degradation to "Unknown" on failure)
-      4. Group by sector → compute market_value, sector_weight_pct, sector_day_pnl
+      2. Concurrently: fetch price batch (S3) + sector via instruments/lookup
+         for each unique instrument (parallel asyncio.gather, fast indexed lookup)
+      3. Group by sector → compute market_value, sector_weight_pct, sector_day_pnl
+
+    Performance fix (PLAN-0099 W4):
+      OLD: N sequential calls to /api/v1/fundamentals/{iid} reading EODHD JSONB
+           -> 633-981ms for a typical portfolio
+      NEW: N concurrent calls to /api/v1/instruments/lookup?id={iid}&extra_info=true
+           reading instruments.sector via indexed PK lookup (~5-15ms each, all
+           concurrent) -> target < 300ms
+
+    sector data note: `instruments.sector` is populated by the fundamentals
+      consumer from EODHD General.Sector. When an instrument has never been
+      enriched (e.g. brand-new seeded ticker), the field is NULL and the holding
+      appears in the "Unknown" bucket. The covered_pct field communicates this
+      partial coverage to the frontend.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -817,55 +1048,41 @@ async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) 
     except Exception:
         raise HTTPException(status_code=502, detail="Invalid response from portfolio service")  # noqa: B904
 
-    holdings: list[dict[str, Any]] = (
-        raw if isinstance(raw, list) else (raw.get("items") or []) if isinstance(raw, dict) else []
-    )
+    holdings: list[dict[str, Any]] = _parse_holdings(raw)
     if not holdings:
         return PortfolioSectorAttributionResponse(portfolio_id=portfolio_id)
 
     instrument_ids = [str(h["instrument_id"]) for h in holdings if h.get("instrument_id")]
 
-    # Step 2 — batch price snapshots from S3
-    price_map: dict[str, dict[str, Any]] = {}
-    try:
-        snap_resp = await clients.market_data.post(
-            "/internal/v1/price/batch",
-            json={"instrument_ids": instrument_ids},
-            headers={"Content-Type": "application/json", **s3_headers},
-        )
-        if snap_resp.status_code == 200:
-            snap_list = snap_resp.json()
-            if isinstance(snap_list, list):
-                for snap in snap_list:
-                    iid = str(snap.get("instrument_id", ""))
-                    if iid:
-                        price_map[iid] = snap
-    except Exception:
-        logger.warning("sector_attribution_price_fetch_failed", portfolio_id=portfolio_id, exc_info=True)
-
-    # Step 3 — sector per instrument (parallel)
-    async def _fetch_sector(iid: str) -> tuple[str, str]:
+    # Step 2 — batch price snapshots + sector lookups in parallel.
+    # WHY two concurrent tasks (not sequential): the price batch and the N
+    # instrument-lookup calls are independent — running them in parallel hides
+    # their latency behind the slower of the two, roughly halving wall-clock time.
+    async def _fetch_prices() -> dict[str, dict[str, Any]]:
+        price_map: dict[str, dict[str, Any]] = {}
         try:
-            r = await clients.market_data.get(
-                f"/api/v1/fundamentals/{iid}",
-                params={"sections": "General"},
-                headers=s3_headers,
+            snap_resp = await clients.market_data.post(
+                "/internal/v1/price/batch",
+                json={"instrument_ids": instrument_ids},
+                headers={"Content-Type": "application/json", **s3_headers},
             )
-            if r.status_code == 200:
-                data = r.json()
-                sector = str(data.get("General", {}).get("Sector") or data.get("sector") or "Unknown")
-                return iid, sector
+            if snap_resp.status_code == 200:
+                snap_list = snap_resp.json()
+                if isinstance(snap_list, list):
+                    for snap in snap_list:
+                        iid = str(snap.get("instrument_id", ""))
+                        if iid:
+                            price_map[iid] = snap
         except Exception:
-            logger.debug("sector_attribution_fetch_sector_failed", instrument_id=iid, exc_info=True)
-        return iid, "Unknown"
+            logger.warning("sector_attribution_price_fetch_failed", portfolio_id=portfolio_id, exc_info=True)
+        return price_map
 
-    sector_results = await asyncio.gather(*[_fetch_sector(iid) for iid in instrument_ids], return_exceptions=True)
-    sector_map: dict[str, str] = {}
-    for result in sector_results:
-        if isinstance(result, tuple):
-            sector_map[result[0]] = result[1]
+    price_map_result, sector_map = await asyncio.gather(
+        _fetch_prices(),
+        _batch_fetch_sectors(instrument_ids, clients, s3_headers),
+    )
 
-    # Step 4 — aggregate by sector
+    # Step 3 — aggregate by sector
     buckets_raw: dict[str, dict[str, float]] = defaultdict(lambda: {"market_value": 0.0, "day_pnl": 0.0, "count": 0.0})
     total_market_value = 0.0
     covered_value = 0.0
@@ -877,7 +1094,7 @@ async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) 
         except (TypeError, ValueError):
             continue
 
-        snap = price_map.get(iid, {})
+        snap = price_map_result.get(iid, {})
         price = float(snap.get("price") or snap.get("close") or 0.0)
         if price <= 0:
             continue
@@ -915,6 +1132,163 @@ async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) 
     )
 
 
+# ── Portfolio Sector Breakdown (PLAN-0099 W4 — optimised single-aggregation) ───
+
+
+@router.get("/portfolios/{portfolio_id}/sector-breakdown", response_model=SectorBreakdownResponse)
+async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) -> Any:
+    """Optimised sector breakdown — guaranteed < 300ms via Valkey cache (warm) or
+    2+N downstream calls (cold).
+
+    Functionally equivalent to /sector-attribution but designed for speed:
+      - Warm path: Valkey cache hit → < 5ms (60s TTL)
+      - Cold path: 1 call to S1 + batch price call to S3 + N concurrent sector
+        lookups via instruments/lookup (all parallel via asyncio.gather)
+
+    Response shape differs from /sector-attribution:
+      - segments[] uses `weight` (0-1 fraction) instead of `sector_weight_pct` (0-100)
+      - segments[] includes `market_value` (absolute, not present in SectorBucket)
+      - as_of: server date for display/caching hints
+      - covered_pct: fraction of MV with a known sector (same semantics as attribution)
+
+    Valkey cache key: ``portfolio:sector-breakdown:{portfolio_id}`` (60s TTL).
+    Cache is fail-open — a Valkey outage degrades to the N-call path, not an error.
+
+    Use this endpoint for any new frontend work — /sector-attribution is kept for
+    backward compatibility only.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # ── Valkey cache check (fail-open) ────────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    _sb_cache_key = f"portfolio:sector-breakdown:{portfolio_id}"
+    if valkey is not None:
+        try:
+            cached = await valkey.get(_sb_cache_key)
+            if cached is not None:
+                # Return raw JSON bytes — avoids re-serialising through Pydantic
+                # (the cached value is already a valid SectorBreakdownResponse JSON).
+                return Response(
+                    content=cached.encode() if isinstance(cached, str) else cached,
+                    status_code=200,
+                    media_type="application/json",
+                )
+        except Exception:
+            logger.debug("sector_breakdown_cache_get_failed", portfolio_id=portfolio_id, exc_info=True)
+
+    headers = _portfolio_headers(request)
+    s3_headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # Step 1 — holdings from S1
+    holdings_resp = await clients.portfolio.get(f"/api/v1/holdings/{portfolio_id}", headers=headers)
+    if holdings_resp.status_code != 200:
+        return Response(
+            content=holdings_resp.content,
+            status_code=holdings_resp.status_code,
+            media_type="application/json",
+        )
+    try:
+        raw = json.loads(holdings_resp.content)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid response from portfolio service")  # noqa: B904
+
+    holdings = _parse_holdings(raw)
+    if not holdings:
+        return SectorBreakdownResponse(
+            portfolio_id=portfolio_id,
+            as_of=datetime.now(tz=UTC).date(),
+        )
+
+    instrument_ids = [str(h["instrument_id"]) for h in holdings if h.get("instrument_id")]
+
+    # Step 2 — prices + sectors in parallel (two coroutines, one gather)
+    async def _prices() -> dict[str, dict[str, Any]]:
+        pm: dict[str, dict[str, Any]] = {}
+        try:
+            r = await clients.market_data.post(
+                "/internal/v1/price/batch",
+                json={"instrument_ids": instrument_ids},
+                headers={"Content-Type": "application/json", **s3_headers},
+            )
+            if r.status_code == 200:
+                snap_list = r.json()
+                if isinstance(snap_list, list):
+                    for s in snap_list:
+                        iid = str(s.get("instrument_id", ""))
+                        if iid:
+                            pm[iid] = s
+        except Exception:
+            logger.warning("sector_breakdown_price_fetch_failed", portfolio_id=portfolio_id, exc_info=True)
+        return pm
+
+    price_map, sector_map = await asyncio.gather(
+        _prices(),
+        _batch_fetch_sectors(instrument_ids, clients, s3_headers),
+    )
+
+    # Step 3 — aggregate: one pass over holdings, O(N)
+    totals: dict[str, dict[str, float]] = defaultdict(lambda: {"mv": 0.0, "count": 0.0})
+    # 2026-06-10 gap #2: collect the instrument UUIDs per sector so the
+    # frontend can join segments back to holdings rows by id (previously it
+    # had to do a fragile name-alias match against the sector string).
+    ids_by_sector: dict[str, list[str]] = defaultdict(list)
+    total_mv = 0.0
+    covered_mv = 0.0
+
+    for h in holdings:
+        iid = str(h.get("instrument_id", ""))
+        try:
+            qty = float(h.get("quantity", 0))
+        except (TypeError, ValueError):
+            continue
+
+        snap = price_map.get(iid, {})
+        price = float(snap.get("price") or snap.get("close") or 0.0)
+        if price <= 0:
+            continue
+
+        mv = qty * price
+        sector = sector_map.get(iid, "Unknown")
+        totals[sector]["mv"] += mv
+        totals[sector]["count"] += 1.0
+        ids_by_sector[sector].append(iid)
+        total_mv += mv
+        if sector != "Unknown":
+            covered_mv += mv
+
+    segments = [
+        SectorBreakdownSegment(
+            sector=sector,
+            weight=round(vals["mv"] / total_mv, 6) if total_mv > 0 else 0.0,
+            count=int(vals["count"]),
+            market_value=round(vals["mv"], 2),
+            instrument_ids=ids_by_sector[sector],
+        )
+        for sector, vals in sorted(totals.items(), key=lambda x: -x[1]["mv"])
+    ]
+
+    result = SectorBreakdownResponse(
+        portfolio_id=portfolio_id,
+        segments=segments,
+        covered_pct=round(covered_mv / total_mv, 4) if total_mv > 0 else 0.0,
+        as_of=datetime.now(tz=UTC).date(),
+    )
+
+    # ── Populate Valkey cache (fire-and-forget, fail-open) ────────────────────
+    # Serialise via model_json() to produce the same wire format the cache-hit
+    # path returns — guarantees the caller always sees the same schema shape
+    # regardless of whether the response came from cache or was freshly computed.
+    if valkey is not None:
+        try:
+            await valkey.set(_sb_cache_key, result.model_dump_json(), ex=60)
+        except Exception:
+            logger.debug("sector_breakdown_cache_set_failed", portfolio_id=portfolio_id, exc_info=True)
+
+    return result
+
+
 @router.get("/transactions")
 async def list_transactions(request: Request) -> Any:
     """Proxy GET /api/v1/transactions → S1 Portfolio service.
@@ -938,7 +1312,60 @@ async def list_transactions(request: Request) -> Any:
         params=qp,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+# PLAN-0114 / T-W2-07: CSV export proxy.
+# IMPORTANT: this route MUST be declared BEFORE
+# ``/portfolios/{portfolio_id}/transactions`` to prevent FastAPI from
+# treating "export" as a literal portfolio_id path segment in the more
+# general route below.
+@router.get("/portfolios/{portfolio_id}/transactions/export")
+async def export_transactions(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /v1/portfolios/{id}/transactions/export → S1 Portfolio service.
+
+    PLAN-0114 / T-W2-07 (FR-3). Streams the CSV response back to the client
+    and forwards the ``Content-Disposition`` header so browsers prompt a save
+    dialog.
+
+    SEC-102 fix: portfolio_id is validated as a UUID before forwarding to S1 and
+    before it is interpolated into the Content-Disposition header. This prevents:
+    (1) Path confusion: a non-UUID string passed to the S1 URL gets blocked here
+        rather than reaching S1 with an unexpected shape.
+    (2) Header injection risk: the Content-Disposition fallback uses portfolio_id in
+        an f-string; rejecting non-UUID values at the gate limits the character set
+        to [0-9a-f-], eliminating any injection surface.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # SEC-102: validate UUID shape — consistent with the manual _uuid.UUID() guard
+    # used in other portfolio routes (e.g. get_portfolio_value_history line ~705).
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(  # noqa: B904
+            status_code=422,
+            detail="portfolio_id must be a valid UUID",
+        )
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions/export",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    content_disposition = resp.headers.get(
+        "Content-Disposition", f'attachment; filename="transactions_{portfolio_id}.csv"'
+    )
+    # CSV export: on success forward as text/csv with the attachment header; on an
+    # upstream 5xx the helper drops the CSV framing and returns a sanitized JSON
+    # error instead (BUG-7 — never stream an upstream stack trace as a file).
+    return proxy_json_response(
+        request,
+        resp,
+        media_type="text/csv",
+        extra_headers={"Content-Disposition": content_disposition},
+    )
 
 
 # F-012 (QA 2026-04-28) — nested transactions form mirrors the analytics
@@ -962,7 +1389,7 @@ async def list_transactions_nested(portfolio_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/transactions")
@@ -982,7 +1409,7 @@ async def create_transaction(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Watchlists (PRD-0028 Wave S9-2) ─────────────────────────────────────────
@@ -1004,7 +1431,7 @@ async def rename_watchlist(watchlist_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists", response_model=list[WatchlistResponse], response_model_exclude_none=True)
@@ -1021,7 +1448,7 @@ async def list_watchlists(request: Request) -> Any:
         "/api/v1/watchlists",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/watchlists")
@@ -1040,7 +1467,7 @@ async def create_watchlist(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}")
@@ -1057,7 +1484,7 @@ async def get_watchlist(watchlist_id: str, request: Request) -> Any:
         f"/api/v1/watchlists/{watchlist_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/watchlists/{watchlist_id}", status_code=200)
@@ -1074,7 +1501,7 @@ async def delete_watchlist(watchlist_id: str, request: Request) -> Any:
         f"/api/v1/watchlists/{watchlist_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}/members")
@@ -1098,7 +1525,7 @@ async def list_watchlist_members(watchlist_id: str, request: Request) -> Any:
         target_path,
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/watchlists/{watchlist_id}/members")
@@ -1117,7 +1544,7 @@ async def add_watchlist_member(watchlist_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/watchlists/{watchlist_id}/members/{entity_id}", status_code=200)
@@ -1134,7 +1561,7 @@ async def remove_watchlist_member(watchlist_id: str, entity_id: str, request: Re
         f"/api/v1/watchlists/{watchlist_id}/members/{entity_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/watchlists/{watchlist_id}/insights")
@@ -1161,7 +1588,7 @@ async def watchlist_insights(watchlist_id: str, request: Request) -> Response:
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
     body = json.dumps(payload).encode()
     # WHY private: the response is user-scoped (their watchlist's members
@@ -1200,7 +1627,7 @@ async def feedback_create_submission(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions")
@@ -1214,7 +1641,7 @@ async def feedback_list_submissions(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions/anonymous")
@@ -1233,7 +1660,7 @@ async def feedback_list_anonymous_submissions(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/submissions/{submission_id}")
@@ -1246,7 +1673,7 @@ async def feedback_get_submission(submission_id: str, request: Request) -> Respo
         f"/api/v1/feedback/submissions/{submission_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/submissions/{submission_id}")
@@ -1261,7 +1688,7 @@ async def feedback_update_submission(submission_id: str, request: Request) -> Re
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete(
@@ -1284,7 +1711,7 @@ async def feedback_delete_submission(submission_id: str, request: Request) -> Re
     # type when the backend actually returned a body (e.g. 4xx errors).
     if resp.status_code == 204:
         return Response(status_code=204)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/nps", status_code=201)
@@ -1299,7 +1726,7 @@ async def feedback_post_nps(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/nps/aggregate")
@@ -1313,7 +1740,7 @@ async def feedback_nps_aggregate(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/features")
@@ -1326,7 +1753,7 @@ async def feedback_list_features(request: Request) -> Response:
     if qs:
         target = f"{target}?{qs}"
     resp = await clients.portfolio.get(target, headers=headers)
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/features", status_code=201)
@@ -1341,7 +1768,7 @@ async def feedback_create_feature(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/features/{feature_request_id}/vote")
@@ -1354,7 +1781,7 @@ async def feedback_vote_feature(feature_request_id: str, request: Request) -> Re
         f"/api/v1/feedback/features/{feature_request_id}/vote",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/features/{feature_request_id}")
@@ -1376,7 +1803,7 @@ async def feedback_update_feature(feature_request_id: str, request: Request) -> 
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/feedback/micro-survey", status_code=201)
@@ -1390,7 +1817,7 @@ async def feedback_micro_survey(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/feedback/beta-program/enrollment")
@@ -1403,7 +1830,7 @@ async def feedback_get_beta_enrollment(request: Request) -> Response:
         "/api/v1/feedback/beta-program/enrollment",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/feedback/beta-program/enrollment")
@@ -1418,7 +1845,7 @@ async def feedback_patch_beta_enrollment(request: Request) -> Response:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Notification preferences (W1-BACKEND / MED-022 / CRIT-004) ───────────────
@@ -1443,7 +1870,7 @@ async def get_notification_preferences(request: Request) -> Any:
         "/api/v1/users/me/notification-preferences",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/users/me/notification-preferences")
@@ -1463,4 +1890,4 @@ async def update_notification_preferences(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

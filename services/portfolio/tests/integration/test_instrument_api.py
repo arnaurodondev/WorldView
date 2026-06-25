@@ -22,17 +22,27 @@ async def test_list_instruments_after_seeding(integration_client, db_session) ->
     import uuid
 
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
+    from sqlalchemy.dialects.postgresql import insert
 
-    inst = InstrumentModel(
-        id=uuid.uuid4(),
-        symbol="TSLA",
-        exchange="NASDAQ",
-        name="Tesla Inc.",
-        currency="USD",
-        asset_class="equity",
-        source_event_id=uuid.uuid4(),
+    # ON CONFLICT DO NOTHING on uq_instruments_symbol_exchange: the testcontainer
+    # DB is session-scoped with no per-test cleanup, and sibling integration
+    # tests (test_transaction_export, test_record_transaction_trade) also seed
+    # TSLA/NASDAQ. A plain INSERT would raise UniqueViolationError on that shared
+    # (symbol, exchange). We only need the row to exist for the list assertion.
+    stmt = (
+        insert(InstrumentModel)
+        .values(
+            id=uuid.uuid4(),
+            symbol="TSLA",
+            exchange="NASDAQ",
+            name="Tesla Inc.",
+            currency="USD",
+            asset_class="equity",
+            source_event_id=uuid.uuid4(),
+        )
+        .on_conflict_do_nothing(constraint="uq_instruments_symbol_exchange")
     )
-    db_session.add(inst)
+    await db_session.execute(stmt)
     await db_session.commit()
 
     resp = await integration_client.get("/api/v1/instruments")

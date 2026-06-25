@@ -1,0 +1,839 @@
+[
+  {
+    "doc_id": "019ecfc0-b1d8-7ee1-a697-1d9d895a67dd",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.16,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ed0af-3b6a-7445-83cc-d719dc588ad4",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.232,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfac-fafd-773b-9ce4-99a5a7d36ca3",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.144,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfec-a4e8-7da3-aadc-29e7af547f3f",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "json_error",
+    "latency_s": 116.044,
+    "tokens_in": 4167,
+    "tokens_out": 16384,
+    "raw_response": "",
+    "parsed": null,
+    "error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf97-d54e-7454-a5b0-706d94031382",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.021,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf9d-864f-7747-ae96-ea1b40061244",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 49.65,
+    "tokens_in": 3146,
+    "tokens_out": 2417,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"RBC says Welltower is well positioned to capitalize on seniors housing demand\",\n      \"entity_refs\": [\"RBC\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "RBC says Welltower is well positioned to capitalize on seniors housing demand",
+          "entity_refs": [
+            "RBC"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Welltower 'Well Positioned' to Capitalize on Seniors Housing Demand, RBC Says",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecf9c-e0a0-7776-b8cf-4030e2ca9ac9",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.026,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf9a-2645-7dd4-a54d-0204db1a1976",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.187,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf93-d8f8-7b88-a218-39ba0794bdf8",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 43.996,
+    "tokens_in": 3324,
+    "tokens_out": 3506,
+    "raw_response": "{\"events\":[{\"event_type\":\"MACRO\",\"description\":\"Iran war\",\"entity_refs\":[],\"valid_from\":null,\"valid_to\":null,\"evidence_text\":\"Airline stocks have often been the biggest movers—one way or the other—following the big moments in the Iran war.\",\"confidence\":0.95}],\"claims\":[{\"entity_ref\":\"Airline stocks\",\"claim_type\":\"OTHER\",\"polarity\":\"positive\",\"confidence\":0.95,\"evidence_text\":\"Airline stocks have often been the biggest movers—one way or the other—following the big moments in the Iran war.\"}],\"relations\":[]}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "Iran war",
+          "entity_refs": [],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "Airline stocks have often been the biggest movers—one way or the other—following the big moments in the Iran war.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Airline stocks",
+          "claim_type": "OTHER",
+          "polarity": "positive",
+          "confidence": 0.95,
+          "evidence_text": "Airline stocks have often been the biggest movers—one way or the other—following the big moments in the Iran war."
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfba-5cb7-71e5-8044-35280a2ee484",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "json_error",
+    "latency_s": 139.521,
+    "tokens_in": 3640,
+    "tokens_out": 16384,
+    "raw_response": "",
+    "parsed": null,
+    "error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfaa-4547-7a21-8b87-958723d5c9cf",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.024,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb8-8366-789f-8961-464b33d3d1ff",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.539,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf9a-49fd-74c8-8688-c4f9c0dedb39",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.307,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb6-f2a8-74c0-b8b0-80fd3b80c550",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.594,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfaf-c964-7aa1-b8f4-a953e99b4e89",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 94.665,
+    "tokens_in": 3997,
+    "tokens_out": 4907,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"REGULATORY_ACTION\",\n      \"description\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"entity_refs\": [\n        \"Cuprina Pte. Ltd.\",\n        \"U.S. Food and Drug Administration\"\n      ],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"(RTTNews) - Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"U.S. Food and Drug Administration\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Cuprina Pte. Ltd.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"FDA\",\n      \"predicate\": \"regulates\",\n      \"object_ref\": \"Cuprina Pte. Ltd.\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "REGULATORY_ACTION",
+          "description": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "entity_refs": [
+            "Cuprina Pte. Ltd.",
+            "U.S. Food and Drug Administration"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "(RTTNews) - Cuprina Holdings (Cayman) Limited (CUPR), a biomedical and biotechnology company, on Monday reported that its wholly-owned subsididiary Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA) for MEDIFLY Maggots in wound debridement.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "U.S. Food and Drug Administration",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "FDA",
+          "predicate": "regulates",
+          "object_ref": "Cuprina Pte. Ltd.",
+          "confidence": 0.95,
+          "evidence_text": "Cuprina Pte. Ltd. received a 510(k) clearance from the U.S. Food and Drug Administration (FDA)",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ed083-d324-7f8c-b21a-5f17f0d2004e",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.035,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb5-61dc-704b-bc84-33e69b7db5c8",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.404,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf9d-6e31-7b98-b35c-99f67b571f3a",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.15,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfc5-7e08-72f5-be6c-225e140eefa9",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 28.213,
+    "tokens_in": 3150,
+    "tokens_out": 1507,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"STMicroelectronics launched a $1.5 billion offering\",\n      \"entity_refs\": [\"STMicroelectronics\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "STMicroelectronics launched a $1.5 billion offering",
+          "entity_refs": [
+            "STMicroelectronics"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "STMicroelectronics (STM) said Tuesday it launched a $1.5 billion offering of senior unsecured conver",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0d2-359d-7ac1-b35c-1a3360f0f4a6",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.033,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ed080-5221-7727-813b-ac56d6d63d7b",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.332,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfa4-3008-744f-903f-2f0ea4cac447",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.177,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfae-140f-7a44-bd27-9131b52df3b3",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.146,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfa8-295c-7a99-8cf8-1ad29c2a8f6e",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 106.46,
+    "tokens_in": 4121,
+    "tokens_out": 5122,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Monthly dividend of $0.12 per common share to be paid on July 15, 2026\",\n      \"entity_refs\": [\"Peyto Exploration &amp; Development Corp.\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Peyto Exploration &amp; Development Corp. (TSX: PEY) (\\\"Peyto\\\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Peyto Exploration &amp; Development Corp.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"TSX\",\n      \"confidence\": 0.96,\n      \"evidence_text\": \"Peyto Exploration &amp; Development Corp. (TSX: PEY)\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Monthly dividend of $0.12 per common share to be paid on July 15, 2026",
+          "entity_refs": [
+            "Peyto Exploration &amp; Development Corp."
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Peyto Exploration &amp; Development Corp. (TSX: PEY) (\"Peyto\") confirms that the monthly dividend with respect to June 2026 of $0.12 per common share is to be paid on July 15, 2026, for shareholders of record on June 30, 2026.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": [
+        {
+          "subject_ref": "Peyto Exploration &amp; Development Corp.",
+          "predicate": "listed_on",
+          "object_ref": "TSX",
+          "confidence": 0.96,
+          "evidence_text": "Peyto Exploration &amp; Development Corp. (TSX: PEY)",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 0,
+    "n_relations": 1
+  },
+  {
+    "doc_id": "019ecf9b-7f1f-761d-a826-341ad9e19e67",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.02,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecff9-5c84-74d9-89df-3c4311f21565",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.121,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb7-de69-759b-b8dc-5bbb425a024c",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 156.414,
+    "tokens_in": 12910,
+    "tokens_out": 7430,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"Neurocrine Biosciences, Inc. presented first retrospective case series of CRENESSITY at ENDO 2026 in Chicago\",\n      \"entity_refs\": [\n        \"Neurocrine Biosciences, Inc.\",\n        \"Chicago\"\n      ],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"SAN DIEGO, June 15, 2026 /PRNewswire/ -- Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced clinical findings from the first retrospective case series in pediatric and adult patients with classic congenital adrenal hyperplasia (CAH) due to 11β‑hydroxylase deficiency. The findings were presented at the Endocrine Society's annual meeting, ENDO 2026, in Chicago.\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"Neurocrine Biosciences, Inc.\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"neutral\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced clinical findings from the first retrospective case series\"\n    }\n  ],\n  \"relations\": [\n    {\n      \"subject_ref\": \"Neurocrine Biosciences, Inc.\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Neurocrine Biosciences, Inc. (Nasdaq: NBIX)\",\n      \"valid_to\": null\n    },\n    {\n      \"subject_ref\": \"NBIX\",\n      \"predicate\": \"listed_on\",\n      \"object_ref\": \"Nasdaq\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Neurocrine Biosciences, Inc. (Nasdaq: NBIX)\",\n      \"valid_to\": null\n    }\n  ]\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "Neurocrine Biosciences, Inc. presented first retrospective case series of CRENESSITY at ENDO 2026 in Chicago",
+          "entity_refs": [
+            "Neurocrine Biosciences, Inc.",
+            "Chicago"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "SAN DIEGO, June 15, 2026 /PRNewswire/ -- Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced clinical findings from the first retrospective case series in pediatric and adult patients with classic congenital adrenal hyperplasia (CAH) due to 11β‑hydroxylase deficiency. The findings were presented at the Endocrine Society's annual meeting, ENDO 2026, in Chicago.",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "Neurocrine Biosciences, Inc.",
+          "claim_type": "OTHER",
+          "polarity": "neutral",
+          "confidence": 0.95,
+          "evidence_text": "Neurocrine Biosciences, Inc. (Nasdaq: NBIX) today announced clinical findings from the first retrospective case series"
+        }
+      ],
+      "relations": [
+        {
+          "subject_ref": "Neurocrine Biosciences, Inc.",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.95,
+          "evidence_text": "Neurocrine Biosciences, Inc. (Nasdaq: NBIX)",
+          "valid_to": null
+        },
+        {
+          "subject_ref": "NBIX",
+          "predicate": "listed_on",
+          "object_ref": "Nasdaq",
+          "confidence": 0.95,
+          "evidence_text": "Neurocrine Biosciences, Inc. (Nasdaq: NBIX)",
+          "valid_to": null
+        }
+      ]
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 2
+  },
+  {
+    "doc_id": "019ecfc0-9a4a-73e9-84c9-b1111be45c05",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.07,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfbb-a5c5-7e26-ba36-f6d9d60ca6fb",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.2,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfbd-7c9b-71f7-97ee-32421f6aeda9",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.247,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb7-510f-7874-b84f-1bf64940b4cc",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.21,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfc0-82a4-788e-bfc9-34768caf5943",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.242,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfc1-feeb-716e-9575-9b520d9635ba",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.197,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb5-034a-7cf9-87bb-27dce0cc5230",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.187,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf95-22f6-7e2e-818a-2dce56aae153",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.26,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf60-1183-7dc2-b758-798f77b8b328",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.991,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfa9-fee9-7f14-a5f8-b078ceb2e2fe",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 168.132,
+    "tokens_in": 3182,
+    "tokens_out": 8560,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"OTHER\",\n      \"description\": \"RBC comments on Lennar's limited near-term improvement amid demand headwinds\",\n      \"entity_refs\": [\"RBC\", \"LEN\"],\n      \"valid_from\": \"2026-06-15\",\n      \"valid_to\": null,\n      \"evidence_text\": \"Lennar Faces Limited Near-Term Improvement Amid Demand Headwinds, RBC Says\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"claims\": [\n    {\n      \"entity_ref\": \"LEN\",\n      \"claim_type\": \"OTHER\",\n      \"polarity\": \"negative\",\n      \"confidence\": 0.95,\n      \"evidence_text\": \"Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns abou\"\n    }\n  ],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "OTHER",
+          "description": "RBC comments on Lennar's limited near-term improvement amid demand headwinds",
+          "entity_refs": [
+            "RBC",
+            "LEN"
+          ],
+          "valid_from": "2026-06-15",
+          "valid_to": null,
+          "evidence_text": "Lennar Faces Limited Near-Term Improvement Amid Demand Headwinds, RBC Says",
+          "confidence": 0.95
+        }
+      ],
+      "claims": [
+        {
+          "entity_ref": "LEN",
+          "claim_type": "OTHER",
+          "polarity": "negative",
+          "confidence": 0.95,
+          "evidence_text": "Lennar (LEN) has limited scope for near-term improvement, with risks still present and concerns abou"
+        }
+      ],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 1,
+    "n_claims": 1,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ed0af-e02f-787c-b9dd-c15b502143f5",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.039,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ed099-c113-7e2c-81bb-fbc35f9ea64b",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.192,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfa7-e1d4-77e8-9463-56452ce7a946",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.301,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf9b-c67a-7849-8efe-ac335146c8dd",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.185,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecf84-cc90-78c2-bb47-e120ddd9594c",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "ok",
+    "latency_s": 123.489,
+    "tokens_in": 3902,
+    "tokens_out": 4789,
+    "raw_response": "{\n  \"events\": [\n    {\n      \"event_type\": \"MACRO\",\n      \"description\": \"US government announced $2 billion in funding support to accelerate quantum computing.\",\n      \"entity_refs\": [\"US government\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"The stock climbed alongside its counterparts, helped primarily by rosy prospects for the sector after the US government last month announced $2 billion in funding support to accelerate the country's leadership in quantum computing.\",\n      \"confidence\": 0.96\n    },\n    {\n      \"event_type\": \"CAPITAL_RAISE\",\n      \"description\": \"Department of Commerce provided $100 million in funding to support quantum computing advancements.\",\n      \"entity_refs\": [\"Department of Commerce\"],\n      \"valid_from\": null,\n      \"valid_to\": null,\n      \"evidence_text\": \"D-Wave Quantum Inc. (NYSE:QBTS) was among the nine named beneficiary companies, with a $100 million in funding from the Department of Commerce to help finance its critical advancements in annealing and gate-model superconducting quantum computing systems, including qubit counts, error rates, and coherence through advanced dielectric material optimization, interface control, and high-density advanced packaging.\",\n      \"confidence\": 0.96\n    }\n  ],\n  \"claims\": [],\n  \"relations\": []\n}",
+    "parsed": {
+      "events": [
+        {
+          "event_type": "MACRO",
+          "description": "US government announced $2 billion in funding support to accelerate quantum computing.",
+          "entity_refs": [
+            "US government"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "The stock climbed alongside its counterparts, helped primarily by rosy prospects for the sector after the US government last month announced $2 billion in funding support to accelerate the country's leadership in quantum computing.",
+          "confidence": 0.96
+        },
+        {
+          "event_type": "CAPITAL_RAISE",
+          "description": "Department of Commerce provided $100 million in funding to support quantum computing advancements.",
+          "entity_refs": [
+            "Department of Commerce"
+          ],
+          "valid_from": null,
+          "valid_to": null,
+          "evidence_text": "D-Wave Quantum Inc. (NYSE:QBTS) was among the nine named beneficiary companies, with a $100 million in funding from the Department of Commerce to help finance its critical advancements in annealing and gate-model superconducting quantum computing systems, including qubit counts, error rates, and coherence through advanced dielectric material optimization, interface control, and high-density advanced packaging.",
+          "confidence": 0.96
+        }
+      ],
+      "claims": [],
+      "relations": []
+    },
+    "error": null,
+    "n_events": 2,
+    "n_claims": 0,
+    "n_relations": 0
+  },
+  {
+    "doc_id": "019ecfb7-0a2f-72d7-a3fc-35f246260b02",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.085,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfb6-db36-79aa-9e82-684b49632ea3",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.149,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  },
+  {
+    "doc_id": "019ecfae-8833-7e0e-be09-036d241c1e29",
+    "model_id": "openai/gpt-oss-120b@high",
+    "status": "api_error",
+    "latency_s": 180.193,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "raw_response": "",
+    "parsed": null,
+    "error": "ReadTimeout: The read operation timed out",
+    "n_events": null,
+    "n_claims": null,
+    "n_relations": null
+  }
+]

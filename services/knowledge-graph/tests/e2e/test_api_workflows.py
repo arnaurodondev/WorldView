@@ -212,7 +212,10 @@ RETURNING entity_id
 """),
         {
             "name": "E2E Corp",
-            "etype": "COMPANY",
+            # Must satisfy ck_canonical_entities_entity_type (intelligence-migrations
+            # 0001). "organization" is the canonical type for a company; "COMPANY"
+            # is NOT in the allowed set and triggers a CheckViolationError.
+            "etype": "organization",
             "ticker": "E2E",
             "exchange": "NASDAQ",
             "metadata": "{}",
@@ -234,7 +237,7 @@ RETURNING entity_id
     center = body["center"]
     assert center["entity_id"] == entity_id
     assert center["canonical_name"] == "E2E Corp"
-    assert center["entity_type"] == "COMPANY"
+    assert center["entity_type"] == "organization"
     assert center["ticker"] == "E2E"
     assert center["exchange"] == "NASDAQ"
 
@@ -285,7 +288,8 @@ INSERT INTO canonical_entities (canonical_name, entity_type, metadata)
 VALUES (:name, :etype, CAST(:metadata AS JSONB))
 RETURNING entity_id
 """),
-        {"name": "SemanticMode Corp", "etype": "COMPANY", "metadata": "{}"},
+        # "organization" satisfies ck_canonical_entities_entity_type ("COMPANY" does not).
+        {"name": "SemanticMode Corp", "etype": "organization", "metadata": "{}"},
     )
     row = result.fetchone()
     assert row is not None

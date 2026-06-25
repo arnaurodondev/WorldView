@@ -45,3 +45,36 @@ describe("TargetPricePanel", () => {
     expect(screen.queryByText(/▼/)).toBeNull();
   });
 });
+
+// ── Round-1 Foundation: current → target bar ─────────────────────────────────
+// WHY these tests: requirement 3 — the bar must render for ANY non-null price
+// pair, including the single-analyst case where target == current (the
+// min==max scale previously implied a divide-by-zero → NaN% widths).
+describe("TargetPricePanel target bar (Round-1)", () => {
+  it("renders the bar when both prices are present", () => {
+    render(<TargetPricePanel targetPrice={215.0} currentPrice={190.0} updatedAt={null} />);
+    expect(screen.getByTestId("target-price-bar")).toBeInTheDocument();
+  });
+
+  it("renders the bar without NaN positions when target equals current (min==max guard)", () => {
+    render(<TargetPricePanel targetPrice={190.0} currentPrice={190.0} updatedAt={null} />);
+    const bar = screen.getByTestId("target-price-bar");
+    expect(bar).toBeInTheDocument();
+    // Every positioned child must carry a finite percentage — "NaN%" is the
+    // failure signature of an unguarded (v - lo) / (hi - lo) scale.
+    for (const child of Array.from(bar.children)) {
+      const style = (child as HTMLElement).getAttribute("style") ?? "";
+      expect(style).not.toContain("NaN");
+    }
+  });
+
+  it("hides the bar when currentPrice is missing (one point carries no information)", () => {
+    render(<TargetPricePanel targetPrice={215.0} currentPrice={null} updatedAt={null} />);
+    expect(screen.queryByTestId("target-price-bar")).toBeNull();
+  });
+
+  it("hides the bar when targetPrice is missing", () => {
+    render(<TargetPricePanel targetPrice={null} currentPrice={190.0} updatedAt={null} />);
+    expect(screen.queryByTestId("target-price-bar")).toBeNull();
+  });
+});

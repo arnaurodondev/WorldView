@@ -36,6 +36,10 @@ const { mockSetSettings, mockRefresh, mockGetGraph } = vi.hoisted(() => ({
     getEdgeAttributes: vi.fn(() => ({ label: "CEO_OF", weight: 0.9 })),
     degree: vi.fn(() => 3),
     nodes: vi.fn(() => []),
+    // W4: FilterController now counts visible/total edges for the "X of Y edges"
+    // indicator via graph.forEachEdge — the mock graph has no edges so the
+    // callback simply never fires (count stays 0/0, which is fine for these tests).
+    forEachEdge: vi.fn(),
   })),
 }));
 
@@ -61,6 +65,9 @@ vi.mock("graphology", () => ({
   default: class MockGraph {
     addNode = vi.fn();
     addEdge = vi.fn();
+    // GraphLoader switched addEdge -> addEdgeWithKey so sigma edge keys equal
+    // KG relation ids (edge-click fix, Wave 2) — the mock must mirror it.
+    addEdgeWithKey = vi.fn();
     hasNode = () => true;
     hasEdge = () => false;
     order = 0;

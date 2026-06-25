@@ -73,6 +73,11 @@ class PriceSnapshot:
         stale_reason:   Human-readable explanation when status is STALE/UNAVAILABLE.
         refresh_available: Whether a fresh quote can be triggered (rate-limit aware).
         refresh_cooldown_remaining_sec: Seconds until next refresh is allowed.
+        bid:            Best bid from the quotes table, or None. Only populated
+                        when the resolved source is a quote (FRESH_QUOTE /
+                        BULK_QUOTE) — bar-derived prices carry no order-book
+                        context, so attaching a stale bid would be misleading.
+        ask:            Best ask — same provenance rule as ``bid``.
     """
 
     instrument_id: str
@@ -88,6 +93,10 @@ class PriceSnapshot:
     stale_reason: str | None
     refresh_available: bool = True
     refresh_cooldown_remaining_sec: int = 0
+    # Forward-compatible additions (2026-06-10, B-Q bid/ask plumbing): default
+    # None so snapshots cached in Valkey before this field existed deserialise.
+    bid: Decimal | None = None
+    ask: Decimal | None = None
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict for Valkey storage."""
@@ -105,6 +114,8 @@ class PriceSnapshot:
             "stale_reason": self.stale_reason,
             "refresh_available": self.refresh_available,
             "refresh_cooldown_remaining_sec": self.refresh_cooldown_remaining_sec,
+            "bid": str(self.bid) if self.bid is not None else None,
+            "ask": str(self.ask) if self.ask is not None else None,
         }
 
     @classmethod
@@ -124,4 +135,7 @@ class PriceSnapshot:
             stale_reason=d.get("stale_reason"),
             refresh_available=d.get("refresh_available", True),
             refresh_cooldown_remaining_sec=d.get("refresh_cooldown_remaining_sec", 0),
+            # .get() so pre-bid/ask cached snapshots remain deserialisable.
+            bid=Decimal(d["bid"]) if d.get("bid") is not None else None,
+            ask=Decimal(d["ask"]) if d.get("ask") is not None else None,
         )

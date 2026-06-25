@@ -175,6 +175,27 @@ async def test_chat_stream_sse_events(app_with_overrides) -> None:  # type: igno
     assert "text/event-stream" in content_type
 
 
+async def test_chat_stream_sse_cache_headers(app_with_overrides) -> None:  # type: ignore[no-untyped-def]
+    """POST /api/v1/chat/stream sets explicit no-cache headers (PLAN-0099 W4).
+
+    Without these headers, middleware (Prometheus / RequestId) or intermediate
+    proxies buffer the SSE body and the client receives the full answer in a
+    single chunk instead of token-by-token streaming.
+    """
+    transport = ASGITransport(app=app_with_overrides)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Latest Apple news?"},
+            headers=_AUTH_HEADERS,
+        )
+    assert resp.status_code == 200
+    # Header names are case-insensitive per RFC 7230 — httpx lowercases them.
+    assert resp.headers.get("cache-control") == "no-cache"
+    assert resp.headers.get("x-accel-buffering") == "no"
+    assert resp.headers.get("connection") == "keep-alive"
+
+
 async def test_chat_rate_limit_429(settings: RagChatSettings) -> None:
     """Rate limit exceeded -> 429."""
     from rag_chat.api.dependencies import get_auth_context, get_uow

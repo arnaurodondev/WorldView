@@ -38,6 +38,9 @@ from knowledge_graph.application.blocks.graph_write import (
     _build_entity_dirtied_payload,
     materialize_graph,
 )
+from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+    CanonicalEntityRepository,
+)
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     OutboxRepository,
 )
@@ -263,6 +266,10 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             outbox_repo = OutboxRepository(session)
             relation_repo = RelationRepository(session)
             evidence_repo = RelationEvidenceRepository(session)
+            # 2026-06-11 relations-FK-crash fix: entity-existence gate needs the
+            # canonical-entity repo so materialize_graph can defer (not crash on)
+            # relations whose subject/object entity has not yet landed.
+            entity_repo = CanonicalEntityRepository(session)
 
             # ----------------------------------------------------------
             # Block 11: Canonicalize all relation types
@@ -335,6 +342,8 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # T-B-03: propagate resolved source metadata into evidence rows.
                 source_name=source_name,
                 source_type_metadata=source_type_str,
+                # 2026-06-11: entity-existence gate (prevents relations FK crash).
+                entity_repo=entity_repo,
             )
 
             # ----------------------------------------------------------
@@ -504,6 +513,8 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     # PLAN-0062 F-019: cap pathological evidence text length.
                     evidence_text=_truncate_text_field(d.get("evidence_text"), field_name="evidence_text"),
+                    # PLAN-0109 W5: per-fact end-of-validity date (None when not stated).
+                    valid_to=_parse_dt_optional(d.get("valid_to")),
                 ),
             )
         # PLAN-0062 F-021: split into typed handlers — drop the ``data=`` echo
@@ -592,3 +603,19 @@ def _parse_dt(value: Any) -> datetime:
         except ValueError:
             pass
     return datetime.now(tz=UTC)
+
+
+def _parse_dt_optional(value: Any) -> datetime | None:
+    """Parse an ISO date/datetime string → tz-aware datetime, or ``None``.
+
+    PLAN-0109 W5: unlike :func:`_parse_dt`, returns ``None`` (NOT now) when the
+    value is absent or unparseable — used for ``valid_to``, where absence means
+    "no known end" and must never be coerced to the current time (which would
+    expire the fact immediately under bitemporal step-decay).
+    """
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip()).replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    return None

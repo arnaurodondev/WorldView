@@ -32,6 +32,21 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query/keys";
+// Round-4 hardening (item 1c): GatewayError carries the HTTP status so we can
+// distinguish "ticker does not exist" (404 → InstrumentNotFound) from
+// "platform hiccup" (5xx/network → retryable page error).
+import { GatewayError } from "@/lib/gateway";
+// Wave-2 sidebar fix: the SAME transformer getFundamentals() uses, exported so
+// the page can seed qk.instruments.fundamentals with the correct FLAT shape
+// from the bundle's raw all-sections leg (see the seeding effect below).
+import {
+  transformFundamentalsSections,
+  type RawFundamentalsSections,
+} from "@/lib/api/instruments";
+// Round-4 hardening (item 1c): the F2-step-10 primitive existed but was never
+// wired — a bogus ticker previously left the page on an infinite "—" header
+// with empty tabs. This is the named 404 surface (ticker + screener CTA).
+import { InstrumentNotFound } from "@/components/primitives/InstrumentNotFound";
 import { useInstrumentBundle } from "@/components/instrument/hooks/useInstrumentBundle";
 import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
@@ -52,7 +67,13 @@ import { QuoteTab } from "@/components/instrument/quote/QuoteTab";
 // out of the redesigned page (one fewer ambient dependency to mock in tests).
 
 export interface InstrumentPageClientProps {
-  /** Authoritative KG entity_id from the URL segment. */
+  /**
+   * The /instruments/[ticker] URL slug — a TICKER ("AAPL") for all
+   * user-facing navigation (post-F2 the resolver also accepts a UUID).
+   * NOT a KG entity UUID: anything that addresses /v1/entities/{id}
+   * (UUID-typed path param) MUST use bundle.entity_id instead — see the
+   * IntelligenceTab slot below (PLAN-0099 W3 recovery).
+   */
   readonly entityId: string;
 }
 
@@ -90,7 +111,11 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
   // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
   // gateway wiring. We only consume its data here; tab components handle
   // their own loading UI via the per-section query hooks.
-  const { data: bundle } = useInstrumentBundle(entityId);
+  // Round-4 hardening (items 1a/1c): we now also consume the error channel —
+  // previously `isError` was discarded and a failed bundle left the page in a
+  // permanent skeleton (the children's `enabled` guards never fired because
+  // instrumentId stayed empty). See the two early-return branches below.
+  const { data: bundle, isError, error, refetch } = useInstrumentBundle(entityId);
 
   // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
   // We seed the per-section query caches so when a tab content component
@@ -121,14 +146,106 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
       queryClient.setQueryData(qk.instruments.ownership(instrumentId), bundle.insider);
     }
 
-    // WHY NOT fundamentals (BP-379): the bundle's `fundamentals` field is a
-    // raw FundamentalsSectionResponse (section-records array). The
-    // qk.instruments.fundamentalsSnapshot cache key is consumed by the
-    // Financials tab which expects the flat `Fundamentals` shape returned by
-    // getFundamentals(). Seeding the wrong shape locks the cache for the
-    // entire staleTime window (~5min) and the Financials tab renders all
-    // "—". The snapshot hook fires its own fetch on tab open instead.
+    // ── Fundamentals seed (Wave-2 sidebar fix, 2026-06-10) ──────────────────
+    // The bundle's `fundamentals` leg is the RAW S3 all-sections payload
+    // ({security_id, records:[…]}) — NOT the flat `Fundamentals` shape that
+    // qk.instruments.fundamentals consumers (MetricsTable, KeyStatsBar,
+    // DenseMetricsGrid) read. Seeding it verbatim was BP-379 (wrong-shape
+    // cache poisoning), so historically this seed was SKIPPED — which left
+    // the Quote tab's Statistics rail dependent on a separate
+    // /v1/fundamentals/{id} fetch that raced the auth token and could settle
+    // into a permanent 401 error (every VALUATION/MARGIN row "—" while the
+    // bundle-seeded snapshot/technicals rows rendered fine).
+    // The transformer was since EXPORTED from lib/api/instruments.ts
+    // (transformFundamentalsSections — the exact function getFundamentals()
+    // uses), so we can now seed the CORRECT flat shape with zero divergence
+    // risk and zero extra round-trips: market cap, P/E, margins, analyst
+    // consensus and 52w range all paint on first render straight from the
+    // bundle. Live-verified against AAPL: market_cap=$4.31T, 47 analysts,
+    // target $303.38 all present after the transform.
+    if (bundle.fundamentals) {
+      queryClient.setQueryData(
+        qk.instruments.fundamentals(instrumentId),
+        // WHY the double cast: FundamentalsSectionResponse types each record
+        // as a structured FundamentalsRecord (no string index signature), while
+        // the transformer accepts the loosest Record<string,unknown> shape —
+        // structurally identical at runtime, but TS requires the unknown hop.
+        transformFundamentalsSections(
+          bundle.fundamentals as unknown as RawFundamentalsSections,
+          instrumentId,
+        ),
+      );
+    }
+
+    // PLAN-0099 follow-up G (audit Q1): seed fundamentalsSnapshot +
+    // shareStatistics caches so useMetricsTableData (Quote tab) finds them
+    // pre-warmed on first paint, eliminating 2 RTTs. The cache keys
+    // (qk.instruments.fundamentalsSnapshot / .shareStatistics) MUST match
+    // the keys read by useMetricsTableData.ts:67-89 verbatim — otherwise
+    // the Quote tab fires the network calls anyway.
+    if (bundle.fundamentals_snapshot) {
+      queryClient.setQueryData(
+        qk.instruments.fundamentalsSnapshot(instrumentId),
+        bundle.fundamentals_snapshot,
+      );
+    }
+    // WHY share_statistics: same shape as the dedicated
+    // /v1/fundamentals/{id}/share-statistics endpoint (FundamentalsSectionResponse).
+    // getShareStatistics() returns the response verbatim — no transformer —
+    // so seeding the bundle leg directly is safe.
+    if (bundle.share_statistics) {
+      queryClient.setQueryData(
+        qk.instruments.shareStatistics(instrumentId),
+        bundle.share_statistics,
+      );
+    }
   }, [bundle, entityId, queryClient]);
+
+  // ── Error recovery (Round-4 hardening, items 1a + 1c) ────────────────────
+  // WHY AFTER all hooks: React's rules-of-hooks — the early returns must not
+  // change the hook call order between renders, so they sit below the last
+  // useEffect. WHY full-page replacement (not chrome + inline error): every
+  // element of this page (header price, tabs, brief) derives from the bundle;
+  // rendering dead chrome around an error message reads as a half-broken
+  // page, while one clear named state reads as a deliberate terminal screen.
+  if (isError) {
+    // 404 = the ticker genuinely doesn't exist (S9 resolve_security_id miss).
+    // Render the dedicated not-found surface with its screener escape hatch —
+    // the canonical "where do I find tickers?" CTA (PRD-0089 F2 step 10).
+    if (error instanceof GatewayError && error.status === 404) {
+      return (
+        <div className="flex h-screen items-start justify-center bg-background pt-[15vh] px-4">
+          <div className="w-full max-w-md">
+            <InstrumentNotFound attemptedTicker={entityId} />
+          </div>
+        </div>
+      );
+    }
+    // Anything else (5xx, network failure, status 0 fail-fast) is transient:
+    // a NAMED page error with a real Retry that refires the bundle query —
+    // never a white page or an infinite skeleton (DS §6.1).
+    return (
+      <div
+        data-testid="instrument-page-error"
+        className="flex h-screen flex-col items-center justify-center gap-2 bg-background px-4"
+      >
+        <p className="text-[12px] text-foreground">Couldn&apos;t load this instrument</p>
+        <p className="max-w-[360px] text-center text-[11px] text-muted-foreground">
+          The page bundle failed to load. This is usually transient — retry, or
+          check the platform status.
+        </p>
+        <button
+          type="button"
+          // WHY void refetch(): TanStack's refetch returns a promise we don't
+          // need to await — the query state transition re-renders this shell.
+          onClick={() => void refetch()}
+          className="mt-1 h-7 rounded-[2px] border border-border px-3 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   // ── Layout ────────────────────────────────────────────────────────────────
   // WHY flex column + h-screen: the page must fill the viewport so the active
@@ -150,11 +267,24 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         instrument={bundle?.overview?.instrument ?? null}
         quote={bundle?.overview?.quote ?? null}
         fundamentals={bundle?.overview?.fundamentals ?? null}
+        // Round-1: 30-day average volume for the header's VOL-vs-30D pair.
+        // Comes straight from the bundle's snapshot leg — no extra fetch.
+        avgVolume30d={bundle?.fundamentals_snapshot?.avg_volume_30d ?? null}
+        // Wave-2: S9 QuoteResponse now carries bid/ask (nullable — most dev
+        // price sources are close snapshots with no order book). The header
+        // renders real values when present and an explained "—×—" when null.
+        bid={bundle?.overview?.quote?.bid ?? null}
+        ask={bundle?.overview?.quote?.ask ?? null}
       />
 
       {/* AI brief banner: returns null when no brief is available, so the
-          banner area disappears cleanly with no reserved space. */}
-      <AiBriefBanner entityId={entityId} />
+          banner area disappears cleanly with no reserved space.
+          W3 FIX: the briefing endpoint types entity_id as a UUID — the URL
+          slug here is a ticker, which 404d ("Invalid entity_id: AAPL") and
+          silently hid the banner. Pass the bundle-resolved UUID instead;
+          "" while the bundle is in flight keeps the brief query disabled
+          (same pattern as IntelligenceTab below). */}
+      <AiBriefBanner entityId={bundle?.entity_id ?? ""} />
 
       {/* Controlled 3-tab nav (Quote / Financials / Intelligence). The
           Q/F/I mnemonic hotkeys live inside InstrumentTabs (T-A-04) — the
@@ -177,6 +307,7 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             fundamentals={bundle?.overview?.fundamentals ?? null}
             quote={bundle?.overview?.quote ?? null}
             initialBars={bundle?.overview?.ohlcv?.bars}
+            bundle={bundle ?? null}
           />
         )}
         {/* Wave C: Financials tab orchestrator (T-C-03). WHY guard on the
@@ -185,14 +316,38 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             /v1/fundamentals/*). Until the page-bundle resolves, no fetches
             should fire — pass undefined-coerced empty string makes useQuery's
             enabled flag false. */}
+        {/* PLAN-0089 W3 T-25: FinancialsTab now receives instrument + entityId
+            for the 7-panel sidebar (CompanySnapshotPanel needs Instrument fields;
+            AIBriefPanel needs entityId for the briefing endpoint). Post-F2,
+            entityId === instrumentId for all new instruments. */}
+        {/* W3 FIX: AIBriefPanel keys the briefing endpoint on entity_id
+            (UUID) — the URL slug is a ticker and 404s. Use the resolved
+            bundle UUID, same as AiBriefBanner/IntelligenceTab. */}
         {activeTab === "financials" && (
-          <FinancialsTab instrumentId={bundle?.instrument_id ?? ""} />
+          <FinancialsTab
+            instrumentId={bundle?.instrument_id ?? ""}
+            entityId={bundle?.entity_id ?? ""}
+            instrument={bundle?.overview?.instrument ?? null}
+            quote={bundle?.overview?.quote ?? null}
+          />
         )}
         {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
             (NewsColumn | GraphColumn | ContextPanel). All data fetching lives
             inside the children, so this slot only needs the entityId. */}
+        {/* INTELLIGENCE TAB RECOVERY (PLAN-0099 W3, 2026-06-11): the URL
+            segment this page receives as `entityId` is a TICKER ("AAPL") —
+            the /instruments/[ticker] route. Every /v1/entities/{id} gateway
+            route types entity_id as a UUID path param, so passing the raw
+            URL slug made EVERY intelligence fetch 422 (dossier, news,
+            events, graph, contradictions, narrative — uniform failure).
+            The page bundle already resolves ticker → KG entity UUID
+            gateway-side (bundle.entity_id, falls back to instrument_id) —
+            we MUST pass that resolved UUID down, mirroring how FinancialsTab
+            receives bundle.instrument_id. While the bundle is in flight we
+            pass "" — every intelligence query gates on `enabled: !!entityId`
+            so the tab renders loading chrome without firing bad requests. */}
         {activeTab === "intelligence" && (
-          <IntelligenceTab entityId={entityId} />
+          <IntelligenceTab entityId={bundle?.entity_id ?? ""} />
         )}
       </div>
     </div>

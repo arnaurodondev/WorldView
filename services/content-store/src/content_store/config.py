@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     kafka_output_topic: str = "content.article.stored.v1"
     kafka_consumer_group: str = "content-store-consumer"
 
+    # ── Kafka static membership (KIP-345 / PRD-0113 FR-9 / BP-703) ──────────────
+    # Opt-in stable consumer identity. Empty string ("") = dynamic membership
+    # (the Kafka default, a no-op). When set per-replica (e.g. "content-store-0"),
+    # a restarting consumer rejoins with its stable identity instead of triggering
+    # a full group rebalance — preventing the controller-overload storm of BP-703.
+    # One field per consumer process so each can carry a distinct identity.
+    kafka_article_consumer_instance_id: str = ""
+    kafka_dedup_consumer_instance_id: str = ""
+
     # ── MinIO (object storage) ─────────────────────────────────────────────────
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = ""

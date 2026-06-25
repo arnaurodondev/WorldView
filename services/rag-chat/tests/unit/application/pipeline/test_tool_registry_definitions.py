@@ -96,7 +96,8 @@ class TestRegistryParameterCoverage:
         # → 25. Method name kept for grep parity.
         registry = build_default_registry()
         names = {s.name for s in registry.all_specs()}
-        assert len(names) == 25, f"Expected 25 tools, got {len(names)}: {sorted(names)}"
+        # PLAN-0112 W4 bumped 25 → 26 by adding ``get_path_between`` (pairwise).
+        assert len(names) == 26, f"Expected 26 tools, got {len(names)}: {sorted(names)}"
 
     def test_every_audit_placeholder_tool_now_carries_params_or_is_zero_param(self) -> None:
         """D-R1-002: 18 placeholder tools were filled in; 3 intentionally zero-arg."""
@@ -160,7 +161,8 @@ class TestProductionRegistryToolDefinitions:
         # PLAN-0104 W32: 25 after adding query_fundamentals.
         registry = build_default_registry()
         defs = registry.to_tool_definitions()
-        assert len(defs) == 25
+        # PLAN-0112 W4: 26 after adding get_path_between.
+        assert len(defs) == 26
 
     def test_every_definition_has_openai_envelope(self) -> None:
         registry = build_default_registry()
@@ -207,6 +209,8 @@ class TestProductionRegistryToolDefinitions:
             "get_entity_news",
             # PLAN-0104 W32
             "query_fundamentals",
+            # PLAN-0112 W4
+            "get_path_between",
         }
         assert names == expected, f"Missing: {expected - names}; Extra: {names - expected}"
 
@@ -244,6 +248,21 @@ class TestProductionRegistryToolDefinitions:
             assert params["type"] == "object"
             assert params["properties"] == {}
             assert params["required"] == []
+
+    def test_get_price_history_interval_enum_excludes_week_and_month(self) -> None:
+        """Chat-eval #5 root cause A: backend /ohlcv/bars has no week/month grain.
+
+        Advertising them made the LLM pick week/month for "YTD high/low" and
+        "P/E vs history" questions and burn iterations retrying on error. The
+        enum the LLM sees must only carry supported grains.
+        """
+        registry = build_default_registry()
+        defs = registry.to_tool_definitions()
+        gph = next(d for d in defs if d["function"]["name"] == "get_price_history")
+        interval_enum = gph["function"]["parameters"]["properties"]["interval"]["enum"]
+        assert set(interval_enum) == {"1m", "hour", "day"}
+        assert "week" not in interval_enum
+        assert "month" not in interval_enum
 
     def test_get_price_history_date_params_have_format_date(self) -> None:
         """The orchestrator relies on the LLM emitting YYYY-MM-DD; format=date hints that."""

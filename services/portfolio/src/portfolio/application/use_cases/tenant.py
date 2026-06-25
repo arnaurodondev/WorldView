@@ -15,7 +15,7 @@ from portfolio.domain.errors import EntityNotFoundError
 from portfolio.domain.events import TenantCreated
 
 if TYPE_CHECKING:
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -52,7 +52,9 @@ class CreateTenantUseCase:
 
 
 class GetTenantUseCase:
-    async def execute(self, tenant_id: UUID, uow: UnitOfWork) -> Tenant:
+    # R27: accepts ReadOnlyUnitOfWork so GET routes can pass ReadUoWDep; UnitOfWork
+    # is a subtype so write-session callers remain compatible.
+    async def execute(self, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> Tenant:
         tenant = await uow.tenants.get(tenant_id)
         if tenant is None:
             raise EntityNotFoundError(

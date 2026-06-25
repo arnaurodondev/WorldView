@@ -63,7 +63,13 @@ class Settings(BaseSettings):
     # These env vars define priority ordering for each dataset+timeframe slot.
     # No DB table — config-backed only. Force-reload via POST /internal/v1/routing/reload.
     routing_ohlcv_intraday: str = "alpaca:100,polygon:80"  # timeframes: 1m,5m,15m,30m,1h,4h
-    routing_ohlcv_eod: str = "yahoo_finance:100,eodhd:80"  # timeframes: 1d,1w,1M
+    # EOD/daily OHLCV: Alpaca is now the primary deep-daily source (free, IEX,
+    # ~6y of split-adjusted daily bars), EODHD is failover-only. Yahoo Finance is
+    # DROPPED from OHLCV routing (PLAN-0036 final topology) — Alpaca 1Day replaces
+    # it as the free deep-daily provider, so every timeframe family has exactly
+    # ONE source and there is no cross-source seam. (1w/1mo are derived-on-read
+    # in market-data from the polled daily series, never routed here.)
+    routing_ohlcv_eod: str = "alpaca:100,eodhd:80"  # timeframes: 1d,1w,1M
     routing_quotes: str = "eodhd:100"
     routing_fundamentals: str = "eodhd:100"
     # Finnhub provides these for free — set to "finnhub:100,eodhd:80" to prefer Finnhub.
@@ -120,6 +126,24 @@ class Settings(BaseSettings):
     # Set INSTRUMENT_POLICY_SYNC_ENABLED=false to disable without redeploying.
     instrument_policy_sync_enabled: bool = True
     instrument_policy_sync_interval_hours: float = 6.0
+
+    # InsiderUniverseRefreshWorker (PRD-0089 L-4b): weekly re-runs the
+    # InsiderUniverseLoader, which expands the insider-transactions polling
+    # universe to the OHLCV-covered set via market-data's internal endpoint.
+    #
+    # GATED OFF BY DEFAULT (deliberately): enabling this starts spending EODHD
+    # credits — ~2,830 credits/month at weekly cadence for this environment's
+    # ~654 OHLCV-covered universe (1 credit/call). The "~13k/month for 3000
+    # instruments" figure in older docs is stale. The spend decision stays the
+    # operator's: set MARKET_INGESTION_INSIDER_UNIVERSE_REFRESH_ENABLED=true to
+    # opt in once budget is confirmed. BP-608: never ship a credit-spending
+    # scheduled worker enabled by default.
+    insider_universe_refresh_enabled: bool = False
+    # Weekly slot, in UTC. day_of_week follows datetime.weekday()
+    # (Monday=0 .. Sunday=6); default Sunday 05:00 UTC (quiet window, after the
+    # 03:00 UTC 90d insider rollup).
+    insider_universe_refresh_day_of_week: int = 6
+    insider_universe_refresh_hour_utc: int = 5
     fundamentals_refresh_top_n: int = 500
     fundamentals_refresh_provider: str = "eodhd"
     fundamentals_refresh_variant: str = "quarterly"
@@ -161,7 +185,10 @@ class Settings(BaseSettings):
     # Lease >=30 s — typical Kafka publish <5 s; 6x safety margin prevents
     # concurrent dispatchers from re-claiming a stalled record.
     dispatcher_lease_seconds: int = 60
-    dispatcher_max_attempts: int = 5
+    # Raised from 5->20: 5 attempts with 60 s max backoff exhausts in ~5 min,
+    # far shorter than a typical rolling restart or Kafka blip (30-90 min).
+    # 20 attempts gives ~20 min coverage before dead-lettering.
+    dispatcher_max_attempts: int = 20
 
     # Auth (PRD-0025 Wave D) — S9 api-gateway base URL for JWKS fetch
     api_gateway_url: str = "http://api-gateway:8000"

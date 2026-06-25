@@ -282,3 +282,105 @@ async def test_spy_only_failure_does_not_block_portfolio_metrics(authed_app, aut
     # 503 and returns None → "no_data". (If S3 search itself raised we'd see
     # "exception"; status_code 503 on /instruments produces None → no_data.)
     assert body["data_quality"]["degradation"]["benchmark"] in {"5xx", "no_data", "exception"}
+
+
+# ── BP-682 — SPY bar_date is a datetime, not a bare date ──────────────────────
+
+
+def test_parse_iso_date_accepts_datetime_and_bare_date() -> None:
+    """BP-682: _parse_iso_date must accept BOTH a bare ``YYYY-MM-DD`` (S1's
+    value-history ``date``) AND a full ISO datetime with trailing ``Z`` (S3's
+    OHLCV ``bar_date``, serialised from a ``datetime`` Pydantic field).
+
+    The old code called ``date.fromisoformat`` directly, which raises
+    ``ValueError`` on ``"2025-08-28T00:00:00Z"`` — silently dropping EVERY SPY
+    bar and collapsing beta/alpha to null even when the benchmark series exists.
+    """
+    from datetime import date as _date
+
+    from api_gateway.routes.risk_metrics import _parse_iso_date
+
+    assert _parse_iso_date("2025-08-28") == _date(2025, 8, 28)
+    # The exact shape S3 returns for an OHLCV bar_date.
+    assert _parse_iso_date("2025-08-28T00:00:00Z") == _date(2025, 8, 28)
+    # Also tolerate an offset-style datetime just in case.
+    assert _parse_iso_date("2025-08-28T13:45:00+00:00") == _date(2025, 8, 28)
+
+
+def _spy_search_body() -> bytes:
+    """S3 instrument-search response for SPY — id + symbol + exchange, matching
+    the real ``InstrumentResponse`` shape (``id`` / ``symbol``, NOT
+    ``instrument_id`` / ``ticker``)."""
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "id": "019e0db9-0f03-7efb-8a08-4c4796c6e4cc",
+                    "symbol": "SPY",
+                    "exchange": "US",
+                },
+            ],
+            "total": 1,
+        },
+    ).encode()
+
+
+@pytest.mark.asyncio
+async def test_beta_alpha_compute_with_datetime_shaped_bar_dates(authed_app, authed_mock_clients) -> None:
+    """BP-682 REGRESSION: when SPY OHLCV bars carry datetime-shaped ``bar_date``
+    (``"2025-...T00:00:00Z"``) AND the series is long enough, beta + alpha MUST
+    compute (not null) and ``data_quality`` MUST read ``"ok"``.
+
+    Before the fix this returned ``beta_vs_spy=null`` / ``alpha=null`` /
+    ``benchmark="no_data"`` because every bar failed ``date.fromisoformat``.
+    """
+    today = date(2026, 5, 23)
+    start = today - timedelta(days=90)
+
+    # 40 portfolio snapshots (well over _MIN_RETURNS) with gentle drift.
+    portfolio_points = []
+    p_val = 100_000.0
+    for i in range(40):
+        d = (start + timedelta(days=i)).isoformat()  # bare date — S1 shape
+        p_val *= 1.002
+        portfolio_points.append({"date": d, "value": p_val})
+    portfolio_body = json.dumps({"points": portfolio_points}).encode()
+
+    # 40 SPY bars on the SAME dates so _align_by_date yields >= _MIN_RETURNS+1
+    # overlap. bar_date uses the datetime-with-Z shape S3 actually emits.
+    spy_bars = []
+    s_close = 500.0
+    for i in range(40):
+        d_iso = (start + timedelta(days=i)).isoformat()
+        bar_date = f"{d_iso}T00:00:00Z"  # ← the shape that broke the old parser
+        s_close *= 1.001
+        spy_bars.append({"bar_date": bar_date, "close": f"{s_close:.4f}"})
+    spy_ohlcv_body = json.dumps({"items": spy_bars, "total": len(spy_bars), "timeframe": "1d"}).encode()
+
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, portfolio_body))
+
+    # market_data.get serves TWO endpoints: instrument-search and OHLCV.
+    # Differentiate by path so the SPY-id resolves and the OHLCV bars flow.
+    async def _market_data_get(path: str, *args, **kwargs):
+        if "/instruments" in path:
+            return _mock_response(200, _spy_search_body())
+        if "/ohlcv/" in path:
+            return _mock_response(200, spy_ohlcv_body)
+        return _mock_response(404, b"{}")
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_market_data_get)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/portfolios/{_PORTFOLIO_ID}/risk-metrics",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    # The crux: beta + alpha MUST compute now that bar_date parses.
+    assert body["beta_vs_spy"] is not None, f"beta should compute, got {body['beta_vs_spy']}"
+    assert body["alpha"] is not None, f"alpha should compute, got {body['alpha']}"
+    # Benchmark leg healthy → no degradation reason → status ok.
+    assert body["data_quality"]["degradation"]["benchmark"] is None
+    assert body["data_quality"]["status"] == "ok"

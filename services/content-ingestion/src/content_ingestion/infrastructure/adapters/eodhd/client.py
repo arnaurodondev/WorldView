@@ -162,7 +162,7 @@ class EODHDClient:
                     max_pages=limit,
                     articles_fetched=len(all_articles),
                     message=(
-                        "fetch_all_pages stopped at the page cap; " "some articles may have been skipped this cycle."
+                        "fetch_all_pages stopped at the page cap; some articles may have been skipped this cycle."
                     ),
                 )
                 break

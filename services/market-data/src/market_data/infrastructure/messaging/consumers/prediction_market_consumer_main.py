@@ -19,6 +19,8 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -33,6 +35,10 @@ async def main() -> None:
         PredictionMarketConsumer,
     )
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
 
     settings = Settings()  # type: ignore[call-arg]
     configure_logging(
@@ -43,11 +49,14 @@ async def main() -> None:
     log = get_logger("market_data.prediction_market_consumer_main")  # type: ignore[no-any-return]
     log.info("prediction_market_consumer_starting", service=settings.service_name)
 
-    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
-    # dedicated port so the worker's counters/gauges become scrape-able.
+    # F-005 / BP-704: expose Prometheus /metrics + /healthz on 9100 (so the
+    # Docker healthcheck has a real endpoint) and bind a stall-aware liveness
+    # probe so /healthz flips to 503 when the poll loop wedges or run() dies.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="market-data-prediction-market-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -74,6 +83,8 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-prediction-markets",
             topics=["market.prediction.v1"],
+            # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+            group_instance_id=settings.kafka_prediction_market_consumer_instance_id,
             # WHY latest: Polymarket snapshots are upsert-keyed on (market_id,
             # snapshot_at). Replaying the full 60k+ history on restart doesn't
             # add durable state (duplicate events return is_new=False from
@@ -86,17 +97,27 @@ async def main() -> None:
             auto_offset_reset="latest",
         ),
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "market-data-prediction-market-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "topics_subscribed": ["market.prediction.v1"],
+        },
+    )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # F-005 / BP-704 supervision: races run() against the stop event so a
+        # crashed run() can no longer leave a dead task while main() hangs on
+        # stop_event.wait(); a terminal run() exit raises ConsumerExited → we
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("prediction_market_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("prediction_market_consumer_fatal_error", error=str(exc))
         sys.exit(1)

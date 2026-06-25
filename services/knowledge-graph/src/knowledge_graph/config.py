@@ -32,6 +32,25 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
     db_max_overflow_read: int = 30
+    # Universal per-connection statement_timeout (milliseconds) applied to EVERY
+    # regular (non-AGE) SQL session on intelligence_db.  Backstop introduced
+    # after a single ``RelationEvidencePromoterWorker._FETCH_SQL`` run ran for
+    # 16,188 s (4.5 h) and starved the UI-facing OLTP databases sharing the
+    # Postgres instance.  Set as an asyncpg ``server_settings`` connection
+    # parameter so it applies the moment a connection is established.
+    #
+    # 60_000 ms (60 s) chosen as the default: it is ~3x the slowest legitimate
+    # AGE neighbourhood query (20 s) yet two orders of magnitude below the
+    # pathological 4.5 h.  Background batch workers (promoter, confidence,
+    # summary) operate on bounded batches (<=200 rows) and complete in well
+    # under 60 s once 0049's indexes land; any session exceeding 60 s is, by
+    # definition, the runaway plan this backstop exists to kill.
+    #
+    # PRECEDENCE: AGE Cypher use cases issue ``SET LOCAL statement_timeout`` per
+    # transaction (5/20/30 s) which overrides this connection-level default for
+    # the duration of that transaction only — their explicit bounds are NOT
+    # widened by this value.  Set to 0 to disable (unbounded; not recommended).
+    statement_timeout_ms: int = 60_000
     alembic_enabled: bool = False
 
     # Kafka topics — consumed
@@ -109,6 +128,22 @@ class Settings(BaseSettings):
     confidence_corroboration_gain_per_source: float = 0.05
     confidence_corroboration_min_temporal_weight: float = 0.1
     confidence_contradiction_top_k: int = 3
+
+    # PLAN-0109 W1 — Beta / subjective-logic confidence backbone (v2).
+    # When True the worker uses ``compute_confidence_beta`` (prior from
+    # base_confidence, graded source trust, extraction confidence, per-mode decay
+    # floor, uncertainty) instead of the v1 bounded-additive formula above.
+    # Rolled out behind a flag; v1 stays as the fallback.
+    confidence_formula_v2: bool = False  # KNOWLEDGE_GRAPH_CONFIDENCE_FORMULA_V2
+    confidence_prior_strength: float = 2.0  # kappa - prior pseudo-count weight
+    confidence_signal_decay_floor: float = 0.1  # TEMPORAL_CLAIM floor as evidence decays
+    confidence_default_source_trust: float = 0.5  # fallback when source_type ∉ source_trust_weights
+    # PLAN-0109 W6 - Beta calibration P = sigmoid(a*ln(s) + b*ln(1-s) + c). Defaults
+    # are the identity map (P = s); an operator sets fitted (a,b,c) from
+    # scripts/fit_confidence_calibration.py after building a labelled set.
+    confidence_calibration_a: float = 1.0
+    confidence_calibration_b: float = -1.0
+    confidence_calibration_c: float = 0.0
 
     # Worker intervals (seconds)
     # FIX-LIVE-GG (2026-05-25, INV-LIVE-GG cluster 2): lowered SummaryWorker,
@@ -241,6 +276,26 @@ class Settings(BaseSettings):
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
 
+    # ── PLAN-0113 FIX-2: static-membership consumer instance IDs ─────────────
+    # Each Kafka consumer group that runs in a KG container may be configured
+    # with a stable group.instance.id so that Kafka's static membership protocol
+    # (KIP-345) avoids a full consumer-group rebalance on every rolling restart.
+    # Default: "" (empty) — the consumer falls back to dynamic membership.
+    # Override in docker-compose via KNOWLEDGE_GRAPH_KAFKA_*_CONSUMER_INSTANCE_ID.
+    kafka_enriched_consumer_instance_id: str = ""
+    kafka_entity_consumer_instance_id: str = ""
+    kafka_fundamentals_consumer_instance_id: str = ""
+    kafka_instrument_consumer_instance_id: str = ""
+    kafka_instrument_discovered_consumer_instance_id: str = ""
+    kafka_temporal_event_consumer_instance_id: str = ""
+    kafka_earnings_calendar_dataset_consumer_instance_id: str = ""
+    kafka_economic_events_dataset_consumer_instance_id: str = ""
+    kafka_insider_transactions_dataset_consumer_instance_id: str = ""
+    kafka_macro_indicator_dataset_consumer_instance_id: str = ""
+    kafka_narrative_refresh_consumer_instance_id: str = ""
+    kafka_provisional_queued_consumer_instance_id: str = ""
+    kafka_structured_enrichment_consumer_instance_id: str = ""
+
     # SummaryWorker Gemini fallback (SA-2 / PLAN-0088).
     # When the primary extraction chain (DeepInfra → Ollama) is exhausted,
     # SummaryWorker makes one additional attempt via Gemini 2.5 Flash Lite.
@@ -290,6 +345,30 @@ class Settings(BaseSettings):
     path_insight_worker_instance_id: str = ""
     # APScheduler cron for PathInsightSeeder (default: 02:30 UTC daily).
     path_insight_seeder_cron: str = "30 2 * * *"
+
+    # PLAN-0112 W1 (T-1-04, §AD-5) — hard ceiling on path-discovery hop length.
+    # AGE traversal cost grows steeply with hop count; the investigation measured
+    # maxhops <= 3 safe (60-800 ms) but maxhops=4 hub-to-hub blew up to 13.8 s on
+    # the unpruned graph.  Capped at 3 until the W2 membership-pruning spike
+    # re-measures 4/5 on the pruned graph and raises this if p95 stays in budget.
+    # Env override: KNOWLEDGE_GRAPH_PATH_MAX_HOPS.
+    path_max_hops: int = 3
+
+    # ── PLAN-0112 W3 (T-3-03) — WeirdnessScorer knobs ─────────────────────────
+    # weirdness = reliability x (w_U*unexpectedness + w_S*semantic_distance + w_N*novelty)
+    # Weights default to (0.45, 0.40, 0.15) per §6.5; tuned in the metric-validation
+    # wave against human-judged samples.  Env: KNOWLEDGE_GRAPH_WEIRDNESS_W_*.
+    weirdness_w_unexpectedness: float = 0.45
+    weirdness_w_semantic: float = 0.40
+    weirdness_w_novelty: float = 0.15
+    # novelty = fraction of the path's edges with first_evidence_at within this
+    # many days.  Small (7) because the graph is only ~3 weeks old (audit Thread 2).
+    # Env: KNOWLEDGE_GRAPH_NOVELTY_WINDOW_DAYS.
+    novelty_window_days: int = 7
+    # Unexpectedness formula selector (AD-3): "config_model" (default,
+    # configuration-model surprise -log(deg(u)*deg(v)/2m)) or "adamic_adar".
+    # Env: KNOWLEDGE_GRAPH_WEIRDNESS_UNEXPECTEDNESS_MODE.
+    weirdness_unexpectedness_mode: str = "config_model"
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:

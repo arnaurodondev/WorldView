@@ -222,16 +222,24 @@ async def test_proxy_post_json_body_forwarded() -> None:
 
 @pytest.mark.asyncio
 async def test_proxy_post_no_retry_by_default() -> None:
-    """POST 503 without allow_retry → HTTPException raised after 1 attempt (BP-025)."""
+    """POST 503 without allow_retry → HTTPException raised after 1 attempt (BP-025).
+
+    BUG-7: 503 (Service Unavailable) is a gateway-semantic status that the gateway
+    forwards as-is so clients keep retry/backoff semantics; the detail is
+    sanitized to a generic string (the raw upstream body never reaches the client).
+    """
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = [_mock_response(503, text="unavailable")]
+    mock_client.post.side_effect = [_mock_response(503, text="unavailable: pg pool exhausted")]
 
     sleep_mock = AsyncMock()
     with patch("api_gateway.clients.asyncio.sleep", sleep_mock):
         with pytest.raises(HTTPException) as exc_info:
             await proxy_post(mock_client, "svc", "/items")
 
-    assert exc_info.value.status_code == 502  # 5xx → 502
+    # 503 preserved (retry semantics); upstream body sanitized to generic detail.
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "upstream service error"
+    assert "pool exhausted" not in exc_info.value.detail
     # Only 1 attempt — POST is not idempotent by default
     assert mock_client.post.call_count == 1
     assert sleep_mock.call_count == 0

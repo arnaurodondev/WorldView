@@ -18,7 +18,7 @@ def _make_settings(**overrides: str) -> MagicMock:
     """
     defaults = {
         "routing_ohlcv_intraday": "alpaca:100,polygon:80",
-        "routing_ohlcv_eod": "yahoo_finance:100,eodhd:80",
+        "routing_ohlcv_eod": "alpaca:100,eodhd:80",
         "routing_quotes": "eodhd:100",
         "routing_fundamentals": "eodhd:100",
         "routing_news_sentiment": "finnhub:100,eodhd:80",
@@ -76,18 +76,23 @@ class TestProviderRoutingCache:
             assert cache.get_providers_for("ohlcv", tf) == ["alpaca", "polygon"]
 
     def test_cache_load_from_config_eod(self) -> None:
-        """routing_ohlcv_eod='yahoo_finance:100,eodhd:80' → yahoo first for ohlcv/1d."""
+        """routing_ohlcv_eod='alpaca:100,eodhd:80' → Alpaca primary, EODHD failover for ohlcv/1d.
+
+        PLAN-0036 final topology: Alpaca is the deep-daily primary; Yahoo is dropped.
+        """
         cache = ProviderRoutingCache()
-        settings = _make_settings(routing_ohlcv_eod="yahoo_finance:100,eodhd:80")
+        settings = _make_settings(routing_ohlcv_eod="alpaca:100,eodhd:80")
         cache.load_from_config(settings)
 
         providers = cache.get_providers_for("ohlcv", "1d")
-        assert providers == ["yahoo_finance", "eodhd"]
-        assert cache.primary_for("ohlcv", "1d") == "yahoo_finance"
+        assert providers == ["alpaca", "eodhd"]
+        assert cache.primary_for("ohlcv", "1d") == "alpaca"
+        # Yahoo must be absent from EOD routing entirely.
+        assert "yahoo_finance" not in providers
 
         # All EOD timeframes should have the same providers
         for tf in ("1d", "1w", "1M"):
-            assert cache.get_providers_for("ohlcv", tf) == ["yahoo_finance", "eodhd"]
+            assert cache.get_providers_for("ohlcv", tf) == ["alpaca", "eodhd"]
 
     def test_cache_load_from_config_invalid_pair(self) -> None:
         """Malformed pair is skipped; valid entries still loaded."""

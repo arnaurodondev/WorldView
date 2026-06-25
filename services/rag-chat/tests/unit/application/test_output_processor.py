@@ -146,10 +146,175 @@ def test_output_preserves_decimal_values(processor: OutputProcessor, raw: str) -
 @pytest.mark.unit
 @pytest.mark.parametrize("bare", ["1", "12", "30"])
 def test_output_strips_bare_citation_integers(processor: OutputProcessor, bare: str) -> None:
-    """Bare citation-range integers NOT wrapped in [N] are still stripped."""
+    """Bare citation-range integers NOT wrapped in [N] are still stripped.
+
+    BP-673: a genuinely STRAY citation integer is one that is followed by
+    clause-ending punctuation (or end-of-text / a bracketed cite), e.g.
+    "Apple grew strongly 12." — the model meant "[12]". Those are still
+    stripped. (An integer followed by ``whitespace + a word`` — "12 this
+    quarter" — is now PRESERVED as a quantity; see
+    ``test_output_preserves_integer_before_any_word``.)
+    """
     items = [_item()]
-    raw = f"Apple grew strongly {bare} this quarter [1]."
+    raw = f"Apple grew strongly this quarter {bare}. See [1]."
     answer, _ = processor.process(raw, items)
     # The bare digit should be gone; the bracketed [1] citation survives.
-    assert f" {bare} " not in answer
+    assert f" {bare}." not in answer
     assert "[1]" in answer
+
+
+# ── BP-670 regression — date/time fragments must survive the bare-int strip ──
+#
+# Live BTC-USD verification (2026-06-11): the final answer rendered as
+# "the most recent -minute bar (2026-06- :)" — the stripper swallowed the
+# "1" of "1-minute", the "11" day of "2026-06-11" and both halves of
+# "10:10". The Apple-news trace showed the same with "(June 9-13)" →
+# "(June -)". Hyphen/colon-adjacent integers are date/time fragments,
+# never bare citation refs.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        ("Trading at $62,836 as of the most recent 1-minute bar [1].", "1-minute"),
+        ("Latest bar timestamp 2026-06-11 10:10 [1].", "2026-06-11 10:10"),
+        ("WWDC runs June 9-13 this year [1].", "9-13"),
+        ("The 5-day window shows gains [1].", "5-day"),
+    ],
+)
+def test_output_preserves_date_time_fragments(processor: OutputProcessor, raw: str, token: str) -> None:
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        ("Apple EU AI delay drew attention *(Jun 9)* [1].", "(Jun 9)"),
+        ("WWDC runs June 9–13, 2026 [1].", "9–13"),  # noqa: RUF001 — en dash
+    ],
+)
+def test_output_preserves_paren_dates_and_endash_ranges(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-670 follow-up: '(Jun 9)' rendered as '(Jun )' in the live Apple run."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+# ── BP-672 regression — leading-digit deletion adjacent to bold / commas / ────
+#    units / multipliers / month-day dates.
+#
+# Live MSTR-news run (run_20260609T175104Z/q_ru_mstr_news_run2.json): the
+# bare-citation stripper ate the leading digit of legitimate quantities,
+# yielding artifacts such as:
+#   "**8,095 BTC**"           -> "**,095 BTC**"   (comma-grouped number)
+#   "last 4 quarters"         -> "last  quarters" (count + unit noun)
+#   "nearly 2x the revenue"   -> "nearly x the ..." (multiplier sign U+00D7/x)
+#   "Direct Partnership (1 hop)" -> "( hop)"       (graph-hop count)
+#   "| May 26 | $165.38 |"    -> "| May  | …"      (month-day date in a table)
+# Each shape is now guarded by _BARE_CITATION_INT_RE so the digit survives.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        # Comma-grouped number — leading group must survive.
+        ("It purchased an additional **8,095 BTC** at auction [1].", "8,095"),
+        ("Total holdings reached 26,500 BTC this year [1].", "26,500"),
+        # Count + unit noun.
+        ("Revenue rose over the last 4 quarters [1].", "4 quarters"),
+        ("The path is just 1 hop away [1].", "1 hop"),
+        ("Volume hit 4 million shares [1].", "4 million"),
+        ("Shares fell over 2 weeks [1].", "2 weeks"),
+        # Multiplier sign (U+00D7 and ASCII x).
+        ("It traded at nearly 2× the revenue [1].", "2×"),  # noqa: RUF001 — U+00D7 multiplication sign
+        ("Roughly 3x the prior level [1].", "3x"),
+        # Month-day calendar dates (full + abbreviated month names).
+        ("Closed on May 26 at the high [1].", "May 26"),
+        ("Reported Jun 1 results [1].", "Jun 1"),
+        ("Scheduled for September 9 [1].", "September 9"),
+    ],
+)
+def test_output_preserves_leading_digit_of_quantities(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-672: leading digits of bold/comma/unit/multiplier/date numbers survive."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+def test_output_bug_a_mstr_btc_acquisition_line(processor: OutputProcessor) -> None:
+    """BP-672 end-to-end: the exact MSTR sentence no longer loses the '8'."""
+    items = [_item()]
+    raw = "The company recently purchased an additional **8,095 BTC** for " "approximately **$271.47 million** [1]."
+    answer, _ = processor.process(raw, items)
+    assert "**,095 BTC**" not in answer, f"Leading digit lost: {answer!r}"
+    assert "**8,095 BTC**" in answer
+
+
+# ── BP-673 regression — integer-before-ANY-word must survive ──────────────────
+#
+# Round-2 live evidence (run_20260612T041327Z) — the BP-672 unit-noun allow-list
+# still dropped the count digit when the following word was NOT on the list or
+# was capitalised:
+#   q_ru_nvda_amd_revenue_4q_run2: stream "over the last 4 reported quarters" ->
+#       final "over the last  reported quarters" ("reported" is an adjective,
+#       not a unit noun → "4" deleted).
+#   q_ru_mstr_news_run1: stream "Latest Headlines (Last 14 Days)" -> final
+#       "(Last  Days)" ("Days" is capitalised → allow-list missed it).
+# The fail-safe rule (strip only before punctuation / cite / EOS) preserves both.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("raw", "token"),
+    [
+        # Verbatim round-2 residuals.
+        ("Revenue grew over the last 4 reported quarters [1].", "4 reported quarters"),
+        ("## Latest Headlines (Last 14 Days)\n\nNews here [1].", "Last 14 Days"),
+        # The general principle: a digit before ANY word (any case, any word).
+        ("It rose 5 percent overall [1].", "5 percent"),
+        ("There were 12 analysts covering it [1].", "12 analysts"),
+        ("Spanning 7 trading sessions [1].", "7 trading"),
+        ("A 3 standard-deviation move [1].", "3 standard"),
+        ("Up 9 consecutive days [1].", "9 consecutive"),
+        ("Within 2 Business Days [1].", "2 Business"),
+    ],
+)
+def test_output_preserves_integer_before_any_word(processor: OutputProcessor, raw: str, token: str) -> None:
+    """BP-673: an integer followed by whitespace+word is a quantity, never stripped."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+
+
+@pytest.mark.unit
+def test_output_bug_a_nvda_amd_revenue_4q_verbatim(processor: OutputProcessor) -> None:
+    """BP-673 end-to-end: round-2 q_ru_nvda_amd_revenue_4q_run2 residual.
+
+    Streamed "over the last 4 reported quarters"; the final answer used to read
+    "over the last  reported quarters".
+    """
+    items = [_item()]
+    raw = "Both companies reported revenue growth over the last 4 reported quarters [1]."
+    answer, _ = processor.process(raw, items)
+    assert "last  reported quarters" not in answer, f"'4' was deleted: {answer!r}"
+    assert "last 4 reported quarters" in answer
+
+
+@pytest.mark.unit
+def test_output_bug_a_mstr_news_last_14_days_verbatim(processor: OutputProcessor) -> None:
+    """BP-673 end-to-end: round-2 q_ru_mstr_news_run1 residual.
+
+    Streamed "Latest Headlines (Last 14 Days)"; the final answer used to read
+    "(Last  Days)" because "Days" is capitalised and missed the allow-list.
+    """
+    items = [_item()]
+    raw = "### Latest Headlines (Last 14 Days)\n\nA recent piece [1]."
+    answer, _ = processor.process(raw, items)
+    assert "(Last  Days)" not in answer, f"'14' was deleted: {answer!r}"
+    assert "(Last 14 Days)" in answer

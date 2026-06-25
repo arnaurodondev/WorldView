@@ -38,6 +38,21 @@ from __future__ import annotations
 # to bypass real retry delays.  Removing this line would break those patches.
 import asyncio  # noqa: F401
 
+from api_gateway.clients.alert_rules import (
+    create_rule as create_alert_rule,
+)
+from api_gateway.clients.alert_rules import (
+    delete_rule as delete_alert_rule,
+)
+from api_gateway.clients.alert_rules import (
+    get_rule as get_alert_rule,
+)
+from api_gateway.clients.alert_rules import (
+    list_rules as list_alert_rules,
+)
+from api_gateway.clients.alert_rules import (
+    update_rule as update_alert_rule,
+)
 from api_gateway.clients.base import (
     DownstreamError,
     ServiceClients,
@@ -46,6 +61,7 @@ from api_gateway.clients.base import (
     logger,
 )
 from api_gateway.clients.dashboard import get_dashboard_snapshot
+from api_gateway.clients.dashboard_bundle import get_dashboard_bundle
 from api_gateway.clients.instrument import (
     get_company_overview,
     get_instrument_page_bundle,
@@ -71,7 +87,11 @@ __all__ = [
     "_checked_get",
     "_checked_post",
     "_screener_for_sector",
+    "create_alert_rule",
+    "delete_alert_rule",
+    "get_alert_rule",
     "get_company_overview",
+    "get_dashboard_bundle",
     "get_dashboard_snapshot",
     "get_instrument_page_bundle",
     "get_map_layers",
@@ -80,5 +100,7 @@ __all__ = [
     "get_relevant_news",
     "get_top_movers",
     "get_watchlist_insights",
+    "list_alert_rules",
     "logger",
+    "update_alert_rule",
 ]

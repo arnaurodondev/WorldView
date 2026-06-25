@@ -322,16 +322,15 @@ jobs:
         run: pnpm build
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # E2E Network Budget — DISABLED post-PLAN-0104 hot-fix
+  # NOTE: The "E2E Network Budget (Playwright)" job was removed here.
   #
-  # The previous "e2e-network-budget" job invoked `pnpm test:e2e:budget` and the
-  # three specs `e2e/{portfolio,instrument,dashboard}-network-budget.spec.ts`,
-  # but neither the npm script nor the spec files were ever merged to main —
-  # they are part of in-flight PLAN-0105 (frontend slim-reads). The job failed
-  # every run on main with ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL (the script
-  # `test:e2e:budget` does not exist in apps/worldview-web/package.json on main).
-  # The job will be re-added together with the scripts/specs when PLAN-0105
-  # merges. Tracking: docs/plans/0105-frontend-slim-reads-plan.md.
+  # It depended on a `test:e2e:budget` npm script and three
+  # `e2e/*-network-budget.spec.ts` files that belong to in-flight PLAN-0105
+  # (frontend slim-reads). Neither the script nor the specs exist on main or on
+  # this branch, so the job failed with ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL
+  # ("Command test:e2e:budget not found"). main already deleted this orphan job
+  # in 437ef2f9c; the consolidation merge re-introduced this stale workflow copy.
+  # The gate will return with PLAN-0105 once the script and specs land.
   # ═══════════════════════════════════════════════════════════════════════════
 
   # ═══════════════════════════════════════════════════════════════════════════

@@ -49,8 +49,18 @@ def _make_section_uc(
     uc = MagicMock()
     rbs = records_by_section or {}
 
-    async def _execute(instrument_id: str, section: FundamentalsSection) -> list[FundamentalsRecord]:
-        return rbs.get(section, [])
+    async def _execute(
+        instrument_id: str,
+        section: FundamentalsSection,
+        period_type: PeriodType | None = None,
+    ) -> list[FundamentalsRecord]:
+        # Backend-gaps wave 3: the statement endpoints forward an optional
+        # period_type — when supplied, mimic the repo filter so tests can
+        # assert annual/quarterly selection.
+        records = rbs.get(section, [])
+        if period_type is not None:
+            records = [r for r in records if r.period_type == period_type]
+        return records
 
     async def _execute_all(instrument_id: str) -> list[FundamentalsRecord]:
         return all_records or []
@@ -109,6 +119,80 @@ def test_get_balance_sheet() -> None:
     resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/balance-sheet")
     assert resp.status_code == 200
     assert resp.json()["records"][0]["section"] == "balance_sheet"
+
+
+def _make_record_with_period(
+    section: FundamentalsSection,
+    period_type: PeriodType,
+    rec_id: str,
+) -> FundamentalsRecord:
+    """Variant of _make_record with an explicit period_type for filter tests."""
+    return FundamentalsRecord(
+        id=rec_id,
+        security_id=INSTR_UUID,
+        section=section,
+        period_end=datetime(2023, 12, 31, tzinfo=UTC),
+        period_type=period_type,
+        data={"revenue": 1.0},
+        source="eodhd",
+        ingested_at=datetime(2024, 1, 10, tzinfo=UTC),
+    )
+
+
+def test_statement_endpoints_accept_period_type_annual() -> None:
+    """Backend-gaps wave 3: ?period_type=annual reaches the use case.
+
+    Regression: the statement endpoints had no periodicity selector, and the
+    repo's BP-546 default pinned balance_sheet/cash_flow to QUARTERLY — the
+    ANNUAL rows were unreachable through the section API.
+    """
+    mixed = [
+        _make_record_with_period(FundamentalsSection.BALANCE_SHEET, PeriodType.ANNUAL, "rec-a"),
+        _make_record_with_period(FundamentalsSection.BALANCE_SHEET, PeriodType.QUARTERLY, "rec-q"),
+    ]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.BALANCE_SHEET: mixed})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/balance-sheet?period_type=annual")
+    assert resp.status_code == 200
+    records = resp.json()["records"]
+    assert [r["period_type"] for r in records] == ["ANNUAL"]
+    # The router must translate the lowercase query value to the enum member.
+    mock_uc.execute.assert_awaited_once_with(INSTR_UUID, FundamentalsSection.BALANCE_SHEET, PeriodType.ANNUAL)
+
+
+def test_statement_endpoints_period_type_uppercase_and_quarterly() -> None:
+    """Uppercase QUARTERLY is accepted and mapped to the enum."""
+    mixed = [
+        _make_record_with_period(FundamentalsSection.CASH_FLOW, PeriodType.ANNUAL, "rec-a"),
+        _make_record_with_period(FundamentalsSection.CASH_FLOW, PeriodType.QUARTERLY, "rec-q"),
+    ]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.CASH_FLOW: mixed})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/cash-flow?period_type=QUARTERLY")
+    assert resp.status_code == 200
+    assert [r["period_type"] for r in resp.json()["records"]] == ["QUARTERLY"]
+
+
+def test_statement_endpoints_period_type_omitted_passes_none() -> None:
+    """No param → period_type=None (back-compat: repo default behaviour)."""
+    records = [_make_record_with_period(FundamentalsSection.INCOME_STATEMENT, PeriodType.ANNUAL, "rec-a")]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.INCOME_STATEMENT: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/income-statement")
+    assert resp.status_code == 200
+    mock_uc.execute.assert_awaited_once_with(INSTR_UUID, FundamentalsSection.INCOME_STATEMENT, None)
+
+
+def test_statement_endpoints_reject_bogus_period_type() -> None:
+    """Values outside quarterly|annual are rejected with 422 at the boundary."""
+    mock_uc = _make_section_uc()
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/balance-sheet?period_type=monthly")
+    assert resp.status_code == 422
 
 
 def test_get_earnings() -> None:

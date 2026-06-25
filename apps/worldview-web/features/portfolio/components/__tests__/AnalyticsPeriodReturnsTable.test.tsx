@@ -1,21 +1,25 @@
 /**
  * features/portfolio/components/__tests__/AnalyticsPeriodReturnsTable.test.tsx (F-006)
  *
- * WHY: Covers the D-002 refactor (useQueries) and verifies:
- *  1. All 7 period rows render (data-testid="period-row-{PERIOD}").
- *  2. A positive return renders with a "+" prefix.
- *  3. A null/insufficient history renders "—" in the RETURN cell.
+ * WHY: Covers the D-002 refactor (useQueries) and — since the 2026-06-10
+ * TWR upgrade — verifies:
+ *  1. All 8 period rows render (data-testid="period-row-{PERIOD}").
+ *  2. A positive flow-adjusted TWR renders with a "+" prefix (PORTED from
+ *     the value-history era: same assertion, real TWR source now).
+ *  3. Insufficient history (<2 points) renders "—" (PORTED).
+ *  4. NEW: the vs SPY / EXCESS columns populate from real SPY closes over
+ *     the same window, and the ALL row keeps an honest "—" benchmark.
  *
- * MOCKED: useAuth, createGateway.
- * NOTE: @tanstack/react-query is real — useQueries is called normally through
- * QueryClientProvider. Mocking it would bypass the hook we're testing.
+ * MOCKED: useAuth, api-client gateway (getTwr / resolveTickersBatch /
+ * getOHLCV). @tanstack/react-query is real — useQueries is the layer under
+ * test.
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { ValueHistoryResponse } from "@/types/api";
+import type { TwrResponse } from "@/types/api";
 
 // ── Auth stub ─────────────────────────────────────────────────────────────────
 vi.mock("@/hooks/useAuth", () => ({
@@ -30,18 +34,25 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway stub ──────────────────────────────────────────────────────────────
-const mockGetValueHistory = vi.fn();
+const mockGetTwr = vi.fn();
+const mockResolveTickersBatch = vi.fn();
+const mockGetOHLCV = vi.fn();
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
-    getValueHistory: mockGetValueHistory,
+    getTwr: mockGetTwr,
+    resolveTickersBatch: mockResolveTickersBatch,
+    getOHLCV: mockGetOHLCV,
   })),
 }));
 
-// WHY stub @/lib/api-client (Wave G QA D1).
+// WHY stub @/lib/api-client (Wave G QA D1): the table reads the gateway via
+// the provider-memoised useApiClient.
 vi.mock("@/lib/api-client", () => ({
   useApiClient: vi.fn(() => ({
-    getValueHistory: mockGetValueHistory,
+    getTwr: mockGetTwr,
+    resolveTickersBatch: mockResolveTickersBatch,
+    getOHLCV: mockGetOHLCV,
   })),
 }));
 
@@ -50,16 +61,37 @@ import { AnalyticsPeriodReturnsTable } from "../AnalyticsPeriodReturnsTable";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-const ALL_PERIODS = ["1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
+// R2 sprint: "1W" row added to the table — list extended to stay exhaustive.
+const ALL_PERIODS = ["1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
 
-/** 7 history responses — all with +20% returns so we can assert the "+" prefix. */
-function makeHistory(_portfolioId: string): ValueHistoryResponse {
+/** ISO date N days before today. */
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** TWR window response: rebased to 0, ending at +20% (fraction). */
+function makeTwr(): TwrResponse {
   return {
+    portfolio_id: "p-001",
+    from_date: daysAgo(30),
+    to_date: daysAgo(0),
     points: [
-      { date: "2026-04-01", value: 100, cost_basis: 100, cash: 0 },
-      { date: "2026-05-01", value: 120, cost_basis: 100, cash: 0 },
+      { date: daysAgo(30), twr_cum: 0, nav: 100 },
+      { date: daysAgo(0), twr_cum: 0.2, nav: 120 },
     ],
+    flow_days: 1,
   };
+}
+
+/** SPY closes covering 2 years: flat 500 → 550 (+10%) over the span. */
+function makeSpyBars() {
+  const bars = [];
+  for (let i = 735; i >= 0; i -= 5) {
+    bars.push({ timestamp: daysAgo(i), close: 500 + ((735 - i) / 735) * 50 });
+  }
+  return { instrument_id: "iid-spy", ticker: "SPY", timeframe: "1D", bars };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,13 +106,12 @@ function wrap(children: ReactNode) {
 describe("AnalyticsPeriodReturnsTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveTickersBatch.mockResolvedValue({ SPY: "iid-spy" });
+    mockGetOHLCV.mockResolvedValue(makeSpyBars());
   });
 
-  it("renders all 7 period rows via data-testid", async () => {
-    // WHY use data-testid: the rows are <tr data-testid="period-row-{PERIOD}">
-    // inserted by the D-002 useQueries refactor. This is the canonical selector
-    // that confirms each period rendered.
-    mockGetValueHistory.mockResolvedValue(makeHistory("p-001"));
+  it("renders all 8 period rows via data-testid", async () => {
+    mockGetTwr.mockResolvedValue(makeTwr());
 
     render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
 
@@ -91,32 +122,86 @@ describe("AnalyticsPeriodReturnsTable", () => {
     });
   });
 
-  it("shows '+' prefixed return for a positive period", async () => {
-    mockGetValueHistory.mockResolvedValue(makeHistory("p-001"));
+  it("shows '+' prefixed TWR for a positive period (ported from the NAV era)", async () => {
+    mockGetTwr.mockResolvedValue(makeTwr());
 
     render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
 
     await waitFor(() => {
-      // +20% return → "+20.00%". At least one row must show a positive return.
+      // +20% TWR → "+20.00%" in every row's TWR cell (8 rows), and the
+      // benchmark/excess columns add their own "+" values on top — assert
+      // at least the 8 TWR cells.
       const positiveReturns = screen.getAllByText(/^\+\d/);
-      expect(positiveReturns.length).toBe(7);
+      expect(positiveReturns.length).toBeGreaterThanOrEqual(8);
     });
   });
 
-  it("shows '—' when value history is insufficient (fewer than 2 points)", async () => {
-    // WHY single-point response: periodReturns[i] = null when pts.length < 2,
-    // so the cell should render the fallback em-dash ("—").
-    mockGetValueHistory.mockResolvedValue({
-      points: [{ date: "2026-05-01", value: 100, cost_basis: 100, cash: 0 }],
-    } satisfies ValueHistoryResponse);
+  it("shows '—' when the TWR series is insufficient (fewer than 2 points)", async () => {
+    mockGetTwr.mockResolvedValue({
+      portfolio_id: "p-001",
+      from_date: daysAgo(0),
+      to_date: daysAgo(0),
+      points: [{ date: daysAgo(0), twr_cum: 0, nav: 100 }],
+      flow_days: 0,
+    } satisfies TwrResponse);
 
     render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
 
     await waitFor(() => {
-      // At least the RETURN cells should show "—" when all periods lack enough points.
       const dashes = screen.getAllByText("—");
-      // WHY ≥7: each of the 7 rows contributes at least one "—" in the RETURN column.
-      expect(dashes.length).toBeGreaterThanOrEqual(7);
+      // Each of the 8 rows contributes at least one "—" in the TWR column
+      // (plus the dependent benchmark/excess dashes).
+      expect(dashes.length).toBeGreaterThanOrEqual(8);
     });
+  });
+
+  it("populates vs SPY + EXCESS from real closes; ALL keeps an honest '—' benchmark", async () => {
+    mockGetTwr.mockResolvedValue(makeTwr());
+
+    render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
+
+    await waitFor(() => {
+      // 1Y row: SPY moved ≈ half its 2y span — a real "+x.xx%" appears in
+      // the benchmark cell and an excess "pp" value computes from it.
+      const oneY = screen.getByTestId("period-row-1Y");
+      expect(oneY).toHaveTextContent(/\+\d+\.\d{2}%.*\+\d+\.\d{2}%.*pp/);
+    });
+
+    // The ALL row's benchmark is "—" (open-ended window has no SPY span)
+    // and so is its excess — the TWR value still renders.
+    const allRow = screen.getByTestId("period-row-ALL");
+    expect(allRow).toHaveTextContent("+20.00%");
+    expect(allRow).toHaveTextContent("—");
+  });
+
+  // ── Wave 3 (2026-06-11): flow-artifact suppression ────────────────────────
+  it("suppresses the TWR cell when the fetched window contains a flow artifact", async () => {
+    // Live bug: the demo series jumps +23.97% on a single day (a funding
+    // event the backend counted as return). The table must show "—" with a
+    // named tooltip — never the corrupted number.
+    mockGetTwr.mockResolvedValue({
+      portfolio_id: "p-001",
+      from_date: daysAgo(30),
+      to_date: daysAgo(0),
+      points: [
+        { date: daysAgo(30), twr_cum: 0, nav: 100 },
+        { date: daysAgo(1), twr_cum: 0.01, nav: 101 },
+        // One-day +23.76% linked jump — the live 2026-06-10 signature.
+        { date: daysAgo(0), twr_cum: 0.25, nav: 125 },
+      ],
+      flow_days: 1,
+    } satisfies TwrResponse);
+
+    render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("period-row-1M")).toBeInTheDocument();
+    });
+    // Every period row fetched this same corrupted series → all suppressed.
+    const cell = screen.getByTestId("analytics-flow-artifact-1M");
+    expect(cell).toHaveTextContent("—");
+    expect(cell.getAttribute("title")).toMatch(/cash-flow artifact/i);
+    // The corrupted +25%/+23.x% figures must never reach the DOM.
+    expect(screen.queryByText(/\+2[35]\.\d{2}%/)).toBeNull();
   });
 });

@@ -47,6 +47,17 @@ SELECT version_num FROM alembic_version;
 **Rollback (migration)**: `alembic downgrade -1` reverts one migration. Never run
 `downgrade base` in production — data loss is permanent.
 
+> **Constraint-window warning (migration `031_extend_field_type_check`)**: this
+> migration `DROP CONSTRAINT`s then `ADD CONSTRAINT`s
+> `ck_screen_field_metadata_field_type` (an immediate full check, not `NOT VALID`),
+> leaving a sub-millisecond window where the CHECK is absent. Run it during a quiet
+> window with no concurrent `screen_field_metadata` writes, or accept the
+> near-zero risk — the only concurrent writer, `_screen_fields_refresh_loop`, only
+> writes known-good `field_type` values from `_get_static_screen_fields()`, so a
+> bad row cannot land in normal operation. Future constraint-widening migrations
+> should prefer `ADD CONSTRAINT … NOT VALID` followed by `VALIDATE CONSTRAINT` —
+> that pattern never drops the old constraint and eliminates the window entirely.
+
 ### Phase 3 — Deploy application containers
 
 ```bash

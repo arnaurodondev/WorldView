@@ -36,6 +36,10 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
+// 2026-06-10 fix: ActivePortfolioProvider was implemented (W1.1 F-002) but never
+// mounted anywhere — the TopBar PortfolioSwitcher wrote into a noop context.
+// Mounted below so the selection is real, persisted, and shared app-wide.
+import { ActivePortfolioProvider } from "@/contexts/ActivePortfolioContext";
 // PLAN-0059-C C-3: ApiClientProvider memoises createGateway(accessToken) so
 // the gateway is constructed once per token (not once per queryFn call).
 // Must be INSIDE AuthProvider (reads accessToken) and INSIDE
@@ -49,6 +53,11 @@ import { GlobalErrorFallback } from "@/components/sentry/GlobalErrorFallback";
 // In Next.js App Router, module-level singletons are shared across ALL requests
 // on the server. A QueryClient per-request (via useState) ensures cache isolation
 // between different users. useState initializes once per component instance.
+//
+// The defaults below are the platform-wide cache policy — documented in
+// DESIGN_SYSTEM.md §9 and pinned by __tests__/query-client-defaults.test.ts
+// (a source-contract test — rendering/importing the full provider tree in a
+// unit test would drag in the Sentry SDK and every context provider).
 function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -68,6 +77,20 @@ function makeQueryClient(): QueryClient {
         // Useful for finance: re-fetching prices when user switches back to tab.
         // Individual queries can override to false for cached/slow data.
         refetchOnWindowFocus: true,
+
+        // gcTime intentionally left at the TanStack default (5 min): unmounted
+        // query data survives 5 minutes so tab-switching within the terminal
+        // re-renders instantly from cache. Don't raise it globally — quote
+        // data has a 22ms-row × thousands-of-instruments footprint.
+      },
+      mutations: {
+        // WHY retry 0 (explicit, Round-4 hardening): mutations are writes —
+        // auto-retrying a write that may have partially succeeded risks
+        // duplicate orders/alerts/watchlist entries. 0 is TanStack's default,
+        // but we pin it explicitly so a library default change can never
+        // silently introduce write retries. Surfaces that KNOW a mutation is
+        // idempotent may override per-call.
+        retry: 0,
       },
     },
   });
@@ -122,7 +145,22 @@ export function Providers({ children }: ProvidersProps) {
               Must be INSIDE AuthProvider so it can read accessToken for ws-token fetch.
               Wraps all children so TopBar, FlashOverlay, and AlertsPage share one WS connection. */}
           <AlertStreamProvider>
-            {children}
+            {/* ActivePortfolioProvider — single source of truth for "which
+                portfolio is active" (PortfolioSwitcher writes, every
+                portfolio-scoped widget + the TopBar rail read via
+                useResolvedPortfolioId / usePortfolioMetrics).
+                BUG FIX (2026-06-10): this provider was implemented in W1.1
+                (F-002) but NEVER MOUNTED — every consumer silently received
+                the noop fallback context, so the TopBar "All Portfolios ▾"
+                chip appeared dead: clicking a portfolio neither updated the
+                chip label nor re-scoped any widget. Mounting it here (root
+                providers, not app/(app)/layout.tsx) is REQUIRED because
+                AppLayout itself calls usePortfolioMetrics → the provider
+                must be an ancestor of the layout component, not a child
+                inside its JSX. */}
+            <ActivePortfolioProvider>
+              {children}
+            </ActivePortfolioProvider>
           </AlertStreamProvider>
         </ApiClientProvider>
       </AuthProvider>
@@ -147,18 +185,35 @@ export function Providers({ children }: ProvidersProps) {
        * bottom-right position collided visually with the floating
        * ForceUpdateBanner before that banner moved to the top in W1.
        */}
+      {/*
+       * Round-3 polish (2026-06-10) — toast behavior is centralized HERE and
+       * only here (DESIGN_SYSTEM.md §6.16). Call sites use the bare sonner
+       * API (toast.success/error/info/…) and must NOT pass duration/position
+       * overrides; the one sanctioned exception is useConfirmable's Undo
+       * toast, whose duration IS the undo window (a functional timer, not
+       * styling). A source-contract test (__tests__/toast-config.test.ts)
+       * pins the single-Toaster rule and this config.
+       */}
       <Toaster
         position="top-right"
         richColors
         theme="dark"
         closeButton
         expand
-        visibleToasts={5}
+        // WHY 3 (was 5): with 5 stacked toasts the top-right column overlapped
+        // the IndexStrip/TopBar content row on 768px-tall laptops. Three is
+        // enough for any realistic burst (mutation result + WS alert + undo);
+        // older toasts collapse into the stack and re-expand on hover.
+        visibleToasts={3}
         // WHY style + className: Sonner attaches className to each toast
         // (mono font for terminal density) and style to the viewport root.
         // z:60 belongs on the viewport, not the per-toast element.
         style={{ zIndex: 60 } as React.CSSProperties}
         toastOptions={{
+          // WHY explicit 4000ms (sonner's default, pinned): the auto-dismiss
+          // window is a design-system contract — relying on the library
+          // default means a sonner upgrade could silently change UX.
+          duration: 4000,
           className: "font-mono text-[11px] tabular-nums",
         }}
       />

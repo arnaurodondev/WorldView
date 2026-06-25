@@ -209,13 +209,23 @@ class ChatPipeline:
         Layer 2 (async, LLMInjectionClassifier, E-8):
           - Semantic classification via small LLM (Qwen/Qwen3.5-0.8B on DeepInfra)
           - Only runs when self.llm_classifier is wired AND Layer 1 passes
-          - Fail-closed: classifier errors → block the message
+          - Genuine UNSAFE verdict → PromptInjectionError (blocked).
+          - Provider UNAVAILABLE (transport/402/429/5xx) → the classifier raises
+            ClassifierUnavailableError which propagates UNCHANGED to the route
+            layer (mapped to CLASSIFIER_UNAVAILABLE). It is DELIBERATELY NOT
+            converted to PromptInjectionError — that conflation was the bug where
+            a DeepInfra billing blip surfaced as a fake "Semantic injection
+            detected" rejection.
 
         Returns the sanitised, XML-wrapped message string.
 
         Raises:
-            PromptInjectionError: if Layer 1 heuristic or Layer 2 LLM fires
+            PromptInjectionError: if Layer 1 heuristic or Layer 2 LLM fires a
+                                  genuine injection verdict
                                   (rag_injection_blocked counter incremented).
+            ClassifierUnavailableError: if the Layer 2 classifier could not run
+                                  (provider unavailable) and fail-closed-but-honest
+                                  policy is active. Propagated as-is.
             PIIDetectedError: if PII is detected in the message.
         """
         # ── Layer 1: synchronous regex + PII ─────────────────────────────────
@@ -379,10 +389,14 @@ class ChatPipeline:
                 canonical_name=re.canonical_name,
                 similarity=float(re.confidence),
                 payload=re,
+                # BP-661: carry the ticker so the query-ticker tiebreak can
+                # rescue ticker-only queries ("what is AAPL?") from the
+                # delta-ambiguity bail when a phantom twin is present.
+                ticker=getattr(re, "ticker", None),
             )
             for re in raw_entities
         ]
-        accepted, rejected = filter_resolver_candidates(candidates, config=_config)
+        accepted, rejected = filter_resolver_candidates(candidates, config=_config, query_text=message)
 
         # Emit per-rejection-cause metrics so operators can monitor the
         # gate in prod. ``source="orchestrator_s6"`` disambiguates this
@@ -404,6 +418,19 @@ class ChatPipeline:
                 similarity=r.similarity,
                 reason=r.rejection_reason,
             )
+
+        # BP-661 observability: log tiebreak-admitted accepts so operators
+        # can audit every resolution that bypassed the delta-ambiguity bail.
+        for a in accepted:
+            if a.accepted_reason:
+                log.info(  # type: ignore[no-any-return]
+                    "orchestrator_resolver_tiebreak_applied",
+                    entity_id=a.entity_id,
+                    canonical_name=a.canonical_name,
+                    ticker=a.ticker,
+                    similarity=a.similarity,
+                    reason=a.accepted_reason,
+                )
 
         # Unwrap payloads back to ResolvedEntity. The original objects
         # are kept opaque inside GatedEntity.payload so we don't have to

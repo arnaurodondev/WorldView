@@ -116,6 +116,22 @@ class ScreenFilter:
     # Wave L-4b: insider 90d rollup range filter — negatives are valid.
     insider_net_buy_90d_min: float | None = None
     insider_net_buy_90d_max: float | None = None
+    # ── Wave L-5b: intelligence rollup column filters (PLAN-0089) ────────────
+    # Numeric min/max ranges for the 4 numeric intelligence fields; boolean
+    # equality for the 2 flag fields. All default to None for R11 forward-compat.
+    # NULL-safe semantics: instruments without a snapshot row (or with NULL
+    # intelligence columns) are excluded when any L-5b predicate is active
+    # (``NULL >= :v`` → UNKNOWN). The sync worker fills them nightly.
+    news_count_7d_min: int | None = None
+    news_count_7d_max: int | None = None
+    llm_relevance_7d_max_min: float | None = None
+    llm_relevance_7d_max_max: float | None = None
+    display_relevance_7d_weighted_min: float | None = None
+    display_relevance_7d_weighted_max: float | None = None
+    recent_contradiction_count_min: int | None = None
+    recent_contradiction_count_max: int | None = None
+    has_active_alert: bool | None = None
+    has_ai_brief: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,8 +267,20 @@ class OHLCVRepository(ABC):
         timeframe: Timeframe,
         start: date,
         end: date,
+        *,
+        limit: int | None = None,
     ) -> list[OHLCVBar]:
-        """Return bars for the given instrument/timeframe within [start, end]."""
+        """Return bars for the given instrument/timeframe within [start, end].
+
+        When ``limit`` is set, the query uses ``ORDER BY bar_date DESC LIMIT N``
+        and reverses the result — so callers always receive the *most-recent* N
+        bars in the window rather than the oldest N (matching financial-chart
+        conventions).  This pushes the cut-off to the database instead of
+        fetching the full window and slicing in Python.
+
+        When ``limit`` is ``None`` (default), all matching bars are returned
+        ordered ascending (original behaviour — backward-compatible).
+        """
 
     @abstractmethod
     async def get_available_timeframes(self, instrument_id: str) -> list[Timeframe]:
@@ -309,7 +337,9 @@ class OHLCVRepository(ABC):
         rather than derived weekly/monthly bars (which are rarely populated).
 
         lookback_days: 7 for 1W, 30 for 1M
-        Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int}
+        Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int,
+        top_mover_ticker: str | None, top_mover_return_pct: float | None}
+        (top mover = largest absolute period return within the sector; 2026-06-10)
         """
 
     @abstractmethod
@@ -318,6 +348,7 @@ class OHLCVRepository(ABC):
         lookback_days: int,
         mover_type: str,
         limit: int,
+        offset: int = 0,
     ) -> list[dict]:
         """Return top gainers or losers sorted by period return using daily OHLCV bars.
 
@@ -325,7 +356,10 @@ class OHLCVRepository(ABC):
 
         lookback_days: 7 for 1W, 30 for 1M
         mover_type: "gainers" (DESC) or "losers" (ASC)
-        Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
+        offset: SQL OFFSET for paginating through the universe leaderboard
+        Returns list of dicts: {instrument_id, ticker, name, last_price, period_return_pct}
+        (last_price = latest daily close, added 2026-06-10 so consumers don't
+        need a second /internal/v1/price batch call)
         """
 
 
@@ -335,6 +369,15 @@ class QuoteRepository(ABC):
     @abstractmethod
     async def upsert(self, quote: Quote) -> Quote:
         """Insert or replace the latest quote for the instrument."""
+
+    @abstractmethod
+    async def upsert_if_newer(self, quote: Quote) -> bool:
+        """Upsert only if the incoming quote timestamp is newer than the stored row.
+
+        Out-of-order / batch-replay protection for the OHLCV 1m write-through
+        (Option B).  Returns True if a row was inserted or updated, False when
+        the existing row was newer (no-op).
+        """
 
     @abstractmethod
     async def find_by_instrument(self, instrument_id: str) -> Quote | None:

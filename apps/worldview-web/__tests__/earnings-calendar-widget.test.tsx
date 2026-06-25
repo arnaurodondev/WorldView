@@ -164,6 +164,24 @@ describe("EarningsCalendarWidget — data state (3 events)", () => {
     expect(screen.getByText("EPS est. $3.10 (AMC)")).toBeInTheDocument();
   });
 
+  it("fetches a block of 30 events per page (user 'blocks of 30' contract)", async () => {
+    // Task 1 (2026-06-12): PAGE_SIZE bumped 10 → 30 so each "Load more" reveals
+    // a full block of 30 events. Pin the limit param so a future regression to
+    // the old 10 (or a silent .slice cap) is caught.
+    mockGetEarningsCalendar.mockResolvedValueOnce({
+      events: [makeEarningsEvent({ event_id: "ev-1", region: "AAPL", title: "AAPL Q3 2026 Earnings" })],
+      total: 1,
+    });
+
+    render(<EarningsCalendarWidget />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+    });
+    // First page starts at offset 0 and requests 30 rows.
+    expect(mockGetEarningsCalendar).toHaveBeenCalledWith({ limit: 30, offset: 0 });
+  });
+
   it("renders date and time extracted from active_from", async () => {
     mockGetEarningsCalendar.mockResolvedValueOnce({
       events: [makeEarningsEvent({ active_from: "2026-07-30T13:30:00Z" })],

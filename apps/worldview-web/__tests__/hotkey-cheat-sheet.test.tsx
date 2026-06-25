@@ -156,6 +156,57 @@ describe("HotkeyCheatSheet", () => {
     expect(await screen.findByText("Go to News")).toBeInTheDocument();
   });
 
+  it("`?` does NOT open the cheat sheet while a text input has focus", async () => {
+    // Round-3 polish pin: `?` is a modifier-less chord, so useChordHotkeys
+    // must suspend it while the user is typing (input/textarea/contenteditable)
+    // — otherwise typing a literal question mark in the search box would pop
+    // the overlay. The suspension rule lives in isTextInputActive(); this test
+    // pins it specifically for the cheat-sheet chord.
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      // userEvent.keyboard types into the focused element — exactly the
+      // "user typing a question mark" scenario.
+      await userEvent.keyboard("?");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("`?` is suppressed inside a contenteditable region (chat composer)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    // jsdom does not compute isContentEditable from the attribute — define it
+    // explicitly so isTextInputActive() sees what a real browser reports.
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    editable.tabIndex = 0; // make focusable in jsdom
+    document.body.appendChild(editable);
+    editable.focus();
+    try {
+      fireEvent.keyDown(editable, { key: "?" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      editable.remove();
+    }
+  });
+
   it("cannot advertise an unregistered chord (auto-derivation guarantee)", async () => {
     // Render the cheat sheet with NO bindings registered. The dialog body must
     // contain zero binding rows. This is the structural anti-fraud guarantee
@@ -172,5 +223,106 @@ describe("HotkeyCheatSheet", () => {
     // other group should be absent because no other bindings exist.
     expect(dialog.textContent).not.toMatch(/Go to Dashboard/);
     expect(dialog.textContent).not.toMatch(/Go to Portfolio/);
+  });
+
+  // ── Focus trap (Round-4 hardening) ──────────────────────────────────────────
+  // The cheat sheet is a hand-rolled aria-modal overlay (no Radix), so it must
+  // implement the WAI-ARIA dialog focus contract itself: Tab cycles within the
+  // dialog (wrapping at the edges) and focus returns to the opener on close.
+  // Focusable order in the dialog DOM: [close button] → [filter input].
+
+  /** Wait for the rAF-deferred autofocus of the filter input after opening. */
+  async function openAndWaitForFocus(): Promise<HTMLElement> {
+    await userEvent.keyboard("?");
+    const filter = await screen.findByPlaceholderText(/filter shortcuts/i);
+    // The component focuses the input inside requestAnimationFrame — poll
+    // until that lands so the trap assertions start from a known state.
+    await vi.waitFor(() => expect(filter).toHaveFocus());
+    return filter;
+  }
+
+  it("Tab on the last focusable wraps to the first (focus stays trapped)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const filter = await openAndWaitForFocus();
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+
+    // Filter input is the LAST focusable; Tab must wrap to the close button
+    // (the first), never escape into the page behind the backdrop.
+    expect(filter).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it("Shift+Tab on the first focusable wraps to the last", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const filter = await openAndWaitForFocus();
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+
+    // Move to the first focusable, then Shift+Tab must wrap back to the last.
+    closeBtn.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(filter).toHaveFocus();
+  });
+
+  it("pulls focus back into the dialog if it escaped (e.g. to <body>)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    await openAndWaitForFocus();
+
+    // Simulate focus having escaped the dialog entirely (backdrop click puts
+    // activeElement on <body> in some browsers). The next Tab must re-engage
+    // the trap by focusing the first dialog focusable.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.body).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it("restores focus to the previously focused element on close", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    // Give some page element focus BEFORE opening — this is the "opener" the
+    // dialog must hand focus back to (WAI-ARIA dialog pattern).
+    const opener = document.createElement("button");
+    opener.textContent = "opener";
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      await openAndWaitForFocus();
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(opener).toHaveFocus();
+    } finally {
+      opener.remove();
+    }
   });
 });

@@ -122,6 +122,18 @@ def e2e_settings() -> Settings:
         kafka_bootstrap_servers="localhost:9092",
         log_json=False,
         otlp_endpoint="",
+        # E2E uses ASGI transport, so create_app's lifespan (which fetches the
+        # RS256 JWKS from the api-gateway at startup) never runs — the
+        # InternalJWTMiddleware would have no public key and fail-closed with
+        # 503 "JWKS not loaded" on every authed request. The api-gateway (JWKS
+        # issuer) is NOT part of the intelligence-test profile, so there is no
+        # key source. Enable skip_verification so the middleware decodes the
+        # _make_e2e_system_jwt() HS256 token WITHOUT signature verification
+        # (the mode _make_e2e_system_jwt documents). The config production guard
+        # (config.py F-007) still rejects this flag when APP_ENV=production, so
+        # it is test-only. Mirrors the nlp-pipeline e2e stack, which omits the
+        # middleware entirely.
+        internal_jwt_skip_verification=True,
     )
 
 

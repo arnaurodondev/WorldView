@@ -23,15 +23,19 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
+from ml_clients.errors import RetryableError  # type: ignore[import-not-found]
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from nlp_pipeline.application.blocks.relation_validation import validate_relations
 from nlp_pipeline.application.blocks.suppression import should_run_deep_extraction
+from nlp_pipeline.application.ports.metrics import NOOP_METRICS, NlpMetricsPort
 from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
@@ -42,6 +46,24 @@ if TYPE_CHECKING:
     from nlp_pipeline.domain.models import Chunk, EntityMention
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+
+@dataclass(frozen=True)
+class EntailmentCheckConfig:
+    """Config for the optional co-mention entailment check (ENHANCEMENT #6).
+
+    Built from ``Settings.relation_entailment_check_*``. When ``enabled`` is False
+    (the default) the check is skipped entirely. See
+    ``nlp_pipeline.application.blocks.relation_entailment`` for the rationale and the
+    measured precision/recall/false-positive numbers.
+    """
+
+    enabled: bool = False
+    predicates: frozenset[str] = frozenset({"competes_with", "regulates", "produces", "partner_of", "supplier_of"})
+    min_drop_confidence: float = 0.7
+    max_per_doc: int = 20
+    model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+
 
 # ── Window configuration (PRD §6.7 Block 10) ─────────────────────────────────
 
@@ -116,6 +138,8 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
                     "evidence_text": {"type": "string"},
                     "entity_provisional": {"type": "boolean"},
                     "provisional_queue_id": {"type": ["string", "null"]},
+                    # PLAN-0109 W5: optional per-fact end-of-validity date (ISO).
+                    "valid_to": {"type": ["string", "null"]},
                 },
                 "required": ["subject_ref", "predicate", "object_ref", "confidence"],
             },
@@ -158,14 +182,38 @@ def _build_windows(chunks: list[Chunk], max_tokens: int, overlap_tokens: int) ->
 # ── Extraction helpers ────────────────────────────────────────────────────────
 
 
-def _build_prompt(window_text: str, mention_names: list[str]) -> str:
-    """Build the extraction prompt for Qwen2.5-7B-Instruct.
+def _build_prompt(window_text: str, mentions: list[EntityMention]) -> str:
+    """Build the extraction prompt for the deep-extraction model.
 
     Delegates to the centralised DEEP_EXTRACTION template in libs/prompts.
+
+    ENHANCEMENT #1 (type-annotated allow-list): each distinct entity surface is
+    rendered into the prompt tagged with its GLiNER ``mention_class``, e.g.
+    ``Apple Inc. [organization], Tim Cook [person], S&P 500 [index]``. The
+    2026-06-20 stored-relation-quality audit found ~22% of unsupported stored
+    relations were entity-resolution/type errors (an [index] like "S&P 500", a
+    [currency] like "US Dollar", or a data-source [financial_institution] like
+    "Zacks" used as a company-relation endpoint) plus a large share of
+    firm-vs-company DIRECTION errors — all caused by the model guessing an
+    entity's type from the bare string. The type tags let the prompt enforce
+    precision (never use an [index]/[currency]/[commodity] as a company-relation
+    endpoint) and direction ([person] is the object, [organization] the subject).
+
+    Order-preserving dedup: the FIRST-seen ``mention_class`` wins for a given
+    distinct ``mention_text``. Falls back to ``none identified`` when empty.
     """
     from prompts.extraction.deep import DEEP_EXTRACTION  # type: ignore[import-untyped]
 
-    entities_str = ", ".join(mention_names) if mention_names else "none identified"
+    # Order-preserving dedup keyed on the surface string; attach first-seen class.
+    class_by_name: dict[str, str] = {}
+    for m in mentions:
+        if m.mention_text not in class_by_name:
+            class_by_name[m.mention_text] = str(m.mention_class.value)
+
+    if class_by_name:
+        entities_str = ", ".join(f"{name} [{cls}]" for name, cls in class_by_name.items())
+    else:
+        entities_str = "none identified"
     return DEEP_EXTRACTION.render(entities=entities_str, text=window_text)  # type: ignore[no-any-return]
 
 
@@ -204,8 +252,10 @@ async def _run_extraction_window(
     # with ``provisional_queue_id`` set. KG enriched_consumer already
     # promotes those to canonicals when the unresolved-resolution-worker
     # canonicalises the queue row.
-    mention_names = list(dict.fromkeys(m.mention_text for m in mentions))
-    prompt = _build_prompt(window_text, mention_names)
+    # ENHANCEMENT #1: pass the full mention objects (not just names) so the prompt
+    # can tag each entity with its GLiNER ``mention_class``. ``_build_prompt`` performs
+    # the order-preserving dedup itself (first-seen class per surface).
+    prompt = _build_prompt(window_text, mentions)
 
     inp = ExtractionInput(
         prompt=prompt,
@@ -228,8 +278,18 @@ async def _run_extraction_window(
         latency_ms = int((time.perf_counter() - t0) * 1000)
         if usage_logger is not None:
             try:
+                # Task #36: record the ACTUAL serving model, not the configured
+                # primary.  ``ExtractionOutput.model_used`` is the secondary slug
+                # when a 429/timeout forced a fallback hop (else the primary).
+                # ``fallback_reason`` (none|rate_limit|timeout|server_error) is
+                # written to the new ``llm_usage_log.fallback_reason`` column so the
+                # audit query ``SELECT model, fallback_reason, count(*) GROUP BY 1,2``
+                # shows when/why the secondary served calls.  Falls back to the
+                # configured ``model_id`` when the adapter predates the field.
+                actual_model = getattr(output, "model_used", None) or model_id
+                fallback_reason = getattr(output, "fallback_reason", "none")
                 await usage_logger.log(
-                    model_id=model_id,
+                    model_id=actual_model,
                     # The deep-extraction provider is selected at consumer
                     # wiring time (DeepInfra when extraction_api_key set,
                     # Ollama otherwise). Without a hint on the client we tag
@@ -244,6 +304,8 @@ async def _run_extraction_window(
                     success=extract_succeeded,
                     error_code=None if extract_succeeded else "model_error",
                     doc_id=doc_id,
+                    # Service-specific extra consumed by NlpUsageLogRepository.log.
+                    fallback_reason=fallback_reason,
                 )
             except Exception as exc:  # protocol forbids raising; belt-and-braces
                 logger.warning(
@@ -322,6 +384,9 @@ async def run_deep_extraction_block(
     extracted_at: datetime,
     outbox_topic_signal: str,
     usage_logger: LlmUsageLogProtocol | None = None,
+    entailment_client: ExtractionClient | None = None,
+    entailment_config: EntailmentCheckConfig | None = None,
+    metrics: NlpMetricsPort = NOOP_METRICS,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -369,8 +434,27 @@ async def run_deep_extraction_block(
     # Build text windows
     windows = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
 
-    # Run extraction per window
+    # Run extraction per window.
+    #
+    # Task #22 (BP-677): we MUST distinguish a transient/timeout failure from a
+    # genuinely empty extraction. The extraction adapter (DeepSeekExtractionAdapter
+    # et al.) raises ``RetryableError`` for every transient condition — wall-clock
+    # timeout, ``APITimeoutError``, ``APIConnectionError``, 429 rate-limit and 5xx
+    # (see ml_clients/adapters/deepseek_extraction.py). The previous code caught
+    # ``except Exception`` and substituted an empty result, so a timed-out window
+    # merged to all-zero and was logged as a NORMAL ``deep_extraction.complete``.
+    # Downstream could not tell "model found nothing" from "model timed out" — the
+    # ~16% timeout rate was hidden as fake "0 events/0 claims/0 relations".
+    #
+    # New behaviour:
+    #   * A RetryableError on a window is counted (``timed_out_windows``) and NOT
+    #     silently treated as a successful empty result.
+    #   * A genuine parse/empty result (the adapter returned, but with no content)
+    #     is a *successful* window — it contributes a real (possibly empty) dict.
+    #   * After the loop, retry semantics are decided (see below).
     window_results: list[ExtractionResult] = []
+    timed_out_windows = 0
+    total_windows = len(windows)
     for window_text in windows:
         try:
             result = await _run_extraction_window(
@@ -382,12 +466,136 @@ async def run_deep_extraction_block(
                 usage_logger=usage_logger,
             )
             window_results.append(result)
+        except RetryableError:
+            # Transient/timeout failure — DO NOT substitute an empty result as if
+            # the window succeeded. Track it so the completion event/return value
+            # can flag the doc as degraded, and so a timed-out doc is retried
+            # rather than persisted as a clean zero.
+            timed_out_windows += 1
+            # R25: record via the injected metrics port (NOOP_METRICS by
+            # default) so the application layer never imports infra metrics.
+            try:
+                metrics.record_deep_extraction_window_timeout()
+            except Exception:  # metrics must never break extraction
+                logger.debug(
+                    "deep_extraction.metric_inc_failed",
+                    metric="deep_extraction_window_timeout_total",
+                )
+            logger.warning(
+                "deep_extraction.window_timeout",
+                doc_id=str(doc_id),
+                timed_out_windows=timed_out_windows,
+                total_windows=total_windows,
+                exc_info=True,
+            )
         except Exception:
+            # Non-retryable / unexpected failure for this window. This is NOT a
+            # transient timeout (those are caught above), so we preserve the
+            # historical behaviour of recording an empty window and continuing —
+            # the doc is not flagged degraded for a non-transient parse-shaped
+            # failure. (FatalError-class problems propagate from the adapter and
+            # are not caught here.)
             logger.warning("deep_extraction.window_failed", doc_id=str(doc_id), exc_info=True)
             window_results.append({"events": [], "claims": [], "relations": []})
 
+    degraded = timed_out_windows > 0
+
+    # Retry semantics (Task #22):
+    #   * If EVERY window timed out (no successful window produced a result), there
+    #     is nothing real to persist — raising ``RetryableError`` makes the article
+    #     consumer re-deliver / dead-letter the whole doc (its batch handler treats
+    #     ConsumerError as retryable; see article_consumer._process_one). This is
+    #     strictly better than committing an empty-but-fake extraction.
+    #   * If SOME windows succeeded and some timed out (partial), we PERSIST the
+    #     good windows but flag ``degraded=true`` + ``timed_out_windows`` so the
+    #     loss is visible and the doc is re-queueable, rather than silently dropping
+    #     the timed-out windows' content. We prefer keeping the good windows over
+    #     re-running the whole doc (which would re-pay for the successful windows).
+    if timed_out_windows > 0 and len(window_results) == 0:
+        logger.warning(
+            "deep_extraction.all_windows_timed_out",
+            doc_id=str(doc_id),
+            timed_out_windows=timed_out_windows,
+            total_windows=total_windows,
+        )
+        raise RetryableError(
+            f"deep extraction timed out on all {timed_out_windows}/{total_windows} windows for doc {doc_id}",
+        )
+
     # Merge deduplicated results
     merged = _merge_results_safe(window_results)
+
+    # Deterministic precision gates (2026-06-14 v1.6 re-A/B follow-up): drop relations
+    # that are structurally invalid — self-loops, out-of-vocabulary predicates,
+    # index/ticker `listed_on` objects, and bare common-noun endpoints. The v1.6 prompt
+    # asks the model to self-police these, but the re-A/B showed it complies only ~2/3 of
+    # the time; this code filter makes the gates a guarantee independent of model drift.
+    # See application/blocks/relation_validation.py.
+    # Enhancements #3/#4/#5 (2026-06-21): thread the per-mention NER class into the gate
+    # so it can run the entity-type guard (#3) and direction auto-swap (#4). Build a
+    # {mention_text: mention_class} map from this doc's resolved mentions. The map is
+    # best-effort: refs the model echoes verbatim from the entity list match exactly, and
+    # any ref NOT in the map is treated as unknown-class (never dropped/swapped), so the
+    # new gates cannot produce false positives. Last write wins on duplicate mention_text.
+    entity_classes = {m.mention_text: m.mention_class for m in mentions}
+    kept_relations, relation_drops = validate_relations(
+        merged.get("relations", []),
+        entity_classes=entity_classes,
+    )
+    if relation_drops:
+        # ``direction_swapped`` is a normalisation event (the relation was KEPT with its
+        # subject/object corrected), not a drop — surface it separately so the dropped
+        # total stays an accurate count of discarded relations.
+        swapped = relation_drops.get("direction_swapped", 0)
+        dropped_total = sum(count for reason, count in relation_drops.items() if reason != "direction_swapped")
+        logger.info(
+            "deep_extraction.relations_filtered",
+            doc_id=str(doc_id),
+            kept=len(kept_relations),
+            dropped_total=dropped_total,
+            swapped=swapped,
+            **{f"dropped_{reason}": count for reason, count in relation_drops.items() if reason != "direction_swapped"},
+        )
+    merged["relations"] = kept_relations
+
+    # ── ENHANCEMENT #6: optional co-mention entailment check (default OFF) ─────────
+    # Runs AFTER the deterministic gate, on the survivors, so we only pay one cheap LLM
+    # call per distinct risky relation. Drops relations whose evidence merely co-mentions
+    # subject and object (the dominant defect per the 2026-06-20 re-measurement, which the
+    # deterministic gate cannot catch). FAIL-OPEN and config-gated — a no-op when disabled
+    # (the default) or when no entailment_client is wired. See relation_entailment.py for
+    # the measured precision/recall/false-positive numbers (Qwen3-235B: 0% FP on high-risk).
+    if (
+        entailment_config is not None
+        and entailment_config.enabled
+        and entailment_client is not None
+        and merged.get("relations")
+    ):
+        from nlp_pipeline.application.blocks.relation_entailment import (
+            check_relation_entailment,
+        )
+
+        try:
+            filtered_relations = await check_relation_entailment(
+                list(merged["relations"]),
+                entailment_client=entailment_client,
+                model_id=entailment_config.model_id,
+                high_risk_predicates=entailment_config.predicates,
+                min_drop_confidence=entailment_config.min_drop_confidence,
+                max_per_doc=entailment_config.max_per_doc,
+                doc_id=str(doc_id),
+            )
+            merged = {**merged, "relations": filtered_relations}
+        except Exception:
+            # Fail-open at the block boundary too: never let the check break extraction.
+            logger.warning("deep_extraction.entailment_check_failed", doc_id=str(doc_id), exc_info=True)
+
+    # Surface degradation on the merged result so the caller (and any persistence
+    # path) can carry it forward. Kept as plain dict keys to avoid changing the
+    # ExtractionResult shape consumed by _merge_results_safe / downstream readers,
+    # which only ever look up events/claims/relations.
+    merged["degraded"] = degraded
+    merged["timed_out_windows"] = timed_out_windows
 
     # Build entity_id lookup from resolved mentions
     entity_id_by_ref: dict[str, UUID] = {}
@@ -440,6 +648,12 @@ async def run_deep_extraction_block(
         claims=len(merged.get("claims", [])),
         relations=len(merged.get("relations", [])),
         signals=len(signal_events),
+        # Task #22 (BP-677): degraded=true means at least one window timed out and
+        # its content was lost — an all-zero result here is NOT a truly empty
+        # article. timed_out_windows quantifies the loss. A fully-successful doc
+        # logs degraded=false, timed_out_windows=0 (unchanged from before).
+        degraded=degraded,
+        timed_out_windows=timed_out_windows,
     )
 
     return merged, signal_events

@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
@@ -58,9 +58,14 @@ vi.mock("react", async (importOriginal) => {
 });
 
 // ── Next.js router mock ───────────────────────────────────────────────────────
+// WHY vi.hoisted: vi.mock factories are hoisted above imports, so a plain
+// `const pushMock` defined here would not exist yet when the factory runs.
+// vi.hoisted lifts the declaration alongside the mock so tests can assert
+// against the SAME push spy the component receives (row-click navigation).
+const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
-    push: vi.fn(),
+    push: pushMock,
     replace: vi.fn(),
     prefetch: vi.fn(),
   })),
@@ -211,14 +216,23 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 13 column headers with ALL CAPS text", () => {
+  it("renders all 34 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
-    // WHY check columnheader role: ScreenerTable sets role="columnheader" on
-    // each header div for screen reader accessibility.
-    // PLAN-0051: a 13th SPARK (sparkline) column was added in parallel by the
-    // mini-chart task; this test count is the canonical authoritative number.
+    // WHY check columnheader role: AG Grid sets role="columnheader" on each
+    // header cell for screen reader accessibility.
+    // IB-L3/L4: added PERFORMANCE group (52W%↑, 52W%↓, 1M/3M/6M/YTD/1Y/3Y RTN)
+    // and OWNERSHIP group (ANALYST TGT, ANALYST UPSIDE, CONSENSUS, INSIDER 90D,
+    // INST OWN%, SHORT %) on top of the existing FUNDAMENTALS and RATIOS groups.
+    // IB-L5: added INTELLIGENCE group (NEWS 7D, BRIEF SCORE) — default-visible.
+    // COUNT SEMANTICS (clarified in Wave-2): the vitest AG Grid shim
+    // (vitest.setup.ts) renders one columnheader per LEAF ColDef and ignores
+    // `hide` — so 34 = total leaf-column catalogue size, NOT the visible set
+    // (the hidden IB-L3/L4 opt-ins and, since Wave-2, the hidden SCORE column
+    // are all counted). This pins "no ColDef silently dropped/added"; the
+    // default-VISIBILITY contract is pinned separately by the SCORE test
+    // below and lib/__tests__/screener-columns.test.ts.
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(13);
+    expect(headers.length).toBe(34);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.
@@ -231,7 +245,8 @@ describe("ScreenerPage — structure", () => {
     expect(screen.getByRole("columnheader", { name: /p\/e/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /revenue/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /beta/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /score/i })).toBeInTheDocument();
+    // WHY getAllByRole: IB-L5 added BRIEF SCORE so two headers match /score/i now.
+    expect(screen.getAllByRole("columnheader", { name: /score/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("columnheader", { name: /52w range/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /volume/i })).toBeInTheDocument();
   });
@@ -307,22 +322,42 @@ describe("ScreenerPage — data rows", () => {
     });
   });
 
-  it("shows HeatCell score of 75 for AAPL (market_impact_score 0.75)", async () => {
-    render(<ScreenerPage />, { wrapper: makeWrapper() });
-    await waitFor(() => {
-      // AAPL has market_impact_score=0.75 → HeatCell displays "75"
-      expect(screen.getByText("75")).toBeInTheDocument();
-    });
+  // ── Wave-2 (2026-06-10): SCORE column is hidden by default ────────────────
+  // market_impact_score has NO backend data source (live-confirmed: absent
+  // from every row, default and filtered views) — a permanently-"—" column
+  // erodes trust, so the column is opt-in now. These tests REPLACE the old
+  // "shows HeatCell score of 75 / em-dash for null score" pair at equal
+  // strength: the real grid's default visibility is driven by exactly two
+  // inputs — the ColDef's `hide` flag (first paint) and the prefs catalogue
+  // default (applyColumnState on grid-ready) — and both are pinned here.
+  // WHY not a DOM-absence assertion: the vitest AG Grid shim
+  // (vitest.setup.ts, shared file) renders every leaf ColDef and ignores
+  // `hide`, so "no SCORE header in the DOM" is untestable at page level
+  // without weakening the shared mock for every other surface.
+  it("ships the SCORE ColDef with hide:true (hidden at first paint — Wave-2)", async () => {
+    const { createAgScreenerColumns } = await import(
+      "@/components/screener/ag-screener-columns"
+    );
+    const defs = createAgScreenerColumns({});
+    // SCORE is a standalone (non-grouped) ColDef.
+    const score = defs.find(
+      (d) => !("children" in d) && (d as { colId?: string }).colId === "score",
+    ) as { hide?: boolean; cellRenderer?: unknown } | undefined;
+    expect(score).toBeDefined();
+    expect(score?.hide).toBe(true);
+    // The renderer survives — the column stays fully functional as an opt-in
+    // for when the backend ships market_impact_score data.
+    expect(score?.cellRenderer).toBeDefined();
   });
 
-  it("shows em-dash for TSLA (null market_impact_score)", async () => {
-    render(<ScreenerPage />, { wrapper: makeWrapper() });
-    await waitFor(() => {
-      // TSLA has null market_impact_score → HeatCell shows "—"
-      // Multiple "—" exist (Price, Revenue, Beta, Volume also show "—")
-      const dashes = screen.getAllByText("—");
-      expect(dashes.length).toBeGreaterThanOrEqual(1);
-    });
+  it("defaults the score prefs entry to hidden but keeps it in the catalogue (opt-in)", async () => {
+    // The prefs catalogue drives applyColumnState on grid-ready AND the
+    // ColumnSettingsPopover checkbox list — the entry must survive (so users
+    // can opt in) while defaulting to hidden.
+    const { DEFAULT_COLUMNS } = await import("@/lib/screener-columns");
+    const score = DEFAULT_COLUMNS.find((c) => c.key === "score");
+    expect(score).toBeDefined();
+    expect(score?.visible).toBe(false);
   });
 
   it("backend-pending columns (Revenue, Beta, Price, Volume) show em-dash", async () => {
@@ -359,6 +394,69 @@ describe("ScreenerPage — data rows", () => {
     await waitFor(() => {
       expect(screen.getByText("3.0T")).toBeInTheDocument();
     });
+  });
+});
+
+// ── ScreenerPage — row click navigation (ROUND-1 item 6) ─────────────────────
+
+describe("ScreenerPage — row click navigation", () => {
+  beforeEach(() => {
+    pushMock.mockClear();
+  });
+
+  it("navigates to /instruments/<TICKER> when a row is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    // Wait for the grid to render the mocked rows.
+    const aaplCell = await screen.findByText("AAPL");
+
+    // Clicking any cell bubbles to AG Grid's rowClicked handler.
+    await user.click(aaplCell);
+
+    // ROUND-1 fix: the canonical instrument route is the TICKER slug
+    // (app/(app)/instruments/[ticker]) — NOT the entity_id UUID. The mock row
+    // has entity_id "ent-1"; asserting the ticker URL pins the fix.
+    expect(pushMock).toHaveBeenCalledWith("/instruments/AAPL");
+  });
+});
+
+// ── ScreenerPage — empty state + Reset filters CTA (ROUND-1 item 8) ──────────
+
+describe("ScreenerPage — empty state with Reset filters CTA", () => {
+  it("shows 'No results match your filters' + Reset CTA when filters exclude all rows, and reset restores them", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    // Wait for data, then apply a search filter that matches nothing.
+    // The search filter is client-side (applyClientFilters), so the mocked
+    // gateway keeps returning both rows — they are filtered out locally.
+    await screen.findByText("AAPL");
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+    await user.type(
+      screen.getByLabelText(/search instruments by name or ticker/i),
+      "ZZZZNOMATCH",
+    );
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
+
+    // Empty state appears with the standardized title + CTA.
+    await waitFor(() => {
+      expect(screen.getByText("No results match your filters")).toBeInTheDocument();
+    });
+    // WHY the long accessible name: the filter bar's own bottom-toolbar Reset
+    // button is also in the DOM (aria-label "Reset filters"); the CTA carries
+    // a unique label so role queries are unambiguous.
+    const resetCta = screen.getByRole("button", {
+      name: /reset filters and show all instruments/i,
+    });
+    expect(resetCta).toBeInTheDocument();
+
+    // Clicking Reset filters clears the search filter → rows come back.
+    await user.click(resetCta);
+    await waitFor(() => {
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("No results match your filters")).not.toBeInTheDocument();
   });
 });
 
@@ -457,9 +555,15 @@ describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
     // Each section's header is rendered as a button (clickable to expand/collapse).
     // We assert every section name is present so a future rename or accidental
     // removal triggers a test failure.
-    expect(screen.getByRole("button", { name: /valuation/i })).toBeInTheDocument();
+    // WHY aria-controls query (not just name): PRD-0089 Wave I added a "Growth"
+    // PresetBar chip which also matches /growth/i. The Section buttons carry
+    // aria-controls="screener-section-<name>" which uniquely identifies them.
+    expect(screen.getByRole("button", { name: /valuation/i, hidden: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /profitability/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /growth/i })).toBeInTheDocument();
+    // Match the Growth SECTION button (aria-controls set), not the Growth PRESET chip
+    expect(
+      document.querySelector("button[aria-controls='screener-section-growth']")
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: /leverage/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /technical/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /news & signals/i })).toBeInTheDocument();

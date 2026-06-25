@@ -291,7 +291,7 @@ class AddWatchlistMemberUseCase:
                     from portfolio.domain.errors import IdempotencyConflictError
 
                     raise IdempotencyConflictError(
-                        f"Idempotency key {cmd.idempotency_key!r} already used " "with a different entity_id",
+                        f"Idempotency key {cmd.idempotency_key!r} already used with a different entity_id",
                     )
                 return AddWatchlistMemberResult(member=existing_by_key, created=False)
 

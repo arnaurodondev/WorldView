@@ -16,7 +16,11 @@ from pydantic import BaseModel
 
 _PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+# NOTE: prefix is `/v1/admin` (canonical). Dashboard Regression #5 — the
+# `strip_api_prefix` middleware in app.py rewrites `/api/v1/...` → `/v1/...`
+# at request time, so existing clients hitting `/api/v1/admin/llm-costs`
+# continue to work after this normalisation.
+router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 _TIMEOUT = 5.0  # seconds per downstream call
 

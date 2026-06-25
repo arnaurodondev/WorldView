@@ -11,14 +11,22 @@ directly to satisfy LAYER-BOUNDARY (R12 / IG-LAYER-002).
 
 from knowledge_graph.application.schemas.paths import (
     EntityPathsResponse,
+    PathBetweenPublic,
     PathEdgePublic,
     PathInsightPublic,
     PathNodePublic,
+    PathsBetweenResponse,
+    WeirdConnectionPublic,
+    WeirdConnectionsResponse,
 )
 
 __all__ = [
     "EntityPathsResponse",
+    "PathBetweenPublic",
     "PathEdgePublic",
     "PathInsightPublic",
     "PathNodePublic",
+    "PathsBetweenResponse",
+    "WeirdConnectionPublic",
+    "WeirdConnectionsResponse",
 ]

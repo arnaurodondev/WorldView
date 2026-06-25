@@ -639,41 +639,53 @@ class TestGetEntityIntelligence:
 
 
 class TestResolveIntelEntityId:
-    """Tests for the shared entity_id resolution helper."""
+    """Tests for the shared entity_id resolution helper.
 
-    def test_no_context_no_id_returns_none(self) -> None:
+    BP-661: ``_resolve_intel_entity_id`` became async (it may now call S6
+    ticker resolution / S7 alias resolution for non-UUID identifiers), so
+    these tests await it. Behaviour with no resolvers wired (the default in
+    ``_make_executor``) is unchanged from the legacy sync version.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_context_no_id_returns_none(self) -> None:
         """No entity context + no LLM entity_id → returns None."""
         executor = _make_executor(entity_context=None)
-        result = executor._resolve_intel_entity_id("test_tool", None)
+        result = await executor._resolve_intel_entity_id("test_tool", None)
         assert result is None
 
-    def test_no_context_with_valid_id_parses_it(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_context_with_valid_id_parses_it(self) -> None:
         """No entity context + valid UUID string → parsed UUID returned."""
         executor = _make_executor(entity_context=None)
-        result = executor._resolve_intel_entity_id("test_tool", str(_SCOPED_ENTITY_ID))
+        result = await executor._resolve_intel_entity_id("test_tool", str(_SCOPED_ENTITY_ID))
         assert result == _SCOPED_ENTITY_ID
 
-    def test_no_context_with_invalid_id_returns_none(self) -> None:
-        """No entity context + invalid UUID string → returns None."""
+    @pytest.mark.asyncio
+    async def test_no_context_with_invalid_id_returns_none(self) -> None:
+        """No entity context + invalid UUID string (no resolvers wired) → returns None."""
         executor = _make_executor(entity_context=None)
-        result = executor._resolve_intel_entity_id("test_tool", "not-a-uuid")
+        result = await executor._resolve_intel_entity_id("test_tool", "not-a-uuid")
         assert result is None
 
-    def test_with_context_returns_scoped_id(self) -> None:
+    @pytest.mark.asyncio
+    async def test_with_context_returns_scoped_id(self) -> None:
         """Entity context present → always returns scoped entity_id."""
         executor = _make_executor(entity_context=_make_entity_context(entity_id=_SCOPED_ENTITY_ID))
-        result = executor._resolve_intel_entity_id("test_tool", None)
+        result = await executor._resolve_intel_entity_id("test_tool", None)
         assert result == _SCOPED_ENTITY_ID
 
-    def test_with_context_overrides_different_llm_id(self) -> None:
+    @pytest.mark.asyncio
+    async def test_with_context_overrides_different_llm_id(self) -> None:
         """Entity context overrides a different LLM-supplied entity_id."""
         executor = _make_executor(entity_context=_make_entity_context(entity_id=_SCOPED_ENTITY_ID))
-        result = executor._resolve_intel_entity_id("test_tool", str(_OTHER_ENTITY_ID))
+        result = await executor._resolve_intel_entity_id("test_tool", str(_OTHER_ENTITY_ID))
         # Must return the SCOPED id, not the LLM-supplied other id
         assert result == _SCOPED_ENTITY_ID
 
-    def test_with_context_matching_id_returns_scoped_id(self) -> None:
+    @pytest.mark.asyncio
+    async def test_with_context_matching_id_returns_scoped_id(self) -> None:
         """Entity context with same entity_id as LLM → returns scoped id (no warning needed)."""
         executor = _make_executor(entity_context=_make_entity_context(entity_id=_SCOPED_ENTITY_ID))
-        result = executor._resolve_intel_entity_id("test_tool", str(_SCOPED_ENTITY_ID))
+        result = await executor._resolve_intel_entity_id("test_tool", str(_SCOPED_ENTITY_ID))
         assert result == _SCOPED_ENTITY_ID

@@ -39,6 +39,8 @@ def _make_config(**overrides: object) -> ArticleConsumerConfig:
     config.bronze_bucket = "worldview-bronze"
     config.silver_bucket = "worldview-silver"
     config.num_perm = 128
+    # PLAN-0113 FIX-2: static-membership identity (empty = dynamic default).
+    config.group_instance_id = ""
     for k, v in overrides.items():
         setattr(config, k, v)
     return config  # type: ignore[return-value]

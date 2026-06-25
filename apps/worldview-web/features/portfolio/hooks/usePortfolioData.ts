@@ -47,6 +47,14 @@ import {
   useRealizedPnL,
   defaultRealizedPnLRange,
 } from "@/hooks/useRealizedPnL";
+// PLAN sprint R1 (2026-06-10): the KPI strip's CASH / BUYING PWR tiles need the
+// exposure endpoint. useExposure is the shared hook already used by
+// ExposureBreakdown / ExposureCurrencyStrip — reusing it (same queryKey
+// ["exposure", id]) means TanStack deduplicates: one network call feeds the KPI
+// strip AND the exposure strips. This closes the BP-517-class regression where
+// cash/buyingPower props were never passed to PortfolioKPIStrip and the tiles
+// permanently rendered "—".
+import { useExposure } from "@/hooks/useExposure";
 import type {
   Portfolio,
   Holding,
@@ -54,7 +62,11 @@ import type {
   HoldingsResponse,
   TransactionsResponse,
   BatchQuoteResponse,
+  ExposureResponse,
+  SectorBreakdownResponse,
 } from "@/types/api";
+// 2026-06-10 sprint gap #2: sector → instrument_ids derivation (pure lib).
+import { sectorIdMapFromSegments } from "@/features/portfolio/lib/sector-stats";
 
 import {
   computePortfolioKPI,
@@ -62,6 +74,7 @@ import {
   computeScopeHint,
   type PortfolioKPI,
   type PortfolioAllocations,
+  type AllocationSlice,
   type HoldingOverviewMap,
 } from "@/features/portfolio/lib/kpi";
 
@@ -98,6 +111,17 @@ export interface UsePortfolioDataResult {
   // ── Loading + error flags ─────────────────────────────────────────────
   portfoliosLoading: boolean;
   portfoliosError: boolean;
+  /**
+   * R4 hardening: re-runs the portfolio-list query (Query 1). Wired to the
+   * Retry action on the page-level "Failed to load portfolio data" state so
+   * a transient network failure is recoverable IN PLACE — the previous
+   * InlineEmptyState forced a full browser reload, throwing away every other
+   * warm cache entry (quotes, watchlists) that may have loaded fine.
+   * WHY refetch (not invalidateQueries): refetch re-runs even while the
+   * query is in error state and returns a promise the button can void;
+   * invalidate alone would not refire a query with no active observers.
+   */
+  refetchPortfolios: () => void;
   holdingsLoading: boolean;
   txLoading: boolean;
   watchlistsLoading: boolean;
@@ -113,6 +137,57 @@ export interface UsePortfolioDataResult {
 
   // ── Transactions ──────────────────────────────────────────────────────
   transactionsResp: TransactionsResponse | undefined;
+  /**
+   * Server-side pagination offset for the transactions query (R1 sprint).
+   * WHY exposed: the Transactions tab renders a Prev/Next pager when
+   * `transactionsResp.total > limit`. The offset lives here (not in the tab)
+   * so BOTH /portfolio?tab=transactions and /portfolio/transactions drive the
+   * same cache entries and the offset resets when the portfolio changes.
+   */
+  txOffset: number;
+  /** Move to another transactions page. Pass `offset + limit` / `offset - limit`. */
+  setTxOffset: (offset: number) => void;
+  /** Page size used by the transactions query (constant — 100 rows/page). */
+  txPageSize: number;
+
+  // ── Exposure (cash / buying power) ────────────────────────────────────
+  /**
+   * Exposure snapshot from GET /v1/portfolios/{id}/exposure.
+   * `cash` feeds the CASH tile; BUYING PWR = cash for v1 cash accounts
+   * (margin is v2 — see PortfolioKPIStrip prop docs).
+   * undefined while loading / on error → tiles render "—" (never a fake $0).
+   */
+  exposure: ExposureResponse | undefined;
+
+  /**
+   * Asset-class lookup keyed by instrument_id. PRIMARY source (2026-06-10
+   * sprint gap #1): the holdings payload itself — S1 now LEFT JOINs
+   * instruments and returns `asset_class` per holding, so every row gets a
+   * real value in the same round-trip that fetched it. The old
+   * transactions-page derivation (PLAN-0053 T-D-4-02) is kept ONLY as a
+   * per-instrument fallback for rows where the holdings JOIN produced null
+   * (instrument not yet synced) but a transaction on the current page
+   * carries the value — both sources are the same instruments-table truth.
+   * Still-null entries → AssetTypeCellRenderer renders its "—" placeholder.
+   */
+  assetClassByInstrument: Record<string, string | null>;
+
+  /**
+   * Server sector-breakdown segments (2026-06-10 sprint gap #2: each
+   * segment now carries `instrument_ids`). Exposed raw — bySector strips
+   * the IDs into AllocationSlice for legacy consumers; the new
+   * SectorExposurePanel + exact-ID sector filter need the full segments.
+   * undefined while loading / on error.
+   */
+  sectorSegments: SectorBreakdownResponse["segments"] | undefined;
+
+  /**
+   * sector label → instrument_ids lookup derived from sectorSegments.
+   * Drives the donut-driven holdings filter's exact-ID join (rule 0 in
+   * sector-filter.ts). Empty object when segments are absent or an older
+   * S9 build omitted instrument_ids → the filter falls back to aliases.
+   */
+  sectorIdMap: Record<string, string[]>;
 
   // ── Watchlists ─────────────────────────────────────────────────────────
   watchlists: Watchlist[] | undefined;
@@ -152,6 +227,14 @@ export interface UsePortfolioDataResult {
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
+/**
+ * TX_PAGE_SIZE — server-side page size for the transactions query.
+ * WHY 100 (the legacy `limit: 100`): preserves the previous request shape so
+ * the S1 query plan / Valkey cache behaviour is unchanged; the R1 sprint only
+ * adds the `offset` dimension on top.
+ */
+const TX_PAGE_SIZE = 100;
+
 export function usePortfolioData(
   args: UsePortfolioDataArgs,
 ): UsePortfolioDataResult {
@@ -161,9 +244,24 @@ export function usePortfolioData(
   // WHY selectedPortfolioId in state (not URL): switching portfolios is
   // ephemeral. The URL always shows /portfolio regardless of which portfolio
   // is active.
-  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(
-    null,
-  );
+  const [selectedPortfolioId, setSelectedPortfolioIdRaw] = useState<
+    string | null
+  >(null);
+
+  // ── Transactions pagination state (R1 sprint) ─────────────────────────
+  // WHY useState (not URL): the transactions page index is ephemeral browsing
+  // state — sharing a deep link to "page 3 of my transactions" has no value
+  // and would go stale as new fills arrive (newest-first ordering shifts rows
+  // across pages).
+  const [txOffset, setTxOffset] = useState(0);
+
+  // WHY wrap the portfolio setter: switching portfolios must reset the
+  // transactions pager to page 1 — portfolio B may have fewer transactions
+  // than the current offset, which would render a confusing empty page.
+  const setSelectedPortfolioId = useCallback((id: string | null) => {
+    setTxOffset(0);
+    setSelectedPortfolioIdRaw(id);
+  }, []);
 
   // ── Query 1: portfolio list ────────────────────────────────────────────
   // WHY qk.portfolios.all: the root ["portfolios"] key; invalidating it
@@ -172,6 +270,9 @@ export function usePortfolioData(
     data: portfolios,
     isLoading: portfoliosLoading,
     isError: portfoliosError,
+    // R4 hardening: surfaced to the page so the named error state can offer
+    // an in-place Retry (see the result-interface doc comment).
+    refetch: refetchPortfolios,
   } = useQuery({
     queryKey: qk.portfolios.all,
     queryFn: () => createGateway(accessToken).getPortfolios(),
@@ -237,14 +338,28 @@ export function usePortfolioData(
   // WHY transactionsByPortfolio: uses the flat ["transactions", id] shape to
   // match the legacy cache entry — different from qk.portfolios.transactions()
   // which nests under the detail path.
+  // R1 sprint: txOffset appended to the key so each page gets its own cache
+  // entry. Invalidations that target the ["transactions", id] PREFIX (e.g.
+  // handlePositionAdded below) still match every page — TanStack invalidation
+  // is prefix-based.
   const { data: transactionsResp, isLoading: txLoading } = useQuery({
-    queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
+    queryKey: [
+      ...qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
+      txOffset,
+    ],
     queryFn: () =>
       createGateway(accessToken).getTransactions(activePortfolioId!, {
-        limit: 100,
+        limit: TX_PAGE_SIZE,
+        offset: txOffset,
       }),
     enabled: !!accessToken && !!activePortfolioId,
     staleTime: 30_000,
+    // WHY placeholderData keeps the previous page: without it, clicking
+    // "Next" unmounts the table into the 6-row skeleton for the duration of
+    // the fetch — a jarring flash for what is usually a <100ms cached hop.
+    // Keeping the old rows visible until the new page lands matches the
+    // behaviour of every terminal blotter pager.
+    placeholderData: (prev) => prev,
   });
 
   // ── Query 5: watchlists ────────────────────────────────────────────────
@@ -275,6 +390,14 @@ export function usePortfolioData(
     refetchInterval: 30_000,
     staleTime: 0,
   });
+
+  // ── Query 6b: exposure — cash / buying power for the KPI strip ─────────
+  // WHY useExposure (not an inline useQuery): the shared hook owns the
+  // ["exposure", id] key that ExposureBreakdown and ExposureCurrencyStrip
+  // already subscribe to — one network round-trip feeds all three surfaces.
+  // The hook internally disables itself when portfolioId/token are null, so
+  // no extra `enabled` plumbing is needed here.
+  const exposureQuery = useExposure(activePortfolioId);
 
   // ── Query 7: realized P&L FIFO (PLAN-0051 T-A-1-05) ───────────────────
   // WHY default range = current calendar year: matches 1099-B statements;
@@ -309,28 +432,62 @@ export function usePortfolioData(
   // permanent. Avoids redundant requests on tab switches.
   // WHY holdingOverviews(ids): sorted IDs ensure a stable cache bucket even if
   // holdingInstrumentIds is produced in different iteration order after mutations.
+  //
+  // PLAN-0099 F-1 FIX (2026-06-06): collapsed the N parallel
+  // getCompanyOverview() calls into a single POST /v1/companies/overviews:batch
+  // round-trip. Previously a 20-holding portfolio fired 20 sequential HTTP +
+  // auth round-trips; now it's exactly one. The returned shape (HoldingOverviewMap
+  // keyed by instrument_id) is unchanged so all downstream call sites
+  // (enrichedHoldings, computeAllocations) continue to work without edits.
   const { data: holdingOverviews } = useQuery({
     queryKey: qk.portfolios.holdingOverviews(holdingInstrumentIds),
     queryFn: async () => {
-      const results = await Promise.all(
-        holdingInstrumentIds.map((id) =>
-          createGateway(accessToken).getCompanyOverview(id).catch(() => null),
-        ),
-      );
+      // Batch fetch — S9 fans out server-side and returns null per leg on failure.
+      const overviewsMap = await createGateway(accessToken)
+        .getCompanyOverviewsBatch(holdingInstrumentIds)
+        .catch(() => ({}) as Record<string, null>);
       return Object.fromEntries(
-        holdingInstrumentIds.map((id, i) => [
-          id,
-          {
-            sector: results[i]?.instrument?.gics_sector ?? null,
-            ticker: results[i]?.instrument?.ticker ?? null,
-            name: results[i]?.instrument?.name ?? null,
-            entity_id: results[i]?.instrument?.entity_id ?? null,
-          },
-        ]),
+        holdingInstrumentIds.map((id) => {
+          // WHY indirect: overviewsMap may be missing the key if the batch
+          // endpoint returned a partial response — coerce to null safely.
+          const ov = overviewsMap[id] ?? null;
+          return [
+            id,
+            {
+              sector: ov?.instrument?.gics_sector ?? null,
+              ticker: ov?.instrument?.ticker ?? null,
+              name: ov?.instrument?.name ?? null,
+              entity_id: ov?.instrument?.entity_id ?? null,
+            },
+          ];
+        }),
       ) as HoldingOverviewMap;
     },
     enabled: holdingInstrumentIds.length > 0 && !!accessToken,
     staleTime: 300_000,
+  });
+
+  // ── Query 10: server-side sector breakdown (fast cached endpoint) ─────
+  // WHY this replaces client-side computeAllocations() for the sector dim:
+  //   The new GET /v1/portfolios/{id}/sector-breakdown endpoint returns a
+  //   pre-computed sector snapshot in 31–86ms (60s Valkey cache), vs the
+  //   ~640ms it took the old sector-attribution endpoint. Client-side
+  //   computation was a further fallback when overviews hadn't resolved yet.
+  //
+  // WHY staleTime = 60_000: matches the Valkey TTL on the S9/S1 side —
+  // fetching more often would still hit the cache, so there is no benefit
+  // to a shorter window.
+  //
+  // WHY enabled guard on activePortfolioId (not holdingInstrumentIds.length):
+  //   The breakdown is per-portfolio, not per-holding. An empty portfolio
+  //   should still fire the request (server returns an empty segments array),
+  //   consistent with how `getConcentration` behaves.
+  const { data: sectorBreakdownData } = useQuery({
+    queryKey: qk.portfolios.sectorBreakdown(activePortfolioId ?? ""),
+    queryFn: () =>
+      createGateway(accessToken).getSectorBreakdown(activePortfolioId!),
+    enabled: !!accessToken && !!activePortfolioId,
+    staleTime: 60_000,
   });
 
   // ── Stable derived values ──────────────────────────────────────────────
@@ -369,6 +526,39 @@ export function usePortfolioData(
     [holdings, holdingOverviews],
   );
 
+  // ── Asset-class lookup for the holdings ASSET column ───────────────────
+  // 2026-06-10 sprint gap #1: holdings now carry asset_class server-side
+  // (instruments LEFT JOIN) — this is the primary source and covers EVERY
+  // row in one round-trip. The transactions-derived map (R1 sprint
+  // workaround) survives only as a fallback for holdings whose JOIN
+  // produced null but whose transaction page carries the value (both read
+  // the same instruments column, so the fallback is never contradictory).
+  const assetClassByInstrument = useMemo(() => {
+    const map: Record<string, string | null> = {};
+    // Primary: server-side holdings field.
+    for (const h of holdings) {
+      if (h.asset_class != null) {
+        map[h.instrument_id] = h.asset_class;
+      }
+    }
+    // Fallback: transactions JOIN (first-write-wins per instrument — every
+    // transaction for the same instrument carries the same value).
+    for (const tx of transactionsResp?.transactions ?? []) {
+      if (tx.asset_class != null && map[tx.instrument_id] == null) {
+        map[tx.instrument_id] = tx.asset_class;
+      }
+    }
+    return map;
+  }, [holdings, transactionsResp]);
+
+  // ── Sector label → instrument_ids (sprint gap #2, exact-ID filter) ────
+  // Pure derivation, memoised on the breakdown response identity so the
+  // map is referentially stable across quote-poll re-renders.
+  const sectorIdMap = useMemo(
+    () => sectorIdMapFromSegments(sectorBreakdownData?.segments),
+    [sectorBreakdownData],
+  );
+
   // ── KPI / allocation / scope-hint (pure functions, unit-tested) ───────
   const kpi = useMemo(
     () =>
@@ -381,10 +571,38 @@ export function usePortfolioData(
   // its own memo means the KPI strip updates immediately when quotes
   // arrive, while SectorAllocationPanel fills in asynchronously without
   // blocking the KPI strip.
-  const { bySector, byType } = useMemo(
+  const { bySector: bySectorClientSide, byType } = useMemo(
     () => computeAllocations(enrichedHoldings, holdingOverviews, holdingsQuotes),
     [enrichedHoldings, holdingOverviews, holdingsQuotes],
   );
+
+  // ── bySector: prefer server snapshot, fall back to client-side ────────
+  // WHY prefer server: the sector-breakdown endpoint is pre-computed with full
+  // market-data access and is 7–20× faster. Client-side computation uses only
+  // the batch-quote subset, so holdings with missing quotes fall back to cost
+  // basis — less accurate than what the server computes.
+  //
+  // WHY fall back to bySectorClientSide (not []): during cold-start the server
+  // query is in-flight while the overviews query may already have resolved.
+  // Keeping the client-side data visible prevents a blank SectorAllocationBar
+  // flash as the server query settles.
+  //
+  // WHY multiply weight by totalPortfolioValue for `value`: AllocationSlice.value
+  // is the market value in portfolio currency. SectorBreakdownSegment already
+  // carries market_value directly so we use that field.
+  const bySector: AllocationSlice[] = useMemo(() => {
+    if (sectorBreakdownData?.segments?.length) {
+      // Map SectorBreakdownSegment → AllocationSlice.
+      // `weight` is a 0-1 fraction; `pct` on AllocationSlice is also 0-1.
+      return sectorBreakdownData.segments.map((seg) => ({
+        label: seg.sector,
+        value: seg.market_value,
+        pct: seg.weight,
+      }));
+    }
+    // Server data not yet available — use client-side computation.
+    return bySectorClientSide;
+  }, [sectorBreakdownData, bySectorClientSide]);
 
   // F-021 scope hint — rendered under the portfolio selector.
   const scopeHint = useMemo(
@@ -413,7 +631,10 @@ export function usePortfolioData(
       void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
       setSelectedPortfolioId(newPortfolio.portfolio_id);
     },
-    [queryClient],
+    // setSelectedPortfolioId is itself a stable useCallback([]) wrapper (R1
+    // sprint — it resets the tx pager), so including it satisfies
+    // exhaustive-deps without ever re-creating this callback.
+    [queryClient, setSelectedPortfolioId],
   );
 
   /**
@@ -504,6 +725,9 @@ export function usePortfolioData(
     activeIsRoot,
     portfoliosLoading,
     portfoliosError,
+    // R4: TanStack's refetch returns a promise + takes optional options; the
+    // exposed contract is a plain thunk so callers can't depend on either.
+    refetchPortfolios: () => void refetchPortfolios(),
     holdingsLoading,
     txLoading,
     watchlistsLoading,
@@ -514,6 +738,13 @@ export function usePortfolioData(
     holdingsQuotes,
     holdingOverviews,
     transactionsResp,
+    txOffset,
+    setTxOffset,
+    txPageSize: TX_PAGE_SIZE,
+    exposure: exposureQuery.data,
+    assetClassByInstrument,
+    sectorSegments: sectorBreakdownData?.segments,
+    sectorIdMap,
     watchlists,
     watchlistQuotes,
     performanceData,

@@ -73,6 +73,13 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        saw the LLM fabricate "17.24% / 21.08%" period values when
     #        the underlying tool returned different periods.  Both
     #        failure modes are addressed by an explicit refusal contract.
+    # 1.9 — PLAN-0107 follow-up Fix #3: anti-narration clause. Even on the
+    #        planning turns (where this prompt is still used), the model has
+    #        been observed leaking visible "I'll fetch ..." preambles and
+    #        <function_calls> XML imitations into assistant text alongside the
+    #        actual structured tool_calls. Belt-and-braces — the synthesis
+    #        turn now uses chat/synthesis.py (Fix #1) which strips tool-use
+    #        guidance entirely; this clause covers the planning turns.
     # 1.8 — PLAN-0104 W47: FINANCIAL_DATA addendum gains a mandatory
     #        PARTIAL DATA RULE that REBALANCES the MISSING-METRIC RULE.
     #        Round 7 v2 Q5 (GOOGL "expensive vs history?") refused with
@@ -87,10 +94,11 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        MISSING-METRIC RULE still applies for the narrow case where
     #        the SPECIFIC requested metric is entirely absent — its
     #        anti-fabrication property is preserved.
-    version="1.8",
+    version="1.9",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
+        "(v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
+        "v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
         "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
         "VALUATION-CONTEXT composition per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS "
         "rule per BP-640; v1.4 adds RATIO-OR-TTM directive per BP-639; v1.3 adds "
@@ -169,6 +177,23 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "- Rationalising your own bad numbers ('this may reflect volatility...').\n"
         "- Accepting M&A, partnership, spin-off, leadership, or product-launch claims "
         "from the user's question without tool confirmation.\n\n"
+        # PLAN-0107 follow-up Fix #3 (v1.9): NO-NARRATION clause.
+        # The model has been observed leaking visible planning preambles +
+        # tool-call XML imitations into the assistant text channel alongside
+        # the structured tool_calls block. The synthesis turn uses a separate
+        # prompt (chat/synthesis.py) that strips all tool-use guidance; this
+        # clause provides belt-and-braces coverage on the planning turns.
+        "NO NARRATION (mandatory):\n"
+        "Do NOT write any of the following into your visible assistant text:\n"
+        "- Planning verbs: 'I will fetch / pull / retrieve / call / use', 'Let me fetch / pull',\n"
+        "  \"I'll fetch / pull\", \"I'm fetching / pulling\", 'First/Now/Next I'll ...'.\n"
+        "- Tool-call XML/JSON imitations: <function_calls>, <function_call>,\n"
+        "  <invoke ...>, <parameter ...>, <tool_call>, <tool_name>, or any\n"
+        "  XML-style tag that looks like a tool invocation.\n"
+        "- Planning markdown: '**Tool calls:**' / '**Function calls:**' headers,\n"
+        "  'Step 1: Call X' enumerations, 'Approach:' / 'Methodology:' sections.\n"
+        "Tool calls go in the structured tool_calls block ONLY — never in\n"
+        "the visible answer text. The user must never see your tool plan.\n\n"
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "

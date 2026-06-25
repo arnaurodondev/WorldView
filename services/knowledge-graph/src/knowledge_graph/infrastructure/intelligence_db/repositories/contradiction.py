@@ -93,6 +93,17 @@ ORDER BY created_at DESC
         """Insert a contradiction link into ``relation_contradiction_links``.
 
         Temporal weights are NOT cached — computed on read.
+
+        COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1): despite its
+        name, ``relation_evidence_id`` does NOT hold a
+        ``relation_evidence_raw.raw_id``. The caller
+        (``contradiction_batch.py`` Worker 13B) passes the *subject claim's*
+        ``claims.claim_id`` here. There is no FK constraint enforcing either
+        interpretation. All read paths therefore resolve the subject by joining
+        ``claims`` (``c.claim_id = rcl.relation_evidence_id``), NOT
+        ``relation_evidence_raw``. Do not "fix" the join back to ``raw_id``
+        without first changing the write to store a real ``raw_id`` and adding
+        the FK (see report follow-up: rename migration recommended).
         """
         result = await self._session.execute(
             text("""
@@ -134,13 +145,24 @@ WHERE relation_evidence_id = :rel_ev_id AND claim_id = :claim_id
         subject_entity_id: UUID,
         window_days: int = _CONTRADICTION_WINDOW_DAYS,
     ) -> list[dict[str, object]]:
-        """Fetch active contradiction links for the top-K calculation (confidence formula)."""
+        """Fetch active contradiction links for the top-K calculation (confidence formula).
+
+        COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1):
+        ``relation_contradiction_links.relation_evidence_id`` is named like a
+        ``relation_evidence_raw.raw_id`` FK but actually holds the subject
+        ``claims.claim_id`` written by ``insert_link`` from
+        ``contradiction_batch.py:99`` (no FK constraint → silently accepted;
+        7180/7180 links match ``claims.claim_id``, 0/7180 match
+        ``relation_evidence_raw.raw_id``). The previous join via
+        ``rer.raw_id = rcl.relation_evidence_id`` returned NOTHING for every
+        subject. We resolve the subject through ``claims`` on the stored value.
+        """
         result = await self._session.execute(
             text("""
 SELECT rcl.link_id, rcl.strength, rcl.detected_at
 FROM relation_contradiction_links rcl
-JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
-WHERE rer.subject_entity_id = :subject_entity_id
+JOIN claims c ON c.claim_id = rcl.relation_evidence_id
+WHERE c.subject_entity_id = :subject_entity_id
   AND rcl.invalidated_at IS NULL
   AND rcl.detected_at    >= now() - make_interval(days => :window_days)
 ORDER BY rcl.detected_at DESC
@@ -208,15 +230,40 @@ LIMIT :limit
     ) -> list[dict[str, object]]:
         """Aggregate contradiction stats per relation for active links (T-B-02).
 
-        Joins ``relation_contradiction_links`` → ``relation_evidence_raw`` →
-        ``relations`` to resolve the relation_id.  Aggregates:
+        Resolves each active contradiction link to the relation(s) it scores via
+        ``relation_contradiction_links`` → ``claims`` → ``relations`` on the
+        **subject entity**.  Aggregates per relation:
           - MAX(strength) AS strongest_contra_score
           - jsonb_object_agg(contradiction_type, count) AS contra_count_by_type
           - MAX(detected_at) AS latest_contra_at
 
-        Returns one row per relation that has at least one active contradiction
-        link within the detection window.  Also returns the relation's current
-        ``confidence`` column so the caller can check the invalidation threshold.
+        Returns one row per relation whose subject entity has at least one active
+        contradiction link within the detection window.  Also returns the
+        relation's current ``confidence`` column so the caller can check the
+        invalidation threshold.
+
+        COLUMN-NAMING TRAP (BP-706, 2026-06-22 backend-e2e-coverage-gaps BUG-2):
+        ``relation_contradiction_links.relation_evidence_id`` is named like a
+        ``relation_evidence_raw.raw_id`` FK, but the detection worker
+        (``contradiction_batch.py`` insert_link) stores the SUBJECT claim's
+        ``claims.claim_id`` there — there is **no FK constraint**, so a join on
+        ``rer.raw_id = rcl.relation_evidence_id`` is silently accepted yet
+        matches NOTHING (live proof: 9717/9717 links match ``claims.claim_id``,
+        0/9717 match ``relation_evidence_raw.raw_id``). That misjoin was the
+        third, missed read path that left this aggregation returning 0 rows on
+        every run, so ``relations`` never received any contra columns.
+
+        Why a SUBJECT-only join (not the relation TRIPLE): contradiction
+        detection is subject-based — the linked claims are entity-level
+        financial/sentiment claims (``OTHER``/``REVENUE_GROWTH``/``MARGIN_CHANGE``…)
+        whose ``claim_type`` values are NOT canonical relation types and which
+        have NO ``relation_evidence_raw`` rows at all (live: 0/9751 linked claims
+        have a matching ``rer.claim_id``). There is therefore no object endpoint
+        or canonical_type to resolve a single relation triple. The contradiction
+        applies to the entity, so we propagate it to every relation where that
+        entity is the subject — matching the two corrected read paths
+        (``fetch_active_for_subject`` and ``intelligence_rollup``), which are
+        likewise purely subject-keyed.
         """
         result = await self._session.execute(
             text("""
@@ -227,22 +274,16 @@ SELECT
     MAX(rcl.detected_at)                                        AS latest_contra_at,
     r.confidence                                                AS current_confidence
 FROM relation_contradiction_links rcl
-JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
-JOIN relations r
-  ON  r.subject_entity_id = rer.subject_entity_id
-  AND r.object_entity_id  = rer.object_entity_id
-  AND r.canonical_type    = rer.canonical_type
+JOIN claims c ON c.claim_id = rcl.relation_evidence_id
+JOIN relations r ON r.subject_entity_id = c.subject_entity_id
 JOIN (
     SELECT
         r2.relation_id,
         rcl2.contradiction_type,
         COUNT(*) AS cnt
     FROM relation_contradiction_links rcl2
-    JOIN relation_evidence_raw rer2 ON rer2.raw_id = rcl2.relation_evidence_id
-    JOIN relations r2
-      ON  r2.subject_entity_id = rer2.subject_entity_id
-      AND r2.object_entity_id  = rer2.object_entity_id
-      AND r2.canonical_type    = rer2.canonical_type
+    JOIN claims c2 ON c2.claim_id = rcl2.relation_evidence_id
+    JOIN relations r2 ON r2.subject_entity_id = c2.subject_entity_id
     WHERE rcl2.invalidated_at IS NULL
       AND rcl2.detected_at >= now() - make_interval(days => :window_days)
     GROUP BY r2.relation_id, rcl2.contradiction_type

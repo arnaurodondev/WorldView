@@ -33,6 +33,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// Round 4: HotkeyProvider is required by the page's useToolTraceChord (it
+// registers the ⌘D debug chord in the central hotkey registry via context).
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
 import type { Thread } from "@/types/api";
 
 // ── Next.js mocks ─────────────────────────────────────────────────────────────
@@ -143,7 +148,14 @@ function makeQueryClient() {
  */
 function Wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={qc}>
+      {/* Round 4: the page's useToolTraceChord registers through the central
+          hotkey registry (useHotkeyScope throws without a provider). A fresh
+          registry per render avoids cross-test binding pollution. */}
+      <HotkeyProvider registry={new HotkeyRegistry()}>{children}</HotkeyProvider>
+    </QueryClientProvider>
+  );
 }
 
 // Lazy-import the page to avoid issues with module mock hoisting
@@ -565,5 +577,365 @@ describe("Chat page — ephemeral thread 404 guard", () => {
     // We additionally assert no "request failed" copy made it onto the page.
     expect(screen.queryByText(/request failed/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/server error/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── Tests: Round 1 Foundation — sidebar collapse + date groups ───────────────
+
+describe("Chat page — history sidebar (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("collapses to a slim rail and expands back", async () => {
+    await renderChatPage();
+
+    // Default: expanded — full sidebar with the "Threads" label.
+    expect(screen.getByText("Threads")).toBeInTheDocument();
+
+    // Collapse: the full panel is replaced by the slim rail.
+    fireEvent.click(screen.getByRole("button", { name: /collapse thread list/i }));
+    expect(screen.queryByText("Threads")).not.toBeInTheDocument();
+    // The rail keeps the expand affordance AND a quick "new chat" icon.
+    expect(screen.getByRole("button", { name: /expand thread list/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+
+    // Expand: the full panel returns.
+    fireEvent.click(screen.getByRole("button", { name: /expand thread list/i }));
+    expect(screen.getByText("Threads")).toBeInTheDocument();
+  });
+
+  it("groups threads under date headers (fixtures from 2026-04 land in Older)", async () => {
+    await renderChatPage();
+
+    // SAMPLE_THREADS timestamps are 2026-04-10/11 — months before any
+    // plausible "today" — so a single "Older" group header must render.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: "Older" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Today" })).not.toBeInTheDocument();
+  });
+
+  it("puts a thread updated today under the Today header", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    vi.mocked(createGateway).mockReturnValue({
+      getThreads: vi.fn().mockResolvedValue([
+        {
+          thread_id: "thread-now",
+          title: "Fresh thread",
+          owner_id: "user-1",
+          messages: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        ...SAMPLE_THREADS,
+      ]),
+      getThread: vi.fn(),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Fresh thread")).toBeInTheDocument();
+    });
+    // Both buckets render: the fresh thread under Today, fixtures under Older.
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Older" })).toBeInTheDocument();
+  });
+});
+
+// ── Tests: Round 1 Foundation — input ergonomics ─────────────────────────────
+
+describe("Chat page — input ergonomics (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  async function openComposer() {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /chat message input/i })).toBeInTheDocument();
+    });
+    return screen.getByRole("textbox", { name: /chat message input/i }) as HTMLTextAreaElement;
+  }
+
+  it("shows the character count from 800 characters", async () => {
+    const textarea = await openComposer();
+
+    // 799 chars: no counter yet.
+    fireEvent.change(textarea, { target: { value: "x".repeat(799) } });
+    expect(screen.queryByText(/\/ 2000/)).not.toBeInTheDocument();
+
+    // 800 chars: counter appears with the exact "N / 2000" copy.
+    fireEvent.change(textarea, { target: { value: "x".repeat(800) } });
+    expect(screen.getByText("800 / 2000")).toBeInTheDocument();
+  });
+
+  it("submits on Cmd+Enter (and Ctrl+Enter)", async () => {
+    // Stub fetch so the submit path doesn't hit the network. A rejected
+    // promise is fine — we only assert the submit FIRED (input cleared +
+    // fetch called), not the streaming outcome.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const textarea = await openComposer();
+    fireEvent.change(textarea, { target: { value: "What moved NVDA today?" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    // The submit clears the input synchronously (UX expectation) and the
+    // stream request goes out.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(textarea.value).toBe("");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does NOT submit on Shift+Enter (newline stays local)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const textarea = await openComposer();
+    fireEvent.change(textarea, { target: { value: "line one" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Input untouched — the browser default (newline insertion) proceeds.
+    expect(textarea.value).toBe("line one");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ── Tests: Round 1 Foundation — failed message Retry ─────────────────────────
+
+describe("Chat page — error state with Retry (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("failed send surfaces an error banner with a Retry button that resubmits", async () => {
+    // First attempt fails at the network level; the retry succeeds with a
+    // minimal one-token SSE stream.
+    const encoder = new TextEncoder();
+    let read = 0;
+    const goodReader = {
+      read: () => {
+        const frames = ['data: {"text":"ok"}\n', "data: [DONE]\n"];
+        if (read >= frames.length) return Promise.resolve({ done: true, value: undefined });
+        return Promise.resolve({ done: false, value: encoder.encode(frames[read++]) });
+      },
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => goodReader },
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+    const textarea = await waitFor(() =>
+      screen.getByRole("textbox", { name: /chat message input/i }),
+    );
+
+    fireEvent.change(textarea, { target: { value: "doomed question" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    // Error banner (role=alert) with a Retry button — never a frozen spinner.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/failed|try again/i);
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+
+    // Retry resubmits the SAME question.
+    fireEvent.click(retryBtn);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).message).toBe(
+      "doomed question",
+    );
+
+    // Banner clears once the retry starts/succeeds.
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ── Tests: Round 3 Polish — welcome state, skeletons, starter chips ──────────
+
+describe("Chat page — Round 3 polish (welcome + skeletons)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("welcome state shows the EmptyState copy + 4 starter chips from the generic follow-up pool", async () => {
+    // welcomeStarterPrompts is the SAME pool generateFollowUps pads from —
+    // importing it here pins the "one suggestion vocabulary" contract: if
+    // the pool and the welcome ever diverge, this assertion breaks.
+    const { welcomeStarterPrompts } = await import(
+      "@/features/chat/lib/follow-ups"
+    );
+
+    await renderChatPage();
+
+    // EmptyState title (chat.welcome copy key) — the pinned welcome label.
+    await waitFor(() => {
+      expect(screen.getByText("Analyst Intelligence")).toBeInTheDocument();
+    });
+
+    // Exactly 4 starter chips, in pool order, under the dedicated
+    // accessible name (NOT "Follow-up suggestions" — no answer exists yet).
+    const list = screen.getByRole("list", { name: "Starter prompts" });
+    const chips = Array.from(list.querySelectorAll("button"));
+    expect(chips.length).toBe(4);
+    expect(chips.map((c) => c.textContent)).toEqual(welcomeStarterPrompts(4));
+  });
+
+  it("clicking a welcome starter chip starts a new chat with the prompt pre-filled", async () => {
+    // REGRESSION (Round 3 fix): the old welcome cards called setInput(q)
+    // BEFORE handleNewChat() — whose trailing setInput("") clobbered the
+    // prompt in the same commit, so the composer always came up blank.
+    await renderChatPage();
+
+    const list = await screen.findByRole("list", { name: "Starter prompts" });
+    const firstChip = list.querySelectorAll("button")[0];
+    const promptText = firstChip.textContent ?? "";
+    expect(promptText.length).toBeGreaterThan(0);
+
+    fireEvent.click(firstChip);
+
+    // A new (ephemeral) thread mounts the composer with the prompt intact.
+    await waitFor(() => {
+      const textarea = screen.getByRole("textbox", {
+        name: /chat message input/i,
+      }) as HTMLTextAreaElement;
+      expect(textarea.value).toBe(promptText);
+    });
+  });
+
+  it("shows row-shaped thread skeletons (not blank) while the thread list loads", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    // Never-resolving getThreads pins the loading state for the assertion
+    // window. mockReturnValueOnce: only the threads queryFn's createGateway
+    // call (the first on mount — every other query is disabled) is hijacked.
+    vi.mocked(createGateway).mockReturnValueOnce({
+      getThreads: vi.fn().mockReturnValue(new Promise(() => {})),
+      getThread: vi.fn(),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    // Skeleton container + exactly 5 two-line row placeholders.
+    expect(await screen.findByLabelText("Loading threads")).toBeInTheDocument();
+    expect(screen.getAllByTestId("thread-skeleton-row").length).toBe(5);
+  });
+
+  it("shows bubble-shaped message skeletons while switching to a thread whose history is loading", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    // Threads list resolves (so a row is clickable); the per-thread history
+    // fetch never resolves (pins the message-skeleton state). The page calls
+    // createGateway once per queryFn invocation: mount (threads) + thread
+    // select (history) — hijack both calls with the same partial mock.
+    const gw = {
+      getThreads: vi.fn().mockResolvedValue(SAMPLE_THREADS),
+      getThread: vi.fn().mockReturnValue(new Promise(() => {})),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>;
+    vi.mocked(createGateway).mockReturnValueOnce(gw).mockReturnValueOnce(gw);
+
+    await renderChatPage();
+
+    // Select the first server thread → history query fires and hangs.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("NVDA Q4 earnings analysis"));
+
+    // Bubble placeholders: alternating user (right) / assistant (left,
+    // avatar square + bubble) silhouettes — never a blank pane.
+    expect(await screen.findByLabelText("Loading messages")).toBeInTheDocument();
+    expect(screen.getAllByTestId("message-skeleton-user").length).toBe(2);
+    expect(screen.getAllByTestId("message-skeleton-assistant").length).toBe(1);
+  });
+});
+
+// ── Tests: Wave 2 (frontend-rework sprint) — layout contracts ────────────────
+
+describe("Chat page — Wave 2 layout contracts", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("the context rail container is xl-gated but ALWAYS in the tree (≥1280px always visible)", async () => {
+    await renderChatPage();
+
+    // The rail renders even with NO active thread — it is the page's
+    // third pane, not a per-conversation accessory.
+    const rail = await screen.findByTestId("chat-context-rail-container");
+    // hidden + xl:block = invisible below 1280px, always visible at ≥1280px.
+    // (jsdom doesn't evaluate media queries — the class contract IS the test.)
+    expect(rail.className).toContain("hidden");
+    expect(rail.className).toContain("xl:block");
+    expect(rail.className).toContain("w-[320px]");
+  });
+
+  it("the rail shows the cold state ('Context appears as you chat') before any conversation", async () => {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("rail-cold-state")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Context appears as you chat")).toBeInTheDocument();
+  });
+
+  it("the conversation column is capped at a readable measure (max-w-[860px], centred)", async () => {
+    await renderChatPage();
+
+    // Select a thread so the message column mounts.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("NVDA Q4 earnings analysis"));
+
+    const column = await screen.findByTestId("chat-message-column");
+    expect(column.className).toContain("max-w-[860px]");
+    expect(column.className).toContain("mx-auto");
+  });
+
+  it("welcome copy sells capability (chat.welcome body — Wave 2 tune)", async () => {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByText("Analyst Intelligence")).toBeInTheDocument();
+    });
+    // The Wave-2 body: capability first ("Ask about any company…"), trust
+    // signal second ("answers cite…"). Pinned so a future copy edit is a
+    // deliberate decision, not drift.
+    expect(
+      screen.getByText(/Ask about any company, your portfolio, or market events/),
+    ).toBeInTheDocument();
   });
 });

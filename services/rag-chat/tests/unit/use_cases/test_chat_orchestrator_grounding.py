@@ -146,6 +146,108 @@ async def _collect(orch: Any, request: Any, uow: Any) -> tuple[list, str]:
     return events, answer
 
 
+# Verbatim round-3 leak (run_20260612T051019Z/q_ru_nvda_amd_compare_qtr_run2):
+# the final_answer was a fenced ```json tool-call OBJECT (the third stub shape),
+# followed by the grounding banner. Pinned verbatim so the detector is anchored
+# to the real artifact.
+_VERBATIM_JSON_STUB_FINAL_ANSWER = (
+    "```json\n"
+    "{\n"
+    '  "name": "get_fundamentals_history_batch",\n'
+    '  "arguments": {\n'
+    '    "tickers": ["NVDA", "AMD"],\n'
+    '    "periods": \n'
+    "  }\n"
+    "}\n"
+    "```\n\n"
+    "⚠ Some entity references could not be verified against retrieved data."
+)
+# The same stub WITHOUT the post-rewrite banner — this is what the rewrite turn
+# actually produces and what ``_is_tool_call_stub`` receives at its call sites.
+_VERBATIM_JSON_STUB_REWRITE_ONLY = (
+    "```json\n"
+    "{\n"
+    '  "name": "get_fundamentals_history_batch",\n'
+    '  "arguments": {\n'
+    '    "tickers": ["NVDA", "AMD"],\n'
+    '    "periods": \n'
+    "  }\n"
+    "}\n"
+    "```"
+)
+
+
+class TestIsToolCallStub:
+    """BP-674 / BP-675 — unit coverage for the leaked tool-call stub detector."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Verbatim round-2 leak shapes (run_20260612T041327Z).
+            (
+                "I will fetch the latest quarterly fundamentals for both NVDA and AMD to "
+                "compare revenue, EPS, and gross margin.\n\n<function_calls>\n"
+                '<invoke name="get_fundamentals_history_batch">\n'
+                '<parameter name="tickers">["NVDA", "AMD"]</parameter>\n</invoke>\n</function_calls>'
+            ),
+            (
+                "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+                '**Tool calls:**\n- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+            ),
+            'Let me fetch the data.\n<invoke name="get_price_history"></invoke>',
+            # BP-675 — verbatim round-3 fenced-JSON tool-call object (with banner).
+            _VERBATIM_JSON_STUB_FINAL_ANSWER,
+            # BP-675 — the same stub pre-banner (the rewrite-turn output).
+            _VERBATIM_JSON_STUB_REWRITE_ONLY,
+            # BP-675 — bare (unfenced) JSON tool-call object standing alone.
+            '{"name": "get_fundamentals_history_batch", "arguments": {"tickers": ["NVDA"]}}',
+        ],
+    )
+    def test_detects_stub(self, text: str) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import _is_tool_call_stub
+
+        assert _is_tool_call_stub(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "   ",
+            "Here is the comparison: | Metric | NVDA | AMD |\n| Revenue | $81.61B | $10.25B |",
+            "NVIDIA revenue grew 18% over the last 4 reported quarters [1].",
+            "I cannot find data about that entity.",
+            "Forward P/E is not currently available in our data sources.",
+            # A real answer that merely mentions a tool name in prose is NOT a stub.
+            "Using get_fundamentals_history_batch, I found revenue of $81.61B for NVDA [1].",
+            # BP-675 — a real answer that QUOTES a small inline JSON snippet
+            # (no name+arguments tool-call shape) must NOT be flagged.
+            'The screener API expects {"foo": 1} as input. NVDA revenue is $81.61B [1].',
+            # BP-675 — a config/example JSON code block that is NOT a tool call
+            # (no "name"/"arguments" keys), even when it is most of the answer.
+            (
+                "Here is the recommended screener configuration:\n"
+                "```json\n"
+                '{"market_cap_min": 50000000000, "revenue_growth": 0.1, "sector": "tech"}\n'
+                "```"
+            ),
+            # BP-675 — a substantive table answer that ALSO embeds a tool-call-
+            # shaped JSON example must NOT collapse (the JSON is a minority).
+            (
+                "Here is the side-by-side comparison:\n\n"
+                "| Metric | NVDA | AMD |\n|---|---|---|\n"
+                "| Revenue | $81.61B | $10.25B |\n| Gross Margin | 74.9% | 52.9% |\n\n"
+                "Under the hood the agent issued "
+                '`{"name": "get_fundamentals_history_batch", "arguments": {"tickers": ["NVDA", "AMD"]}}` '
+                "to retrieve these figures, which confirm NVDA's scale advantage [1]."
+            ),
+        ],
+    )
+    def test_clean_answer_not_flagged(self, text: str) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import _is_tool_call_stub
+
+        assert _is_tool_call_stub(text) is False
+
+
 class TestOrchestratorGroundingHook:
     def _build(self, **kwargs: Any) -> tuple[Any, list, MagicMock]:
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
@@ -310,6 +412,180 @@ class TestOrchestratorGroundingHook:
         assert "could not be verified" in assistant_response.content, (
             "W44 — banner suppression must not hide real fabrication; " f"got: {assistant_response.content!r}"
         )
+
+    def test_divergent_resynthesis_rewrite_keeps_grounded_original(self) -> None:
+        """BP-671 — a rewrite that FREE-GENERATES a new answer (re-synthesis)
+        instead of correcting the draft must be rejected; the grounded
+        original is kept.
+
+        Reproduces the live MSTR-news run
+        (run_20260609T175104Z/q_ru_mstr_news_run2.json): the streamed draft
+        was grounded (real Peter Schiff headline + real price table) but had a
+        single unsupported figure that tripped the validator. The rewrite then
+        regenerated a completely different, fabricated answer (invented BTC
+        holdings, market cap, revenue). The divergence guard detects the rewrite
+        shares <50% of the original's content anchors and keeps the original.
+        """
+        # A grounded draft rich in anchors (proper nouns + price-table numbers);
+        # one figure ("$28.4B treasury") is unsupported and trips the validator.
+        grounded_draft = (
+            "Here's what's happening with MicroStrategy (MSTR). The most prominent "
+            "recent article is a critical piece from Peter Schiff arguing the debt "
+            "buyback torched 60% of the safety net. Price action over the last two "
+            "weeks: May 26 close $165.38, May 27 $159.63, May 28 $149.70, Jun 2 "
+            "$135.90, Jun 3 $135.69 — a drop of roughly 18%. The treasury is worth "
+            "about $28.4B in Bitcoin and remains the key driver of the stock."
+        )
+        # A long, fabricated re-synthesis: different numbers, different structure,
+        # almost none of the original's grounded anchors survive.
+        fabricated_rewrite = (
+            "Here are the latest developments on MicroStrategy (MSTR). The company "
+            "recently purchased an additional 8,095 BTC for approximately $271.47 "
+            "million, bringing total holdings to roughly 271,474 BTC. Market "
+            "capitalization is around $28.0 billion with enterprise value near "
+            "$30.0 billion. Revenue stands at $509.0 million and net income at "
+            "$135.9 million. Short interest is about 17.0% of float and the "
+            "put/call ratio is 0.6, suggesting bearish options positioning across "
+            "the most recent sessions in this period of elevated trading volume."
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_draft],
+            rewrite_chunks=[fabricated_rewrite],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Both turns ran: the validator failed the draft and tried a rewrite.
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The GROUNDED original is kept — its real anchors survive …
+        assert "Peter Schiff" in content, f"grounded original was dropped: {content!r}"
+        assert "$165.38" in content
+        # … and the fabricated re-synthesis anchors are NOT shipped.
+        assert "271,474 BTC" not in content, f"fabricated re-synthesis shipped: {content!r}"
+        assert "$509.0 million" not in content
+        # The user is still warned about the one figure that tripped the pass.
+        assert "could not be verified" in content
+
+    def test_numeric_rewrite_tool_call_stub_keeps_grounded_original(self) -> None:
+        """BP-674 — a numeric rewrite that leaks a tool-call / planning STUB must
+        be rejected; the grounded streamed answer is kept, NOT the stub.
+
+        Reproduces the round-2 live runs (run_20260612T041327Z):
+          q_ru_nvda_amd_compare_qtr_run1 — streamed a real comparison table; the
+            final answer became 'I will fetch … <function_calls><invoke …>…'.
+          q_ru_nvda_amd_revenue_4q_run1 — streamed a real quarterly table; the
+            final answer became '**Tool calls:**\\n- get_fundamentals_history_batch(…)'.
+        The grounding rewrite's stream_chat returned the planning stub (it was
+        re-prompted with prior tool turns in history) and it overwrote the
+        grounded synthesis. The stub guard keeps the original instead.
+        """
+        # Grounded streamed table (one figure "$28.4B" trips the validator).
+        grounded_table = (
+            "Here is the side-by-side comparison for the latest reported quarters:\n\n"
+            "| Metric | NVDA (Q1 FY2027) | AMD (Q1 FY2026) |\n"
+            "|---|---|---|\n"
+            "| Revenue | $81.61B | $10.25B |\n"
+            "| EPS (Diluted) | $1.87 | $1.37 |\n"
+            "| Gross Profit | $61.16B | $5.55B |\n\n"
+            "NVDA's revenue dwarfs AMD's, with a combined treasury value near $28.4B."
+        )
+        # Leaked tool-call stub (verbatim shape from the compare_qtr run).
+        leaked_stub = (
+            "I will fetch the latest quarterly fundamentals for both NVDA and AMD to "
+            "compare revenue, EPS, and gross margin.\n\n"
+            "<function_calls>\n"
+            '<invoke name="get_fundamentals_history_batch">\n'
+            '<parameter name="tickers">["NVDA", "AMD"]</parameter>\n'
+            "</invoke>\n"
+            "</function_calls>"
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[leaked_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2  # initial draft + rewrite both ran
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The grounded table is kept …
+        assert "side-by-side comparison" in content, f"grounded table dropped: {content!r}"
+        assert "$81.61B" in content
+        # … and NO part of the leaked tool-call stub is shipped.
+        assert "I will fetch" not in content, f"planning lead shipped: {content!r}"
+        assert "function_calls" not in content, f"tool-call XML shipped: {content!r}"
+        assert "get_fundamentals_history_batch" not in content
+
+    def test_numeric_rewrite_tool_calls_markdown_stub_rejected(self) -> None:
+        """BP-674 — the '**Tool calls:**' markdown stub form (no XML) is also
+        rejected. The BP-670 XML-only guard missed this; ``_is_tool_call_stub``
+        covers it. Mirrors q_ru_nvda_amd_revenue_4q_run1."""
+        grounded_table = (
+            "NVIDIA (FY ends Jan) — last 4 reported quarters:\n"
+            "| Quarter | Revenue |\n|---|---|\n"
+            "| Q2 FY2026 | $46.7B |\n| Q3 FY2026 | $57.0B |\n| Q4 FY2026 | $39.3B |\n\n"
+            "Revenue has grown steadily, reaching a treasury-adjusted base of $28.4B."
+        )
+        markdown_stub = (
+            "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+            "**Tool calls:**\n"
+            '- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[markdown_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        assert "last 4 reported quarters" in content, f"grounded table dropped: {content!r}"
+        assert "$46.7B" in content
+        assert "**Tool calls:**" not in content, f"markdown stub shipped: {content!r}"
+        assert "get_fundamentals_history_batch" not in content
+
+    def test_numeric_rewrite_fenced_json_stub_keeps_grounded_original(self) -> None:
+        """BP-675 — a numeric rewrite that leaks a fenced ```json tool-call
+        OBJECT must be rejected; the grounded streamed answer is kept.
+
+        Reproduces run_20260612T051019Z/q_ru_nvda_amd_compare_qtr_run2: the
+        streamed gross-margin comparison was replaced as final_answer by a
+        ```json {"name": …, "arguments": {…}} block. The round-2 XML/markdown
+        detectors missed the JSON-object form; the BP-675 JSON gate covers it.
+        """
+        grounded_table = (
+            "Now let me compute gross margin from the gross profit and revenue figures.\n\n"
+            "Here's the side-by-side comparison:\n\n"
+            "| Metric | NVDA (Q1 FY2027) | AMD (Q1 FY2026) |\n"
+            "|---|---|---|\n"
+            "| Revenue | $81.61B | $10.25B |\n"
+            "| Gross Profit | $61.16B | $5.42B |\n"
+            "| Gross Margin | 74.9% | 52.9% |\n\n"
+            "NVDA's margin advantage is stark, but its treasury base sits near $28.4B."
+        )
+        # Verbatim fenced-JSON tool-call object (pre-banner — the rewrite output).
+        json_stub = (
+            "```json\n"
+            "{\n"
+            '  "name": "get_fundamentals_history_batch",\n'
+            '  "arguments": {\n'
+            '    "tickers": ["NVDA", "AMD"],\n'
+            '    "periods": \n'
+            "  }\n"
+            "}\n"
+            "```"
+        )
+        orch, captured, pipeline = self._build(
+            stream_chunks=[grounded_table],
+            rewrite_chunks=[json_stub],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2  # initial draft + rewrite both ran
+        content = pipeline.persist_chat.await_args.kwargs["assistant_response"].content
+        # The grounded comparison is kept …
+        assert "side-by-side comparison" in content, f"grounded table dropped: {content!r}"
+        assert "74.9%" in content
+        assert "$81.61B" in content
+        # … and NO part of the leaked JSON tool-call stub is shipped.
+        assert '"name": "get_fundamentals_history_batch"' not in content, f"json stub shipped: {content!r}"
+        assert '"arguments"' not in content
+        assert "```json" not in content
 
     def test_completion_cache_written_when_grounding_passes(self) -> None:
         """Sanity check — passing grounding still writes to the cache.
@@ -752,6 +1028,55 @@ class TestEntityNameGroundingSecondPassBridge:
         # And the returned text MUST NOT be the verbatim original prose.
         assert text != response, "Negative case must not admit response unchanged"
 
+    def test_entity_rewrite_tool_calls_markdown_stub_keeps_original(self) -> None:
+        """BP-674 — when the entity-grounding rewrite leaks a '**Tool calls:**'
+        markdown stub, keep the ORIGINAL grounded answer + banner.
+
+        The legacy BP-670 guard here only checked for ``<function_calls>`` XML;
+        the round-2 q_ru_nvda_amd_revenue_4q_run1 leak used the markdown form,
+        which slipped through. ``_is_tool_call_stub`` now covers both.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        # Response names an UNRELATED entity → first pass flags → rewrite fires.
+        response = "Apple's revenue grew 8% year-on-year per the filing, a solid quarter."
+        prior_calls = [self._make_prior_call({"ticker": "MSFT", "metrics": ["revenue"]})]
+
+        markdown_stub = (
+            "I'll fetch the revenue data for both NVIDIA and AMD over the last 4 quarters.\n\n"
+            "**Tool calls:**\n"
+            '- get_fundamentals_history_batch(tickers=["NVDA", "AMD"], periods=4)'
+        )
+        pipeline = self._make_pipeline_for_entity(rewrite_text=markdown_stub)
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=prior_calls,
+            )
+        )
+
+        assert pipeline._rewrite_call_count["n"] >= 1, "rewrite must have fired"
+        # The leaked markdown stub MUST NOT be shipped …
+        assert "**Tool calls:**" not in text, f"markdown stub shipped: {text!r}"
+        assert "get_fundamentals_history_batch" not in text
+        # … the original answer body is preserved + the banner is appended.
+        assert "Apple's revenue grew 8%" in text
+        assert "could not be verified" in text
+        assert passed is False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # F-NEW-015 — tool-result entity grounding (Option A) + rewrite timeout (Option B)
@@ -984,3 +1309,759 @@ class TestEntityGroundingRewriteTimeout:
         assert passed is False, "Timeout path must mark grounding as failed"
         assert "validator timeout" in text, "Timeout banner must be appended to original response"
         assert text.startswith(response), "Original response text must be preserved verbatim"
+
+
+class TestEntityGroundingRewriteBudget:
+    """BP-670 — at most ONE repair rewrite per turn.
+
+    The live 50s Apple-news turn stacked a 16.5s numeric-grounding rewrite
+    AND a 15s entity-grounding rewrite timeout. When the orchestrator passes
+    ``allow_rewrite=False`` (numeric pass already rewrote), the entity pass
+    must validate-only: banner on failure, ZERO additional LLM calls.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_allow_rewrite_false_banners_without_llm_call(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple's revenue grew 8% year-on-year per the filing."
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text="should never be used")
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+                allow_rewrite=False,
+            )
+        )
+
+        assert passed is False
+        assert pipeline._rewrite_call_count["n"] == 0, "validate-only mode must not call the LLM"
+        assert text.startswith(response)
+        assert "could not be verified" in text
+
+    def test_allow_rewrite_default_still_rewrites(self) -> None:
+        """Default behaviour unchanged: failure triggers exactly one rewrite."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple's revenue grew 8% year-on-year per the filing."
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text="Revenue figures [unverified].")
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert pipeline._rewrite_call_count["n"] == 1
+
+
+class TestEntityGroundingRewriteFabricationGuard:
+    """BP-670 — a rewrite that invents numerically-unsupported content is discarded.
+
+    Live Apple-news verification run (2026-06-11, request 01KTV3BD1B...):
+    two junk candidates ("Multiple", "Would") tripped the entity validator
+    and the repair rewrite REPLACED a correct cited news summary with a
+    fabricated one ("52% smartwatch share", "iPhone Pro supply chain
+    ramp"). The numeric pass had ALREADY accepted the original — so a
+    rewrite that now fails numeric grounding has fabricated numbers and
+    must be rejected in favour of the original + banner.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_fabricating_rewrite_is_discarded_for_original(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        # Original fails entity grounding ("Apple" ungrounded) but carries
+        # no numbers — the numeric pass upstream accepted it.
+        response = "Apple announced a partnership per the filing."
+        # The rewrite invents a number no tool result supports.
+        pipeline = self._make_pipeline_for_entity(
+            rewrite_text="Microsoft Watch held 52% of the smartwatch market last quarter."
+        )
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Microsoft news"}],
+                budget=budget,
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert passed is False
+        assert text.startswith(response), "fabricating rewrite must be discarded for the original"
+        assert "52%" not in text
+        assert "could not be verified" in text
+
+
+class TestNumericRewriteDegradationGuard:
+    """BP-670 — a numerically WORSE rewrite must be discarded for the original.
+
+    Live Apple-news run: draft had ONE unsupported number; the rewrite was a
+    fabricated news table with many. The legacy "rewrite is usually strictly
+    better" policy (and the full-citation-coverage suppression) shipped the
+    fabrication as the final answer.
+    """
+
+    def test_worse_rewrite_discarded_for_original_plus_banner(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        # Original: one unsupported number (42%). Tools carry none of these.
+        response = "Options desk flags a 42% setup on the stock."
+        # Rewrite: fabricates MORE unsupported numbers.
+        rewrite = "Revenue hit $28.5B with 52% share and 31% growth across 17 regions."
+
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+
+        async def _stream_chat(messages: list, **_: Any):
+            yield rewrite
+
+        pipeline.llm_chain.stream_chat = _stream_chat
+
+        item = MagicMock()
+        # Carry an unrelated number (15%) so the grounding pool is NON-EMPTY
+        # (otherwise the Theme-A empty-pool gate would pre-empt this test). The
+        # 42% claim still does not match 15%, so numeric grounding fails and the
+        # rewrite path runs — exactly the BP-670 worse-rewrite scenario.
+        item.text = "Article headline notes a 15% move\n  Source: news"
+        item.citation_meta = None
+        item.item_id = "tool:entity_news:abc"
+
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        text, passed = asyncio.run(
+            orch._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[item],
+                messages=[{"role": "user", "content": "news?"}],
+                budget=AgentBudget(),
+            )
+        )
+
+        assert passed is False
+        assert text.startswith(response), "worse rewrite must be discarded for the original"
+        assert "$28.5B" not in text
+        assert "could not be verified" in text
+
+
+class TestEntityGroundingRewriteToolXmlGuard:
+    """BP-670 — a rewrite that is tool-call XML must never ship as the answer.
+
+    Live run (2026-06-11, request 01KTV4JA...): the repair rewrite emitted
+    ``<function_calls><invoke name="get_entity_news">...`` (the model tried
+    to re-fetch data instead of writing prose). XML contains no entity or
+    numeric candidates, so BOTH validators passed it and the user received
+    raw XML as the final answer.
+    """
+
+    _make_prior_call = staticmethod(TestEntityNameGroundingSecondPassBridge._make_prior_call)
+    _make_tool_item = staticmethod(TestEntityNameGroundingSecondPassBridge._make_tool_item)
+    _make_resolved_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_resolved_entity)
+    _make_pipeline_for_entity = staticmethod(TestEntityNameGroundingSecondPassBridge._make_pipeline_for_entity)
+
+    def test_tool_xml_rewrite_discarded_for_original(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple announced a partnership per the filing, with broad analyst coverage following."
+        xml = (
+            '<function_calls>\n<invoke name="get_entity_news">\n'
+            '<parameter name="ticker">AAPL</parameter>\n</invoke>\n</function_calls>'
+        )
+
+        pipeline = self._make_pipeline_for_entity(rewrite_text=xml)
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Microsoft news"}],
+                budget=AgentBudget(),
+                prior_tool_calls=[self._make_prior_call({"ticker": "MSFT"})],
+            )
+        )
+
+        assert passed is False
+        assert "<function_calls" not in text
+        assert text.startswith(response)
+        assert "could not be verified" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat-eval pack-10 (2026-06-12) — universe/aggregate questions must NOT be
+# refused by the entity-grounding guard.
+#
+# ``tc_earnings_next_week_universe`` ("Which S&P 500 names report earnings next
+# week?") refused with "I cannot find information about the entities…" even
+# though ``get_earnings_calendar`` returned a valid calendar: the universe
+# question has no anchor entity, S6 mis-resolved it to garbage, and the calendar
+# items carry ``entity_name=None`` → zero overlap → false refusal. The guard
+# must be skipped when a universe/aggregate/screener tool ran.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestUniverseQuestionSkipsEntityGroundingGuard:
+    def _build_universe(self, *, tool_name: str, stream_chunks: list[str]) -> tuple[Any, MagicMock]:
+        from uuid import UUID
+
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+        from rag_chat.domain.entities.chat import ResolvedEntity
+
+        pipeline, _captured = _make_pipeline(stream_chunks=stream_chunks)
+        # Garbage resolved entity (the S6 mis-resolution) → non-empty
+        # _question_entity_ids, which would otherwise arm the guard.
+        garbage = ResolvedEntity(
+            entity_id=UUID("41c379f9-0000-7000-8000-000000000000"),
+            canonical_name="Pandora",
+            entity_type="company",
+            confidence=0.6,
+            matched_text="P",
+            ticker="P",
+        )
+        pipeline.resolve_entities = AsyncMock(return_value=[garbage])
+
+        # A universe tool result whose items reference NONE of the question
+        # entities (calendar rows carry entity_name=None).
+        item = _make_grounding_item(
+            text="Earnings next week: AAPL (Thu), MSFT (Wed), GOOGL (Tue).",
+            entity_name=None,
+        )
+        block = _make_tool_use_block(name=tool_name, inp={"from_date": "2026-06-15", "to_date": "2026-06-22"})
+        executor = _make_executor([item])
+        factory = _make_factory(executor)
+
+        ct = {"i": 0}
+
+        async def _two_call(messages, tools=None, **_):
+            ct["i"] += 1
+            if ct["i"] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="", tool_calls=[])
+
+        pipeline.llm_chain.chat_with_tools = _two_call
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        return orch, pipeline
+
+    def test_earnings_calendar_universe_question_not_refused(self) -> None:
+        orch, pipeline = self._build_universe(
+            tool_name="get_earnings_calendar",
+            stream_chunks=["Next week: AAPL on Thursday, MSFT on Wednesday, GOOGL on Tuesday."],
+        )
+        _, answer = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert "cannot find information about the entities" not in answer
+        assert "AAPL" in answer
+
+    def test_single_entity_tool_still_refused_on_drift(self) -> None:
+        """Control: a non-universe tool with drifted entities still refuses."""
+        orch, pipeline = self._build_universe(
+            tool_name="get_entity_intelligence",
+            stream_chunks=["Pandora is a jewellery company."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # The single-entity path keeps the guard: the persisted answer is the
+        # refusal (item text mentions only AAPL/MSFT/GOOGL, question = Pandora).
+        assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
+        assert "cannot find information about the entities" in assistant_response.content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-06-12 root-cause audit Theme A — PHANTOM-CITATION GATE + EMPTY-POOL REFUSAL
+#
+# The dominant fabrication mechanism: the LLM invents numbers and tags them with
+# ``[tool_name row N]`` for tools it NEVER called. The grounding validator's
+# bracket fast-path then accepts the number because the fake tag sits within
+# ±50 chars. ``_run_grounding_validation`` must DETERMINISTICALLY refuse such an
+# answer (grounded=False so it is never cached) when fed the called-tool set.
+#
+# Artifacts: run_20260612T183758Z/{q_tc_portfolio_dividend_yielders,
+# q_agg_q5_tsla_macro, q_iter3_apple_suppliers_compound}.json.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestPhantomCitationGate:
+    @staticmethod
+    def _orch() -> Any:
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        return ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+    @staticmethod
+    def _row_with_value(value: float) -> MagicMock:
+        from contracts.numeric_grounding import FieldKind
+
+        item = MagicMock()
+        item.text = "Portfolio position"
+        item.value = value
+        item.field_kind = FieldKind.RATIO
+        item.citation_meta = None
+        item.item_id = "tool:portfolio:AAPL"
+        return item
+
+    def test_phantom_query_fundamentals_refused(self) -> None:
+        """Dividend-yielders answer cites [query_fundamentals row N]; only get_portfolio_context ran."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        # Verbatim shape from q_tc_portfolio_dividend_yielders.json.
+        response = (
+            "| **Apple (AAPL)** | 0.46% [query_fundamentals row 0] |\n"
+            "| **Microsoft (MSFT)** | 0.72% [query_fundamentals row 1] |"
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        # The rewrite stream must NEVER be reached — the gate fires first.
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(0.46)],
+                messages=[{"role": "user", "content": "dividend yields?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_portfolio_context"],
+            )
+        )
+        assert passed is False, "phantom-citation answer must fail grounding (never cached)"
+        assert text == _PHANTOM_CITATION_REFUSAL
+        assert "query_fundamentals" not in text
+
+    def test_phantom_query_macro_refused(self) -> None:
+        """agg_q5_tsla_macro cites [query_macro row N]; only get_economic_calendar ran."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        response = (
+            "The Federal Reserve is expected to hold rates at 4.25%-4.50% [query_macro row 0]. "
+            "GDP is projected to grow at 1.8% [query_macro row 1]."
+        )
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[self._row_with_value(4.25)],
+                messages=[{"role": "user", "content": "macro events for Tesla?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_economic_calendar", "search_documents", "get_entity_news"],
+            )
+        )
+        assert passed is False
+        assert text == _PHANTOM_CITATION_REFUSAL
+
+    def test_real_called_tool_citation_passes_gate(self) -> None:
+        """A [get_fundamentals_history row N] tag for a CALLED tool does NOT trip the phantom gate."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        # The cited tool WAS called, and the number matches the tool value, so the
+        # answer passes grounding entirely (no refusal). No quarter label so the
+        # quarter-grounding sub-check stays out of the way.
+        response = "Apple's dividend yield is 0.46% [get_fundamentals_history row 0]."
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=MagicMock(),
+                response=response,
+                tool_items=[self._row_with_value(0.46)],
+                messages=[{"role": "user", "content": "revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+            )
+        )
+        assert passed is True
+        assert text != _PHANTOM_CITATION_REFUSAL
+        assert text == response
+
+
+class TestEmptyPoolRefusal:
+    @staticmethod
+    def _orch() -> Any:
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        return ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+    def test_numeric_claims_with_empty_pool_refused(self) -> None:
+        """Specific numbers + empty tool-value pool → refuse (cannot corroborate)."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _EMPTY_POOL_REFUSAL,
+            AgentBudget,
+        )
+
+        # Tool returned a text-only row with NO numbers → empty numeric pool.
+        empty_item = MagicMock()
+        empty_item.text = "no matching rows returned"
+        empty_item.value = None
+        empty_item.field_kind = None
+        empty_item.citation_meta = None
+        empty_item.item_id = "tool:fundamentals:ZZZ"
+
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        pipeline.llm_chain.stream_chat = MagicMock(side_effect=AssertionError("rewrite should not run"))
+
+        response = "Revenue was $24.7B and EPS was $1.40 last quarter."
+        text, passed = asyncio.run(
+            self._orch()._run_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[empty_item],
+                messages=[{"role": "user", "content": "revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+            )
+        )
+        assert passed is False
+        assert text == _EMPTY_POOL_REFUSAL
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RC-1 (2026-06-18 internal-tool latency investigation) — combined numeric +
+# entity-name grounding pass. Merges the two formerly-sequential rewrite passes
+# into ONE repair completion per turn. Coverage:
+#   - combined rewrite fixes BOTH a missing-number and a missing-name in ONE call
+#   - stricter trigger: a fully-grounded answer never triggers a rewrite
+#   - the configurable model is actually used for the rewrite call
+#   - default (unset model) → model kwarg is None (unchanged behaviour)
+#   - divergence guard still rejects a divergent re-synthesis (original kept)
+#   - banner still appended when grounding cannot be satisfied
+#   - numeric refusal gates (phantom citation) still fire with no LLM call
+# ─────────────────────────────────────────────────────────────────────────────
+class TestCombinedGroundingValidation:
+    @staticmethod
+    def _orch() -> Any:
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        return ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+
+    @staticmethod
+    def _make_resolved_entity(canonical_name: str, ticker: str | None = None) -> MagicMock:
+        ent = MagicMock()
+        ent.canonical_name = canonical_name
+        ent.ticker = ticker
+        ent.matched_text = canonical_name
+        return ent
+
+    @staticmethod
+    def _make_pipeline(rewrite_text: str = "") -> tuple[MagicMock, dict[str, Any]]:
+        """Pipeline whose ``stream_chat`` yields ``rewrite_text`` once and
+        records the call count + the kwargs of the LAST call (so a test can
+        assert the ``model`` override actually reached the provider call)."""
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        capture: dict[str, Any] = {"n": 0, "last_kwargs": None}
+
+        async def _stream_chat(messages: list, **kwargs: Any):
+            capture["n"] += 1
+            capture["last_kwargs"] = kwargs
+            if rewrite_text:
+                yield rewrite_text
+
+        pipeline.llm_chain.stream_chat = _stream_chat
+        return pipeline, capture
+
+    def test_combined_rewrite_fixes_number_and_name_in_one_call(self) -> None:
+        """A single rewrite repairs BOTH an ungrounded number AND an ungrounded
+        name — the core RC-1 win (today the entity issue would be bannered)."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        # Tool item carries the GROUND TRUTH: Apple, $10.253B revenue.
+        tool_item = _make_retrieved_item(text="Apple Q3 revenue was $10.253B per the filing.")
+        resolved = [self._make_resolved_entity(canonical_name="Apple", ticker="AAPL")]
+        # Original answer: WRONG number ($34.6B) AND an ungrounded company
+        # (Microsoft is nowhere in the resolved set or the tool text).
+        response = "Microsoft drove the quarter; Apple Q2 revenue was $34.6B per the filing."
+        # The single rewrite grounds both: correct number, drops Microsoft.
+        rewrite = "Apple Q2 revenue was $10.253B per the filing."
+
+        pipeline, capture = self._make_pipeline(rewrite_text=rewrite)
+        text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[tool_item],
+                resolved_entities=resolved,
+                messages=[{"role": "user", "content": "Apple revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+                prior_tool_calls=None,
+                run_entity_pass=True,
+            )
+        )
+
+        # EXACTLY ONE rewrite completion — not two sequential passes.
+        assert capture["n"] == 1, "combined pass must fire at most one rewrite"
+        assert passed is True
+        assert "$10.253B" in text
+        assert "$34.6B" not in text
+        assert "Microsoft" not in text
+
+    def test_fully_grounded_answer_triggers_no_rewrite(self) -> None:
+        """Stricter trigger — a fully-grounded answer never calls the LLM."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        tool_item = _make_retrieved_item(text="Apple Q3 revenue was $10.253B per the filing.")
+        resolved = [self._make_resolved_entity(canonical_name="Apple", ticker="AAPL")]
+        # Number matches the tool value; the only name (Apple) is grounded.
+        response = "Apple Q3 revenue was $10.253B."
+
+        pipeline, capture = self._make_pipeline(rewrite_text="SHOULD NOT BE CALLED")
+        text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[tool_item],
+                resolved_entities=resolved,
+                messages=[{"role": "user", "content": "Apple revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+                prior_tool_calls=None,
+                run_entity_pass=True,
+            )
+        )
+
+        assert capture["n"] == 0, "fully-grounded answer must NOT trigger a rewrite"
+        assert passed is True
+        assert text == response
+
+    def test_configurable_model_used_for_rewrite(self) -> None:
+        """The ``rewrite_model`` override is forwarded to the rewrite call."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        tool_item = _make_retrieved_item(text="Apple Q3 revenue was $10.253B per the filing.")
+        resolved = [self._make_resolved_entity(canonical_name="Apple", ticker="AAPL")]
+        response = "Apple Q2 revenue was $34.6B per the filing."  # ungrounded number
+        rewrite = "Apple Q2 revenue was $10.253B per the filing."
+
+        pipeline, capture = self._make_pipeline(rewrite_text=rewrite)
+        _text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[tool_item],
+                resolved_entities=resolved,
+                messages=[{"role": "user", "content": "Apple revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+                prior_tool_calls=None,
+                run_entity_pass=True,
+                rewrite_model="openai/gpt-oss-120b",
+            )
+        )
+
+        assert capture["n"] == 1
+        assert passed is True
+        assert (
+            capture["last_kwargs"]["model"] == "openai/gpt-oss-120b"
+        ), "rewrite must route to the configured override model"
+
+    def test_default_unset_model_passes_none(self) -> None:
+        """Default (no override) → ``model=None`` reaches the provider, so the
+        adapter uses its configured completion model (unchanged behaviour)."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        tool_item = _make_retrieved_item(text="Apple Q3 revenue was $10.253B per the filing.")
+        resolved = [self._make_resolved_entity(canonical_name="Apple", ticker="AAPL")]
+        response = "Apple Q2 revenue was $34.6B per the filing."
+        rewrite = "Apple Q2 revenue was $10.253B per the filing."
+
+        pipeline, capture = self._make_pipeline(rewrite_text=rewrite)
+        asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[tool_item],
+                resolved_entities=resolved,
+                messages=[{"role": "user", "content": "Apple revenue?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_fundamentals_history"],
+                prior_tool_calls=None,
+                run_entity_pass=True,
+                # rewrite_model omitted → defaults to None
+            )
+        )
+        assert capture["n"] == 1
+        assert capture["last_kwargs"]["model"] is None
+
+    def test_divergent_resynthesis_keeps_grounded_original(self) -> None:
+        """The BP-671 divergence guard still rejects a fresh re-synthesis."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        grounded_draft = (
+            "Here's what's happening with MicroStrategy (MSTR). The most prominent "
+            "recent article is a critical piece from Peter Schiff arguing the debt "
+            "buyback torched 60% of the safety net. Price action over the last two "
+            "weeks: May 26 close $165.38, May 27 $159.63, May 28 $149.70, Jun 2 "
+            "$135.90, Jun 3 $135.69 — a drop of roughly 18%. The treasury is worth "
+            "about $28.4B in Bitcoin and remains the key driver of the stock."
+        )
+        fabricated_rewrite = (
+            "Here are the latest developments on MicroStrategy (MSTR). The company "
+            "recently purchased an additional 8,095 BTC for approximately $271.47 "
+            "million, bringing total holdings to roughly 271,474 BTC. Market "
+            "capitalization is around $28.0 billion with enterprise value near "
+            "$30.0 billion. Revenue stands at $509.0 million and net income at "
+            "$135.9 million. Short interest is about 17.0% of float and the "
+            "put/call ratio is 0.6, suggesting bearish options positioning across "
+            "the most recent sessions in this period of elevated trading volume."
+        )
+        # Tool item carries a number so the pool is non-empty; the draft's
+        # "$28.4B" still trips the numeric validator → rewrite path runs.
+        item = MagicMock()
+        item.text = "Article notes a 15% move\n  Source: news"
+        item.citation_meta = None
+        item.item_id = "tool:entity_news:mstr"
+
+        pipeline, capture = self._make_pipeline(rewrite_text=fabricated_rewrite)
+        text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=grounded_draft,
+                tool_items=[item],
+                resolved_entities=[],
+                messages=[{"role": "user", "content": "MSTR news?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+                prior_tool_calls=None,
+                run_entity_pass=False,
+            )
+        )
+
+        assert capture["n"] == 1, "rewrite must have been attempted before the guard"
+        assert passed is False
+        assert "Peter Schiff" in text, "divergent rewrite must be rejected for the grounded original"
+        assert "271,474 BTC" not in text
+        assert "could not be verified" in text
+
+    def test_banner_appended_when_grounding_cannot_be_satisfied(self) -> None:
+        """When the rewrite still invents a number, the banner is appended."""
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+        item = MagicMock()
+        # Non-empty pool (15%) so the empty-pool gate does not pre-empt.
+        item.text = "Article headline notes a 15% move\n  Source: news"
+        item.citation_meta = None
+        item.item_id = "tool:entity_news:abc"
+
+        response = "Options desk flags a 42% setup on the stock."
+        # Rewrite invents ANOTHER unsupported number (same count, not worse) →
+        # second validation fails → banner.
+        rewrite = "Options desk flags a 99% setup on the stock."
+
+        pipeline, capture = self._make_pipeline(rewrite_text=rewrite)
+        text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[item],
+                resolved_entities=[],
+                messages=[{"role": "user", "content": "news?"}],
+                budget=AgentBudget(),
+                called_tool_names=["get_entity_news"],
+                prior_tool_calls=None,
+                run_entity_pass=False,
+            )
+        )
+
+        assert capture["n"] == 1
+        assert passed is False
+        assert "could not be verified" in text
+
+    def test_phantom_citation_refused_without_llm_call(self) -> None:
+        """The numeric phantom-citation refusal gate is preserved — fires
+        deterministically with NO rewrite (the safeguard is intact)."""
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _PHANTOM_CITATION_REFUSAL,
+            AgentBudget,
+        )
+
+        from contracts.numeric_grounding import FieldKind
+
+        row = MagicMock()
+        row.text = "Portfolio position"
+        row.value = 0.46
+        row.field_kind = FieldKind.RATIO
+        row.citation_meta = None
+        row.item_id = "tool:portfolio:AAPL"
+
+        response = "| **Apple (AAPL)** | 0.46% [query_fundamentals row 0] |"
+        pipeline, capture = self._make_pipeline(rewrite_text="SHOULD NOT BE CALLED")
+        text, passed = asyncio.run(
+            self._orch()._run_combined_grounding_validation(
+                p=pipeline,
+                response=response,
+                tool_items=[row],
+                resolved_entities=[],
+                messages=[{"role": "user", "content": "dividend yields?"}],
+                budget=AgentBudget(),
+                # Only get_portfolio_context ran → query_fundamentals citation is phantom.
+                called_tool_names=["get_portfolio_context"],
+                prior_tool_calls=None,
+                run_entity_pass=False,
+            )
+        )
+
+        assert capture["n"] == 0, "phantom gate must refuse with no LLM call"
+        assert passed is False
+        assert text == _PHANTOM_CITATION_REFUSAL

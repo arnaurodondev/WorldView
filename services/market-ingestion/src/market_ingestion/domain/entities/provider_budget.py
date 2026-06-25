@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import ClassVar
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -55,10 +56,25 @@ class ProviderBudget:
 
     # ── Provider default factories ────────────────────────────────────────────
 
+    # EODHD hard daily quota is 100_000 requests/day.  Modelled as a token
+    # bucket whose refill rate equals the sustained daily allowance:
+    #   100_000 / 86_400 s ≈ 1.157 tokens/second.
+    # burst_capacity (10_000) bounds how much a quiet period can bank before a
+    # burst, ~2.4 h of allowance.  These values match the live DB row written by
+    # migration 0005; the old 1000/10.0 defaults under-provisioned fresh envs by
+    # 10x on burst and over-provisioned refill by ~8.6x (BP-EODHD-QUOTA).
+    EODHD_BURST_CAPACITY: ClassVar[float] = 10_000.0
+    EODHD_REFILL_RATE: ClassVar[float] = 1.157  # 100_000 req/day ÷ 86_400 s
+
     @classmethod
     def for_eodhd(cls) -> ProviderBudget:
-        """EODHD: 1000-token burst, refills at 10 tokens/second."""
-        return cls(provider=Provider.EODHD, burst_capacity=1000.0, refill_rate=10.0, tokens=1000.0)
+        """EODHD: 10_000-token burst, refills at ~1.157 tokens/second (100k/day)."""
+        return cls(
+            provider=Provider.EODHD,
+            burst_capacity=cls.EODHD_BURST_CAPACITY,
+            refill_rate=cls.EODHD_REFILL_RATE,
+            tokens=cls.EODHD_BURST_CAPACITY,
+        )
 
     @classmethod
     def for_alpha_vantage(cls) -> ProviderBudget:

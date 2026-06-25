@@ -75,6 +75,19 @@ class TestPathEdgePublic:
         assert edge.relation_type == "COMPETES_WITH"
         assert edge.confidence == 0.85
 
+    def test_forward_defaults_none_for_old_clients(self) -> None:
+        """forward is additive/optional → None when omitted (back-compat, R11)."""
+        from knowledge_graph.api.schemas.paths import PathEdgePublic
+
+        assert PathEdgePublic(**_make_edge()).forward is None
+
+    def test_forward_roundtrips_explicit_value(self) -> None:
+        """forward=False (reverse-walked) is preserved on the wire schema."""
+        from knowledge_graph.api.schemas.paths import PathEdgePublic
+
+        edge = PathEdgePublic(relation_type="ACQUIRED_BY", confidence=0.9, forward=False)
+        assert edge.forward is False
+
 
 class TestPathInsightPublic:
     def test_schema_all_required_fields_present(self) -> None:

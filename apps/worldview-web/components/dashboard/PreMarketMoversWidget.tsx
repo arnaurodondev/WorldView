@@ -19,7 +19,8 @@
 // WHY "use client": uses useQuery, useQueries, useAuth, useState for period selector + sector pills, and useRouter for nav.
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query/keys";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
@@ -29,7 +30,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
-import { formatPrice } from "@/lib/format";
+// formatPriceCompact: collapses ≥$1M prices to a suffix ("$1.20M") so price
+// fits its slot. formatChangePct: bounds extreme % moves (see docs/audits/2026-06-19-winners-losers-wrap.md).
+import { formatPriceCompact, formatChangePct } from "@/lib/format";
 import type { Mover } from "@/types/api";
 // PLAN-0048 Wave F-2: shared sector pill list (re-used by F-1 SectorHeatmap and
 // future Wave E WatchlistMoversWidget) so all three widgets keep identical
@@ -142,38 +145,58 @@ export function PreMarketMoversWidget() {
     return merged;
   }, [allGainers, allLosers]);
 
-  const overviewQueries = useQueries({
-    queries: allCandidates.map((m) => ({
-      queryKey: ["mover-overview-sector", m.instrument_id],
-      queryFn: () => createGateway(accessToken).getCompanyOverview(m.instrument_id),
-      enabled: !!accessToken && !!m.instrument_id,
-      staleTime: 600_000,
-    })),
+  // FIX F-1 (2026-06-05): collapse N parallel /v1/companies/{id}/overview calls
+  // into ONE POST /v1/companies/overviews:batch. Previously this widget fired up
+  // to 20 parallel HTTP round-trips via useQueries — now it's a single request.
+  // The batch endpoint returns `{ <uuid>: CompanyOverview | null }` so a single
+  // failing leg degrades to null instead of tanking the whole fan-out.
+  const candidateIds = useMemo(
+    () => allCandidates.map((m) => m.instrument_id).filter(Boolean),
+    [allCandidates],
+  );
+  const { data: overviewsMap } = useQuery({
+    queryKey: qk.instruments.overviewsBatch(candidateIds),
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverviewsBatch(candidateIds),
+    enabled: !!accessToken && candidateIds.length > 0,
+    // WHY staleTime 10min: a company's GICS sector + last price change very
+    // rarely on this widget's timescale. Aggressive caching avoids round-trip
+    // storms when the user clicks between sector pills.
+    staleTime: 600_000,
   });
+
+  // WHY a stable empty-object fallback: useMemo consumers below depend on
+  // `overviewByid` referentially — `?? {}` inline would mint a new object on
+  // every render and invalidate every downstream memo.
+  const overviewByid = useMemo(() => overviewsMap ?? {}, [overviewsMap]);
 
   // Build instrument_id → sector map for O(1) lookup during filtering.
   const sectorByInstrumentId = useMemo(() => {
     const map = new Map<string, string | null | undefined>();
-    allCandidates.forEach((m, i) => {
-      map.set(m.instrument_id, overviewQueries[i]?.data?.instrument?.gics_sector);
+    allCandidates.forEach((m) => {
+      // WHY `undefined` when the leg failed (null) OR is still loading
+      // (missing key): downstream filter treats `undefined` as "show the row"
+      // — see applyFilter() below.
+      const ov = overviewByid[m.instrument_id];
+      map.set(m.instrument_id, ov?.instrument?.gics_sector);
     });
     return map;
-  }, [allCandidates, overviewQueries]);
+  }, [allCandidates, overviewByid]);
 
   // WHY priceByInstrumentId: the S3 fundamentals screener only returns metrics stored
   // in the fundamentals table (daily_return, pe_ratio, etc.) — price lives in the
   // OHLCV table and is NOT included in screener metrics. Every mover therefore shows
-  // $0.00 from the screener alone. We reuse the overview queries already fired for
-  // sector filtering (same staleTime=10min, zero extra network cost) and extract
-  // quote.price from them so the mover rows show a real last-trade price.
+  // $0.00 from the screener alone. We extract quote.price from the same batched
+  // overview map (zero extra network cost) so the mover rows show a real last-trade
+  // price.
   const priceByInstrumentId = useMemo(() => {
     const map = new Map<string, number>();
-    allCandidates.forEach((m, i) => {
-      const price = overviewQueries[i]?.data?.quote?.price;
+    allCandidates.forEach((m) => {
+      const price = overviewByid[m.instrument_id]?.quote?.price;
       if (typeof price === "number" && price > 0) map.set(m.instrument_id, price);
     });
     return map;
-  }, [allCandidates, overviewQueries]);
+  }, [allCandidates, overviewByid]);
 
   // ── Filter helper ───────────────────────────────────────────────────────
   // WHY graceful "still loading" behaviour: if a row's overview hasn't
@@ -383,7 +406,7 @@ export function PreMarketMoversWidget() {
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-        <span className="text-[10px] text-muted-foreground/60">
+        <span className="text-[10px] text-muted-foreground-dim">
           prior session data
         </span>
       </div>
@@ -428,7 +451,10 @@ function MoverRow({ mover, side }: MoverRowProps) {
     // faint hover tint follows the terminal hover-state convention.
     // WHY role="button" + tabIndex: keyboard nav — traders can Tab and Enter to navigate.
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // 2026-06-19 wrap fix: min-w-0 + overflow-hidden clip overflow within the
+      // 22px row so extreme prices/% never bleed past the column edge
+      // (see docs/audits/2026-06-19-winners-losers-wrap.md).
+      className="flex h-[22px] min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden px-2 transition-colors hover:bg-muted/30"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => { if (e.key === "Enter") router.push(`/instruments/${navId}`); }}
       role="button"
@@ -436,15 +462,17 @@ function MoverRow({ mover, side }: MoverRowProps) {
       aria-label={`Navigate to ${mover.ticker} instrument page`}
     >
 
-      {/* Ticker — fixed 38px for column alignment */}
-      <span className="w-[38px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+      {/* Ticker — fixed 38px for column alignment. overflow-hidden +
+          whitespace-nowrap: clip a long ticker to 38px rather than bleed. */}
+      <span className="w-[38px] shrink-0 overflow-hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-foreground">
         {mover.ticker}
       </span>
 
       {/* Price — right-aligned in a fixed slot; muted so % change remains primary */}
-      {/* WHY text-muted-foreground: price is context, change% is the signal */}
-      <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {formatPrice(mover.price)}
+      {/* WHY text-muted-foreground: price is context, change% is the signal.
+          formatPriceCompact + whitespace-nowrap keep high-price stocks on one line. */}
+      <span className="w-[48px] shrink-0 whitespace-nowrap text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {formatPriceCompact(mover.price)}
       </span>
 
       {/* Spacer — pushes the change% to the right edge */}
@@ -453,14 +481,14 @@ function MoverRow({ mover, side }: MoverRowProps) {
       {/* Change % — right-aligned, colored by direction */}
       <span
         className={cn(
-          "shrink-0 font-mono text-[11px] tabular-nums",
+          "shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums",
           // WHY explicit side check rather than mover.change_pct sign:
           // the API already segregated gainers/losers by type; trust that.
           side === "gainer" ? "text-positive" : "text-negative",
         )}
       >
-        {mover.change_pct >= 0 ? "+" : ""}
-        {mover.change_pct.toFixed(2)}%
+        {/* formatChangePct bounds extreme moves to keep the % compact. */}
+        {formatChangePct(mover.change_pct)}
       </span>
 
     </div>

@@ -146,6 +146,31 @@ vi.mock("@/lib/gateway", () => ({
       ],
       total: 1,
     }),
+    // W4 fix: PortfolioNewsWidget now fans out one /v1/news/entity/{id} call per
+    // holding (portfolio-scoped) instead of the global /v1/news/top feed. The
+    // mock returns the same NVDA article so the "renders article title" test
+    // still asserts a real, portfolio-relevant headline.
+    getEntityNews: vi.fn().mockResolvedValue({
+      articles: [
+        {
+          article_id: "art-1",
+          title: "NVDA reports record Q4 revenue",
+          url: "https://example.com/nvda-q4",
+          published_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+          source_type: "eodhd_news",
+          source_name: "Reuters",
+          routing_tier: "DEEP",
+          routing_score: 0.9,
+          market_impact_score: 0.85,
+          llm_relevance_score: 0.82,
+          display_relevance_score: 0.85,
+          primary_entity_id: "ent-nvda",
+          primary_entity_symbol: "NVDA",
+          impact_windows: null,
+        },
+      ],
+      total: 1,
+    }),
     // WHY getPendingAlerts: RecentAlerts widget (in DashboardPage) polls pending alerts
     getPendingAlerts: vi.fn().mockResolvedValue({
       alerts: [],
@@ -153,17 +178,23 @@ vi.mock("@/lib/gateway", () => ({
       offset: 0,
       limit: 10,
     }),
-    // WHY searchInstruments: MarketSnapshotWidget resolves ticker → instrument_id
-    // for all 9 tickers (3 index + 6 equities). Return a single result with the
-    // searched ticker so all group rows get instrument IDs and the LIVE badge appears.
+    // WHY searchInstruments: legacy fallback kept in mock for other call-sites.
     searchInstruments: vi.fn().mockImplementation((ticker: string) =>
       Promise.resolve({
         results: [{ instrument_id: `ins-${ticker.toLowerCase()}`, entity_id: `ins-${ticker.toLowerCase()}`, ticker, name: `${ticker} Inc`, exchange: "US", type: "equity" }],
         query: ticker,
       }),
     ),
-    // WHY getBatchQuotes: MarketSnapshotWidget batch-fetches live quotes.
-    // Return non-zero prices so the truthfulness guard (hasPrice) passes for equities.
+    // WHY resolveTickersBatch: MarketSnapshotWidget (PLAN-0099 W4 refactor) now uses
+    // POST /v1/instruments/resolve-tickers (exact indexed match) instead of 9 parallel
+    // searchInstruments calls. The mock returns a ticker → instrument_id map for all
+    // 9 snapshot tickers so idsQuery resolves and the LIVE badge + footer appear.
+    resolveTickersBatch: vi.fn().mockImplementation((tickers: string[]) =>
+      Promise.resolve(
+        Object.fromEntries(tickers.map((t) => [t, `ins-${t.toLowerCase()}`])),
+      ),
+    ),
+    // WHY getBatchQuotes: kept for other widgets that still use it.
     getBatchQuotes: vi.fn().mockResolvedValue({
       quotes: {
         "ins-aapl": { price: 185.5, change: 2.3, change_pct: 1.25 },
@@ -196,8 +227,20 @@ vi.mock("@/lib/gateway", () => ({
     }),
     // WHY getEconomicCalendar: defined at top-level gateway mock below — this
     // line intentionally omitted here to avoid overriding the mock with events.
-    // WHY getPortfolios/getHoldings: PortfolioSummary widget in DashboardPage
-    getPortfolios: vi.fn().mockResolvedValue([]),
+    // WHY getPortfolios/getHoldings: PortfolioSummary widget in DashboardPage.
+    // W4 fix: PortfolioNewsWidget now resolves the active portfolio + its
+    // holdings to scope news per-entity, so the mock returns one portfolio
+    // (was []) with a single NVDA holding carrying an entity_id below.
+    getPortfolios: vi.fn().mockResolvedValue([
+      {
+        portfolio_id: "p1",
+        name: "Test Portfolio",
+        currency: "USD",
+        owner_id: "u1",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]),
     // WHY getWatchlists/getWatchlistMembers: WatchlistMoversWidget (Wave E-2)
     // queries these to build the row list. Returning [] makes the widget
     // render its "No watchlist yet" empty-state — that's still a valid
@@ -224,10 +267,38 @@ vi.mock("@/lib/gateway", () => ({
         name: "Apple Inc",
         gics_sector: "Information Technology",
       },
+      // Round 1: MarketSnapshotWidget rows render price + day-change $ + arrow
+      // from quote — included so snapshot rows render data (not "—") in tests.
+      quote: { price: 185.5, change: 2.3, change_pct: 1.25 },
     }),
+    // Round 1: TopMovers + SectorHeatmapWidget + PreMarketMoversWidget batch
+    // their per-row overview lookups through ONE POST /v1/companies/overviews:batch.
+    // Empty map = "no overview resolved" — rows degrade gracefully ("—" price).
+    getCompanyOverviewsBatch: vi.fn().mockResolvedValue({}),
+    // Round 1: TopMovers fetches 5-day close arrays for row sparklines in one
+    // batch call. Empty map = dashed placeholder sparkline per row.
+    getMarketSparklines: vi.fn().mockResolvedValue({}),
     getHoldings: vi.fn().mockResolvedValue({
       portfolio_id: "p1",
-      holdings: [],
+      // W4 fix: one holding with an entity_id so PortfolioNewsWidget has an
+      // entity to fan its per-entity news call out to. Other widgets
+      // (PortfolioSummary, WatchlistQuickView) tolerate a populated list — they
+      // aren't asserted on emptiness in this file.
+      holdings: [
+        {
+          holding_id: "h-nvda",
+          portfolio_id: "p1",
+          instrument_id: "ins-nvda",
+          entity_id: "ent-nvda",
+          ticker: "NVDA",
+          name: "NVIDIA Corp",
+          quantity: 10,
+          average_cost: 700,
+          current_price: 800,
+          currency: "USD",
+          asset_class: "equity",
+        },
+      ],
       total_value: null,
       total_cost: null,
       total_unrealised_pnl: null,

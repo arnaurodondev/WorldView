@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import UserCreateRequest, UserResponse
 from portfolio.application.use_cases.user import CreateUserCommand, CreateUserUseCase, GetUserUseCase
 
@@ -33,7 +33,7 @@ async def create_user(body: UserCreateRequest, uow: UoWDep) -> UserResponse:
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> UserResponse:
     raw_tenant_id = getattr(request.state, "tenant_id", None)

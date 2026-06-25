@@ -141,6 +141,58 @@ class TestAlertOutboxDispatcher:
         )
 
     @pytest.mark.unit
+    async def test_broken_producer_error_resets_producer(self) -> None:
+        """GAP-A: a delivery TimeoutError discards the wedged producer.
+
+        Without the reset, the cached producer stays wedged forever and every
+        subsequent dispatch times out → permanent outbox wedge.
+        """
+        event = _make_outbox_event()
+        dispatcher, _, _ = _make_dispatcher()
+
+        # flush() raises TimeoutError → signature of a wedged producer.
+        mock_producer = MagicMock()
+        mock_producer.produce = MagicMock()
+        mock_producer.flush = MagicMock(side_effect=TimeoutError())
+        dispatcher._producer = mock_producer
+
+        with (
+            patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo,
+            patch.object(dispatcher, "_get_producer", return_value=mock_producer),
+        ):
+            MockRepo.return_value.fetch_pending = AsyncMock(return_value=[event])
+            MockRepo.return_value.mark_dispatched = AsyncMock()
+            MockRepo.return_value.mark_failed = AsyncMock()
+
+            await dispatcher._dispatch_batch()
+
+        # Producer cache cleared so next dispatch rebuilds + reconnects.
+        assert dispatcher._producer is None
+        MockRepo.return_value.mark_failed.assert_awaited_once_with(event.event_id)
+
+    @pytest.mark.unit
+    async def test_non_broken_error_keeps_producer(self) -> None:
+        """A non-timeout failure must NOT discard the cached producer."""
+        event = _make_outbox_event()
+        dispatcher, _, _ = _make_dispatcher()
+
+        mock_producer = MagicMock()
+        mock_producer.produce = MagicMock(side_effect=RuntimeError("broker down"))
+        dispatcher._producer = mock_producer
+
+        with (
+            patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo,
+            patch.object(dispatcher, "_get_producer", return_value=mock_producer),
+        ):
+            MockRepo.return_value.fetch_pending = AsyncMock(return_value=[event])
+            MockRepo.return_value.mark_dispatched = AsyncMock()
+            MockRepo.return_value.mark_failed = AsyncMock()
+
+            await dispatcher._dispatch_batch()
+
+        assert dispatcher._producer is mock_producer
+
+    @pytest.mark.unit
     def test_stop_sets_stop_event(self) -> None:
         dispatcher, _, _ = _make_dispatcher()
         dispatcher._stop_event.clear()  # reset

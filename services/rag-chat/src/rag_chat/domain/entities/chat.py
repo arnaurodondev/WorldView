@@ -91,6 +91,11 @@ class ChatRequest:
     tenant_id: UUID
     user_id: UUID
     thread_id: UUID | None = None
+    # PLAN-0107 follow-up: optional deterministic seed for LLM sampling.
+    # Set by the benchmark runner (seed=42 in --judge mode) so synthesis-turn
+    # outputs are reproducible across runs. Default ``None`` means "no seed"
+    # and adapters omit the field from the payload (provider default applies).
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         if not (1 <= len(self.message) <= 2000):

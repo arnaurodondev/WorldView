@@ -104,6 +104,28 @@ class Settings(BaseSettings):
         "deepseek-ai/DeepSeek-V4-Flash"  # RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL
     )
 
+    # FIX-LIVE-BRIEF (2026-06-19): morning/instrument brief synthesis token
+    # budgets.  ROOT CAUSE of the "chars=300, sections_count=0, confidence=0.0"
+    # fresh-brief regression: the configured completion model is a *reasoning*
+    # model (openai/gpt-oss-120b in the live stack; DeepSeek-V4-Flash-Thinking
+    # by config default).  Reasoning tokens count against ``max_tokens``.  With
+    # the previous hardcoded ``max_tokens=2000`` for the morning brief, the
+    # heavy brief prompt (full portfolio context + ~53 news items + macro +
+    # earnings) made the model spend the entire budget on chain-of-thought and
+    # truncate the structured ``## section`` output (finish_reason=length) — the
+    # parser then saw 0 well-formed sections and the defensive injector filled
+    # all six with "No specific items today." (the exact 300-char blob).  The
+    # email brief path already used 6000 and never regressed, which is the tell.
+    # We raise the floor and make it env-tunable so a future reasoning-model swap
+    # never silently starves the structured answer again.  Instrument brief gets
+    # a slightly smaller budget (single-entity, less context).
+    morning_brief_synthesis_max_tokens: int = Field(
+        default=8000, ge=2000, le=32000
+    )  # RAG_CHAT_MORNING_BRIEF_MAX_TOKENS
+    instrument_brief_synthesis_max_tokens: int = Field(
+        default=6000, ge=1500, le=32000
+    )  # RAG_CHAT_INSTRUMENT_BRIEF_MAX_TOKENS
+
     # FIX-LIVE-EE (2026-05-25): Provider-chain exponential backoff for the
     # iteration-0 chat_with_tools turn. Q4 v1 + similar queries surfaced a
     # transient DeepInfra failure rate of 60-100% under chained-test load (5x
@@ -218,6 +240,27 @@ class Settings(BaseSettings):
     # RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS.
     entity_grounding_rewrite_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
 
+    # RC-1 (2026-06-18 internal-tool latency investigation) — configurable model
+    # for the SINGLE combined grounding-repair rewrite. The combined
+    # numeric+entity grounding pass fires at most one repair completion per turn
+    # (the dominant tail-latency cost: a full completion on the 235B model).
+    # Setting this lets an operator A/B the repair rewrite on a cheaper/faster
+    # model (e.g. gpt-oss-120b / gpt-oss-20b) WITHOUT a code change, while the
+    # primary synthesis turn keeps the default ``completion_model``.
+    #
+    # DEFAULT None → the rewrite uses the existing completion model (the chain's
+    # active provider model), so behaviour is byte-for-byte unchanged when unset.
+    # When set to a non-empty model id, the combined rewrite's ``stream_chat``
+    # call is issued with ``model=<this>`` so the provider adapter routes the
+    # single repair completion to the override model.
+    #
+    # NOTE: if a gpt-oss model is selected, the DeepInfra adapter must send
+    # ``reasoning_effort`` for that family — this field does NOT set it. The
+    # operator configures reasoning_effort separately (see the adapter's gpt-oss
+    # handling); we deliberately do not hardcode it here.
+    # Override via RAG_CHAT_GROUNDING_REWRITE_MODEL.
+    grounding_rewrite_model: str | None = None
+
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
     #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor
@@ -227,6 +270,33 @@ class Settings(BaseSettings):
     trust_w_source: float = 0.4  # RAG_CHAT_TRUST_W_SOURCE
     trust_w_corroboration: float = 0.1  # RAG_CHAT_TRUST_W_CORROBORATION
     trust_w_extraction: float = 0.1  # RAG_CHAT_TRUST_W_EXTRACTION
+
+    # ── Layer 2 injection classifier availability policy ─────────────────────
+    # BUG-FIX (DeepInfra 402 outage): when the Layer 2 LLM injection classifier
+    # CANNOT RUN (provider unavailable / transport error — HTTP 402/429/5xx,
+    # connect or network error), this flag controls the closed-vs-open policy.
+    #
+    #   False (default) → fail CLOSED-but-HONEST: reject the request, but with an
+    #     accurate ``CLASSIFIER_UNAVAILABLE`` error ("input safety check
+    #     temporarily unavailable, please retry") — NEVER the misleading
+    #     "Semantic injection detected".
+    #   True            → fail OPEN: let the request through (Layer 1 regex/PII
+    #     already ran). Use ONLY when continuity of service is judged to outweigh
+    #     the marginal risk of a semantic-only injection slipping past Layer 2
+    #     during a provider outage. We NEVER default to this.
+    #
+    # The classifier reads ``RAG_CHAT_CLASSIFIER_FAIL_OPEN`` from the environment
+    # per-call (same hot-toggle pattern as RAG_COMPLETION_CACHE_DISABLED /
+    # DEBUG_SKIP_CLASSIFIER) so ops can flip it during an incident without a
+    # redeploy. This field documents the knob and keeps it discoverable via
+    # Settings. NOTE: a GENUINE injection verdict is always rejected regardless
+    # of this flag — it only governs the "could not run" path.
+    classifier_fail_open: bool = False  # RAG_CHAT_CLASSIFIER_FAIL_OPEN
+
+    # Bounded retry on a transient classifier transport failure BEFORE declaring
+    # the classifier unavailable. 0 disables retries (legacy behaviour). Kept
+    # small (1) so a real outage surfaces fast instead of multiplying latency.
+    classifier_retry_attempts: int = Field(default=1, ge=0, le=3, validation_alias="RAG_CHAT_CLASSIFIER_RETRY_ATTEMPTS")
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
@@ -244,6 +314,17 @@ class Settings(BaseSettings):
     brief_pregen_concurrency: int = Field(default=4, ge=1, le=20)
     brief_fresh_ttl_hours: int = Field(default=30, ge=1, le=168)
     brief_last_good_ttl_days: int = Field(default=7, ge=1, le=30)
+
+    # ── Instrument-brief pre-generation (AI-brief-flag fix, 2026-06-19) ───────
+    # Separate scheduled worker that pre-generates + PERSISTS entity briefs
+    # (brief_type='entity') for the set of instruments viewed in the active
+    # window (Valkey ``active_instruments`` sorted-set populated by the on-demand
+    # route). This is what populates the screener ``has_ai_brief`` flag
+    # proactively instead of only on first view. Reuses the morning-brief
+    # pre-gen knobs (interval/active-window/batch/concurrency) above so there is
+    # one set of tuning dials. Defaults ON so coverage builds without operator
+    # action; set RAG_CHAT_BRIEF_INSTRUMENT_PREGEN_ENABLED=false to disable.
+    brief_instrument_pregen_enabled: bool = True  # RAG_CHAT_BRIEF_INSTRUMENT_PREGEN_ENABLED
 
     # ── Agentic brief generator (PLAN-0099 Wave C — experimental) ────────────
     # When True, the morning-brief route uses the AgenticBriefGenerator (an
@@ -274,6 +355,31 @@ class Settings(BaseSettings):
     # titles share a prefix or share >= this fraction of token overlap are
     # collapsed; the highest-display_relevance_score copy wins.
     brief_news_dedupe_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+    # ── Follow-up suggestions SSE event ──────────────────────────────────────
+    # When True (default) the orchestrator emits a ``suggestions`` SSE event
+    # after the final answer with 3 deterministically-templated follow-up
+    # questions (zero extra LLM calls — see application/services/suggestions.py).
+    # NOTE: the orchestrator reads RAG_CHAT_SUGGESTIONS_ENABLED from the
+    # environment per-call (same hot-toggle pattern as
+    # RAG_COMPLETION_CACHE_DISABLED); this field documents the knob and keeps
+    # it discoverable via Settings.
+    suggestions_enabled: bool = True  # RAG_CHAT_SUGGESTIONS_ENABLED
+
+    # ── Eval grounding-sample capture (PRD-0091 FR-5 / NFR-2) ────────────────
+    # When the UN-prefixed env var ``CHAT_EVAL_GROUNDING_SAMPLES=true`` is set,
+    # the ``tool_result`` SSE frame carries an additional bounded, redacted,
+    # allow-list-only ``grounding_sample`` of the tool-result VALUES so the
+    # chat-eval judge can VERIFY (not presume) numeric grounding. Default OFF in
+    # prod (NFR-2) keeps eval-only data out of normal traffic.
+    #
+    # IMPORTANT: this knob is intentionally NOT a pydantic field here — it is
+    # read directly from ``os.environ`` in ``SSEEmitter.emit_tool_result`` (a
+    # per-call hot-toggle, same pattern as RAG_COMPLETION_CACHE_DISABLED). A
+    # pydantic field would force the RAG_CHAT_ prefix; PRD-0091 §6.3 fixes the
+    # name as the un-prefixed ``CHAT_EVAL_GROUNDING_SAMPLES`` because it is an
+    # eval-harness toggle, not a service config value. Documented here purely
+    # for discoverability.
 
     # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
     # Stop-words stripped from the query string BEFORE the S7 alias fuzzy

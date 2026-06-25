@@ -14,6 +14,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AlertDetailSheet } from "@/components/alerts/AlertDetailSheet";
+// PLAN-0113 merge: AlertDetailSheet's rule-creation path now uses the server
+// alert-rules hooks (useAuthedQuery), which require the ApiClientProvider.
+import { ApiClientProvider } from "@/lib/api-client";
 import type { Alert } from "@/types/api";
 
 // ── Router mock — capture push() calls ─────────────────────────────────────
@@ -53,7 +56,11 @@ function makeQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 function wrapper({ children }: { children: React.ReactNode }) {
-  return <QueryClientProvider client={makeQueryClient()}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={makeQueryClient()}>
+      <ApiClientProvider>{children}</ApiClientProvider>
+    </QueryClientProvider>
+  );
 }
 
 const ALERT_WITH_INSTRUMENT: Alert = {

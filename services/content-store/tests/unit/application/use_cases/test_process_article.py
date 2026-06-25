@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from content_store.application.use_cases.process_article import (
     ProcessArticleUseCase,
     RawArticleEvent,
     _build_stored_payload,
+    _extract_prose_payload,
     _guess_content_type,
 )
 from content_store.domain.entities import CanonicalDocument, DeduplicationDecision
@@ -150,6 +152,96 @@ class TestProcessArticleUseCase:
         assert call_kwargs.kwargs["event_type"] == "content.article.stored.v1"
         assert call_kwargs.kwargs["topic"] == "content.article.stored.v1"
         assert call_kwargs.kwargs["aggregate_type"] == "document"
+
+    async def test_eodhd_json_payload_stores_inner_prose_not_envelope(self) -> None:
+        """BUG #34 — eodhd JSON payload → silver body is the inner prose, not the JSON."""
+        prose = "Apple reported record quarterly revenue and raised guidance for the year."
+        store = AsyncMock()
+        # content-ingestion stores the EODHD dict as json.dumps(article); bronze is
+        # the unwrapped payload (no raw_b64 envelope here — passthrough path).
+        store.get_bytes.return_value = json.dumps(
+            {"title": "Apple beats earnings", "content": prose, "date": "2026-03-01"}
+        ).encode("utf-8")
+
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None  # No existing hashes
+        minhash_repo = AsyncMock()
+        minhash_repo.get_signature_by_doc_id.return_value = None
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c")
+        silver_storage = _make_silver_storage()
+
+        uc = _make_use_case(
+            bronze_store=store,
+            dedup_repo=dedup_repo,
+            minhash_repo=minhash_repo,
+            silver_storage=silver_storage,
+            lsh_client=lsh_client,
+        )
+        await uc.execute(_make_article(source_type="eodhd"))
+
+        # The cleaned text handed to silver must be the inner prose, NOT the JSON envelope.
+        cleaned_text = silver_storage.put_canonical.call_args.args[1]
+        assert cleaned_text == prose
+        assert "{" not in cleaned_text
+        assert "symbols" not in cleaned_text
+
+    async def test_newsapi_json_payload_stores_content_prose(self) -> None:
+        """BUG #34 — newsapi JSON payload → silver body is the inner ``content`` prose."""
+        prose = "Stocks climbed across the board on Friday as inflation data cooled."
+        store = AsyncMock()
+        store.get_bytes.return_value = json.dumps(
+            {"title": "Markets rally", "description": "blurb", "content": prose}
+        ).encode("utf-8")
+
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None  # No existing hashes
+        minhash_repo = AsyncMock()
+        minhash_repo.get_signature_by_doc_id.return_value = None
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c")
+        silver_storage = _make_silver_storage()
+
+        uc = _make_use_case(
+            bronze_store=store,
+            dedup_repo=dedup_repo,
+            minhash_repo=minhash_repo,
+            silver_storage=silver_storage,
+            lsh_client=lsh_client,
+        )
+        await uc.execute(_make_article(source_type="newsapi"))
+
+        cleaned_text = silver_storage.put_canonical.call_args.args[1]
+        assert cleaned_text == prose
+
+    async def test_genuine_html_still_cleans_normally(self) -> None:
+        """A genuine-HTML source is unaffected: tags stripped, no JSON-recovery path."""
+        store = AsyncMock()
+        store.get_bytes.return_value = (
+            b"<html><body><p>Tesla shares jumped after the delivery numbers"
+            b" exceeded analyst expectations for the quarter.</p></body></html>"
+        )
+
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None  # No existing hashes
+        minhash_repo = AsyncMock()
+        minhash_repo.get_signature_by_doc_id.return_value = None
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c")
+        silver_storage = _make_silver_storage()
+
+        uc = _make_use_case(
+            bronze_store=store,
+            dedup_repo=dedup_repo,
+            minhash_repo=minhash_repo,
+            silver_storage=silver_storage,
+            lsh_client=lsh_client,
+        )
+        await uc.execute(_make_article(source_type="eodhd"))
+
+        cleaned_text = silver_storage.put_canonical.call_args.args[1]
+        assert "Tesla shares jumped" in cleaned_text
+        assert "<p>" not in cleaned_text
 
     async def test_corroborating_article_stored(self) -> None:
         """Corroborating article → stored with link to primary."""
@@ -334,6 +426,59 @@ class TestGuessContentType:
 
     def test_unknown_defaults_html(self) -> None:
         assert _guess_content_type("unknown") == "html"
+
+
+class TestExtractProsePayload:
+    """BUG #34 — recover inner prose from a raw-news JSON payload."""
+
+    def test_eodhd_content_field(self) -> None:
+        # EODHD adapter emits ``json.dumps(article)`` with prose under ``content``.
+        payload = json.dumps(
+            {
+                "title": "Apple beats earnings",
+                "content": "Apple reported record quarterly revenue today.",
+                "date": "2026-03-01",
+                "symbols": ["AAPL.US"],
+            }
+        ).encode("utf-8")
+        assert _extract_prose_payload(payload) == "Apple reported record quarterly revenue today."
+
+    def test_newsapi_content_field(self) -> None:
+        payload = json.dumps(
+            {
+                "title": "Markets rally",
+                "description": "Short blurb.",
+                "content": "Stocks climbed across the board on Friday.",
+                "url": "https://example.com/x",
+            }
+        ).encode("utf-8")
+        # ``content`` outranks ``description`` in the priority order.
+        assert _extract_prose_payload(payload) == "Stocks climbed across the board on Friday."
+
+    def test_newsapi_description_fallback(self) -> None:
+        payload = json.dumps({"title": "T", "description": "Only a description here."}).encode("utf-8")
+        assert _extract_prose_payload(payload) == "Only a description here."
+
+    def test_summary_field_yahoo_seed(self) -> None:
+        payload = json.dumps({"summary": "Yahoo-style summary prose."}).encode("utf-8")
+        assert _extract_prose_payload(payload) == "Yahoo-style summary prose."
+
+    def test_genuine_html_returns_none(self) -> None:
+        # Real HTML must fall through to the classify+clean path unchanged.
+        assert _extract_prose_payload(b"<html><body><p>Hello</p></body></html>") is None
+
+    def test_json_array_returns_none(self) -> None:
+        assert _extract_prose_payload(b'["a", "b"]') is None
+
+    def test_dict_without_prose_field_returns_none(self) -> None:
+        # No recognised prose field → fall through (don't drop content silently).
+        assert _extract_prose_payload(b'{"title": "T", "date": "2026-03-01"}') is None
+
+    def test_does_not_match_own_silver_body_envelope(self) -> None:
+        # content-store's OWN silver envelope uses a top-level ``body`` key — it must
+        # NOT be treated as a raw news payload (no ``content``/``summary``/etc.).
+        payload = json.dumps({"body": "already-cleaned prose", "source_type": "eodhd"}).encode("utf-8")
+        assert _extract_prose_payload(payload) is None
 
 
 class TestPublishedAtParsing:

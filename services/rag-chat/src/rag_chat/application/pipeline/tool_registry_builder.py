@@ -76,9 +76,20 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_price_history",
             description=(
-                "Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker "
-                "over a specified date range. Use when the user asks about price movement, "
-                "trend, range, or performance over a time period."
+                # PLAN-0109 B-3: teach the LLM the new flexible parameter
+                # shape. The implicit 7d/1m fallback was removed in favour
+                # of explicit ``last_n_bars`` / ``lookback_days`` knobs the
+                # LLM can pick deliberately based on the user's question.
+                "Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker. "
+                "Only ``ticker`` is required. Provide ONE of the temporal patterns below:\n"
+                "  - ``last_n_bars=1, interval='1m'`` for \"what is AAPL trading at?\" "
+                "(works 24/7 — returns the most recent 1-minute bar).\n"
+                "  - ``last_n_bars=7, interval='day'`` for \"the last week of daily prices\".\n"
+                "  - ``lookback_days=30, interval='hour'`` for \"the last 30 days of hourly bars\".\n"
+                "  - ``from_date`` + ``to_date`` (both required as a pair) for an explicit "
+                'calendar window such as "Q1 2026".\n'
+                "When no temporal parameter is supplied, defaults to ``last_n_bars=20`` "
+                "(one screen of bars at the requested interval)."
             ),
             parameters=[
                 ParameterSpec(
@@ -90,27 +101,61 @@ def build_default_registry() -> ToolRegistry:
                 ParameterSpec(
                     name="from_date",
                     type="date",
-                    description="Start of date range (YYYY-MM-DD)",
-                    required=True,
+                    description=(
+                        "Start of explicit date range (YYYY-MM-DD). Optional — pair with "
+                        "``to_date`` for a calendar window. Ignored when ``last_n_bars`` or "
+                        "``lookback_days`` is supplied."
+                    ),
+                    required=False,
                 ),
                 ParameterSpec(
                     name="to_date",
                     type="date",
-                    description="End of date range (YYYY-MM-DD)",
-                    required=True,
+                    description=(
+                        "End of explicit date range (YYYY-MM-DD). Optional — pair with "
+                        "``from_date``. Ignored when ``last_n_bars`` or ``lookback_days`` "
+                        "is supplied."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="last_n_bars",
+                    type="integer",
+                    description=(
+                        "Return the N most-recent bars of the requested interval. "
+                        "Use ``last_n_bars=1, interval='1m'`` for current-price queries."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="lookback_days",
+                    type="integer",
+                    description=(
+                        "Return bars from the last N calendar days ending today. "
+                        "Pairs naturally with intra-day intervals (hour/1m)."
+                    ),
+                    required=False,
                 ),
                 ParameterSpec(
                     name="interval",
                     type="string",
-                    description="Bar granularity: day/week/month. Default 'week'.",
+                    # Chat-eval #5 NEW root cause A (2026-06-12): the backend
+                    # ``/ohlcv/bars`` endpoint does NOT aggregate ``week``/
+                    # ``month`` bars, so advertising them made the LLM pick them
+                    # for "YTD high/low" and "P/E vs history" questions and burn
+                    # iterations retrying on error. Drop them from the enum so the
+                    # model only ever selects supported grains (intraday + day).
+                    description="Bar granularity: 1m/hour/day. Default 'day'.",
                     required=False,
-                    enum=["day", "week", "month"],
+                    enum=["1m", "hour", "day"],
                 ),
             ],
             source_type="ohlcv",
             example_queries=[
+                "What is AAPL trading at?",
+                "Show me the last week of daily prices for NVDA",
+                "Plot the last 30 days of hourly bars for TSLA",
                 "How has AAPL performed over the last 3 months?",
-                "What was NVDA's price range in Q1 2026?",
             ],
         ),
         handler=lambda **_: None,  # dispatch happens inside ToolExecutor.execute()
@@ -517,7 +562,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve the narrative for. "
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name "
+                        "(e.g. 'Apple Inc.'). Tickers and names are resolved server-side (BP-661). "
                         "Auto-injected from entity scope when available."
                     ),
                     required=False,
@@ -551,7 +597,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve paths for. Auto-injected from entity scope when available."
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name. "
+                        "Resolved server-side. Auto-injected from entity scope when available."
                     ),
                     required=False,
                 ),
@@ -571,6 +618,56 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # PLAN-0112 W4: on-demand TWO-ENTITY pairwise pathfinding (FR-9). Distinct
+    # from get_entity_paths (single anchor, pre-computed): this binds BOTH ends
+    # and searches live via S9 /v1/paths/between (R14). Manifest bumped to v5.
+    registry.register(
+        ToolSpec(
+            name="get_path_between",
+            description=(
+                "Performs an ON-DEMAND, live, bounded search for connection PATHS between TWO "
+                "specific entities — 'is X connected to Y, and how are they linked?'. Returns "
+                "whether a connection exists within max_hops, the shortest hop count, and the "
+                "ranked intermediary paths (ranked by how surprising the connection is). Use "
+                "this for ANY two-entity relationship question: 'how is Nvidia connected to "
+                "SpaceX', 'is Apple linked to OpenAI', 'what connects Microsoft and Anthropic'. "
+                "DO NOT use for single-entity network questions — use get_entity_paths "
+                "(one anchor, pre-computed) instead."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="source_entity",
+                    type="string",
+                    description=(
+                        "First entity — UUID, ticker symbol (e.g. 'NVDA'), or company name. " "Resolved server-side."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="target_entity",
+                    type="string",
+                    description=(
+                        "Second entity — UUID, ticker, or company name. Resolved server-side. "
+                        "Must differ from source_entity."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="max_hops",
+                    type="integer",
+                    description="Maximum path length to search (1-3). Default 3.",
+                    required=False,
+                ),
+            ],
+            source_type="knowledge_graph",
+            example_queries=[
+                "How is Nvidia connected to SpaceX?",
+                "Is Apple linked to OpenAI, and how?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     registry.register(
         ToolSpec(
             name="get_entity_health",
@@ -584,8 +681,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve health data for. "
-                        "Auto-injected from entity scope when available."
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name. "
+                        "Resolved server-side. Auto-injected from entity scope when available."
                     ),
                     required=False,
                 ),
@@ -621,7 +718,8 @@ def build_default_registry() -> ToolRegistry:
                     name="entity_id",
                     type="string",
                     description=(
-                        "UUID of the entity to retrieve intelligence for. "
+                        "Entity identifier: UUID, ticker symbol (e.g. 'AAPL'), or company name "
+                        "(e.g. 'Apple Inc.'). Tickers and names are resolved server-side (BP-661). "
                         "Auto-injected from entity scope when available."
                     ),
                     required=False,
@@ -1130,12 +1228,23 @@ def build_default_registry() -> ToolRegistry:
             name="create_alert",
             description=(
                 "Creates a user-initiated alert rule for a specific entity and condition. "
-                'Use when the user explicitly asks to set, create, or add an alert (e.g. "alert '
-                'me when AAPL drops below $200" or "set a price alert for NVDA"). IMPORTANT: '
-                "this tool requires explicit user confirmation before execution "
-                "(requires_confirmation: true). Do NOT call this tool unless the user has "
-                "clearly and unambiguously asked to create an alert — never create alerts "
-                "speculatively or as a follow-up to an unrelated question."
+                "**You MUST call this tool — and call it IMMEDIATELY — whenever the user "
+                'issues an alert imperative such as "alert me when AAPL drops below $200", '
+                '"set a price alert for NVDA above $1000", "notify me when TSLA spikes", or '
+                '"add an alert for ...". Calling this tool is how the alert gets set.** '
+                "How the confirmation gate works (READ THIS — it is the #1 mistake on this "
+                "tool): the system itself handles user confirmation. When you call this tool, "
+                "it does NOT execute the write immediately — it returns a structured pending "
+                "action that the application surfaces to the user as a confirm/cancel card, and "
+                "the user confirms there. Your job is ONLY to call the tool with the parsed "
+                "entity + condition + threshold. Do NOT ask the user to confirm in your text "
+                "reply, do NOT write a prose sentence like 'I need your confirmation before I "
+                "proceed', and do NOT claim the alert has been or will be created in prose "
+                "INSTEAD of calling this tool — the confirmation step happens automatically "
+                "AFTER you call it. Free-texting a confirmation request or a fake 'alert set' "
+                "message without calling this tool is a failure: the alert is never registered. "
+                "The ONLY thing you must NOT do is invent an alert the user did not ask for — "
+                "never create alerts speculatively or as a follow-up to an unrelated question."
             ),
             parameters=[
                 ParameterSpec(

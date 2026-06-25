@@ -163,6 +163,27 @@ class DefinitionRefreshWorker:
 
             if entity_type != _FINANCIAL_INSTRUMENT:
                 source_text = await self._resolve_non_company_text(entity_id, entity_type, row)
+            elif not source_text:
+                # ── 2026-06-14 P1 (empty-entity-descriptions RC2) ──────────────
+                # Normally a financial_instrument's source_text is the EODHD
+                # business description, populated at create-time by the
+                # instrument consumer. But ~48 FI entities are crypto/FX/indices
+                # (BTC.USD, ETH.USD, GBPUSD, DJI, GSPC, IXIC, …) that EODHD has
+                # NO business description for, so source_text IS NULL. Previously
+                # the `if not source_text: continue` below skipped them on EVERY
+                # cycle forever — they never got a definition embedding.
+                #
+                # When an FI row has NULL source_text, synthesize a description
+                # via the DeepInfra description client (the same path used for
+                # non-company entities). This does NOT touch the normal FI path:
+                # any FI with a non-empty EODHD description skips this branch.
+                #
+                # BP-114 guard: _resolve_definition_text_for_null_fi returns ""
+                # (not the trivial "X is a financial_instrument." template) when
+                # the LLM yields nothing, so the `if not source_text: continue`
+                # below skips persisting a degenerate description rather than
+                # locking in a useless one for 90 days.
+                source_text = await self._resolve_definition_text_for_null_fi(entity_id, row)
 
             if not source_text:
                 continue
@@ -351,6 +372,68 @@ class DefinitionRefreshWorker:
             entity_type=entity_type,
         )
         return fallback
+
+    async def _resolve_definition_text_for_null_fi(
+        self,
+        entity_id: UUID,
+        row: dict[str, Any],
+    ) -> str:
+        """Generate a definition for a financial_instrument with NULL source_text.
+
+        Used for crypto/FX/index instruments that EODHD has no business
+        description for (RC2). Calls the description client (DeepInfra) and
+        returns the generated text, or "" on any failure / empty result.
+
+        Unlike ``_resolve_non_company_text`` this intentionally does NOT fall
+        back to the deterministic ``"<name> is a financial_instrument."``
+        template: a trivial template would be embedded and locked in for 90
+        days, polluting semantic search. Returning "" makes the caller skip the
+        row so it can be retried on the next cycle once the LLM recovers.
+
+        BP-114 guard: a provider that silently returns an empty/whitespace
+        string must NOT be persisted — we treat it the same as a failure.
+        """
+        canonical_name = str(row.get("canonical_name") or "")
+        context_hints: dict[str, str] = {}
+        if row.get("ticker"):
+            context_hints["ticker"] = str(row["ticker"])
+        if row.get("exchange"):
+            context_hints["exchange"] = str(row["exchange"])
+        if row.get("isin"):
+            context_hints["isin"] = str(row["isin"])
+
+        try:
+            description = await self._description_client.generate_description(
+                entity_id=str(entity_id),
+                canonical_name=canonical_name,
+                entity_type=_FINANCIAL_INSTRUMENT,
+                context_hints=context_hints,
+            )
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "definition_refresh_fi_null_description_error",
+                entity_id=str(entity_id),
+                ticker=context_hints.get("ticker"),
+                error=str(exc),
+            )
+            return ""
+
+        # BP-114: guard against a silent empty/whitespace return.
+        if not description or not description.strip():
+            logger.info(  # type: ignore[no-any-return]
+                "definition_refresh_fi_null_description_empty",
+                entity_id=str(entity_id),
+                ticker=context_hints.get("ticker"),
+            )
+            return ""
+
+        logger.info(  # type: ignore[no-any-return]
+            "definition_refresh_fi_null_description_generated",
+            entity_id=str(entity_id),
+            ticker=context_hints.get("ticker"),
+            chars=len(description),
+        )
+        return description
 
     async def _embed(self, entity_id: UUID, text: str) -> list[float] | None:
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]

@@ -43,6 +43,7 @@ import {
   GraphEvents,
   GraphLoader,
   FilterController,
+  FocusNodeController,
   CameraAutoFit,
   KeyboardResetListener,
   CameraResetButton,
@@ -113,9 +114,33 @@ export interface EntityGraphProps {
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
   ) => void;
+  /** Block I T-27: optional edge-click callback. When provided, clicking a graph
+   *  edge fires this handler with the API-level edge id (GraphEdge.id). */
+  onEdgeClick?: (edgeId: string) => void;
+  // ── PLAN-0099 Wave 2: selection + focus (Intelligence tab inspector) ────────
+  /** Node currently selected in the host's inspector — rendered with the
+   *  trading-yellow highlight + forced label on the canvas. */
+  selectedNodeId?: string | null;
+  /** Edge currently selected in the host's inspector — rendered with the
+   *  trading-yellow highlight + size bump. Key == GraphEdge.id. */
+  selectedEdgeId?: string | null;
+  /** "Focus graph here" request: camera animates to centre this node. */
+  focusNodeId?: string | null;
+  /** Bump to re-fire the focus animation for the same node (see
+   *  FocusNodeController docstring). */
+  focusNonce?: number;
 }
 
-export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
+export function EntityGraph({
+  data,
+  centerEntityId,
+  onNodeClick,
+  onEdgeClick,
+  selectedNodeId = null,
+  selectedEdgeId = null,
+  focusNodeId = null,
+  focusNonce = 0,
+}: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -131,6 +156,16 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [layout, setLayout] = useState<"force" | "hierarchical">("force");
+  // PLAN-0099 W4 FIX: how many edges survive the pill/strength filters. Seeded
+  // to the full edge count so the toolbar reads correctly before the first
+  // FilterController pass. FilterController updates this whenever the relation
+  // pill or strength slider changes — the visible proof the filter applied.
+  const [visibleEdgeCount, setVisibleEdgeCount] = useState<number>(data.edges.length);
+  // WHY useCallback: passed into FilterController's effect dep array; a stable
+  // identity avoids re-running the count effect on every EntityGraph re-render.
+  const handleVisibleEdgeCount = useCallback((visible: number) => {
+    setVisibleEdgeCount(visible);
+  }, []);
 
   // WHY useCallback with []: stable references prevent useEffect re-registration in GraphEvents.
   const handleNodeHover = useCallback((tooltip: NodeTooltip | null) => {
@@ -163,6 +198,10 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
         searchQuery={searchQuery}
         layout={layout}
         edgeCount={data.edges.length}
+        // PLAN-0099 W4 FIX: pass the post-filter visible count so the toolbar can
+        // render "showing X of Y edges" — the analyst now SEES the pill/strength
+        // filter take effect even though sigma only hides (not removes) edges.
+        visibleEdgeCount={visibleEdgeCount}
         denseGraphEdgeThreshold={DENSE_GRAPH_EDGE_THRESHOLD}
         onRelFilterChange={setActiveRelFilter}
         onMinWeightChange={setMinWeight}
@@ -220,13 +259,28 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             onNodeHover={handleNodeHover}
             onEdgeHover={handleEdgeHover}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
           />
           <FilterController
             activeRelFilter={activeRelFilter}
             minWeight={minWeight}
             searchQuery={searchQuery}
             graphData={data}
+            // KG FILTER BUG FIX (2026-06-23): pass the centre entity so the
+            // orphan-node hiding logic never hides the node the analyst is
+            // focused on, even when a relation pill filters away all its edges.
+            centerEntityId={centerEntityId}
+            // PLAN-0099 Wave 2: selection highlight is folded into the SAME
+            // reducer as the filters (two setSettings callers would clobber
+            // each other — see FilterController docstring).
+            selectedNodeId={selectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            // PLAN-0099 W4 FIX: report post-filter visible-edge count up so the
+            // toolbar renders "X of Y edges". Closes the no-op-looking pill gap.
+            onVisibleEdgeCountChange={handleVisibleEdgeCount}
           />
+          {/* PLAN-0099 Wave 2: "Focus graph here" camera animation */}
+          <FocusNodeController focusNodeId={focusNodeId} focusNonce={focusNonce} />
           {/* SA-3 (2026-05-10): auto-fit camera when entity changes */}
           <CameraAutoFit centerEntityId={centerEntityId} />
           {/* SA-3 (2026-05-10): keyboard shortcut 'R' to reset camera */}

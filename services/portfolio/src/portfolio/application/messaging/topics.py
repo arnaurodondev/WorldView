@@ -4,6 +4,7 @@ from __future__ import annotations
 
 PORTFOLIO_EVENTS_V1 = "portfolio.events.v1"
 WATCHLIST_UPDATED_V1 = "portfolio.watchlist.updated.v1"
+PORTFOLIO_HOLDING_RECOMPUTE_REQUESTED_V1 = "portfolio.holding.recompute_requested.v1"
 
 EVENT_TOPIC_MAP: dict[str, str] = {
     "tenant.created": PORTFOLIO_EVENTS_V1,
@@ -21,4 +22,5 @@ EVENT_TOPIC_MAP: dict[str, str] = {
     "watchlist.renamed": WATCHLIST_UPDATED_V1,
     "watchlist.item_added": WATCHLIST_UPDATED_V1,
     "watchlist.item_deleted": WATCHLIST_UPDATED_V1,
+    "portfolio.holding.recompute_requested": PORTFOLIO_HOLDING_RECOMPUTE_REQUESTED_V1,
 }

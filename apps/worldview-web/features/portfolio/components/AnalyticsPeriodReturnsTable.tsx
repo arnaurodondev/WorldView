@@ -6,25 +6,22 @@
  * return for a standard period vs a benchmark. Traders use this to answer:
  * "Did I beat SPY over 1M / 3M / YTD / 1Y?" without navigating between charts.
  *
- * DATA SOURCE:
- *   - Fetches value-history at each standard period via useQueries (D-002).
- *   - Computes period return client-side from first/last value point.
- *   - Benchmark column uses the TWR endpoint when available; currently shows "—"
- *     until the backend endpoint ships (Decision 2 fallback in design spec).
+ * UPGRADED 2026-06-10 (sprint gap #3 — the TWR endpoint shipped):
+ *   - RETURN column is now the FLOW-ADJUSTED TWR per window
+ *     (GET /v1/portfolios/{id}/twr?days=N — first point rebased to 0, so the
+ *     last point's cumulative value IS the window return). The previous
+ *     value-history first/last approximation counted deposits as returns.
+ *   - "vs SPY" and "EXCESS" were dead "—" columns ("until the TWR endpoint
+ *     ships") — they now compute from real SPY daily closes over the SAME
+ *     calendar window (windowReturnFromCloses, unit-tested). ALL keeps "—"
+ *     for the benchmark: an open-ended window has no defined SPY span.
  *
  * WHY useQueries instead of per-row PeriodRow components (D-002 refactor):
- * The original design used a separate PeriodRow sub-component per period, each
- * owning its own useQuery. This was architecturally sound (independent cache
- * entries) but created 7 extra component instances per table mount and made
- * integration tests impossible — there was no data-testid to select rows from
- * outside the component tree.
+ * each entry in the queries array has its own queryKey/isLoading/data —
+ * independent caching — while keeping all rendering in one component and
+ * exposing data-testid="period-row-{PERIOD}" for the test suite.
  *
- * useQueries achieves the same independent caching guarantee (each entry in the
- * queries array has its own queryKey, isLoading, and data) while keeping all
- * rendering in one component. This exposes data-testid="period-row-{PERIOD}"
- * which the test suite requires.
- *
- * WHY 7 rows (not the 9 IBKR shows): We use the same 7 periods as
+ * WHY 8 rows (not the 9 IBKR shows): same 8 periods as
  * AnalyticsPeriodSelector. "3Y" and "ITD" are deferred until the backend
  * provides a reliable long-horizon snapshot history.
  *
@@ -32,12 +29,21 @@
  */
 "use client";
 
-import { useQueries } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+// 2026-06-11 Wave 3: findFlowArtifactDates guards the TWR column against the
+// backend series' flow artifacts (deposits counted as returns — live audit
+// 2026-06-11 found +116%/+23.97% single-day jumps that are funding events).
+import {
+  windowReturnFromCloses,
+  findFlowArtifactDates,
+} from "@/features/portfolio/lib/period-returns";
+import type { DatedValue } from "@/features/portfolio/lib/risk-metrics";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -47,26 +53,52 @@ export interface AnalyticsPeriodReturnsTableProps {
 
 // ── Period definitions ────────────────────────────────────────────────────────
 
-// WHY separate type from the selector's PERIODS const: this table has 7 rows
-// in a fixed display order; the selector provides the interactive state.
-// Having an independent definition means we can add "3Y" to the table without
-// touching the interactive selector's period list.
+// WHY separate type from the selector's PERIODS const: this table has fixed
+// display rows; the selector provides the interactive state.
+// days=null rows resolve at render time: YTD = days since Jan 1; ALL = the
+// TWR endpoint's 3650-day maximum (10y — beyond any realistic retail book).
 const PERIODS = [
+  { label: "1W",  days: 7 },
   { label: "1M",  days: 30 },
   { label: "3M",  days: 90 },
   { label: "6M",  days: 180 },
-  { label: "YTD", days: null }, // server computes YTD from Jan 1
+  { label: "YTD", days: null },
   { label: "1Y",  days: 365 },
   { label: "2Y",  days: 730 },
-  { label: "ALL", days: null }, // full history
+  { label: "ALL", days: null },
 ] as const;
+
+/** TWR endpoint maximum window — the honest stand-in for "ALL". */
+const TWR_MAX_DAYS = 3650;
+
+/** Days since Jan 1 (≥1 so the endpoint validator never sees 0). */
+function ytdDays(): number {
+  const now = new Date();
+  const jan1 = Date.UTC(now.getUTCFullYear(), 0, 1);
+  return Math.max(1, Math.ceil((now.getTime() - jan1) / 86_400_000));
+}
+
+/** Concrete fetch window for a row. */
+function rowDays(label: string, days: number | null): number {
+  if (days != null) return days;
+  return label === "YTD" ? ytdDays() : TWR_MAX_DAYS;
+}
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 function fmtReturn(v: number | null): string {
   if (v == null) return "—";
   const pct = (v * 100).toFixed(2);
-  return v >= 0 ? `+${pct}%` : `${pct}%`;
+  // R3 polish: ZERO stays unsigned ("0.00%") — signedPrice convention (R1);
+  // a flat period has no direction so "+0.00%" would mislead.
+  return v > 0 ? `+${pct}%` : `${pct}%`;
+}
+
+/** Signed percentage-point string for the EXCESS column ("+1.30pp"). */
+function fmtExcess(v: number | null): string {
+  if (v == null) return "—";
+  const pp = (v * 100).toFixed(2);
+  return v > 0 ? `+${pp}pp` : `${pp}pp`;
 }
 
 function returnColorClass(v: number | null): string {
@@ -74,17 +106,6 @@ function returnColorClass(v: number | null): string {
   if (v > 0) return "text-positive";
   if (v < 0) return "text-negative";
   return "text-muted-foreground";
-}
-
-// ── Period return computation ─────────────────────────────────────────────────
-
-function computePeriodReturn(points: Array<{ value: number }> | undefined): number | null {
-  const pts = points ?? [];
-  if (pts.length < 2) return null;
-  const first = pts[0].value;
-  const last = pts[pts.length - 1].value;
-  if (first === 0) return null;
-  return (last - first) / first;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -96,37 +117,73 @@ export function AnalyticsPeriodReturnsTable({
   // every queryFn in the useQueries array.
   const apiClient = useApiClient();
 
-  // WHY useQueries (D-002): fires 7 independent queries in one hook call.
-  // Each entry has its own queryKey, so each period's cache entry is independent —
-  // the 1Y fetch is not invalidated when only the 1M period changes on the
-  // performance chart above. The results array is index-aligned with PERIODS.
+  // WHY useQueries (D-002): fires 8 independent TWR queries in one hook call.
+  // Each entry has its own queryKey, so each period's cache entry is
+  // independent. The results array is index-aligned with PERIODS.
   const results = useQueries({
-    queries: PERIODS.map((p) => ({
-      queryKey: qk.portfolios.valueHistory(portfolioId, p.label),
-      queryFn: () =>
-        apiClient.getValueHistory(portfolioId, {
-          ...(p.days != null ? { days: p.days } : {}),
-          granularity: "1d" as const,
-        }),
-      enabled: !!portfolioId,
-      staleTime: 60_000,
-      // WHY retry: 1 — table cell gracefully degrades to "—"; preventing
-      // 21-call retry storm on transient backend (DS-005). Default retry: 3
-      // × 7 parallel queries = up to 21 concurrent S1 calls on a single
-      // 5xx hiccup; capping per-query at 1 keeps the worst-case load to
-      // 14 calls and surfaces the partial-failure state faster.
-      retry: 1,
-    })),
+    queries: PERIODS.map((p) => {
+      const days = rowDays(p.label, p.days);
+      return {
+        // 2026-06-10: qk.portfolios.twr — shared with AnalyticsTwrChart for
+        // coinciding windows (e.g. the 3M pill), one fetch feeds both.
+        queryKey: qk.portfolios.twr(portfolioId, days),
+        queryFn: () => apiClient.getTwr(portfolioId, days),
+        enabled: !!portfolioId,
+        staleTime: 60_000,
+        // WHY retry: 1 — table cell gracefully degrades to "—"; prevents a
+        // 24-call retry storm on transient backend errors (DS-005): default
+        // retry 3 × 8 parallel queries vs capped 16 worst-case.
+        retry: 1,
+      };
+    }),
   });
+
+  // ── SPY closes for the benchmark columns (one fetch, all rows) ──────────
+  // Window: 740 days back — covers the longest CONCRETE row (2Y = 730) plus
+  // weekend slack. The ALL row keeps "—" (open-ended window; fetching 10y of
+  // SPY for one usually-empty cell isn't worth the payload).
+  const { data: idMap } = useQuery({
+    // Same key as useBenchmarkSeries' resolve step — shared cache entry.
+    queryKey: ["benchmark-resolve-batch", ["SPY"]],
+    queryFn: () => apiClient.resolveTickersBatch(["SPY"]),
+    staleTime: 24 * 60 * 60 * 1000,
+    enabled: !!portfolioId,
+    retry: false,
+  });
+  const spyId = idMap?.["SPY"] ?? null;
+  const spyFromDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 740);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const { data: spyOhlcv } = useQuery({
+    queryKey: ["benchmark-ohlcv", "SPY", spyId, spyFromDate],
+    queryFn: () =>
+      apiClient.getOHLCV(spyId!, { timeframe: "1D", start: spyFromDate }),
+    enabled: Boolean(spyId),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const spyCloses: DatedValue[] = useMemo(
+    () =>
+      (spyOhlcv?.bars ?? [])
+        .map((b: { timestamp: string; close: number }) => ({
+          date: b.timestamp.slice(0, 10),
+          value: b.close,
+        }))
+        .sort((a: DatedValue, b: DatedValue) =>
+          a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
+        ),
+    [spyOhlcv],
+  );
 
   // ── Aggregate error state ────────────────────────────────────────────────
   // WHY aggregate (Wave G QA D8/D9): when every period query fails (e.g. S9
-  // outage), surface a single inline error instead of seven empty cells. We
-  // only show the error when ALL queries fail — partial failures still let the
-  // user read the periods that did load.
+  // outage), surface a single inline error instead of eight empty cells. We
+  // only show the error when ALL queries fail — partial failures still let
+  // the user read the periods that did load.
   const allErrored = results.length > 0 && results.every((r) => r.isError);
 
-  // Inline error replaces the entire table when every period failed.
   if (allErrored) {
     return (
       <div
@@ -148,8 +205,13 @@ export function AnalyticsPeriodReturnsTable({
             <th className="text-left text-[10px] text-muted-foreground uppercase tracking-wide px-2 py-1 font-normal w-[60px]">
               PERIOD
             </th>
-            <th className="text-right text-[10px] text-muted-foreground uppercase tracking-wide px-2 py-1 font-normal">
-              RETURN
+            {/* 2026-06-10 honest relabel: the column IS flow-adjusted TWR now
+                (previously a NAV first/last approximation labelled RETURN). */}
+            <th
+              className="text-right text-[10px] text-muted-foreground uppercase tracking-wide px-2 py-1 font-normal"
+              title="Flow-adjusted time-weighted return — deposits/withdrawals excluded"
+            >
+              TWR
             </th>
             <th className="text-right text-[10px] text-muted-foreground uppercase tracking-wide px-2 py-1 font-normal">
               vs SPY
@@ -175,9 +237,32 @@ export function AnalyticsPeriodReturnsTable({
               );
             }
 
-            const periodReturn = computePeriodReturn(data?.points);
-            const display = fmtReturn(periodReturn);
-            const colorClass = returnColorClass(periodReturn);
+            // Window TWR: the endpoint rebases the series to 0 at window
+            // start, so the LAST point's cumulative value IS the window
+            // return. <2 points = no return derivable → "—".
+            // 2026-06-11 Wave 3: when the fetched window contains a flow
+            // artifact (backend counted a deposit/position import as return
+            // — see period-returns.ts live audit), the corrupted number is
+            // SUPPRESSED to "—" with an explanatory tooltip. Never shown,
+            // never "corrected" client-side.
+            const pts = data?.points ?? [];
+            const hasFlowArtifact = findFlowArtifactDates(pts).length > 0;
+            const periodReturn =
+              pts.length >= 2 && !hasFlowArtifact
+                ? pts[pts.length - 1].twr_cum
+                : null;
+
+            // Benchmark over the SAME calendar window. ALL stays null (no
+            // defined window); windowReturnFromCloses also nulls windows the
+            // SPY series doesn't cover — never a mislabelled figure.
+            const benchmark =
+              p.label !== "ALL" && spyCloses.length >= 2
+                ? windowReturnFromCloses(spyCloses, rowDays(p.label, p.days))
+                : null;
+            const excess =
+              periodReturn != null && benchmark != null
+                ? periodReturn - benchmark
+                : null;
 
             return (
               // WHY data-testid: lets the test suite assert each period row
@@ -188,11 +273,34 @@ export function AnalyticsPeriodReturnsTable({
                 className="h-[24px] border-b border-border/40 last:border-0"
               >
                 <td className="text-muted-foreground pr-3 py-0.5">{p.label}</td>
-                <td className={cn("pr-3 py-0.5 tabular-nums", colorClass)}>{display}</td>
-                {/* vs SPY — placeholder until TWR endpoint ships. */}
-                <td className="pr-3 py-0.5 text-muted-foreground tabular-nums">—</td>
-                {/* Excess return — unavailable until TWR endpoint ships */}
-                <td className="py-0.5 text-muted-foreground tabular-nums">—</td>
+                <td
+                  // Tooltip + testid only when the cell was artifact-suppressed
+                  // — a coverage-gap "—" keeps the generic (silent) treatment.
+                  data-testid={
+                    hasFlowArtifact ? `analytics-flow-artifact-${p.label}` : undefined
+                  }
+                  title={
+                    hasFlowArtifact
+                      ? "Suppressed — the TWR series contains a cash-flow artifact inside this window (a deposit/position import was counted as return). Backend series fix pending."
+                      : undefined
+                  }
+                  className={cn("pr-3 py-0.5 tabular-nums text-right", returnColorClass(periodReturn))}
+                >
+                  {fmtReturn(periodReturn)}
+                </td>
+                {/* vs SPY — real closes over the same window (2026-06-10). */}
+                <td className="pr-3 py-0.5 text-muted-foreground tabular-nums text-right">
+                  {fmtReturn(benchmark)}
+                </td>
+                {/* Excess = TWR − SPY, in percentage points. */}
+                <td
+                  className={cn(
+                    "py-0.5 tabular-nums text-right px-2",
+                    returnColorClass(excess),
+                  )}
+                >
+                  {fmtExcess(excess)}
+                </td>
               </tr>
             );
           })}

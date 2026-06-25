@@ -49,7 +49,9 @@ export function BiggestNewsRow({ news }: BiggestNewsRowProps) {
       href={news.url}
       target={linkAttrs.target}
       rel={linkAttrs.rel}
-      className="flex h-7 shrink-0 items-center gap-2 border-b border-border/30 bg-warning/5 px-2 transition-colors hover:bg-warning/10"
+      // Round 3 (item 5): inset focus-visible ring — anchors are natively
+      // tabbable; the ring makes the focus position visible on the dark strip.
+      className="flex h-7 shrink-0 items-center gap-2 border-b border-border/30 bg-warning/5 px-2 transition-colors hover:bg-warning/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       aria-label={`Open biggest news: ${news.title}`}
     >
       {/* Newspaper icon + ticker chip pinned left so the title can truncate

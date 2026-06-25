@@ -23,10 +23,18 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { severityColor } from "@/lib/utils";
 import { formatAlertTitle } from "@/lib/alerts/format";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
+// no-alerts state; the action Link keeps the create-rules CTA.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): the bespoke one-line "Failed to load alerts" text becomes
+// a named error state with a Retry action wired to refetch().
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+import { BellOff } from "lucide-react";
 import type { AlertPayload } from "@/types/alerts";
 
 // ── Severity sort order ───────────────────────────────────────────────────────
@@ -55,13 +63,23 @@ const SEVERITY_ORDER: Record<string, number> = {
 export function RecentAlerts() {
   const { accessToken } = useAuth();
   const { recentAlerts } = useAlertStream();
+  // F-4: Row-4 widget — defer query until above-fold widgets fetch first.
+  // Live alerts still stream over WebSocket (useAlertStream above), so the
+  // user sees critical real-time alerts immediately; only the historical
+  // REST poll is gated.
+  const aboveFoldReady = useAboveFoldReady();
 
   // ── Poll historical alerts from REST endpoint ──────────────────────────────
   // WHY poll: WebSocket gaps could miss alerts. REST is the authoritative source.
-  const { data: alertsResp, isLoading, isError } = useQuery({
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data: alertsResp, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["alerts-pending"],
-    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
-    enabled: !!accessToken,
+    // WHY limit 30 (user request 2026-06-12 "blocks of 30"): standardised with
+    // the other dashboard listing widgets. We over-fetch the REST page to 30 so
+    // the merged live+historical list below can show a full block of 30 alerts
+    // (the prior 10 starved the slice(0, 30) cap below).
+    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 30 }),
+    enabled: !!accessToken && aboveFoldReady,
     refetchInterval: 30_000, // WHY 30s: balance freshness vs API load
     staleTime: 15_000,
   });
@@ -101,7 +119,8 @@ export function RecentAlerts() {
       }
     }
 
-    // FR-1.6 MED-003: sort by severity DESC then created_at DESC, limit to 8.
+    // FR-1.6 MED-003: sort by severity DESC then created_at DESC, capped to a
+    // block of 30 (user request 2026-06-12 "blocks of 30" — was 8).
     // WHY severity first: a CRITICAL alert from an hour ago is more actionable
     // than a LOW alert from 5 minutes ago. Traders must never have to scroll
     // past noise to find the most urgent signal.
@@ -115,13 +134,14 @@ export function RecentAlerts() {
         if (severityDiff !== 0) return severityDiff;
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       })
-      .slice(0, 8);
+      .slice(0, 30);
   }, [recentAlerts, alertsResp?.alerts]);
 
   // WHY single outer wrapper for all render paths: consistent bg-background + h-full
   // across all Row-4 panels regardless of data state. See EconomicCalendar for rationale.
   return (
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Recent alerts">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -132,22 +152,35 @@ export function RecentAlerts() {
 
       {/* ── Loading state ──────────────────────────────────────────────── */}
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1) */}
+      {/* Round 3 (item 3): skeleton rows mirror the loaded alert rows —
+          h-[22px] divide-y at px-2 with the real column slots (severity
+          badge · message flex · timestamp) — replacing the taller spaced
+          bars. 5 rows ≈ a typical pending-alert page fold. */}
       {isLoading && merged.length === 0 && (
-        <div className="flex-1 space-y-2 px-3 py-2">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex gap-2">
-              <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+        <div className="flex-1 divide-y divide-border/30">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
+              <Skeleton className="h-3.5 w-9 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-6 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
       )}
 
       {/* ── Error state ─────────────────────────────────────────────────── */}
+      {/* Round 4 (item 1): named error state + Retry replaces the bare
+          destructive one-liner (which had no recovery path and collapsed the
+          panel to a 22px sliver). WHY merged.length === 0 stays: live
+          WebSocket alerts can still populate the list while the REST poll is
+          down — in that case showing the (partial) data beats an error. */}
       {isError && merged.length === 0 && (
-        <div className="flex h-[22px] items-center gap-1.5 px-1">
-          <span className="text-[11px] text-destructive">Failed to load alerts</span>
-        </div>
+        <WidgetErrorState
+          copyKey="dashboard.alerts-error"
+          icon={BellOff}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
@@ -156,15 +189,25 @@ export function RecentAlerts() {
           alert rules guides them to the action that will populate this widget.
           The second line is a softer hint about where to go — not an error state. */}
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
+      {/* Round 3 (item 4): shared EmptyState primitive — copy key
+          dashboard.no-alerts keeps the "No recent alerts." headline and the
+          create-rules guidance; the action slot carries a real <Link> (was a
+          raw <a>, which skipped Next.js prefetch + client navigation). */}
       {!isLoading && !isError && merged.length === 0 && (
-        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
-          <p className="text-[10px] text-muted-foreground">No recent alerts.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Create alert rules on the{" "}
-            <a href="/alerts" className="text-primary">Alerts page</a>
-            {" "}to receive notifications here.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="dashboard.no-alerts"
+            icon={BellOff}
+            action={
+              <Link
+                href="/alerts"
+                className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                Open Alerts page →
+              </Link>
+            }
+          />
         </div>
       )}
 
@@ -195,7 +238,9 @@ export function RecentAlerts() {
                 key={alert.id || `${alert.created_at}-${alert.alert_type}`}
                 href={href}
                 // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
-                className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40 no-underline"
+                // Round 3 (item 5): transition-colors (Tier-1) + inset
+                // focus-visible ring — anchor rows are natively tabbable.
+                className="flex h-[22px] items-center gap-2 px-2 py-0 no-underline transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 {/* Severity badge — use Tailwind bg/text classes from severityColor */}
                 <span
@@ -227,7 +272,7 @@ export function RecentAlerts() {
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
         <Link
           href="/alerts"
-          className="text-[11px] text-muted-foreground hover:text-foreground"
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           View all alerts →
         </Link>

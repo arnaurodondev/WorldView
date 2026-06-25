@@ -232,9 +232,12 @@ class TestOrchestratorToolUsePath:
         assert "assistant" in roles
 
     def test_orchestrator_all_tools_failed_returns_early(self) -> None:
-        """When all tool results are None → error emitted, second LLM turn NOT called.
+        """When all tool results are None → WORDED refusal emitted, second LLM turn NOT called.
 
         Verifies the all-tools-failed guard that prevents hallucination.
+
+        2026-06-12 root-cause audit Theme E (fix #3): the guard now streams a
+        worded "I couldn't find a match…" answer instead of an empty error body.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -260,10 +263,11 @@ class TestOrchestratorToolUsePath:
         # Second turn must NOT have been called
         assert second_turn_count[0] == 0
 
-        # Error event with all_tools_failed code must be in stream
-        error_events = [e for e in events if e.get("event") == "error"]
-        assert len(error_events) >= 1
-        assert any(json.loads(e["data"]).get("code") == "all_tools_failed" for e in error_events)
+        # Worded body (final_answer) must be in stream; no empty error.
+        final_events = [e for e in events if e.get("event") == "final_answer"]
+        assert len(final_events) == 1
+        assert "couldn't find a match" in json.loads(final_events[0]["data"])["text"]
+        assert not any(e.get("event") == "error" for e in events)
 
     def test_orchestrator_tool_result_content_capped_at_4000_chars(self) -> None:
         """Large context block (> 4000 chars) from tool results must be capped.
@@ -478,3 +482,82 @@ class TestChatPipelineCacheBeforeClassifier:
         # Both must have been called exactly once.
         pipeline.check_cache.assert_called_once()
         pipeline.validate_input.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-06-12 root-cause audit Theme D — plan-only synthesis guard
+#
+# chain_nvda_competitor_growth_rank shipped a future-tense PLAN ("I'll start
+# by… **Step 1**… Let me first…") as the final answer. The synthesis-turn guard
+# must detect a plan-only synthesis, re-prompt ONCE for a direct answer, and ship
+# the repaired text (or a worded refusal if the re-prompt also fails).
+# ─────────────────────────────────────────────────────────────────────────────
+# Verbatim plan-only answer from the run_20260612T183758Z artifact (pre-banner).
+_PLAN_ONLY_SYNTHESIS = (
+    "I'll start by identifying NVIDIA's main competitors and then check their revenue growth.\n\n"
+    "**Step 1: Find NVIDIA's competitors**\n\n"
+    "I'll search for relationships and entity paths for NVIDIA.\n\n"
+    "**Step 2: Get competitor revenue data**\n\n"
+    "Let me first get the entity intelligence for NVIDIA to identify competitors, "
+    "then fetch fundamentals for those competitors."
+)
+
+
+class TestPlanOnlySynthesisGuard:
+    def _build(self, stream_seq: list[str]) -> tuple[Any, list[int]]:
+        """Pipeline whose stream_chat yields stream_seq[i] on the i-th call."""
+        block = _make_tool_use_block("search_documents", {"query": "NVDA competitors"})
+        first_resp = _make_llm_tool_response(tool_calls=[block])
+        pipeline = _make_pipeline(first_response=first_resp)
+
+        call_idx = [0]
+
+        async def _stream(messages: list, **kwargs: Any):
+            i = call_idx[0]
+            call_idx[0] += 1
+            yield stream_seq[min(i, len(stream_seq) - 1)]
+
+        pipeline.llm_chain.stream_chat = _stream
+        # Pass the final text through unchanged so the final_answer body reflects
+        # the repaired/refused ``full_text`` (the default mock returns "Answer.").
+        pipeline.process_output = MagicMock(side_effect=lambda text, items: (text, []))
+
+        # A real retrieved item so synthesis runs (not the all-tools-failed path).
+        item = _make_retrieved_item()
+        item.text = "NVIDIA competes with AMD and Intel in GPUs."
+        item.citation_meta = None
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        factory = _make_factory(_make_executor([item]))
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        return orch, call_idx
+
+    def test_plan_only_synthesis_repaired_by_reprompt(self) -> None:
+        """A plan-only synthesis triggers a re-prompt that yields a real answer."""
+        substantive = "NVIDIA's main competitors are AMD and Intel."
+        orch, call_idx = self._build([_PLAN_ONLY_SYNTHESIS, substantive])
+        events = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+
+        # The re-prompt fired (stream_chat called twice) and the repaired answer ships.
+        assert call_idx[0] == 2
+        final = [e for e in events if e.get("event") == "final_answer"]
+        assert final, f"expected final_answer, got {[e.get('event') for e in events]}"
+        body = json.loads(final[0]["data"])["text"]
+        assert "I'll start by" not in body
+        assert "Step 1" not in body
+        assert "AMD and Intel" in body
+
+    def test_plan_only_synthesis_refused_when_reprompt_also_plan(self) -> None:
+        """When the re-prompt ALSO returns a plan, ship a worded refusal — never a plan."""
+        from rag_chat.application.use_cases.chat_orchestrator import _PLAN_ONLY_REFUSAL
+
+        orch, call_idx = self._build([_PLAN_ONLY_SYNTHESIS, _PLAN_ONLY_SYNTHESIS])
+        events = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+
+        assert call_idx[0] == 2  # re-prompt attempted once
+        final = [e for e in events if e.get("event") == "final_answer"]
+        assert final
+        body = json.loads(final[0]["data"])["text"]
+        assert "I'll start by" not in body
+        assert "Step 1" not in body
+        assert body == _PLAN_ONLY_REFUSAL

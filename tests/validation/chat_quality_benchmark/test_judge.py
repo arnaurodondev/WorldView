@@ -595,14 +595,24 @@ def test_judge_w36_fallback_scored_on_highlights_not_absence():
 
 def test_judge_system_prompt_includes_w48_calibration_language():
     """Pin the W48 calibration language so future rewrites can't silently
-    regress the R8 flukes."""
+    regress the R8 flukes.
+
+    PLAN-0110 W3 (v3.0): the v2.0 "PRESUME GROUNDED → award 20-25" shortcut was
+    DELETED — numeric grounding is now cross-checked deterministically. This test
+    is repointed to the NEW authoritative grounding language (the presumed-band
+    fallback + the still-present scope/coverage discipline), NOT weakened: the
+    grounding dimension is still pinned, just to its v3.0 form.
+    """
     from chat_quality_judge import _SYSTEM_PROMPT
 
-    # Value-extraction language (grounding dim)
-    assert "VALUE EXTRACTION" in _SYSTEM_PROMPT
+    # Grounding dim — v3.0 division-of-labour + presumed-band language.
+    assert "NUMERIC VALUE VERIFICATION IS NOT YOUR JOB" in _SYSTEM_PROMPT
+    assert "GROUNDING SAMPLE" in _SYSTEM_PROMPT
+    assert "presumed band" in _SYSTEM_PROMPT.lower()
     assert "compact" in _SYSTEM_PROMPT.lower() or "COMPACT" in _SYSTEM_PROMPT
-    assert "PRESUMED" in _SYSTEM_PROMPT or "presumed grounded" in _SYSTEM_PROMPT.lower()
-    # Refusal-detection language (refusal_judgment dim)
+    # The deleted v2.0 "PRESUME GROUNDED → award 20-25" shortcut must stay gone.
+    assert "PRESUMED\n                             GROUNDED. Award grounding 20-25" not in _SYSTEM_PROMPT
+    # Refusal-detection language (refusal_judgment dim) — unchanged in v3.0.
     assert "REFUSAL PHRASES" in _SYSTEM_PROMPT or "REFUSAL DETECTION" in _SYSTEM_PROMPT
     assert "I cannot" in _SYSTEM_PROMPT
     assert "Hedging" in _SYSTEM_PROMPT or "hedging" in _SYSTEM_PROMPT
@@ -769,10 +779,13 @@ def test_judge_system_prompt_includes_w51_would_help_hedging_language():
     assert "WOULD-HELP HEDGING" in _SYSTEM_PROMPT
     assert "would be required" in _SYSTEM_PROMPT
     assert "would help" in _SYSTEM_PROMPT.lower()
-    # Pin the verbatim Q5 GOOGL R10 worked example so a future rewrite that
-    # drops it (and silently regresses Q5) breaks this test loudly.
-    assert "Q5 GOOGL R10" in _SYSTEM_PROMPT
-    assert "28.99x" in _SYSTEM_PROMPT
+    # Pin distinctive verbatim W51 language so a future rewrite that drops the
+    # WOULD-HELP HEDGING calibration breaks this test loudly. v2.0 replaced the
+    # v1.x "Q5 GOOGL R10 / 28.99x" worked example with the phrase-list form +
+    # the hard pre-emption rule pinned below (the behavioural GOOGL guard lives
+    # in test_judge_would_help_hedge_with_substantive_analysis_scores_full_marks).
+    assert "A longer time series would be required" in _SYSTEM_PROMPT
+    assert "WOULD-HELP HEDGE" in _SYSTEM_PROMPT
 
 
 def test_judge_would_help_hedge_with_substantive_analysis_scores_full_marks():

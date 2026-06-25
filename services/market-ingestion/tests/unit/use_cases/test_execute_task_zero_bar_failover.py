@@ -7,7 +7,7 @@ Covers:
 - Failover does not fire below threshold
 - EODHD intraday has no fallback — logs warning
 - _fallback_provider returns None for EODHD OHLCV intraday
-- _fallback_provider returns EODHD for Yahoo daily
+- _fallback_provider returns EODHD for Alpaca daily
 - _fallback_provider returns EODHD for Finnhub news
 - zero_bar_tracker=None skips all logic
 - FUNDAMENTALS dataset is not tracked
@@ -89,7 +89,7 @@ def _make_task(
 
 def _make_fetch_result(bars_returned: int = 0) -> MagicMock:
     return MagicMock(
-        provider=Provider.YAHOO_FINANCE,
+        provider=Provider.ALPACA,
         dataset_type=DatasetType.OHLCV,
         raw_data=b'[{"open":1}]',
         content_type="application/json",
@@ -144,10 +144,10 @@ def test_fallback_returns_none_for_eodhd_ohlcv_intraday() -> None:
 
 
 @pytest.mark.unit()
-def test_fallback_returns_eodhd_for_yahoo_daily() -> None:
-    """Yahoo OHLCV daily falls back to EODHD."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
-    result = _fallback_provider(DatasetType.OHLCV, "1d", Provider.YAHOO_FINANCE, registry)
+def test_fallback_returns_eodhd_for_alpaca_daily() -> None:
+    """Alpaca OHLCV daily falls back to EODHD (PLAN-0036: Alpaca primary, EODHD failover)."""
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
+    result = _fallback_provider(DatasetType.OHLCV, "1d", Provider.ALPACA, registry)
     assert result == Provider.EODHD
 
 
@@ -168,18 +168,18 @@ def test_fallback_returns_eodhd_for_finnhub_news() -> None:
 @pytest.mark.asyncio()
 async def test_zero_bar_ohlcv_increments_streak() -> None:
     """bars_returned=0 calls record_zero() on the tracker."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker(streak_value=1)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     await use_case.execute(task)
 
     tracker.record_zero.assert_called_once_with(
-        provider="yahoo_finance",
+        provider="alpaca",
         symbol="AAPL",
         timeframe="1d",
         dataset_type="ohlcv",
@@ -190,18 +190,18 @@ async def test_zero_bar_ohlcv_increments_streak() -> None:
 @pytest.mark.asyncio()
 async def test_nonzero_bar_resets_streak() -> None:
     """bars_returned=5 calls reset() on the tracker."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker()
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=5))
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=5))
 
     await use_case.execute(task)
 
     tracker.reset.assert_called_once_with(
-        provider="yahoo_finance",
+        provider="alpaca",
         symbol="AAPL",
         timeframe="1d",
         dataset_type="ohlcv",
@@ -213,21 +213,21 @@ async def test_nonzero_bar_resets_streak() -> None:
 @pytest.mark.asyncio()
 async def test_failover_fires_at_threshold_5() -> None:
     """Streak=5 triggers re-fetch with EODHD fallback adapter."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker(streak_value=5)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     eodhd_adapter = registry.get(Provider.EODHD)
     eodhd_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=10))
 
     await use_case.execute(task)
 
-    # Yahoo was called first (zero bars), then EODHD fallback was called
-    yahoo_adapter.fetch_ohlcv.assert_called_once()
+    # Alpaca was called first (zero bars), then EODHD fallback was called
+    alpaca_adapter.fetch_ohlcv.assert_called_once()
     eodhd_adapter.fetch_ohlcv.assert_called_once()
 
 
@@ -235,19 +235,19 @@ async def test_failover_fires_at_threshold_5() -> None:
 @pytest.mark.asyncio()
 async def test_failover_does_not_fire_below_threshold() -> None:
     """Streak=4 does NOT trigger re-fetch."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker(streak_value=4)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     eodhd_adapter = registry.get(Provider.EODHD)
 
     await use_case.execute(task)
 
-    yahoo_adapter.fetch_ohlcv.assert_called_once()
+    alpaca_adapter.fetch_ohlcv.assert_called_once()
     eodhd_adapter.fetch_ohlcv.assert_not_called()
 
 
@@ -302,12 +302,12 @@ async def test_eodhd_intraday_no_fallback_logs_warning() -> None:
 @pytest.mark.asyncio()
 async def test_zero_bar_tracker_none_skips_logic() -> None:
     """zero_bar_tracker=None means no calls to record_zero or reset."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=None)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     # Should execute without errors — no zero-bar tracking
     await use_case.execute(task)
@@ -350,14 +350,14 @@ async def test_fundamentals_not_tracked() -> None:
 @pytest.mark.asyncio()
 async def test_fallback_rate_limited_retries_task() -> None:
     """Fallback adapter raises ProviderRateLimited → task.retry() is called."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker(streak_value=5)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    # Primary (Yahoo) returns zero bars to trigger failover
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    # Primary (Alpaca) returns zero bars to trigger failover
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     # Fallback (EODHD) raises rate-limited error
     eodhd_adapter = registry.get(Provider.EODHD)
@@ -376,14 +376,14 @@ async def test_fallback_rate_limited_retries_task() -> None:
 @pytest.mark.asyncio()
 async def test_fallback_auth_error_fails_task() -> None:
     """Fallback adapter raises ProviderAuthError → task.fail() is called."""
-    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    registry = _make_registry(Provider.EODHD, Provider.ALPACA)
     tracker = _make_zero_bar_tracker(streak_value=5)
     use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
-    # Primary (Yahoo) returns zero bars to trigger failover
-    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
-    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+    # Primary (Alpaca) returns zero bars to trigger failover
+    alpaca_adapter = registry.get(Provider.ALPACA)
+    alpaca_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
 
     # Fallback (EODHD) raises auth error (fatal)
     eodhd_adapter = registry.get(Provider.EODHD)

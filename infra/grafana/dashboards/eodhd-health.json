@@ -135,14 +135,14 @@
     },
     {
       "type": "stat",
-      "title": "Response Cache Hit Rate (NOT INSTRUMENTED)",
-      "description": "STUB: cache metrics are not yet emitted by market-ingestion. No s2_mi_provider_cache_* family exists. Pending instrumentation work; query left as-is so it surfaces as missing rather than silently 0.",
+      "title": "Response Cache Hit Rate",
+      "description": "PLAN-0107 A-4: provider-agnostic cache hit rate, summed across providers and dataset types. Empty until first request flows through MarketDataCache (Wave A-3).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
-          "expr": "rate(s2_eodhd_cache_hits_total[5m]) / clamp_min(rate(s2_eodhd_cache_hits_total[5m]) + rate(s2_eodhd_cache_misses_total[5m]), 0.001) * 100",
-          "legendFormat": "Hit Rate % (no data — not instrumented)",
+          "expr": "sum(rate(s2_mi_provider_cache_hits_total[5m])) / (sum(rate(s2_mi_provider_cache_hits_total[5m])) + sum(rate(s2_mi_provider_cache_misses_total[5m])))",
+          "legendFormat": "Hit Rate",
           "refId": "A"
         }
       ],
@@ -152,15 +152,37 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "green", "value": 80 }
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.8 }
             ]
           }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache Hit Rate by Dataset Type",
+      "description": "PLAN-0107 A-4: per-dataset-type hit rate. Useful for spotting cold paths (e.g. fundamentals not yet warmed) and validating provider-swap reuse: when routing flips EODHD→Polygon for a dataset_type, the series for that dataset should stay flat.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        {
+          "expr": "sum by (dataset_type) (rate(s2_mi_provider_cache_hits_total[5m])) / clamp_min(sum by (dataset_type) (rate(s2_mi_provider_cache_hits_total[5m]) + rate(s2_mi_provider_cache_misses_total[5m])), 0.001)",
+          "legendFormat": "{{dataset_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       }

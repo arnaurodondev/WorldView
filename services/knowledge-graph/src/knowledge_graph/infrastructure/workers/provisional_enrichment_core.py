@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.tickers import strip_exchange_qualifier  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
@@ -55,8 +56,31 @@ _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
         "place",
         "product",
         "index",
+        "exchange",  # FR-12: stock exchanges / trading venues (NYSE, NASDAQ, LSE)
+        "organization",  # FR-12: tickerless private companies / agencies / non-profits / institutions
         "currency",
         "unknown",
+    },
+)
+
+# FR-12 — coarse "company-ish" GLiNER/legacy classes that the alias map below
+# resolves to ``financial_instrument``.  When such a class arrives on the
+# NO-ENRICH fallback path (the LLM omitted ``entity_type`` so we fell back to the
+# raw mention_class) and there is NO ticker, the row is almost always NOT a
+# tradable instrument — it is an exchange, a private company, a foundation, or a
+# generic phrase ("Nvidia shares").  74% of live ``financial_instrument`` rows
+# were tickerless mislabels minted exactly this way.  We therefore downgrade
+# these tickerless rows to ``unknown`` instead of trusting the FI alias.
+_COMPANY_CLASS_ALIASES: frozenset[str] = frozenset(
+    {
+        "company",
+        "corp",
+        "corporation",
+        "enterprise",
+        "firm",
+        "business",
+        "inst",
+        "institution",
     },
 )
 
@@ -74,15 +98,23 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "enterprise": "financial_instrument",
     "firm": "financial_instrument",
     "business": "financial_instrument",
-    # 'organization'/'organisation' → 'unknown': too broad to safely assume FI;
-    # covers regulators, NGOs, non-profits. The prompt fix (F-009) prevents the
-    # LLM from emitting these; alias is the safety net for legacy/fallback data.
-    # Migration 0039 established this mapping — do not promote to financial_instrument.
-    "organization": "unknown",
-    "organisation": "unknown",
-    "inst": "financial_instrument",
-    "institution": "financial_instrument",
-    "regulator": "unknown",  # regulators (SEC, Fed) are not financial instruments
+    # 'organization'/'organisation' → 'organization' (FR-12 / migration 0055):
+    # there is now a dedicated canonical type for tickerless companies, agencies,
+    # NGOs, and non-profits, so we map to it directly instead of dumping to
+    # 'unknown'. The ENTITY_PROFILE prompt v2.2 also emits 'organization' for these.
+    "organization": "organization",
+    "organisation": "organization",
+    # 'inst'/'institution' → 'organization': an institution (university, research
+    # firm, agency) is an organisation, NOT a tradeable instrument (FR-12).
+    "inst": "organization",
+    "institution": "organization",
+    "regulator": "organization",  # regulators (SEC, Fed) are organisations, not instruments
+    "agency": "organization",  # government agencies / bodies
+    "nonprofit": "organization",
+    "non_profit": "organization",
+    "foundation": "organization",
+    "ngo": "organization",
+    "university": "organization",
     # country/location → place (migration 0039 §2b; GLiNER uses 'location' not 'country')
     "country": "place",
     "nation": "place",
@@ -99,6 +131,53 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     # emitted it as "macro indicator" (with space → underscore normalisation
     # already applied before this dict is consulted).
 }
+
+
+# ── FR-11 — generic finance suffixes for the token-superset dedup fallback ───────
+# A ticker-less mention like "SpaceX shares" / "SpaceX stock" / "SpaceX Class A
+# common stock" denotes the SAME entity as an existing "SpaceX" canonical, but the
+# 0.75 trigram pre-lookup misses (sim 0.54-0.58 < 0.75) and a fresh duplicate is
+# minted (root cause of FR-11 / the SpaceX 8-row cluster).  Stripping these
+# boilerplate suffixes from the END of the incoming name and retrying an EXACT
+# normalised-alias match folds the variant into the existing canonical.  Kept
+# conservative — only unambiguous corporate/security boilerplate tokens — and
+# longest-first so multi-word suffixes are removed before their single-word parts.
+_FR11_GENERIC_SUFFIXES: tuple[str, ...] = (
+    "class a common stock",
+    "class b common stock",
+    "class c common stock",
+    "common stock",
+    "ordinary shares",
+    "preferred stock",
+    "class a",
+    "class b",
+    "class c",
+    "shares",
+    "stock",
+    "equity",
+    "holdings",
+    "holding",
+    "adr",
+)
+
+
+def _strip_generic_suffixes(normalized_name: str) -> str:
+    """Iteratively strip trailing generic finance suffixes from a normalised name.
+
+    ``normalized_name`` is expected already lower-cased + whitespace-collapsed.
+    Returns the boilerplate-free stem (e.g. "spacex shares" → "spacex").  Never
+    strips a suffix that is the WHOLE name (so "shares" alone is preserved).
+    """
+    s = normalized_name
+    changed = True
+    while changed:
+        changed = False
+        for suf in _FR11_GENERIC_SUFFIXES:
+            if s != suf and s.endswith(" " + suf):
+                s = s[: -(len(suf) + 1)].strip()
+                changed = True
+                break
+    return s
 
 
 def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated", *, event_id: UUID) -> bytes:
@@ -244,6 +323,26 @@ async def persist_enrichment(
     from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
     canonical_name: str = profile.get("canonical_name") or mention_text
+
+    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
+    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
+    # NOTE: ticker is parsed BEFORE entity_type so the FR-12 tickerless-company
+    # downgrade below can consult it.
+    _ticker_raw: str | None = profile.get("ticker")
+    # 2026-06-15 entity-matching fix: collapse provider exchange suffixes
+    # (e.g. ``AAPL.MX`` / ``NVDA.US``) to the bare symbol BEFORE any lookup or
+    # write, so the ticker we query in M-017 anchoring and the BP-459 ticker
+    # dedup pre-lookup is the same bare symbol the canonical row already owns.
+    # Without this, ``AAPL.MX`` never matched ``AAPL`` and minted a duplicate
+    # tickerless canonical.  Share classes (``BRK.A``) and preferred shares
+    # (``JPM.PRM``) are deliberately preserved by the allowlist helper.
+    _ticker_stripped: str | None = strip_exchange_qualifier(_ticker_raw)
+    ticker: str | None = _ticker_stripped[:20] if _ticker_stripped else None
+
+    # ── entity_type resolution + FR-12 tickerless-company hardening ──────────
+    # The LLM may omit entity_type; we then fall back to the raw GLiNER
+    # mention_class.  ``_norm_type`` is the normalised source value; ``entity_type``
+    # is its canonical mapping via the alias table.
     _raw_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
     _norm_type = _raw_type.lower().strip().replace(" ", "_")
     entity_type = _ENTITY_TYPE_ALIASES.get(_norm_type, _norm_type)
@@ -255,10 +354,21 @@ async def persist_enrichment(
             defaulting_to="unknown",
         )
         entity_type = "unknown"
-    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
-    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
-    _ticker_raw: str | None = profile.get("ticker")
-    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+    # FR-12: a coarse "company"-class mention (company/corp/firm/...) only maps to
+    # ``financial_instrument`` via the alias table.  Without a ticker that mapping
+    # is almost always wrong — it is the exact path that minted NYSE, SpaceX,
+    # foundations, and "X shares" phrases as instruments (74% of FI rows were
+    # tickerless).  Reserve ``financial_instrument`` for rows that carry a ticker
+    # (or were explicitly LLM-typed to a non-company canonical value); downgrade
+    # tickerless company-class fallbacks to ``unknown``.
+    if entity_type == "financial_instrument" and ticker is None and _norm_type in _COMPANY_CLASS_ALIASES:
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_tickerless_company_downgraded",
+            raw_type=_raw_type,
+            mention_text=mention_text,
+            downgraded_to="unknown",
+        )
+        entity_type = "unknown"
     _isin_raw: str | None = profile.get("isin")
     # Standard ISIN = exactly 12 alphanumeric chars; anything else is a hallucination.
     import re as _re
@@ -346,6 +456,47 @@ async def persist_enrichment(
     }
     avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
+    # ── Ticker-equality pre-lookup — BP-459 hard dedup key (PLAN-0111) ───────
+    # ROOT CAUSE (2026-06-12): the news/provisional promotion path and the
+    # market-data instrument-seeding path (instrument_consumer) each mint a
+    # canonical_entity for the SAME ticker without ever consulting the OTHER's
+    # row.  None of the existing guards key on the ticker:
+    #   - ``create_or_get``'s ON CONFLICT is ``lower(canonical_name)`` AND its
+    #     partial index *excludes* entity_type='financial_instrument' entirely,
+    #     so two SHEL instruments never conflict on name.
+    #   - the fuzzy pre-lookup below keys on ``canonical_name`` trigram
+    #     similarity, so "NYSE:PG" / "Procter and Gamble" / "Shell Plc" never
+    #     dedup against "Shell PLC ADR" / "The Procter & Gamble Company".
+    #   - M-017 anchoring (above) only fires when ``market_data_lookup`` is
+    #     supplied AND S2 already owns the instrument; the historical SHEL
+    #     "Shell Plc" was promoted BEFORE the ADR instrument existed, so it
+    #     minted a fresh ticker-bearing canonical.
+    # Result: 451 tickers with duplicate canonicals / 593 excess rows (live
+    # count 2026-06-12).
+    #
+    # FIX: for a tradable instrument WITH a ticker, the ticker is the single
+    # strongest identity key.  Before any name-based work, look up an existing
+    # financial_instrument canonical that already owns this exact ticker and
+    # REUSE it.  This makes the ticker a hard dedup key across BOTH minting
+    # pipelines (the instrument_consumer path gets the symmetric guard).  We
+    # run this AFTER M-017 anchoring (a successful S2 lookup is an even stronger,
+    # exact-by-construction match) and AFTER ticker normalization so the value
+    # we query is the value we'd write.  When ``forced_entity_id`` was already
+    # resolved by M-017 we skip this — the anchored UUID wins.
+    if forced_entity_id is None and entity_type == "financial_instrument" and ticker:
+        existing_by_ticker = await CanonicalEntityRepository(session).find_by_ticker(ticker)
+        if existing_by_ticker is not None:
+            reused_id = UUID(str(existing_by_ticker["entity_id"]))
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_entity_deduplicated_by_ticker",
+                mention_text=mention_text,
+                canonical_name=canonical_name,
+                ticker=ticker,
+                matched_entity_id=str(reused_id),
+                matched_name=existing_by_ticker.get("canonical_name"),
+            )
+            return reused_id
+
     # ── Fuzzy pre-lookup — BP-459 provisional entity deduplication ───────────
     # ``create_or_get`` handles exact-name conflicts atomically via ON CONFLICT,
     # but the unique index only triggers when ``lower(canonical_name)`` matches
@@ -386,6 +537,38 @@ async def persist_enrichment(
         # The caller (ProvisionalEnrichmentWorker / ProvisionalQueuedConsumer)
         # will update provisional_entity_queue with this entity_id.
         return existing_entity_id
+
+    # ── FR-11 token-superset fallback — close the SpaceX-class miss ───────────
+    # The 0.75 trigram pre-lookup above misses ticker-less variants that are an
+    # existing canonical's name PLUS a generic finance suffix ("SpaceX shares" /
+    # "SpaceX stock" / "SpaceX Class A common stock"): their trigram against
+    # "spacex" is 0.54-0.58, below 0.75, so each minted a fresh duplicate (the
+    # FR-11 root cause).  Here we strip those suffixes from the incoming name and
+    # retry an EXACT normalised-alias match.  We ONLY act when the strip actually
+    # shortened the name (so this is a no-op for names without a generic suffix)
+    # and when the matched existing canonical is the SAME entity_type — never
+    # collapse across types (e.g. a "product" must not fold into a
+    # "financial_instrument").  This is a DISTINCT block, intentionally placed
+    # AFTER the ticker pre-lookup and the trigram pre-lookup so it only runs on
+    # their miss; it adds no new infrastructure (reuses the alias EXACT lookup).
+    stripped_name = _strip_generic_suffixes(lookup_name)
+    if stripped_name and stripped_name != lookup_name:
+        superset_match = await alias_repo_prelookup.find_exact(stripped_name)
+        # find_exact returns the matched entity_id; confirm same entity_type via
+        # the canonical_entities row before reusing it (cross-type guard).
+        if superset_match is not None:
+            matched_id = UUID(str(superset_match["entity_id"]))
+            matched_row = await CanonicalEntityRepository(session).get_by_id(matched_id)
+            if matched_row is not None and matched_row.entity_type == entity_type:
+                logger.info(  # type: ignore[no-any-return]
+                    "provisional_entity_deduplicated_by_name_superset",
+                    mention_text=mention_text,
+                    canonical_name=canonical_name,
+                    stripped_name=stripped_name,
+                    matched_entity_id=str(matched_id),
+                    matched_name=matched_row.canonical_name,
+                )
+                return matched_id
 
     # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
     # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  ``create_or_get``

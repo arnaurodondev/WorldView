@@ -185,3 +185,62 @@ class TestNameResolutionOnFourKGTools:
         # structlog renders to stdout — verify the structured warning fired.
         captured = capsys.readouterr()
         assert "tool_entity_unresolved" in (captured.out + captured.err)
+
+
+class TestTickerFirstResolution:
+    """BP-661 — ticker-shaped entity_name strings resolve via S6 before S7 alias search.
+
+    The S7 alias index is dominated by ticker-derived noise aliases
+    ("AAPL Stock", "AAPL.US") that trip the ambiguity gates; S6's ticker
+    resolver matches the exact ticker column and is phantom-twin aware.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ticker_shaped_name_resolves_via_s6_before_alias_search(self) -> None:
+        from unittest.mock import MagicMock
+
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = _make_s7()
+        s6 = MagicMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=_RESOLVED_ID)
+        handler = IntelligenceHandler(s7=s7, s6=s6, entity_context=None, timeout=5.0)
+
+        resolved = await handler._resolve_entity_by_name("get_entity_graph", "AAPL")
+
+        assert resolved == _RESOLVED_ID
+        s6.resolve_entity_by_ticker.assert_awaited_once_with("AAPL")
+        # S7 alias search must NOT run when the ticker path hits.
+        s7.resolve_entity_by_name.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ticker_miss_falls_back_to_alias_search(self) -> None:
+        from unittest.mock import MagicMock
+
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = _make_s7()  # default: resolves "Apple" → _RESOLVED_ID at 0.95
+        s6 = MagicMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=None)
+        handler = IntelligenceHandler(s7=s7, s6=s6, entity_context=None, timeout=5.0)
+
+        resolved = await handler._resolve_entity_by_name("search_claims", "AAPL")
+
+        assert resolved == _RESOLVED_ID
+        s6.resolve_entity_by_ticker.assert_awaited_once()
+        s7.resolve_entity_by_name.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_name_public_wrapper_guards_missing_s7(self) -> None:
+        """resolve_name (used by NarrativeHandler) returns None when S7 not wired."""
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        handler = IntelligenceHandler(s7=None, entity_context=None, timeout=5.0)
+        assert await handler.resolve_name("get_entity_intelligence", "Apple") is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_name_public_wrapper_delegates(self) -> None:
+        s7 = _make_s7()
+        handler = _make_handler(s7, entity_context=None)
+        resolved = await handler.resolve_name("get_entity_intelligence", "Apple")
+        assert resolved == _RESOLVED_ID

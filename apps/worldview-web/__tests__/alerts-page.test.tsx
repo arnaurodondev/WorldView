@@ -27,6 +27,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ArticleImpactBadge } from "@/components/news/ArticleImpactBadge";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { AlertsList } from "@/components/alerts/AlertsList";
+// PLAN-0113 W4: the page now uses useApiClient() (via useAlertRules), which
+// requires the ApiClientProvider. It reads useAuth (mocked) + createGateway
+// (mocked), so wrapping renders in it uses the mocked gateway transparently.
+import { ApiClientProvider } from "@/lib/api-client";
 import type { Article } from "@/types/api";
 
 // ── Next.js navigation mock ───────────────────────────────────────────────────
@@ -107,6 +111,8 @@ vi.mock("@/lib/gateway", () => ({
     getRelevantNews: vi.fn().mockResolvedValue({ articles: [], total: 0, offset: 0, limit: 20 }),
     getTopNews: vi.fn().mockResolvedValue({ articles: [], total: 0, offset: 0, limit: 20 }),
     acknowledgeAlert: vi.fn().mockResolvedValue(undefined),
+    // PLAN-0113 W4: the page reads the rule count from the SERVER rules list.
+    listAlertRules: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "tok",
       user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
@@ -418,58 +424,65 @@ describe("AlertsList — ACK behavior", () => {
   });
 });
 
-// ── Tests: AlertRuleBuilder (Wave 7 new) ─────────────────────────────────────
+// ── Tests: rule management toolbar (PLAN-0113 W4 — server rules + wizard) ─────
 
-describe("AlertRuleBuilder — Create Rule button", () => {
+describe("Alerts page — rule management toolbar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     safeClearLocalStorage();
   });
 
-  it("rule-builder-opens: + Create Rule button is present in alerts page", async () => {
-    // Import lazily to avoid module mock ordering issues
+  it("renders the Manage Rules button with the server rule count", async () => {
     const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
     const qc = makeQueryClient();
     render(
       <QueryClientProvider client={qc}>
-        <AlertsPage />
+        <ApiClientProvider>
+          <AlertsPage />
+        </ApiClientProvider>
       </QueryClientProvider>,
     );
 
-    // The rule builder trigger button
-    expect(screen.getByText("+ Create Rule")).toBeInTheDocument();
-  });
-
-  it("rule-builder-opens: clicking Create Rule opens the dialog", async () => {
-    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
-    const qc = makeQueryClient();
-    render(
-      <QueryClientProvider client={qc}>
-        <AlertsPage />
-      </QueryClientProvider>,
-    );
-
-    // Click the button
-    fireEvent.click(screen.getByText("+ Create Rule"));
-
-    // Dialog should open with CREATE ALERT RULE header
+    // Button shows "⚙ Rules (N)"; the mocked listAlertRules returns total: 0.
     await waitFor(() => {
-      expect(screen.getByText("CREATE ALERT RULE")).toBeInTheDocument();
+      expect(screen.getByText(/⚙ Rules \(\d+\)/)).toBeInTheDocument();
     });
   });
 
-  it("Manage Rules button shows rule count", async () => {
+  it("removes the legacy '+ Create Rule' button (creation moved to the wizard)", async () => {
     const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
     const qc = makeQueryClient();
     render(
       <QueryClientProvider client={qc}>
-        <AlertsPage />
+        <ApiClientProvider>
+          <AlertsPage />
+        </ApiClientProvider>
       </QueryClientProvider>,
     );
 
-    // Button shows "⚙ Rules (N)" where N is the count from localStorage
-    // With empty localStorage, count is 0
-    expect(screen.getByText(/⚙ Rules \(\d+\)/)).toBeInTheDocument();
+    // The legacy AlertRuleBuilder trigger is gone — rule creation now happens
+    // inside RuleManagerDialog via the AlertWizard's "New rule" button.
+    expect(screen.queryByText("+ Create Rule")).not.toBeInTheDocument();
+  });
+
+  it("opens the rule manager dialog from the toolbar", async () => {
+    const user = userEvent.setup();
+    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
+    const qc = makeQueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <ApiClientProvider>
+          <AlertsPage />
+        </ApiClientProvider>
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Manage alert rules/i }));
+
+    // The manager dialog header renders.
+    await waitFor(() => {
+      expect(screen.getByText("ALERT RULES")).toBeInTheDocument();
+    });
   });
 });
 
@@ -492,7 +505,9 @@ describe("Category filter rail", () => {
 
     render(
       <QueryClientProvider client={qc}>
-        <AlertsPage />
+        <ApiClientProvider>
+          <AlertsPage />
+        </ApiClientProvider>
       </QueryClientProvider>,
     );
 

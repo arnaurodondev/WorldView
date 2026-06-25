@@ -13,7 +13,12 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
-from api_gateway.routes.helpers import _auth_headers, _clients
+from api_gateway.routes.chat_safety import (
+    build_injection_block_body,
+    is_injection_block_response,
+    rewrite_sse_chunk_if_injection_block,
+)
+from api_gateway.routes.helpers import _auth_headers, _clients, proxy_json_response
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -40,11 +45,20 @@ async def chat(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-    )
+    # Input-safety block presentation (Theme E): when S8 rejected the input as a
+    # prompt-injection / PII attempt it returns a 4xx whose body has no readable
+    # answer (the block is correct, the empty body is the defect).  We do NOT
+    # weaken the block — we re-present it with a worded explanation while keeping
+    # the HTTP status and the stable ``error.code`` so clients still see the
+    # rejection.  All other responses pass through unchanged.
+    if is_injection_block_response(resp.status_code, resp.content):
+        return Response(
+            content=build_injection_block_body(),
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
+    # All other responses: forward 2xx/4xx verbatim, sanitize upstream 5xx (BUG-7).
+    return proxy_json_response(request, resp)
 
 
 @router.post("/chat/stream")
@@ -69,9 +83,29 @@ async def chat_stream(request: Request) -> Any:
             headers={"Content-Type": "application/json", **headers},
         ) as resp:
             async for chunk in resp.aiter_bytes():
-                yield chunk
+                # Input-safety block presentation (Theme E): if S8 emits an
+                # ``event: error`` for a prompt-injection / PII block, rewrite the
+                # frame so its ``message`` carries a worded explanation (the block
+                # is unchanged — code stays INPUT_REJECTED). Token / status frames
+                # pass through untouched, preserving streaming.
+                yield rewrite_sse_chunk_if_injection_block(chunk)
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/entity-context", summary="Entity-context chat (PLAN-0074 Wave G)")
@@ -143,7 +177,7 @@ async def chat_entity_context(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/chat/entity-context/stream", summary="SSE entity-context chat (PLAN-0074 Wave G)")
@@ -197,7 +231,22 @@ async def chat_entity_context_stream(request: Request) -> Any:
             async for chunk in resp.aiter_bytes():
                 yield chunk
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Proposal confirmation (PLAN-0082 Wave B) ─────────────────────────────────
@@ -228,7 +277,22 @@ async def confirm_proposal(proposal_id: str, request: Request) -> Any:
             async for chunk in resp.aiter_bytes():
                 yield chunk
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Threads ───────────────────────────────────────────────
@@ -247,7 +311,7 @@ async def create_thread(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/threads")
@@ -262,7 +326,7 @@ async def list_threads(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/threads/{thread_id}")
@@ -276,7 +340,7 @@ async def get_thread(thread_id: str, request: Request) -> Any:
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.delete("/threads/{thread_id}", status_code=200)
@@ -290,7 +354,7 @@ async def delete_thread(thread_id: str, request: Request) -> Any:
         f"/api/v1/threads/{thread_id}",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.patch("/threads/{thread_id}")
@@ -313,7 +377,7 @@ async def update_thread(thread_id: str, request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
@@ -338,7 +402,7 @@ async def get_morning_briefing(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.get("/briefings/instrument/{entity_id}")
@@ -360,7 +424,37 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+@router.post("/briefings/morning/generate", status_code=202)
+async def generate_morning_briefing(request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/morning/generate → S8 RAG/Chat service.
+
+    Requires authentication. Forces regeneration of the user's morning brief
+    (bypasses the staleness/cache check) — backs the dashboard "Regenerate"
+    button, which previously could only refetch the cached brief.
+
+    Job semantics mirror the instrument lazy-generate proxy: S8 responds
+    202 + {"status": "queued", "generated_at": ...} once the fresh brief is
+    generated and cached; the frontend then refetches GET /v1/briefings/morning.
+
+    WHY a timeout guard: regeneration invokes a full LLM call (same cost as
+    the cold GET path); the rag-chat client timeout is 120 s — on timeout we
+    return 503 (not 500) so the frontend can show a friendly retry message.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    try:
+        resp = await clients.rag_chat.post(
+            "/api/v1/briefings/morning/generate",
+            headers=headers,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
+    return proxy_json_response(request, resp)
 
 
 @router.get("/briefings/morning/history")
@@ -384,7 +478,7 @@ async def get_morning_brief_history(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0066 Wave C: brief diff + feedback proxies ───────────────────────────
@@ -408,7 +502,7 @@ async def get_morning_brief_diff(request: Request) -> Any:
         "/api/v1/briefings/morning/diff",
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/feedback/bullet", status_code=201)
@@ -432,7 +526,7 @@ async def submit_bullet_feedback(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/feedback/brief", status_code=201)
@@ -452,7 +546,7 @@ async def submit_brief_feedback(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── PLAN-0066 Wave D: chat/discuss + Wave E: create-alert placeholder ─────────
@@ -484,7 +578,7 @@ async def discuss_brief(request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 @router.post("/briefings/{brief_id}/create-alert", status_code=201)
@@ -508,4 +602,4 @@ async def create_brief_alert(brief_id: str, request: Request) -> Any:
         content=body,
         headers={**headers, "Content-Type": "application/json"},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

@@ -759,6 +759,197 @@ async def test_get_screen_fields_proxies_to_market_data(client, mock_clients) ->
 
 
 @pytest.mark.asyncio
+async def test_screen_instruments_flattens_metric_renames(client, mock_clients) -> None:
+    """_flatten_screener_result renames S3 metric keys to match TS ScreenerResult.
+
+    PRD-0099: verifies the five renaming rules that map S3 canonical metric
+    names to the frontend-facing display names:
+      revenue_ttm        → revenue
+      operating_margin_ttm → operating_margin
+      roe_ttm            → roe
+      market_capitalization → market_cap
+      quarterly_revenue_growth_yoy → revenue_growth_yoy
+    Also checks that unrenamed keys (forward_pe, dividend_yield, current_price)
+    pass through unchanged.
+    """
+    import json
+
+    s3_payload = {
+        "results": [
+            {
+                "instrument_id": "instr-001",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "exchange": "NASDAQ",
+                "sector": "Technology",
+                "metrics": {
+                    "market_capitalization": 3_000_000_000_000.0,
+                    "pe_ratio": 28.5,
+                    "revenue_ttm": 400_000_000_000.0,
+                    "operating_margin_ttm": 0.31,
+                    "roe_ttm": 0.175,
+                    "quarterly_revenue_growth_yoy": 0.05,
+                    "forward_pe": 26.0,
+                    "dividend_yield": 0.006,
+                    "current_price": 193.5,
+                },
+            }
+        ],
+        "count": 1,
+        "total": 1,
+    }
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = json.dumps(s3_payload).encode()
+
+    mock_clients.market_data.post = AsyncMock(return_value=downstream_resp)
+
+    response = await client.post(
+        "/v1/fundamentals/screen",
+        content=b'{"filters": []}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    result = body["results"][0]
+
+    # Renames applied
+    assert result["market_cap"] == 3_000_000_000_000.0, "market_capitalization → market_cap"
+    assert result["revenue"] == 400_000_000_000.0, "revenue_ttm → revenue"
+    assert result["operating_margin"] == pytest.approx(0.31), "operating_margin_ttm → operating_margin"
+    assert result["roe"] == pytest.approx(0.175), "roe_ttm → roe"
+    assert result["revenue_growth_yoy"] == pytest.approx(0.05), "quarterly_revenue_growth_yoy → revenue_growth_yoy"
+
+    # Pass-through (no rename)
+    assert result["forward_pe"] == pytest.approx(26.0), "forward_pe unchanged"
+    assert result["dividend_yield"] == pytest.approx(0.006), "dividend_yield unchanged"
+    assert result["current_price"] == pytest.approx(193.5), "current_price unchanged"
+
+    # Top-level instrument fields
+    assert result["gics_sector"] == "Technology", "sector → gics_sector"
+    assert result["ticker"] == "AAPL"
+
+    # Original S3 names must NOT appear (they were renamed)
+    assert "market_capitalization" not in result
+    assert "revenue_ttm" not in result
+    assert "operating_margin_ttm" not in result
+    assert "roe_ttm" not in result
+    assert "quarterly_revenue_growth_yoy" not in result
+
+
+@pytest.mark.asyncio
+async def test_screen_instruments_cache_hit_skips_s3(app, mock_clients) -> None:
+    """Valkey cache hit: S3 is NOT called; cached JSON is returned directly.
+
+    WHY this test: the 60-second read-through cache is the primary latency fix
+    for the screener cold-start 504 (2.6-4.7 s warm -> <5 ms cached). We verify
+    that a non-None Valkey.get() response bypasses the S3 round-trip entirely.
+    """
+    import json as _json
+
+    cached_payload = _json.dumps({"results": [{"ticker": "CACHED"}], "total": 1, "count": 1, "offset": 0, "limit": 50})
+    # Override the default AsyncMock(return_value=None) with a cache-hit value.
+    app.state.valkey.get = AsyncMock(return_value=cached_payload)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/v1/fundamentals/screen",
+            content=b'{"filters": []}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"][0]["ticker"] == "CACHED"
+    # S3 must NOT have been called — cache hit means no upstream request.
+    mock_clients.market_data.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_screen_instruments_cache_miss_populates_cache(app, mock_clients) -> None:
+    """Valkey cache miss: S3 is called and the transformed response is stored.
+
+    WHY this test: confirms the write path — after a successful S3 call the BFF
+    stores the transformed JSON so the *next* identical request is a cache hit.
+    """
+    import json as _json
+
+    s3_payload = {
+        "results": [
+            {
+                "instrument_id": "instr-001",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "exchange": "NASDAQ",
+                "sector": "Technology",
+                "metrics": {"market_capitalization": 3_000_000_000_000.0},
+            }
+        ],
+        "count": 1,
+        "total": 1,
+    }
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = _json.dumps(s3_payload).encode()
+
+    # Default: cache miss (get returns None), set is a no-op mock.
+    app.state.valkey.get = AsyncMock(return_value=None)
+    mock_clients.market_data.post = AsyncMock(return_value=downstream_resp)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/v1/fundamentals/screen",
+            content=b'{"filters": []}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    # S3 was called once (cache miss)
+    mock_clients.market_data.post.assert_called_once()
+    # Valkey.set was called with the 60-second TTL
+    app.state.valkey.set.assert_called_once()
+    call_kwargs = app.state.valkey.set.call_args[1]
+    assert call_kwargs.get("ex") == 60
+
+
+@pytest.mark.asyncio
+async def test_screen_instruments_cache_failure_is_fail_open(app, mock_clients) -> None:
+    """Valkey read/write failure does not block the screener — request succeeds via S3.
+
+    WHY this test: architecture rule — "fail-open on Valkey unavailable". A broken
+    cache must never degrade the screener to 500/503. We simulate a get() exception
+    and verify the request still completes successfully via the S3 upstream.
+    """
+    import json as _json
+
+    s3_payload = {"results": [], "count": 0, "total": 0}
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = _json.dumps(s3_payload).encode()
+
+    # Simulate a broken Valkey connection on both get and set.
+    app.state.valkey.get = AsyncMock(side_effect=ConnectionError("valkey down"))
+    app.state.valkey.set = AsyncMock(side_effect=ConnectionError("valkey down"))
+    mock_clients.market_data.post = AsyncMock(return_value=downstream_resp)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.post(
+            "/v1/fundamentals/screen",
+            content=b'{"filters": []}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    # Fail-open: response is 200 despite Valkey being down.
+    assert response.status_code == 200
+    mock_clients.market_data.post.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_get_fundamentals_timeseries_proxies_to_market_data(client, mock_clients) -> None:
     """GET /v1/fundamentals/timeseries proxies query params to S3 market-data."""
     downstream_resp = MagicMock(spec=httpx.Response)

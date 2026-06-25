@@ -41,7 +41,11 @@ def _nodes_to_json(nodes: tuple[PathNode, ...]) -> str:
 
 
 def _edges_to_json(edges: tuple[PathEdge, ...]) -> str:
-    return json.dumps([{"relation_type": e.relation_type, "confidence": e.confidence} for e in edges])
+    # ``forward`` persists per-edge traversal orientation so rendering stays
+    # correct after a read-back without re-traversing the graph (2026-06-13).
+    return json.dumps(
+        [{"relation_type": e.relation_type, "confidence": e.confidence, "forward": e.forward} for e in edges]
+    )
 
 
 def _parse_nodes(raw: object) -> tuple[PathNode, ...]:
@@ -62,6 +66,10 @@ def _parse_edges(raw: object) -> tuple[PathEdge, ...]:
         PathEdge(
             relation_type=str(item["relation_type"]),
             confidence=float(item["confidence"]),
+            # ``forward`` is absent in rows persisted before the directionality
+            # fix (2026-06-13) → default True (forward), matching the pre-fix
+            # node[i]→node[i+1] assumption (R11 forward-compat read).
+            forward=bool(item.get("forward", True)),
         )
         for item in data
     )
@@ -100,6 +108,8 @@ class PathInsightRepository(PathInsightRepositoryPort):
             # between the named-param ``:name`` and the Postgres cast ``::type``.
             # Use explicit CAST(:name AS type) for all typed columns to avoid
             # the parse ambiguity (BP-180 pattern).
+            # PLAN-0112 W3 (T-3-04): persist the new weirdness columns alongside
+            # the legacy ones.  dst_entity_id is nullable (CAST handles None).
             rows_sql_parts.append(
                 f"(CAST(:insight_id{suffix} AS UUID), "
                 f"CAST(:anchor{suffix} AS UUID), "
@@ -113,7 +123,14 @@ class PathInsightRepository(PathInsightRepositoryPort):
                 f":composite{suffix}, "
                 f":llm_exp{suffix}, "
                 f":exp_model{suffix}, "
-                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ))"
+                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ), "
+                f"CAST(:dst{suffix} AS UUID), "
+                f":reliability{suffix}, "
+                f":unexpectedness{suffix}, "
+                f":semantic{suffix}, "
+                f":novelty{suffix}, "
+                f":weirdness{suffix}, "
+                f":scorer_version{suffix})"
             )
             params[f"insight_id{suffix}"] = str(insight.insight_id)
             params[f"anchor{suffix}"] = str(insight.anchor_entity_id)
@@ -128,12 +145,21 @@ class PathInsightRepository(PathInsightRepositoryPort):
             params[f"llm_exp{suffix}"] = insight.llm_explanation
             params[f"exp_model{suffix}"] = insight.explanation_model
             params[f"computed_at{suffix}"] = insight.computed_at
+            params[f"dst{suffix}"] = str(insight.dst_entity_id) if insight.dst_entity_id else None
+            params[f"reliability{suffix}"] = insight.reliability
+            params[f"unexpectedness{suffix}"] = insight.unexpectedness
+            params[f"semantic{suffix}"] = insight.semantic_distance
+            params[f"novelty{suffix}"] = insight.novelty
+            params[f"weirdness{suffix}"] = insight.weirdness
+            params[f"scorer_version{suffix}"] = insight.scorer_version
 
         sql = (
             "INSERT INTO path_insights "
             "(insight_id, anchor_entity_id, path_nodes, path_edges, hop_count, "
             "harmonic_score, diversity_score, surprise_score, template_match, "
-            "composite_score, llm_explanation, explanation_model, computed_at) "
+            "composite_score, llm_explanation, explanation_model, computed_at, "
+            "dst_entity_id, reliability, unexpectedness, semantic_distance, "
+            "novelty, weirdness, scorer_version) "
             f"VALUES {', '.join(rows_sql_parts)}"
         )
         await self._session.execute(text(sql), params)
@@ -147,18 +173,26 @@ class PathInsightRepository(PathInsightRepositoryPort):
         min_hops: int = 2,
         max_hops: int = 5,
     ) -> list[PathInsight]:
-        """Return insights ordered by composite_score DESC with optional filters."""
+        """Return insights ordered by weirdness DESC with optional filters.
+
+        PLAN-0112 W3: ranking switches to ``weirdness`` (mirrored into
+        ``composite_score``).  ``COALESCE(weirdness, composite_score)`` keeps
+        pre-W3 rows (weirdness IS NULL) ordered by their legacy composite_score
+        so an un-backfilled deployment still returns sensibly-ranked paths.
+        """
         result = await self._session.execute(
             text("""
 SELECT insight_id, anchor_entity_id, hop_count, path_nodes, path_edges,
        harmonic_score, diversity_score, surprise_score, template_match,
-       composite_score, llm_explanation, explanation_model, computed_at
+       composite_score, llm_explanation, explanation_model, computed_at,
+       dst_entity_id, reliability, unexpectedness, semantic_distance,
+       novelty, weirdness, scorer_version
 FROM path_insights
 WHERE anchor_entity_id = CAST(:anchor AS UUID)
   AND composite_score >= :min_score
   AND hop_count >= :min_hops
   AND hop_count <= :max_hops
-ORDER BY composite_score DESC
+ORDER BY COALESCE(weirdness, composite_score) DESC
 LIMIT :lim
 """),
             {
@@ -189,6 +223,123 @@ LIMIT :lim
                     llm_explanation=str(row[10]) if row[10] else None,
                     explanation_model=str(row[11]) if row[11] else None,
                     computed_at=row[12],
+                    # PLAN-0112 W3 weirdness columns.  All NULLable: old rows
+                    # written before the migration deserialize to the entity
+                    # defaults (None / 0.0), keeping the in-range invariant.
+                    dst_entity_id=UUID(str(row[13])) if row[13] else None,
+                    reliability=float(row[14]) if row[14] is not None else 0.0,
+                    unexpectedness=float(row[15]) if row[15] is not None else 0.0,
+                    semantic_distance=float(row[16]) if row[16] is not None else 0.0,
+                    novelty=float(row[17]) if row[17] is not None else 0.0,
+                    weirdness=float(row[18]) if row[18] is not None else 0.0,
+                    scorer_version=str(row[19]) if row[19] else None,
+                )
+            )
+        return insights
+
+    async def list_global_weird(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        min_weirdness: float = 0.0,
+        since_days: int | None = None,
+        entity_type: str | None = None,
+    ) -> list[PathInsight]:
+        """Return the globally most-weird insights, deduped by endpoint pair.
+
+        PLAN-0112 W5 (T-5-01).  Strategy:
+          1. ``base`` CTE selects all rows with ``weirdness IS NOT NULL`` and
+             ``weirdness >= :min_weirdness``, optionally requiring ``novelty > 0``
+             (the ``since_days`` recent-edge proxy) and an ``entity_type`` match
+             on the anchor OR dst endpoint canonical entity.
+          2. ``DISTINCT ON (anchor_entity_id, dst_entity_id)`` keeps the single
+             highest-weirdness row per endpoint pair (OQ-6 default).  The inner
+             ORDER BY puts the best row first within each pair group.
+          3. The outer query re-orders the deduped rows by ``weirdness DESC``
+             and applies ``LIMIT`` / ``OFFSET`` pagination.
+
+        ``entity_type`` is matched via a join to ``canonical_entities`` on either
+        endpoint.  Rows whose ``dst_entity_id`` is NULL (pre-W3 / un-backfilled)
+        are excluded because the feed is endpoint-pair oriented.
+        """
+        # The recent-edge proxy: when since_days is given, only keep paths whose
+        # scorer-computed novelty is > 0 (at least one edge inside the window).
+        novelty_clause = "AND pi.novelty > 0" if since_days is not None else ""
+        # entity_type filter: the path's anchor OR dst endpoint matches the type.
+        entity_type_clause = (
+            """
+  AND EXISTS (
+        SELECT 1 FROM canonical_entities ce
+        WHERE ce.entity_id IN (pi.anchor_entity_id, pi.dst_entity_id)
+          AND ce.entity_type = :entity_type
+      )
+"""
+            if entity_type is not None
+            else ""
+        )
+
+        sql = f"""
+WITH base AS (
+    SELECT DISTINCT ON (pi.anchor_entity_id, pi.dst_entity_id)
+           pi.insight_id, pi.anchor_entity_id, pi.hop_count, pi.path_nodes, pi.path_edges,
+           pi.harmonic_score, pi.diversity_score, pi.surprise_score, pi.template_match,
+           pi.composite_score, pi.llm_explanation, pi.explanation_model, pi.computed_at,
+           pi.dst_entity_id, pi.reliability, pi.unexpectedness, pi.semantic_distance,
+           pi.novelty, pi.weirdness, pi.scorer_version
+    FROM path_insights pi
+    WHERE pi.weirdness IS NOT NULL
+      AND pi.weirdness >= :min_weirdness
+      AND pi.dst_entity_id IS NOT NULL
+      {novelty_clause}
+      {entity_type_clause}
+    ORDER BY pi.anchor_entity_id, pi.dst_entity_id, pi.weirdness DESC
+)
+SELECT insight_id, anchor_entity_id, hop_count, path_nodes, path_edges,
+       harmonic_score, diversity_score, surprise_score, template_match,
+       composite_score, llm_explanation, explanation_model, computed_at,
+       dst_entity_id, reliability, unexpectedness, semantic_distance,
+       novelty, weirdness, scorer_version
+FROM base
+ORDER BY weirdness DESC
+LIMIT :lim OFFSET :off
+"""
+        params: dict[str, object] = {
+            "min_weirdness": min_weirdness,
+            "lim": limit,
+            "off": offset,
+        }
+        if entity_type is not None:
+            params["entity_type"] = entity_type
+
+        result = await self._session.execute(text(sql), params)
+        rows = result.fetchall()
+        insights: list[PathInsight] = []
+        for row in rows:
+            nodes = _parse_nodes(row[3])
+            edges = _parse_edges(row[4])
+            insights.append(
+                PathInsight(
+                    insight_id=UUID(str(row[0])),
+                    anchor_entity_id=UUID(str(row[1])),
+                    hop_count=int(row[2]),
+                    path_nodes=nodes,
+                    path_edges=edges,
+                    harmonic_score=float(row[5]),
+                    diversity_score=float(row[6]),
+                    surprise_score=float(row[7]),
+                    template_match=str(row[8]) if row[8] else None,
+                    composite_score=float(row[9]),
+                    llm_explanation=str(row[10]) if row[10] else None,
+                    explanation_model=str(row[11]) if row[11] else None,
+                    computed_at=row[12],
+                    dst_entity_id=UUID(str(row[13])) if row[13] else None,
+                    reliability=float(row[14]) if row[14] is not None else 0.0,
+                    unexpectedness=float(row[15]) if row[15] is not None else 0.0,
+                    semantic_distance=float(row[16]) if row[16] is not None else 0.0,
+                    novelty=float(row[17]) if row[17] is not None else 0.0,
+                    weirdness=float(row[18]) if row[18] is not None else 0.0,
+                    scorer_version=str(row[19]) if row[19] else None,
                 )
             )
         return insights

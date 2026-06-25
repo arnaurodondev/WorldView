@@ -14,10 +14,18 @@
  * DATA SOURCE: fundHoldersData from useFinancialsSidebarData →
  *   qk.instruments.fundHolders → S9 GET /v1/fundamentals/{id}/fund-holders.
  * DESIGN REFERENCE: docs/designs/0089/06-instrument-financials.md §4.7
+ *
+ * WAVE-4 ENHANCEMENT (de-static-ify): click-to-sort column headers (same
+ * useSortableRows primitive as the institutional table) so an analyst can
+ * re-rank "which fund added the most shares?" without scanning all 10 rows.
  */
 
-// WHY no "use client": pure presentational — no hooks, no browser APIs.
+"use client";
+// WHY "use client" (changed): the column-sort hook is browser-only state.
 
+import { PanelHeader } from "./PanelHeader";
+import { SortableHeaderCell } from "./SortableHeaderCell";
+import { useSortableRows, type SortAccessor } from "./useSortableRows";
 import { formatMarketCap, formatPercent } from "@/lib/utils";
 import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
@@ -84,6 +92,19 @@ function fmtChange(change: number | null | undefined): string {
   return change > 0 ? `+${abs}` : change < 0 ? `-${abs}` : abs;
 }
 
+// ── Sort wiring ───────────────────────────────────────────────────────────────
+type FundSortKey = "name" | "shares" | "percent" | "value" | "change";
+
+const ACCESSORS: Record<FundSortKey, SortAccessor<EohdFundHolder>> = {
+  name: (h) => h.name ?? null,
+  // Shares cell falls back to totalShares, so the sort key must too (keeps the
+  // visible value and the sort key consistent — a silent mismatch otherwise).
+  shares: (h) => h.currentShares ?? h.totalShares ?? null,
+  percent: (h) => h.currentPercent ?? null,
+  value: (h) => h.currentValue ?? null,
+  change: (h) => h.change ?? null,
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function FundHoldersTable({
@@ -91,13 +112,18 @@ export function FundHoldersTable({
 }: FundHoldersTableProps) {
   const holders = extractHolders(fundHoldersData);
 
+  // Keep the endpoint's "top 10" order until a header click; name sorts A→Z.
+  const { sortedRows, sort, toggleSort } = useSortableRows<EohdFundHolder, FundSortKey>({
+    rows: holders,
+    accessors: ACCESSORS,
+    defaultDirections: { name: "asc" },
+  });
+
   return (
     <div data-table-grid className="border-t border-border">
-      <div className="flex items-center h-[var(--row-h,20px)] px-2 border-b border-border bg-muted/20">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
-          FUND HOLDERS
-        </span>
-      </div>
+      {/* Wave-2 redesign: shared PanelHeader (24px accent-bar band) — every
+          Financials panel carries identical chrome now (scope item 1). */}
+      <PanelHeader label="FUND HOLDERS" meta="top 10 funds / ETFs · click a column to sort" />
 
       {holders.length === 0 ? (
         <div className="text-[11px] text-muted-foreground px-2 py-2">
@@ -106,17 +132,18 @@ export function FundHoldersTable({
       ) : (
         <table className="w-full text-[11px] font-mono" role="table" aria-label="Fund holders">
           <thead>
-            <tr className="h-[var(--row-h,20px)]">
-              <th scope="col" className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Fund</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Shares</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal whitespace-nowrap">% Held</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Value</th>
-              <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Change</th>
+            {/* Wave-4: click-to-sort headers (SortableHeaderCell). */}
+            <tr className="h-[22px]">
+              <SortableHeaderCell label="Fund" align="left" active={sort.key === "name"} direction={sort.direction} onSort={() => toggleSort("name")} className="text-left" />
+              <SortableHeaderCell label="Shares" align="right" active={sort.key === "shares"} direction={sort.direction} onSort={() => toggleSort("shares")} />
+              <SortableHeaderCell label="% Held" align="right" active={sort.key === "percent"} direction={sort.direction} onSort={() => toggleSort("percent")} className="whitespace-nowrap" />
+              <SortableHeaderCell label="Value" align="right" active={sort.key === "value"} direction={sort.direction} onSort={() => toggleSort("value")} />
+              <SortableHeaderCell label="Change" align="right" active={sort.key === "change"} direction={sort.direction} onSort={() => toggleSort("change")} />
             </tr>
           </thead>
           <tbody className="divide-y divide-border/30">
-            {holders.map((h, i) => (
-              <tr key={i} className="h-[var(--row-h,20px)] hover:bg-muted/20 transition-colors">
+            {sortedRows.map((h, i) => (
+              <tr key={i} className="h-[22px] hover:bg-muted/20 transition-colors">
                 <td className="px-2 text-[11px] text-foreground truncate max-w-[140px]">
                   {h.name ?? "—"}
                 </td>

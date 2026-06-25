@@ -79,11 +79,12 @@ async def test_worker_processes_1m_ohlcv_event() -> None:
     ) as mock_use_case_cls:
         mock_instance = AsyncMock()
         mock_instance.execute = AsyncMock(return_value=[])
+        mock_instance.execute_batch = AsyncMock(return_value=[])
         mock_use_case_cls.return_value = mock_instance
 
         await consumer.process_message(key=None, value=msg, headers={})
 
-        assert mock_instance.execute.call_count == 2
+        assert mock_instance.execute_batch.call_count == 1  # batched: one call for all bars
 
 
 @pytest.mark.asyncio
@@ -163,6 +164,7 @@ async def test_worker_dedup_key_namespaced() -> None:
     ) as mock_use_case_cls:
         mock_instance = AsyncMock()
         mock_instance.execute = AsyncMock(return_value=[])
+        mock_instance.execute_batch = AsyncMock(return_value=[])
         mock_use_case_cls.return_value = mock_instance
         await consumer.process_message(key=None, value=msg, headers={})
 
@@ -223,8 +225,9 @@ async def test_worker_source_timeframe_5m_processes_5m_event() -> None:
     ) as mock_use_case_cls:
         mock_instance = AsyncMock()
         mock_instance.execute = AsyncMock(return_value=[])
+        mock_instance.execute_batch = AsyncMock(return_value=[])
         mock_use_case_cls.return_value = mock_instance
 
         await consumer.process_message(key=None, value=msg, headers={})
 
-        assert mock_instance.execute.call_count == 1
+        assert mock_instance.execute_batch.call_count == 1  # batched: one call for all bars

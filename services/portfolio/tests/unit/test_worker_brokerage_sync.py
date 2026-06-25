@@ -937,8 +937,8 @@ async def test_sync_holdings_not_wiped_when_all_positions_unresolved() -> None:
         instrument_id=instrument.id,
         tenant_id=TENANT_ID,
         currency="USD",
-        quantity=Decimal("50"),
-        average_cost=Decimal("100"),
+        quantity=Decimal(50),
+        average_cost=Decimal(100),
     )
     await uow.holdings.save(existing_holding)
 
@@ -952,8 +952,8 @@ async def test_sync_holdings_not_wiped_when_all_positions_unresolved() -> None:
             SnapTradePosition(
                 account_id="acc-1",
                 symbol="VWO",
-                quantity=Decimal("100"),
-                average_purchase_price=Decimal("45"),
+                quantity=Decimal(100),
+                average_purchase_price=Decimal(45),
                 currency="USD",
             ),
         ],

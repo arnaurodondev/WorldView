@@ -74,3 +74,123 @@ describe("StreamingBubble", () => {
     expect(screen.getByText("Querying timeline")).toBeDefined();
   });
 });
+
+// ── Round 1 Foundation — no flash of empty assistant bubble ──────────────────
+
+describe("StreamingBubble — pre-first-token state", () => {
+  it("shows a typing indicator inside the bubble when no text and no tools yet", () => {
+    // The instant after Send (before the first SSE event) streaming.text is ""
+    // and activeTools is empty — the old render produced an EMPTY bubble.
+    render(<StreamingBubble streaming={{ text: "", active: true }} activeTools={[]} />);
+
+    // Typing dots present…
+    expect(screen.getByLabelText("AI is generating a response")).toBeDefined();
+    // …and no empty markdown container is mounted (the flash).
+    expect(screen.queryByTestId("markdown")).toBeNull();
+  });
+
+  it("hides the typing dots once tools are active (spinners already signal progress)", () => {
+    const tools: ToolCallState[] = [
+      { name: "search_documents", label: "Searching documents...", status: "running" },
+    ];
+    render(<StreamingBubble streaming={{ text: "", active: true }} activeTools={tools} />);
+
+    // Tool indicator visible, dots gone — one progress signal at a time.
+    expect(screen.getByText("Searching documents...")).toBeDefined();
+    expect(screen.queryByLabelText("AI is generating a response")).toBeNull();
+  });
+
+  it("replaces the dots with markdown text when the first token arrives", () => {
+    render(
+      <StreamingBubble streaming={{ text: "First tok", active: true }} activeTools={[]} />,
+    );
+    expect(screen.getByTestId("markdown").textContent).toBe("First tok");
+    expect(screen.queryByLabelText("AI is generating a response")).toBeNull();
+  });
+});
+
+// ── Wave 3 — streaming-paint regression ───────────────────────────────────────
+//
+// USER-REPORTED BUG (2026-06-11): "streaming is not working — nothing
+// displays until the end". Root cause was transport-level (the Next rewrite
+// proxy gzip-buffered the SSE stream; fixed by app/api/v1/chat/[...path]/
+// route.ts), but this test pins the RENDER side of the contract forever:
+// when token updates DO reach the component, the visible text must update
+// DURING the stream — within one ThrottledMarkdown frame (~33ms) — never
+// only at stream end. If a future memo/throttle change swallows mid-stream
+// paints, this fails.
+//
+// NOTE: LazyMarkdownContent is mocked above, but ThrottledMarkdown (the
+// throttle/memo layer under suspicion) is NOT — its real timer logic runs
+// against vitest fake timers.
+
+import { act } from "@testing-library/react";
+import { STREAM_RENDER_FRAME_MS } from "../ThrottledMarkdown";
+
+describe("StreamingBubble — streaming-paint regression (Wave 3)", () => {
+  it("paints each token batch DURING the stream, within one throttle frame", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <StreamingBubble streaming={{ text: "Apple", active: true }} />,
+      );
+      // First token batch renders immediately (no added latency).
+      expect(screen.getByTestId("markdown").textContent).toBe("Apple");
+
+      // Simulate the SSE cadence: a new accumulated text every ~20ms.
+      rerender(
+        <StreamingBubble streaming={{ text: "Apple is", active: true }} />,
+      );
+      // Inside the 33ms frame budget the throttle may hold the update…
+      act(() => {
+        vi.advanceTimersByTime(STREAM_RENDER_FRAME_MS);
+      });
+      // …but after ONE frame it MUST be visible — mid-stream, no done event,
+      // stream still active. This is the "tokens appear while streaming"
+      // contract.
+      expect(screen.getByTestId("markdown").textContent).toBe("Apple is");
+
+      rerender(
+        <StreamingBubble
+          streaming={{ text: "Apple is doing fine", active: true }}
+        />,
+      );
+      act(() => {
+        vi.advanceTimersByTime(STREAM_RENDER_FRAME_MS);
+      });
+      expect(screen.getByTestId("markdown").textContent).toBe(
+        "Apple is doing fine",
+      );
+
+      // The cursor is visible the whole time — the bubble reads as live.
+      expect(document.querySelector(".bg-primary.align-middle")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("running tool indicators stay visible while text streams below them", () => {
+    // The 40s-wait scenario: tools visible AND text flowing — neither
+    // replaces the other.
+    const tools: ToolCallState[] = [
+      {
+        name: "get_entity_news",
+        label: "get_entity_news...",
+        status: "running",
+        startedAt: Date.now(),
+      },
+    ];
+    render(
+      <StreamingBubble
+        streaming={{ text: "Partial answer", active: true }}
+        activeTools={tools}
+      />,
+    );
+    expect(screen.getByLabelText("Tool activity")).toBeDefined();
+    expect(screen.getByText("get_entity_news...")).toBeDefined();
+    // Tool name (precise identifier) + elapsed chip both render.
+    expect(screen.getByText("get_entity_news")).toBeDefined();
+    expect(screen.getByTestId("tool-elapsed")).toBeDefined();
+    expect(screen.getByTestId("markdown").textContent).toBe("Partial answer");
+  });
+});

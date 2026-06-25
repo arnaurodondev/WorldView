@@ -267,16 +267,46 @@ RelationSummaryRepoDep = Annotated[RelationSummaryRepositoryPort, Depends(get_re
 def get_entity_detail_uc(
     session: ReadOnlyDbSessionDep,
 ) -> GetEntityDetailUseCase:
-    """Build GetEntityDetailUseCase bound to the current read-only session."""
+    """Build GetEntityDetailUseCase bound to the current read-only session.
+
+    PLAN-0099: alias / relation / summary repos wired so the detail endpoint
+    can return aliases, top relations and the relation count (node-click panel).
+    """
     from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
         CanonicalEntityRepository,
     )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+        RelationSummaryRepository,
+    )
 
-    return GetEntityDetailUseCase(CanonicalEntityRepository(session))
+    return GetEntityDetailUseCase(
+        CanonicalEntityRepository(session),
+        alias_repo=EntityAliasRepository(session),
+        relation_repo=RelationRepository(session),
+        summary_repo=RelationSummaryRepository(session),
+    )
 
 
 GetEntityDetailUseCaseDep = Annotated[GetEntityDetailUseCase, Depends(get_entity_detail_uc)]
+
+
+# ── Relation detail use case (PLAN-0099 edge detail) ──────────────────────────
+
+
+def get_relation_detail_uc() -> GetRelationDetailUseCase_:
+    """Depends() factory for GetRelationDetailUseCase (R25 compliance).
+
+    The use case is stateless — repos are passed per-call from the
+    EntityGraphReposDep bundle by the route handler.
+    """
+    from knowledge_graph.application.use_cases.get_relation_detail import GetRelationDetailUseCase
+
+    return GetRelationDetailUseCase()
 
 
 # ── Entity intelligence use case (PRD-0074 Wave D) ────────────────────────────
@@ -379,10 +409,141 @@ def get_entity_paths_uc(
     )
 
 
+# ── Global weird-connections feed (PLAN-0112 W5) ──────────────────────────────
+# R25: All infrastructure wiring happens here — the router imports only the Dep.
+# R27: list_global_weird is a pure path_insights SELECT (no AGE) → read-replica.
+
+
+def get_global_weird_connections_uc(
+    session: ReadOnlyDbSessionDep,
+) -> GlobalWeirdConnectionsUseCase_:
+    """Build GlobalWeirdConnectionsUseCase bound to the current read-only session.
+
+    Wires ``PathInsightRepository`` here (dependencies.py) so the connections.py
+    router never imports from infrastructure/ (R25).  Read-only (R27).
+    """
+    from knowledge_graph.application.use_cases.global_weird_connections import (
+        GlobalWeirdConnectionsUseCase,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+        PathInsightRepository,
+    )
+
+    return GlobalWeirdConnectionsUseCase(PathInsightRepository(session))
+
+
+# ── Pairwise pathfinding (PLAN-0112 W4) ───────────────────────────────────────
+# R25: All infrastructure wiring happens here — the router imports only the Dep.
+# R27 exception: AGE traversal needs LOAD 'age' → the engine holds the WRITE
+# session factory (same documented precedent as CypherPathUseCase).  Entity
+# existence + the WeirdnessScorer prefetch run on their own sessions opened by
+# the factory; the use case itself owns no session.
+
+
+def get_find_paths_between_uc(
+    session: ReadOnlyDbSessionDep,
+    request: Request,
+) -> FindPathsBetweenUseCase_:
+    """Build FindPathsBetweenUseCase for the on-demand pairwise endpoint.
+
+    Wires:
+      • ``AgeGraphPathEngine`` over ``app.state.write_factory`` (R27 exception —
+        AGE ``LOAD 'age'`` requires a write session, like the existing engine
+        callers).
+      • ``entity_exists`` over the read-only request session (R27).
+      • ``build_scorer`` — an async factory that pre-fetches the SAME global
+        lookups the ``PathInsightWorker`` uses (degree map, graph stats,
+        definition embeddings, first-seen) for the entities/relations on the
+        candidate paths and returns a configured pure ``WeirdnessScorer``.  This
+        keeps pairwise scoring byte-for-byte identical to batch discovery.
+    """
+    from datetime import timedelta
+
+    from knowledge_graph.application.ports.node_degree_repository import GraphStats
+    from knowledge_graph.application.services.weirdness_scorer import WeirdnessScorer
+    from knowledge_graph.application.use_cases.find_paths_between import FindPathsBetweenUseCase
+    from knowledge_graph.config import Settings
+    from knowledge_graph.infrastructure.age.graph_path_engine import AgeGraphPathEngine
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.node_degree_repository import (
+        NodeDegreeRepository,
+    )
+    from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
+
+    settings: Settings = request.app.state.settings
+    write_factory = request.app.state.write_factory
+
+    engine = AgeGraphPathEngine(write_factory)
+
+    canonical_repo = CanonicalEntityRepository(session)
+
+    async def _entity_exists(entity_id: UUID) -> bool:
+        return await canonical_repo.exists(entity_id)
+
+    async def _build_scorer(raw_paths: object) -> WeirdnessScorer:
+        # Collect endpoint ids + rel ids exactly as the worker does.
+        from uuid import UUID as _UUID
+
+        endpoint_ids: set[UUID] = set()
+        rel_ids: set[UUID] = set()
+        for p in raw_paths:  # type: ignore[attr-defined]
+            for nid in p.node_ids:
+                try:
+                    endpoint_ids.add(_UUID(str(nid)))
+                except (ValueError, AttributeError):
+                    continue
+            rel_ids.update(p.rel_ids)
+
+        # Reuse the worker's static prefetch helpers (single source of truth for
+        # the degree / embedding / first-seen SQL).  Runs on the WRITE factory —
+        # same connection class the engine uses — so the GUC + AGE search_path are
+        # available if needed.
+        async with write_factory() as scoring_session:
+            degree_repo = NodeDegreeRepository(scoring_session)
+            degree_map = await degree_repo.get_degree_map()
+            stats = await degree_repo.get_graph_stats() or GraphStats(0, 0, 0)
+            embeddings = await PathInsightWorker._fetch_definition_embeddings(scoring_session, endpoint_ids)
+            first_seen = await PathInsightWorker._fetch_first_seen(scoring_session, rel_ids)
+
+        return WeirdnessScorer(
+            degree_of=lambda eid: degree_map.get(eid, (1, 1))[0],
+            meaningful_degree_of=lambda eid: degree_map.get(eid, (1, 1))[1],
+            graph_stats=stats,
+            embedding_of=lambda eid: embeddings.get(eid),
+            first_seen_of=lambda rid: first_seen.get(rid),
+            novelty_window=timedelta(days=settings.novelty_window_days),
+            w_unexpectedness=settings.weirdness_w_unexpectedness,
+            w_semantic=settings.weirdness_w_semantic,
+            w_novelty=settings.weirdness_w_novelty,
+            unexpectedness_mode=settings.weirdness_unexpectedness_mode,
+        )
+
+    return FindPathsBetweenUseCase(
+        path_engine=engine,
+        entity_exists=_entity_exists,
+        build_scorer=_build_scorer,  # type: ignore[arg-type]
+        max_hops_cap=settings.path_max_hops,
+    )
+
+
 # Import the concrete type for the Annotated alias — deferred to avoid a
 # circular import at module load time (dependencies ← use_cases ← schemas).
+from knowledge_graph.application.use_cases.find_paths_between import (  # noqa: E402
+    FindPathsBetweenUseCase as FindPathsBetweenUseCase_,
+)
 from knowledge_graph.application.use_cases.get_entity_paths import (  # noqa: E402
     GetEntityPathsUseCase as GetEntityPathsUseCase_,
 )
+from knowledge_graph.application.use_cases.get_relation_detail import (  # noqa: E402
+    GetRelationDetailUseCase as GetRelationDetailUseCase_,
+)
+from knowledge_graph.application.use_cases.global_weird_connections import (  # noqa: E402
+    GlobalWeirdConnectionsUseCase as GlobalWeirdConnectionsUseCase_,
+)
 
 GetEntityPathsUseCaseDep = Annotated[GetEntityPathsUseCase_, Depends(get_entity_paths_uc)]
+GetRelationDetailUseCaseDep = Annotated[GetRelationDetailUseCase_, Depends(get_relation_detail_uc)]
+FindPathsBetweenUseCaseDep = Annotated[FindPathsBetweenUseCase_, Depends(get_find_paths_between_uc)]
+GlobalWeirdConnectionsUseCaseDep = Annotated[GlobalWeirdConnectionsUseCase_, Depends(get_global_weird_connections_uc)]

@@ -70,7 +70,7 @@ async def watchlist_client(postgres_container: str) -> AsyncGenerator[AsyncClien
                 id=UUID(INTEGRATION_USER_ID),
                 tenant_id=UUID(INTEGRATION_TENANT_ID),
                 email="integration@test.com",
-            )
+            ),
         )
         await session.commit()
 

@@ -36,6 +36,9 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from knowledge_graph.application.ports.repositories import (
+        CanonicalEntityRepositoryPort,
+    )
     from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
         OutboxRepository,
     )
@@ -88,6 +91,9 @@ class RawRelation:
     claim_id: UUID | None = None
     chunk_id: UUID | None = None
     evidence_text: str | None = None
+    # PLAN-0109 W5: optional per-fact end-of-validity date extracted by the LLM.
+    # Stored on relations.valid_to → drives bitemporal step-decay (W3).
+    valid_to: datetime | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -361,6 +367,7 @@ async def materialize_graph(
     extraction_model_id: str | None = None,
     source_name: str | None = None,
     source_type_metadata: str | None = None,
+    entity_repo: CanonicalEntityRepositoryPort | None = None,
 ) -> MaterializationSummary:
     """Materialize graph from a single enriched article message.
 
@@ -401,6 +408,13 @@ async def materialize_graph(
         extraction_model_id: LLM model ID that produced the extraction
             (PLAN-0031 B-2).  Stored on each ``claims`` row so downstream
             consumers know which model version produced the claim.
+        entity_repo: Canonical-entity repository used by the entity-existence
+            gate (2026-06-11 relations-FK-crash fix).  When provided, the
+            subject/object of every relation is checked via ``exists()`` before
+            the ``relations`` upsert; missing entities defer the edge (evidence
+            row written with ``entity_provisional=true``) instead of FK-crashing
+            the whole transaction.  When ``None`` the gate is skipped (legacy /
+            unit-test behaviour).
 
     Returns:
     -------
@@ -414,6 +428,32 @@ async def materialize_graph(
     claim_count = 0
     relation_ids: list[str] = []
     affected_entity_ids: set[UUID] = set()
+
+    # ── Entity-existence gate cache (2026-06-11 relations-FK-crash fix) ────────
+    # ``relations`` has FKs (fk_relations_subject/object_entity) to
+    # canonical_entities. Before this gate, ``relation_repo.upsert`` ran
+    # unconditionally; if either entity was missing (e.g. merged away, or an
+    # out-of-lockstep replay where the entity event has not yet been consumed),
+    # the INSERT raised ForeignKeyViolationError and aborted the ENTIRE
+    # enriched-article transaction — so ``relations`` stopped growing while
+    # ``relation_evidence_raw`` (no entity FK) kept writing.
+    #
+    # We now check both entities via ``entity_repo.exists()`` BEFORE upsert and
+    # defer (write the evidence row with entity_provisional=true) when either is
+    # absent. The per-call ``_exists_cache`` dedups lookups so the same entity
+    # is queried at most once per message (no N queries per event).
+    _exists_cache: dict[UUID, bool] = {}
+
+    async def _entity_exists(entity_id: UUID) -> bool:
+        if entity_repo is None:
+            # No repo wired (legacy / unit tests that don't exercise the gate):
+            # preserve the previous unconditional behaviour.
+            return True
+        cached = _exists_cache.get(entity_id)
+        if cached is None:
+            cached = await entity_repo.exists(entity_id)
+            _exists_cache[entity_id] = cached
+        return cached
 
     # ------------------------------------------------------------------
     # 1+2 — Relations: advisory lock + upsert + insert relation_evidence_raw
@@ -449,10 +489,106 @@ async def materialize_graph(
             )
             continue
 
-        # Skip provisional entities from the aggregation worker perspective,
-        # but still INSERT the raw evidence row (entity_provisional=true rows
-        # are held until entity.canonical.created.v1 resolves them).
-        if canonical_type is not None:
+        # ── P0 claim_id fix (2026-06-11) ─────────────────────────────────
+        # ``relation_evidence_raw.claim_id`` is NOT NULL (migration 0047,
+        # PLAN-0093 T-B-3-01) but S6 cannot supply a real claim_id: claims
+        # are not persisted in nlp_db (legacy claims topic removed in
+        # PLAN-0057 D-1) and LLM extraction returns relations and claims as
+        # UNLINKED arrays. The writer guard added on 2026-05-23 therefore
+        # rejected every news-path evidence row — relation_evidence_raw was
+        # dead for news since then. The original T-B-3-02 intent is restored
+        # here: when the relation carries no claim_id, mint a REAL ``claims``
+        # row from the relation's own evidence and link the evidence row to
+        # it, keeping the relation → evidence → claim provenance chain intact
+        # (F-DB-008). Never fabricate a UUID that points at nothing.
+        evidence_claim_id = rel.claim_id
+        if evidence_claim_id is None:
+            backing_claim = RawClaim(
+                subject_entity_id=rel.subject_entity_id,
+                # Prefer the canonicalized type; fall back to the raw LLM
+                # predicate so the claim is still queryable by type.
+                claim_type=(canonical_type or rel.raw_type or "RELATION_EVIDENCE")[:100],
+                polarity=rel.polarity,
+                # claims.claim_text is NOT NULL — use the evidence sentence,
+                # falling back to a structured triple description.
+                claim_text=rel.evidence_text or f"{rel.subject_entity_id} {rel.raw_type} {rel.object_entity_id}",
+                extraction_confidence=rel.extraction_confidence,
+                chunk_id=rel.chunk_id,
+                is_backfill=rel.is_backfill or is_backfill,
+            )
+            evidence_claim_id = await _insert_claim(
+                session,
+                doc_id,
+                backing_claim,
+                extraction_model_id=extraction_model_id,
+            )
+            claim_count += 1
+            _log.debug(
+                "evidence_claim_autocreated",
+                doc_id=str(doc_id),
+                claim_id=str(evidence_claim_id),
+                raw_type=rel.raw_type,
+            )
+
+        # ── chunk_id fallback (backlog replay only) ──────────────────────
+        # New producer messages (2026-06-11 onward) carry a real nlp_db
+        # chunk_id matched against the evidence text. Messages produced
+        # between 2026-05-23 and the producer fix have NO chunk_id key, yet
+        # the column is NOT NULL. There is no chunks table in intelligence_db
+        # and reading nlp_db would violate R9 (no cross-service DB access),
+        # so for those legacy messages we derive a DETERMINISTIC doc-scoped
+        # placeholder (uuid5 of doc_id) — stable across replays (idempotent)
+        # and clearly flagged in logs. It does not resolve to an nlp_db chunk
+        # row; provenance for legacy rows is anchored by source_document_id.
+        evidence_chunk_id = rel.chunk_id
+        if evidence_chunk_id is None:
+            evidence_chunk_id = UUID(uuid5_from_parts(str(doc_id), "missing_chunk_fallback"))
+            _log.warning(
+                "evidence_chunk_id_fallback",
+                doc_id=str(doc_id),
+                chunk_id=str(evidence_chunk_id),
+                message="legacy enriched message lacks chunk_id; using deterministic doc-scoped fallback",
+            )
+
+        # ── Entity-existence gate (2026-06-11 relations-FK-crash fix) ─────
+        # Both entities MUST exist in canonical_entities before we can upsert
+        # the edge — otherwise the FK violation aborts the whole transaction
+        # (0 edges land for the entire message). Check both, defer if missing.
+        subject_present = await _entity_exists(rel.subject_entity_id)
+        object_present = await _entity_exists(rel.object_entity_id)
+        both_present = subject_present and object_present
+
+        # If an entity is missing, force the evidence row to be deferred
+        # (entity_provisional=true) so the entity_consumer can materialize the
+        # edge later when the entity lands — instead of dropping it silently.
+        evidence_provisional = rel.entity_provisional or not both_present
+
+        if not both_present:
+            if not subject_present and not object_present:
+                reason = "both_missing"
+            elif not subject_present:
+                reason = "subject_missing"
+            else:
+                reason = "object_missing"
+            from knowledge_graph.application.metrics import (
+                s7_relation_entity_missing_total,
+            )
+
+            s7_relation_entity_missing_total.labels(reason=reason).inc()
+            _log.info(
+                "relation_entity_missing_deferred",
+                subject_entity_id=str(rel.subject_entity_id),
+                object_entity_id=str(rel.object_entity_id),
+                subject_present=subject_present,
+                object_present=object_present,
+                reason=reason,
+                canonical_type=canonical_type,
+                doc_id=str(doc_id),
+            )
+
+        # Upsert the edge only when the type is known AND both entities exist.
+        # Skipping the upsert for a missing entity is what prevents the FK crash.
+        if canonical_type is not None and both_present:
             relation_id = await relation_repo.upsert(
                 subject_entity_id=rel.subject_entity_id,
                 object_entity_id=rel.object_entity_id,
@@ -461,10 +597,12 @@ async def materialize_graph(
                 decay_class=decay_class or "DURABLE",
                 decay_alpha=decay_alpha if decay_alpha is not None else 0.000950,
                 base_confidence=base_confidence if base_confidence is not None else rel.extraction_confidence,
+                valid_to=rel.valid_to,
             )
             relation_ids.append(str(relation_id))
         else:
-            # Unknown type — still stage the evidence; canonical_type stays NULL
+            # Unknown type OR missing entity — still stage the evidence so the
+            # relation is recoverable; canonical_type may stay NULL.
             relation_id = None  # type: ignore[assignment]
 
         await evidence_repo.insert_raw(
@@ -476,10 +614,14 @@ async def materialize_graph(
             evidence_date=rel.evidence_date,
             canonical_type=canonical_type,
             polarity=rel.polarity,
-            claim_id=rel.claim_id,
-            chunk_id=rel.chunk_id,
+            # P0 fix: always a real claims-row UUID (incoming or auto-created).
+            claim_id=evidence_claim_id,
+            chunk_id=evidence_chunk_id,
             is_backfill=rel.is_backfill or is_backfill,
-            entity_provisional=rel.entity_provisional,
+            # Deferred when the source row was already provisional OR when the
+            # gate found a missing entity — the entity_consumer unblock path
+            # will materialize the edge once the entity lands.
+            entity_provisional=evidence_provisional,
             provisional_queue_id=rel.provisional_queue_id,
             evidence_text=rel.evidence_text,
             # T-B-03: propagate source metadata from the enriched event.

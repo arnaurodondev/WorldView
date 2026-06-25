@@ -21,6 +21,7 @@ import structlog.testing
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import ProviderRateLimited, ProviderUnavailable
 from market_ingestion.infrastructure.adapters.providers.alpaca import (
+    _MAX_PAGES,
     _TIMEFRAME_MAP,
     AlpacaProviderAdapter,
     _is_crypto_symbol,
@@ -220,7 +221,11 @@ async def test_fetch_ohlcv_batch_chunks_1001_symbols() -> None:
 
 
 def test_fetch_ohlcv_timeframe_mapping() -> None:
-    """All 6 internal timeframe codes map to the correct Alpaca API format."""
+    """All internal timeframe codes map to the correct Alpaca API format.
+
+    Includes ``1d`` → ``1Day`` (PLAN-0036: daily is now polled directly from
+    Alpaca as the deep-history daily source).
+    """
     expected = {
         "1m": "1Min",
         "5m": "5Min",
@@ -228,8 +233,56 @@ def test_fetch_ohlcv_timeframe_mapping() -> None:
         "30m": "30Min",
         "1h": "1Hour",
         "4h": "4Hour",
+        "1d": "1Day",
     }
     assert _TIMEFRAME_MAP == expected
+
+
+@pytest.mark.asyncio
+async def test_fetch_daily_sends_1day_timeframe_and_adjustment() -> None:
+    """Daily fetch maps to ``1Day`` and requests corporate-action adjustment.
+
+    Without ``adjustment=all`` Alpaca returns RAW (split-unadjusted) daily prices,
+    which would be inconsistent with the EODHD failover daily and the 1w/1mo bars
+    derived from this series (PLAN-0036).
+    """
+    from datetime import UTC, datetime
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=_bars_response("AAPL", 2)))
+    adapter = _make_adapter(client=client)
+
+    await adapter.fetch_ohlcv(
+        "AAPL",
+        "1d",
+        datetime(2020, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    params = client.get.call_args.kwargs.get("params", {})
+    assert params["timeframe"] == "1Day"
+    assert params["adjustment"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_fetch_intraday_omits_adjustment() -> None:
+    """Intraday (1m) fetch must NOT request adjustment — bars stay raw within a session."""
+    from datetime import UTC, datetime
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=_bars_response("AAPL", 2)))
+    adapter = _make_adapter(client=client)
+
+    await adapter.fetch_ohlcv(
+        "AAPL",
+        "1m",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    params = client.get.call_args.kwargs.get("params", {})
+    assert params["timeframe"] == "1Min"
+    assert "adjustment" not in params
 
 
 # ---------------------------------------------------------------------------
@@ -466,3 +519,194 @@ async def test_fetch_ohlcv_crypto_uses_crypto_endpoint() -> None:
 
     assert result.bars_returned == 1
     assert result.symbol == "BTC-USD"
+
+
+# ---------------------------------------------------------------------------
+# Pagination tests (next_page_token) — fix for the per-response limit data loss
+# ---------------------------------------------------------------------------
+
+
+def _bar(ts: str, base: float = 100.0) -> dict[str, object]:
+    """Build a single raw Alpaca bar dict for *ts*."""
+    return {"t": ts, "o": base, "h": base + 5, "l": base - 5, "c": base + 2, "v": 1000}
+
+
+def _page(bars_by_symbol: dict[str, list[dict[str, object]]], next_token: str | None) -> bytes:
+    """Build a raw Alpaca multi-symbol page response with an optional next_page_token."""
+    return json.dumps({"bars": bars_by_symbol, "next_page_token": next_token}).encode()
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_batch_multi_page_concatenates_per_symbol() -> None:
+    """Page1 (with token) + Page2 (no token): each symbol's bars = concatenation of both pages.
+
+    Verifies pagination is followed and that TAIL symbols carried only by page2 are
+    not dropped.
+    """
+    from datetime import UTC, datetime
+
+    # Page 1 carries AAPL bars (and a token); page 2 carries the remaining AAPL bars
+    # plus MSFT — MSFT exists ONLY because pagination continued past the budget.
+    page1 = _page(
+        {"AAPL": [_bar("2024-01-02T14:30:00Z"), _bar("2024-01-02T14:31:00Z")]},
+        next_token="tok-1",
+    )
+    page2 = _page(
+        {
+            "AAPL": [_bar("2024-01-02T14:32:00Z")],
+            "MSFT": [_bar("2024-01-02T14:30:00Z", base=200.0), _bar("2024-01-02T14:31:00Z", base=200.0)],
+        },
+        next_token=None,
+    )
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[_mock_response(content=page1), _mock_response(content=page2)])
+    adapter = _make_adapter(client=client)
+
+    results = await adapter.fetch_ohlcv_batch(
+        symbols=["AAPL", "MSFT"],
+        timeframe="1m",
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    # Two HTTP calls: page1 then page2 (page_token follow-up).
+    assert client.get.call_count == 2
+    # Second call must carry the page_token from page1's next_page_token.
+    second_params = client.get.call_args_list[1].kwargs.get("params", {})
+    assert second_params.get("page_token") == "tok-1"
+
+    # AAPL = 2 (page1) + 1 (page2) = 3 bars, in chronological order.
+    aapl = json.loads(results["AAPL"].raw_data)
+    assert [b["datetime"] for b in aapl] == [
+        "2024-01-02T14:30:00Z",
+        "2024-01-02T14:31:00Z",
+        "2024-01-02T14:32:00Z",
+    ]
+    assert results["AAPL"].bars_returned == 3
+    # MSFT (tail symbol, page2-only) is NOT dropped.
+    assert results["MSFT"].bars_returned == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_batch_budget_exhausted_tail_symbols_recovered() -> None:
+    """Exact bug scenario: page1 carries only the first symbols (budget exhausted),
+    page2 carries the remaining symbols → ALL symbols end up with their bars."""
+    from datetime import UTC, datetime
+
+    # page1: only AAA + BBB returned (budget consumed by symbol-sorted leaders).
+    page1 = _page(
+        {
+            "AAA": [_bar("2024-01-02T14:30:00Z")],
+            "BBB": [_bar("2024-01-02T14:30:00Z", base=110.0)],
+        },
+        next_token="more",
+    )
+    # page2: the starved tail symbols CCC + DDD.
+    page2 = _page(
+        {
+            "CCC": [_bar("2024-01-02T14:30:00Z", base=120.0)],
+            "DDD": [_bar("2024-01-02T14:30:00Z", base=130.0)],
+        },
+        next_token=None,
+    )
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[_mock_response(content=page1), _mock_response(content=page2)])
+    adapter = _make_adapter(client=client)
+
+    results = await adapter.fetch_ohlcv_batch(
+        symbols=["AAA", "BBB", "CCC", "DDD"],
+        timeframe="1m",
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    # Every symbol — including the tail ones only present on page2 — has its bar.
+    assert results["AAA"].bars_returned == 1
+    assert results["BBB"].bars_returned == 1
+    assert results["CCC"].bars_returned == 1
+    assert results["DDD"].bars_returned == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_batch_single_page_one_get() -> None:
+    """No next_page_token → exactly one GET (unchanged single-page behaviour)."""
+    from datetime import UTC, datetime
+
+    single = _page({"AAPL": [_bar("2024-01-02T14:30:00Z")]}, next_token=None)
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=single))
+    adapter = _make_adapter(client=client)
+
+    results = await adapter.fetch_ohlcv_batch(
+        symbols=["AAPL"],
+        timeframe="1m",
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    assert client.get.call_count == 1
+    # No page_token on the single request.
+    assert "page_token" not in client.get.call_args.kwargs.get("params", {})
+    assert results["AAPL"].bars_returned == 1
+
+
+@pytest.mark.asyncio
+async def test_pagination_cap_stops_and_warns_on_non_terminating_token() -> None:
+    """A response that always returns a token → stop at _MAX_PAGES and log a warning."""
+    from datetime import UTC, datetime
+
+    # Every page returns one bar AND a (self-referential) token → never terminates.
+    always_more = _page({"AAPL": [_bar("2024-01-02T14:30:00Z")]}, next_token="loop")
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=always_more))
+    adapter = _make_adapter(client=client)
+
+    with structlog.testing.capture_logs() as cap:
+        results = await adapter.fetch_ohlcv_batch(
+            symbols=["AAPL"],
+            timeframe="1m",
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 3, 1, tzinfo=UTC),
+        )
+
+    # Stopped at the hard cap — no unbounded loop.
+    assert client.get.call_count == _MAX_PAGES
+    # Returned what it accumulated (one bar per page).
+    assert results["AAPL"].bars_returned == _MAX_PAGES
+    # Warning emitted so the runaway is observable.
+    cap_events = [e for e in cap if e.get("event") == "alpaca_pagination_cap_hit"]
+    assert len(cap_events) == 1
+    assert cap_events[0]["pages"] == _MAX_PAGES
+    assert cap_events[0]["timeframe"] == "1Min"
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_single_symbol_multi_page_merge() -> None:
+    """fetch_ohlcv (single symbol) follows the token and merges bars across pages."""
+    from datetime import UTC, datetime
+
+    page1 = _page({"AAPL": [_bar("2024-01-02T14:30:00Z"), _bar("2024-01-02T14:31:00Z")]}, next_token="p2")
+    page2 = _page({"AAPL": [_bar("2024-01-02T14:32:00Z")]}, next_token=None)
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[_mock_response(content=page1), _mock_response(content=page2)])
+    adapter = _make_adapter(client=client)
+
+    result = await adapter.fetch_ohlcv(
+        "AAPL",
+        "1m",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    assert client.get.call_count == 2
+    assert client.get.call_args_list[1].kwargs.get("params", {}).get("page_token") == "p2"
+    assert result.bars_returned == 3
+    bars = json.loads(result.raw_data)
+    assert [b["datetime"] for b in bars] == [
+        "2024-01-02T14:30:00Z",
+        "2024-01-02T14:31:00Z",
+        "2024-01-02T14:32:00Z",
+    ]

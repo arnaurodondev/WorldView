@@ -71,6 +71,11 @@ class ServiceMetrics:
     outbox_dispatched_total: Counter
     outbox_dispatch_errors_total: Counter
     kafka_consumer_lag: Gauge
+    # Unix timestamp (seconds) of the most recent *successful* outbox delivery.
+    # A staleness alert (e.g. now() - this > 30 min) detects a wedged producer —
+    # see BP outbox-dispatcher-wedged-producer. Always registered (no opt-in) so
+    # every dispatcher emits it; defaults to 0 until the first delivery.
+    outbox_last_delivery_timestamp: Gauge
     websocket_active_connections: Gauge | None = None
 
 
@@ -166,6 +171,15 @@ def create_metrics(
         labelnames=["topic", "partition", "consumer_group"],
         registry=reg,
     )
+    # Staleness signal for the outbox dispatcher: set to the Unix epoch seconds
+    # of each successful delivery. Alert on ``time() - <metric> > 1800`` to catch
+    # a wedged/cached-broken producer that silently stops delivering (the failure
+    # mode that froze content.article.raw.v1 for ~23h with empty error logs).
+    outbox_last_delivery_timestamp = Gauge(
+        f"{ns}_outbox_last_delivery_timestamp",
+        "Unix timestamp of the most recent successful outbox delivery",
+        registry=reg,
+    )
     websocket_active_connections: Gauge | None = None
     if include_websocket:
         websocket_active_connections = Gauge(
@@ -186,6 +200,7 @@ def create_metrics(
         outbox_dispatched_total=outbox_dispatched_total,
         outbox_dispatch_errors_total=outbox_dispatch_errors_total,
         kafka_consumer_lag=kafka_consumer_lag,
+        outbox_last_delivery_timestamp=outbox_last_delivery_timestamp,
         websocket_active_connections=websocket_active_connections,
     )
     if reg is REGISTRY:

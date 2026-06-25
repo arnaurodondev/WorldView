@@ -169,6 +169,34 @@ function narrativeOnlyBrief(): BriefingResponse {
   };
 }
 
+// User report 2026-06-14: the live v4.x morning brief leaks cryptic uppercase
+// citation markers — [N2]/[N10]/[N12] — into both the collapsed summary and the
+// expanded narrative. This fixture reproduces the exact leak (the [N2] from the
+// real "Manus deal" report) plus a content-bearing bracket that MUST survive
+// the strip (a date range), so the regression test verifies BOTH directions:
+// markers gone, real brackets kept.
+function leakedMarkersBrief(): BriefingResponse {
+  return {
+    narrative:
+      "**Market Snapshot** [N1]\n\n- META reportedly unwinding a $2B Manus deal " +
+      "after Beijing's demand [N2] — regulatory headline risk [N10]. Window closes " +
+      "[2026-06-30]. " +
+      LONG_NARRATIVE_PADDING,
+    // Collapsed view reads summary_paragraph first (3-tier fallback).
+    summary_paragraph:
+      "META reportedly unwinding a $2B Manus deal after Beijing's demand [N2]; " +
+      "NVDA tailwind from CoreWeave [N12]. Reassess by [2026-06-30].",
+    summary: "META unwinds $2B Manus deal [N2].",
+    risk_summary: null,
+    entity_mentions: [],
+    citations: [],
+    generated_at: new Date().toISOString(),
+    cached: false,
+    entity_id: null,
+    sections: [],
+  };
+}
+
 function emptyBrief(): BriefingResponse {
   return {
     // WHY both empty: triggers the "AI brief unavailable" guard. A brief object
@@ -183,6 +211,34 @@ function emptyBrief(): BriefingResponse {
     cached: false,
     entity_id: null,
     sections: [],
+  };
+}
+
+// Empty-AI-brief investigation (2026-06-19): when the backend cannot reach any
+// upstream (transient gateway/auth blip) it returns a 200 with a NON-empty
+// narrative composed entirely of the literal "No specific items today."
+// placeholder under each heading, and confidence: 0. The old string-only guard
+// let this through and rendered six dead lines. This fixture reproduces that
+// degenerate payload so we can pin the new confidence===0 guard.
+function allPlaceholderBrief(): BriefingResponse {
+  return {
+    narrative:
+      "## Portfolio\n\nNo specific items today.\n\n" +
+      "## Market Snapshot\n\nNo specific items today.\n\n" +
+      "## News\n\nNo specific items today.\n\n" +
+      "## Events\n\nNo specific items today.\n\n" +
+      "## Alerts\n\nNo specific items today.\n\n" +
+      "## Risk\n\nNo specific items today.",
+    summary: "No specific items today.",
+    risk_summary: null,
+    entity_mentions: [],
+    citations: [],
+    generated_at: new Date().toISOString(),
+    cached: false,
+    entity_id: null,
+    sections: [],
+    // The backend's "I had no usable context" signal.
+    confidence: 0,
   };
 }
 
@@ -254,6 +310,37 @@ describe("MorningBriefCard — PLAN-0049 T-D-4-01 contract", () => {
     });
   });
 
+  it("strips cryptic [N#] citation markers from collapsed + expanded text but keeps real brackets", async () => {
+    // Regression for the 2026-06-14 user report: literal "[N2]"/"[N10]"/"[N12]"
+    // markers were leaking into the rendered morning brief because the card's
+    // ReactMarkdown render path (collapsed + narrative-fallback) never stripped
+    // them — only StructuredBrief did, and the live brief has empty sections[]
+    // so it never runs StructuredBrief.
+    mockGetMorningBrief.mockResolvedValue(leakedMarkersBrief());
+
+    const user = userEvent.setup();
+    const { container } = render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    // Collapsed view (summary_paragraph) must be marker-free.
+    await waitFor(() => {
+      expect(screen.getByText(/Manus deal/)).toBeInTheDocument();
+    });
+    // No cryptic [N#] token anywhere in the collapsed card.
+    expect(container.textContent).not.toMatch(/\[N\d+\]/);
+    // Content-bearing bracket (a date) must be preserved — proves the strip is
+    // surgical and doesn't eat legitimate bracketed values.
+    expect(container.textContent).toMatch(/\[2026-06-30\]/);
+
+    // Expand → narrative-fallback markdown path must ALSO be marker-free.
+    const expandBtn = await screen.findByRole("button", { name: /Expand morning brief/i });
+    await user.click(expandBtn);
+    await waitFor(() => {
+      expect(screen.getAllByText(/Manus deal/).length).toBeGreaterThanOrEqual(1);
+    });
+    expect(container.textContent).not.toMatch(/\[N\d+\]/);
+    expect(container.textContent).toMatch(/\[2026-06-30\]/);
+  });
+
   it("renders the unavailable empty state when narrative + summary are empty", async () => {
     // WHY this is the empty-state path: S8 may return ``{}`` while the brief
     // is still being generated. A regression here would render an empty card
@@ -266,5 +353,98 @@ describe("MorningBriefCard — PLAN-0049 T-D-4-01 contract", () => {
     await waitFor(() => {
       expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
     });
+  });
+});
+
+// ── Round 1 foundation (2026-06-10): named empty state ───────────────────────
+// The bare "system initializing" one-liner became a structured empty state:
+// icon + headline + last-attempt timestamp + Regenerate action. These tests
+// pin the NEW contract; the headline copy test above is untouched (R19).
+
+describe("MorningBriefCard — Round 1 named empty state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows the last-attempt timestamp and a Regenerate action", async () => {
+    mockGetMorningBrief.mockResolvedValue(emptyBrief());
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    // dataUpdatedAt is set by the successful (but empty) fetch — the empty
+    // state must surface WHEN we last heard from S8.
+    expect(screen.getByText(/Last attempt \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/)).toBeInTheDocument();
+    // Regenerate is the named CTA (wired to a refetch of the morning-brief
+    // endpoint — S8 background-regenerates when the cached brief is stale).
+    expect(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    ).toBeInTheDocument();
+    // role=status so assistive tech announces the empty state.
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("clicking Regenerate refetches the morning brief", async () => {
+    mockGetMorningBrief.mockResolvedValue(emptyBrief());
+
+    const user = userEvent.setup();
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    const callsBefore = mockGetMorningBrief.mock.calls.length;
+
+    await user.click(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    );
+
+    // The button triggers refetch() — the gateway method must be hit again.
+    await waitFor(() => {
+      expect(mockGetMorningBrief.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  // Empty-AI-brief investigation (2026-06-19): a zero-confidence brief whose
+  // body is ALL placeholders ("No specific items today.") used to render six
+  // dead lines because the empty guard only checked for empty strings. It must
+  // now fall through to the named EmptyState with Regenerate, exactly like a
+  // truly-empty brief.
+  it("renders the empty state for a zero-confidence all-placeholder brief", async () => {
+    mockGetMorningBrief.mockResolvedValue(allPlaceholderBrief());
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    // The Regenerate affordance must be present so the user can retry.
+    expect(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    ).toBeInTheDocument();
+    // And the dead placeholder line must NOT be rendered anywhere.
+    expect(screen.queryByText(/No specific items today/i)).not.toBeInTheDocument();
+  });
+
+  // Guard conservatism: a brief with REAL prose must still render even if its
+  // confidence happens to be 0 — we never want to hide a genuine brief.
+  it("still renders a brief that has real prose despite confidence 0", async () => {
+    mockGetMorningBrief.mockResolvedValue({
+      ...allPlaceholderBrief(),
+      narrative:
+        "## Portfolio\n\nAAPL led your holdings up +2.1% on strong iPhone demand. " +
+        LONG_NARRATIVE_PADDING,
+      summary: "AAPL led your holdings up +2.1%.",
+    });
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    // The real summary must render — NOT the empty state.
+    await waitFor(() => {
+      expect(screen.getByText(/AAPL led your holdings/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/AI brief unavailable/i)).not.toBeInTheDocument();
   });
 });

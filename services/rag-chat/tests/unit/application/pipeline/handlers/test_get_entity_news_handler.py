@@ -119,3 +119,56 @@ class TestGetEntityNewsHandler:
         items = await handler._handle_get_entity_news(entity_id=str(_AAPL_ID), max_results=2)
 
         assert len(items) == 2
+
+
+class TestEntityNewsCitationEntityBinding:
+    """BP-670 — entity-news items must bind the requested entity.
+
+    Leaving ``citation_meta.entity_name=None`` forced the BP-605 grounding
+    gate and the entity-name validator onto text-scan fallbacks; article
+    titles frequently lead with OTHER companies ("AI Boom Sends TSMC Sales
+    Soaring..." is a valid Apple-tagged article whose title never says
+    Apple), producing false "different entities" refusals.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ticker_path_binds_entity_name(self) -> None:
+        s6 = AsyncMock()
+        s6.resolve_entity_by_ticker = AsyncMock(return_value=_AAPL_ID)
+        s6._get = AsyncMock(return_value={"articles": [_article(1)]})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_entity_news(ticker="aapl")
+
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_entity_id_only_path_leaves_entity_name_unset(self) -> None:
+        """No ticker provided — no label to bind; must stay None (not a guess)."""
+        s6 = AsyncMock()
+        s6._get = AsyncMock(return_value={"articles": [_article(1)]})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_entity_news(entity_id=str(_AAPL_ID))
+
+        assert len(items) == 1
+        assert items[0].citation_meta.entity_name is None
+
+    @pytest.mark.asyncio
+    async def test_items_are_stamped_with_resolved_entity_uuid(self) -> None:
+        """BP-670: entity-anchored items carry the requested entity UUID.
+
+        The live Apple-news refusal regression: the LLM called this tool
+        with entity_id=<question entity>, items carried neither entity_id
+        nor entity_name, and "apple inc" never text-matched titles like
+        "Apple's AI Push..." — the BP-605 gate refused a correct answer.
+        """
+        s6 = AsyncMock()
+        s6._get = AsyncMock(return_value={"articles": [_article(1)]})
+        handler = _make_handler(s6)
+
+        items = await handler._handle_get_entity_news(entity_id=str(_AAPL_ID))
+
+        assert len(items) == 1
+        assert items[0].entity_id == _AAPL_ID

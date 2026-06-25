@@ -1,0 +1,289 @@
+[
+  {
+    "page": "login",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)",
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 GET http://localhost:3001/api/v1/auth/login",
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "post-login URL: http://localhost:3001/dashboard"
+    ]
+  },
+  {
+    "page": "dashboard",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/dashboard"
+    ],
+    "shot": "dashboard.png"
+  },
+  {
+    "page": "portfolio",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/portfolio?sort=value&dir=desc"
+    ],
+    "shot": "portfolio.png"
+  },
+  {
+    "page": "chat",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/chat"
+    ],
+    "shot": "chat.png"
+  },
+  {
+    "page": "watchlists",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/watchlists"
+    ],
+    "shot": "watchlists.png"
+  },
+  {
+    "page": "alerts",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/alerts"
+    ],
+    "shot": "alerts.png"
+  },
+  {
+    "page": "news",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/news"
+    ],
+    "shot": "news.png"
+  },
+  {
+    "page": "prediction-markets",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "final URL: http://localhost:3001/prediction-markets"
+    ],
+    "shot": "prediction-markets.png"
+  },
+  {
+    "page": "instrument-AAPL-quote",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab=quote current=page"
+    ],
+    "shot": "instrument-AAPL-quote.png"
+  },
+  {
+    "page": "instrument-AAPL-financials",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab=financials current=page"
+    ],
+    "shot": "instrument-AAPL-financials.png"
+  },
+  {
+    "page": "instrument-AAPL-intelligence",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ea000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+      "[.WebGL-0x114001ed000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    ],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "tab=intelligence current=page"
+    ],
+    "shot": "instrument-AAPL-intelligence.png"
+  },
+  {
+    "page": "screener-default",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "ag rows (default): 50"
+    ],
+    "shot": "screener-01-default.png"
+  },
+  {
+    "page": "screener-columns",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "toggled ON: 5"
+    ],
+    "shot": "screener-02c-with-columns.png"
+  },
+  {
+    "page": "screener-intel-filters",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [],
+    "shot": "screener-03-intel-filters.png"
+  },
+  {
+    "page": "screener-live-catalysts",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "rows after catalysts: 7"
+    ],
+    "shot": "screener-04-live-catalysts.png"
+  },
+  {
+    "page": "screener-nl-search",
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    ],
+    "consoleWarnings": [],
+    "failedRequests": [
+      "502 POST http://localhost:3001/api/v1/screener/nl-translate"
+    ],
+    "notes": [
+      "rows after NL: 50",
+      "NL error visible: 1"
+    ],
+    "shot": "screener-05b-nl-result.png"
+  },
+  {
+    "page": "command-palette",
+    "consoleErrors": [],
+    "consoleWarnings": [],
+    "failedRequests": [],
+    "notes": [],
+    "shot": "command-palette.png"
+  }
+]

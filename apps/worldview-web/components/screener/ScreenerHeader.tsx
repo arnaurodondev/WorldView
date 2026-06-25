@@ -23,13 +23,16 @@
 
 "use client";
 
-import { SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal, Flame } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FilterState } from "@/features/screener/lib/filter-state";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
 // PRD-0089 Wave I-A · T-IA-01: the inline preset chip rendering was extracted
 // into a dedicated `<PresetBar>` so the Workspace screener panel can reuse it.
 import { PresetBar } from "@/components/screener/PresetBar";
+// #5 (roadmap B3): peer-percentile heat toggle. Self-managing via an external
+// store so it needs no new prop from page.tsx (this surface can't edit the page).
+import { usePeerHeatEnabled, setPeerHeatEnabled } from "@/components/screener/percentile-heat";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -64,11 +67,13 @@ export function ScreenerHeader({
   activePresetId,
   toolbarActions,
 }: ScreenerHeaderProps) {
+  // #5 peer-heat toggle state (reactive — drives the button's pressed styling).
+  const peerHeat = usePeerHeatEnabled();
   return (
     <div className="flex h-[36px] shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
       {/* ── Title + count ─────────────────────────────────────────────── */}
       <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono shrink-0">
-        Screener
+        Instrument Screener
       </h1>
       <span
         className="font-mono text-[10px] tabular-nums uppercase tracking-[0.06em] text-muted-foreground shrink-0"
@@ -95,6 +100,27 @@ export function ScreenerHeader({
 
       {/* ── Spacer ─────────────────────────────────────────────────────── */}
       <div className="ml-auto flex items-center gap-1">
+        {/* #5 Peer-heat toggle — turns on the subtle percentile wash behind the
+            valuation/quality columns (P/E, FWD PE, DIV Y, ROE, OP MGN, upside).
+            WHY a self-managing button (no onClick prop): the heat state lives in
+            an external store shared with the cell renderers, so this surface can
+            toggle it without page.tsx threading a handler through. */}
+        <button
+          type="button"
+          aria-label="Toggle peer-percentile heat"
+          aria-pressed={peerHeat}
+          title="Peer heat: shade valuation/quality columns by their percentile within the current results"
+          onClick={() => setPeerHeatEnabled(!peerHeat)}
+          className={cn(
+            "flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            peerHeat
+              ? "bg-primary/10 border-primary/60 text-primary"
+              : "bg-background border-border text-muted-foreground hover:text-foreground hover:border-border/80",
+          )}
+        >
+          <Flame className="h-3 w-3 shrink-0" aria-hidden strokeWidth={1.5} />
+          Heat
+        </button>
         {/* Filters toggle button */}
         <button
           type="button"
@@ -102,7 +128,9 @@ export function ScreenerHeader({
           aria-expanded={filtersOpen}
           onClick={onToggleFilters}
           className={cn(
-            "flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors",
+            // ROUND-3 item 6: focus-visible ring (shared --ring yellow) so the
+            // keyboard path to the filter panel is as visible as the hover one.
+            "flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             filtersOpen
               ? "bg-primary/10 border-primary/60 text-primary"
               : "bg-background border-border text-muted-foreground hover:text-foreground hover:border-border/80",

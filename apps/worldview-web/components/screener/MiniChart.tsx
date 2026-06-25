@@ -81,9 +81,16 @@ function MiniChartInner({
   // WHY useMemo: path computation runs on every parent re-render. The screener
   // re-renders frequently (TanStack Query fetches, sort changes). Memoising on
   // bars reference keeps render cost effectively zero across renders.
+  // ROUND-3 color-token fix (DESIGN_SYSTEM.md §15.11): the strokes previously
+  // used raw `var(--positive)` / `var(--negative)` / `var(--muted-foreground)`.
+  // Those tokens are HSL TRIPLETS ("150 100% 41%"), not colors — so the SVG
+  // stroke resolved to an invalid value and silently fell back to the browser
+  // default. This is the exact "no-paint" bug class §15.11 documents (it hit
+  // the portfolio sparkline in R1). Canonical consumption for SVG/chart code
+  // is `hsl(var(--chart-*))`.
   const { path, color, valid } = useMemo(() => {
     if (!bars || bars.length < 2) {
-      return { path: "", color: "var(--muted-foreground)", valid: false };
+      return { path: "", color: "hsl(var(--chart-neutral))", valid: false };
     }
 
     const closes = bars.map((b) => b.close);
@@ -115,16 +122,33 @@ function MiniChartInner({
     const first = closes[0];
     const last = closes[closes.length - 1];
     let strokeColor: string;
-    if (last > first) strokeColor = "var(--positive)";
-    else if (last < first) strokeColor = "var(--negative)";
-    else strokeColor = "var(--muted-foreground)";
+    if (last > first) strokeColor = "hsl(var(--chart-positive))";
+    else if (last < first) strokeColor = "hsl(var(--chart-negative))";
+    else strokeColor = "hsl(var(--chart-neutral))";
 
     return { path: d, color: strokeColor, valid: true };
   }, [bars, width, height]);
 
   // ── Empty / insufficient-data render ───────────────────────────────────────
   if (!valid) {
-    // WHY a flat grey line (not nothing): preserves row height, signals "no data".
+    // DESIGN-QA S-1 (2026-06-18) — clean empty-state, NOT a dotted "broken" line.
+    //
+    // WHY THE CHANGE: the previous empty-state drew a DASHED (strokeDasharray
+    // "2 2") baseline. Against a black terminal grid a faint dotted line reads
+    // as a chart that is *perpetually loading / broken* — the single biggest
+    // "this looks unfinished" signal the design audit flagged on the flagship
+    // screener page (every row showed it, because the TREND column ships with
+    // no live bars in this deployment).
+    //
+    // WHY A SOLID, FAINTER BASELINE (not dotted, not nothing):
+    //   - Solid 1px line at low opacity = the universal terminal "flat / no
+    //     movement" resting state (Bloomberg/Koyfin draw a quiet baseline, not
+    //     a dotted placeholder). It reads as "nothing to show here", not "still
+    //     loading".
+    //   - Keeping a line at all preserves the 18px row rhythm so the column
+    //     never collapses and mis-aligns its neighbours.
+    //   - Lower opacity (0.18 vs the old 0.3) recedes further so a screen full
+    //     of empty cells does not draw the eye away from real data.
     return (
       <svg
         width={width}
@@ -140,10 +164,14 @@ function MiniChartInner({
           x2={width - 1}
           y1={height / 2}
           y2={height / 2}
-          stroke="var(--muted-foreground)"
-          strokeOpacity={0.3}
+          // §15.11: hsl(var(--chart-*)) is the canonical SVG consumption —
+          // the bare triplet var was an invalid color (see WHY above).
+          stroke="hsl(var(--chart-neutral))"
+          strokeOpacity={0.18}
           strokeWidth={1}
-          strokeDasharray="2 2"
+          // NO strokeDasharray: a SOLID baseline is the resting "flat / no
+          // data" state; a dashed line reads as "loading / broken" (S-1).
+          strokeLinecap="round"
         />
       </svg>
     );
@@ -161,7 +189,11 @@ function MiniChartInner({
       data-direction={
         // Expose the trend direction as a data attribute so tests can assert
         // colour without parsing inline SVG styles.
-        color === "var(--positive)" ? "positive" : color === "var(--negative)" ? "negative" : "flat"
+        color === "hsl(var(--chart-positive))"
+          ? "positive"
+          : color === "hsl(var(--chart-negative))"
+            ? "negative"
+            : "flat"
       }
     >
       <path

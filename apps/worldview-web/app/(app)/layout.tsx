@@ -31,7 +31,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useIdleLock } from "@/hooks/useIdleLock";
 import { PreferencesProvider } from "@/contexts/PreferencesContext";
@@ -49,6 +49,12 @@ import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import { HotkeyProvider } from "@/contexts/HotkeyContext";
 import { GlobalHotkeyBindings } from "@/components/shell/GlobalHotkeyBindings";
 import { HotkeyCheatSheet } from "@/components/shell/HotkeyCheatSheet";
+// Round-1 Command Palette (2026-06-10) — global ⌘K dialog covering route
+// navigation, instrument search, and recent conversations. Owns its own
+// document-level ⌘K listener (NOT registered in the hotkey registry — it must
+// fire even while an input has focus) and listens for the
+// `worldview:open-command-palette` CustomEvent dispatched by the TopBar chip.
+import { CommandPalette } from "@/components/shell/CommandPalette";
 // PLAN-0059 B-6 — fixed-position banner that detects new build deploys and
 // prompts the user to reload. Polls /api/version every 60s; user-driven reload.
 import { ForceUpdateBanner } from "@/components/shell/ForceUpdateBanner";
@@ -94,8 +100,12 @@ const SIDEBAR_STORAGE_KEY = "worldview-sidebar-expanded";
  */
 const SIDEBAR_WIDTH_KEY = "worldview-sidebar-width";
 
-/** Default expanded width matches the original fixed 220px design */
-const DEFAULT_SIDEBAR_WIDTH = 220;
+/**
+ * WHY 200px (was 220px): PRD-0089 W1 §4.4 — tightening to 200px reclaims 20px
+ * of horizontal space for the main content area while still fitting all nav
+ * labels without truncation. Plan §9.4 locks this default.
+ */
+const DEFAULT_SIDEBAR_WIDTH = 200;
 
 // ── Layout component ──────────────────────────────────────────────────────────
 
@@ -108,12 +118,44 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const router = useRouter();
   const { unreadCount } = useAlertStream();
 
+  // PRD-0089 W1 §4.11 / C-22 — idle-lock pauses query refetch intervals to
+  // avoid unnecessary network calls when the user steps away. We track the
+  // "warn" state (60s before lock) as the signal to start pausing polls —
+  // well before the redirect fires so the UI is already quiet.
+  const [isIdlePaused, setIsIdlePaused] = useState(false);
+
   // PLAN-0059 I-6: idle-lock — auto-redirect to /login after 15 minutes of
   // inactivity, preserving the user's current path via ?next=. Disabled
   // while we don't have a session yet (login page must not lock itself).
   // Multi-tab aware via BroadcastChannel — activity in any tab keeps every
   // tab unlocked.
-  useIdleLock({ enabled: isAuthenticated });
+  useIdleLock({
+    enabled: isAuthenticated,
+    // WHY onWarn: when idle-lock fires its 60s pre-lock warning we pause all
+    // refetch intervals. This prevents pointless network calls during the
+    // countdown and cleans up gracefully before the redirect.
+    onWarn: () => setIsIdlePaused(true),
+    // When the user returns from idle (lock fires then they re-auth), the
+    // component will remount — no need to explicitly reset isIdlePaused.
+  });
+
+  // Apply / lift the refetch pause via queryClient default options.
+  // WHY setDefaultOptions (not per-query): affects all currently registered
+  // queries in one call — no need to know which queries are active.
+  // WHY in useEffect: queryClient must be stable across renders, so we
+  // reference it via closure (it is created once in providers.tsx).
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (isIdlePaused) {
+      // Pause all auto-refetching — user is away.
+      queryClient.setDefaultOptions({ queries: { refetchInterval: false } });
+    } else {
+      // Restore defaults — user is active again.
+      // WHY undefined (not a number): removing the override restores individual
+      // query-level refetchInterval settings.
+      queryClient.setDefaultOptions({ queries: { refetchInterval: undefined } });
+    }
+  }, [isIdlePaused, queryClient]);
 
   // WHY REST pending count: the WebSocket unreadCount only tracks alerts received
   // during this browser session — it resets to 0 on page refresh. The TopBar badge
@@ -195,6 +237,25 @@ export default function AppLayout({ children }: AppLayoutProps) {
     });
   }
 
+  // PRD-0089 W1 §4.4 / C-21 — multi-tab localStorage sync.
+  // WHY subscribe to "storage" events: when the user has two tabs open and
+  // collapses the sidebar in one tab, the other tab receives a `storage` event
+  // and reflects the change within ~100ms (browser fires `storage` events in
+  // all tabs except the one that wrote). Last-write-wins semantics.
+  useEffect(() => {
+    function onStorageChange(e: StorageEvent) {
+      if (e.key === SIDEBAR_STORAGE_KEY && e.newValue !== null) {
+        const next = safeStorage.get(SIDEBAR_STORAGE_KEY, isBoolean, sidebarExpanded);
+        setSidebarExpanded(next);
+      }
+    }
+    window.addEventListener("storage", onStorageChange);
+    return () => window.removeEventListener("storage", onStorageChange);
+  // WHY sidebarExpanded in deps: we use it as the fallback in safeStorage.get;
+  // the effect must re-register when sidebarExpanded changes so the closure is
+  // fresh (avoids stale closure returning the old default).
+  }, [sidebarExpanded]);
+
   /**
    * handleSidebarResize — called by CollapsibleSidebar on every mousemove during drag.
    *
@@ -274,6 +335,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
       {/* HotkeyCheatSheet — `?` overlay; auto-derives content from the registry. */}
       <HotkeyCheatSheet />
+
+      {/* CommandPalette — global ⌘K dialog (Navigate / Instruments / Recent
+          Conversations). Mounted once at the shell so it is reachable from
+          every authenticated route. It renders nothing until opened, so the
+          mount itself costs no layout space and no network calls (its queries
+          are gated on `open`). */}
+      <CommandPalette />
 
       {/* B-6: ForceUpdateBanner is a fixed-position overlay; mounting it
           alongside other globals avoids layout-tree pollution. */}

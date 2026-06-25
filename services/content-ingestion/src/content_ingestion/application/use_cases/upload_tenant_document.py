@@ -166,7 +166,7 @@ class UploadTenantDocumentUseCase:
         # ── Step 1: Validate MIME type ────────────────────────────────────────
         if inp.content_type not in ALLOWED_CONTENT_TYPES:
             raise UnsupportedFileTypeError(
-                f"Unsupported content type '{inp.content_type}'. " f"Allowed: {sorted(ALLOWED_CONTENT_TYPES)}"
+                f"Unsupported content type '{inp.content_type}'. Allowed: {sorted(ALLOWED_CONTENT_TYPES)}"
             )
 
         # ── Step 2: Validate file size ────────────────────────────────────────

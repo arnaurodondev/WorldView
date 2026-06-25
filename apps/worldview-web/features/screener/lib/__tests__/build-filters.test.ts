@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildScreenerFilters } from "../build-filters";
+import { buildScreenerFilters, nlFiltersToFilterState } from "../build-filters";
 import type { FilterState } from "../filter-state";
 import type { ScreenerFilter } from "@/types/api";
 
@@ -229,5 +229,396 @@ describe("buildScreenerFilters — empty filter list (S3 v2 BP-368 fix)", () => 
     const hasDailyReturn = filters.some((f) => f.metric === "daily_return");
     expect(hasMarketCap).toBe(false);
     expect(hasDailyReturn).toBe(false);
+  });
+});
+
+// ── IB-L5 — Intelligence rollup filters (per-filter named fields) ────────────
+//
+// WHY the wire format changed (2026-06-09 hotfix): the original IB-L5 ship
+// pushed each intelligence field as its own filter entry
+// (`{metric: "news_count_7d", min_value: 1}`). That silently dropped every
+// IB-L5 filter at the backend INNER JOIN because the metric strings aren't in
+// the computed-metrics catalogue. The corrected wire format places the
+// intelligence fields as NAMED siblings of `min_value`/`max_value` on a single
+// filter object — matching the ScreenFilterRequest schema in
+// services/market-data/src/market_data/api/schemas/fundamental_metrics.py.
+//
+// Tests below verify the *fixed* shape: one filter object carries all live
+// intelligence fields plus a synthetic `metric` ("market_capitalization") to
+// satisfy the backend's required-metric regex.
+
+describe("buildScreenerFilters — IB-L5 intelligence rollup (per-filter fields)", () => {
+  it("newsCount7dMin lands on filter.news_count_7d_min, not as its own filter entry", () => {
+    const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 3 }));
+    // No filter entry has metric=news_count_7d (the old broken shape):
+    expect(findFilter(filters, "news_count_7d")).toBeUndefined();
+    // Instead, ONE filter carries the intelligence field as a named sibling.
+    const intelHolder = filters.find((x) => x.news_count_7d_min !== undefined);
+    expect(intelHolder?.news_count_7d_min).toBe(3);
+    expect(intelHolder?.news_count_7d_max).toBeUndefined();
+  });
+
+  it("newsCount7d max also maps to news_count_7d_max named field", () => {
+    const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 2, newsCount7dMax: 50 }));
+    const h = filters.find((x) => x.news_count_7d_min !== undefined);
+    expect(h?.news_count_7d_min).toBe(2);
+    expect(h?.news_count_7d_max).toBe(50);
+  });
+
+  it("llmRelevance7d maps to llm_relevance_7d_max_min named field", () => {
+    const filters = buildScreenerFilters(makeFilters({ llmRelevance7dMin: 0.6 }));
+    const h = filters.find((x) => x.llm_relevance_7d_max_min !== undefined);
+    expect(h?.llm_relevance_7d_max_min).toBe(0.6);
+  });
+
+  it("displayRelevance7d maps to display_relevance_7d_weighted_{min,max}", () => {
+    const filters = buildScreenerFilters(makeFilters({ displayRelevance7dMin: 0.5, displayRelevance7dMax: 1 }));
+    const h = filters.find((x) => x.display_relevance_7d_weighted_min !== undefined);
+    expect(h?.display_relevance_7d_weighted_min).toBe(0.5);
+    expect(h?.display_relevance_7d_weighted_max).toBe(1);
+  });
+
+  it("contradictions maps to recent_contradiction_count_min", () => {
+    const filters = buildScreenerFilters(makeFilters({ contradictionsMin: 1 }));
+    const h = filters.find((x) => x.recent_contradiction_count_min !== undefined);
+    expect(h?.recent_contradiction_count_min).toBe(1);
+  });
+
+  it("hasAiBrief=true sets has_ai_brief: true on a filter (not a min_value=1 entry)", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: true }));
+    expect(findFilter(filters, "has_ai_brief")).toBeUndefined(); // old broken shape gone
+    const h = filters.find((x) => x.has_ai_brief !== undefined);
+    expect(h?.has_ai_brief).toBe(true);
+  });
+
+  it("hasAiBrief=false does NOT set has_ai_brief", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: false }));
+    expect(filters.some((x) => x.has_ai_brief !== undefined)).toBe(false);
+  });
+
+  it("hasAiBrief=undefined does NOT set has_ai_brief", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    expect(filters.some((x) => x.has_ai_brief !== undefined)).toBe(false);
+  });
+
+  it("hasActiveAlert=true sets has_active_alert: true", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: true }));
+    const h = filters.find((x) => x.has_active_alert !== undefined);
+    expect(h?.has_active_alert).toBe(true);
+  });
+
+  it("hasActiveAlert=false does NOT set has_active_alert", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: false }));
+    expect(filters.some((x) => x.has_active_alert !== undefined)).toBe(false);
+  });
+
+  it("no intelligence fields are emitted when all IB-L5 inputs are at defaults", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    const intelKeys: (keyof import("@/types/api").ScreenerFilter)[] = [
+      "news_count_7d_min",
+      "news_count_7d_max",
+      "llm_relevance_7d_max_min",
+      "llm_relevance_7d_max_max",
+      "display_relevance_7d_weighted_min",
+      "display_relevance_7d_weighted_max",
+      "recent_contradiction_count_min",
+      "has_ai_brief",
+      "has_active_alert",
+    ];
+    for (const k of intelKeys) {
+      expect(filters.some((x) => x[k] !== undefined)).toBe(false);
+    }
+  });
+
+  it("multiple intelligence fields merge onto a SINGLE filter object", () => {
+    // Regression guard: each intelligence field must NOT spawn its own filter
+    // entry (the original IB-L5 bug). They all merge onto one object.
+    const filters = buildScreenerFilters(
+      makeFilters({
+        newsCount7dMin: 5,
+        contradictionsMin: 1,
+        hasAiBrief: true,
+        hasActiveAlert: true,
+        displayRelevance7dMin: 0.7,
+      }),
+    );
+    const intelHolders = filters.filter(
+      (x) =>
+        x.news_count_7d_min !== undefined ||
+        x.recent_contradiction_count_min !== undefined ||
+        x.has_ai_brief !== undefined ||
+        x.has_active_alert !== undefined ||
+        x.display_relevance_7d_weighted_min !== undefined,
+    );
+    expect(intelHolders).toHaveLength(1);
+    const h = intelHolders[0];
+    expect(h.news_count_7d_min).toBe(5);
+    expect(h.recent_contradiction_count_min).toBe(1);
+    expect(h.has_ai_brief).toBe(true);
+    expect(h.has_active_alert).toBe(true);
+    expect(h.display_relevance_7d_weighted_min).toBe(0.7);
+  });
+
+  it("intelligence-only request creates a synthetic market_capitalization filter (required by backend regex)", () => {
+    // When no other range filter is active, the intelligence fields still need
+    // a `metric` field — backend regex requires it. Synthetic market_capitalization
+    // has no min/max so it carries no extra constraint.
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: true }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect(filters[0].has_ai_brief).toBe(true);
+  });
+});
+
+// ── Round 2: avg_volume_30d named-field range (SERVER_SIDE) ──────────────────
+//
+// WHY THESE TESTS: avg_volume_30d is a snapshot COLUMN (not a
+// fundamental_metrics row), so it must travel as the avg_volume_30d_min/max
+// per-filter named fields — the exact same silent-zero-rows trap as the
+// intelligence rollup fields above. These tests pin the request shape the
+// backend actually parses (ScreenFilterRequest, fundamental_metrics.py:48-49).
+
+describe("buildScreenerFilters — avg volume 30d range (Round 2)", () => {
+  it("merges avgVolume30dMin/Max onto an existing filter as named fields (NOT a metric entry)", () => {
+    const filters = buildScreenerFilters(
+      makeFilters({ peMin: 10, avgVolume30dMin: 500_000, avgVolume30dMax: 50_000_000 }),
+    );
+    // No `{metric: "avg_volume_30d"}` entry may exist — that shape silently
+    // returns 0 rows via the backend's INNER JOIN on unknown metrics.
+    expect(findFilter(filters, "avg_volume_30d")).toBeUndefined();
+    // The named fields ride on the first filter object.
+    const holder = filters.find(
+      (f) =>
+        (f as Record<string, unknown>).avg_volume_30d_min !== undefined ||
+        (f as Record<string, unknown>).avg_volume_30d_max !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    expect(holder?.avg_volume_30d_min).toBe(500_000);
+    expect(holder?.avg_volume_30d_max).toBe(50_000_000);
+    // And it merged onto the existing pe_ratio filter, not a new entry.
+    expect(holder?.metric).toBe("pe_ratio");
+  });
+
+  it("volume-only request creates the synthetic market_capitalization carrier filter", () => {
+    const filters = buildScreenerFilters(makeFilters({ avgVolume30dMin: 1_000_000 }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect((filters[0] as Record<string, unknown>).avg_volume_30d_min).toBe(1_000_000);
+  });
+
+  it("sends only the side that is set (min-only / max-only)", () => {
+    const minOnly = buildScreenerFilters(makeFilters({ avgVolume30dMin: 250_000 }));
+    expect((minOnly[0] as Record<string, unknown>).avg_volume_30d_min).toBe(250_000);
+    expect((minOnly[0] as Record<string, unknown>).avg_volume_30d_max).toBeUndefined();
+
+    const maxOnly = buildScreenerFilters(makeFilters({ avgVolume30dMax: 10_000_000 }));
+    expect((maxOnly[0] as Record<string, unknown>).avg_volume_30d_max).toBe(10_000_000);
+    expect((maxOnly[0] as Record<string, unknown>).avg_volume_30d_min).toBeUndefined();
+  });
+
+  it("emits nothing volume-related when both sides are unset", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    for (const f of filters) {
+      expect((f as Record<string, unknown>).avg_volume_30d_min).toBeUndefined();
+      expect((f as Record<string, unknown>).avg_volume_30d_max).toBeUndefined();
+    }
+  });
+
+  it("coexists with the intelligence named fields on the same carrier filter", () => {
+    // Both blocks use the merge-onto-filters[0] pattern; they must compose,
+    // not overwrite each other.
+    const filters = buildScreenerFilters(
+      makeFilters({ hasAiBrief: true, avgVolume30dMin: 2_000_000 }),
+    );
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.has_ai_brief).toBe(true);
+    expect(f.avg_volume_30d_min).toBe(2_000_000);
+  });
+});
+
+// ── BUGFIX 2026-06-15: Ownership snapshot-column named-field range ────────────
+//
+// WHY THESE TESTS: the five Ownership-section filters (analyst target/consensus,
+// insider 90d, institutional ownership, short %) are COLUMNS on
+// instrument_fundamentals_snapshot — NOT rows in fundamental_metrics. Before
+// this fix they were emitted as `{metric: "short_percent", min_value: ...}`,
+// which made the backend INNER JOIN on a non-existent metric row and return
+// ZERO results for the whole section (live-verified: total 0). The fix routes
+// them as per-filter NAMED siblings (`short_percent_min` etc.) — the exact
+// same trap + remedy as the IB-L5 + avg_volume_30d blocks above. These tests
+// pin the request shape the backend's ScreenFilterRequest actually parses
+// (fundamental_metrics.py:64-71, 109-110).
+
+describe("buildScreenerFilters — ownership snapshot fields (named-field range)", () => {
+  // Each (FilterState key → backend named field) pair the fix wires up. The
+  // backend matches each pair against an instrument_fundamentals_snapshot
+  // column, so the metric-entry form silently returns 0 rows.
+  const cases: ReadonlyArray<readonly [keyof FilterState, keyof FilterState, string, string, string]> = [
+    ["analystTargetPriceMin", "analystTargetPriceMax", "analyst_target_price_min", "analyst_target_price_max", "analyst_target_price"],
+    ["analystConsensusMin", "analystConsensusMax", "analyst_consensus_rating_min", "analyst_consensus_rating_max", "analyst_consensus_rating"],
+    ["insiderNetBuy90dMin", "insiderNetBuy90dMax", "insider_net_buy_90d_min", "insider_net_buy_90d_max", "insider_net_buy_90d"],
+    ["instOwnPctMin", "instOwnPctMax", "institutional_ownership_pct_min", "institutional_ownership_pct_max", "institutional_ownership_pct"],
+    ["shortPctMin", "shortPctMax", "short_percent_min", "short_percent_max", "short_percent"],
+  ];
+
+  for (const [minKey, maxKey, minField, maxField, metricName] of cases) {
+    it(`${String(minKey)}/${String(maxKey)} → named ${minField}/${maxField}, NOT a {metric:"${metricName}"} entry`, () => {
+      const filters = buildScreenerFilters(
+        makeFilters({ [minKey]: 1, [maxKey]: 2 } as Partial<FilterState>),
+      );
+      // The broken metric-entry shape must NOT be present (it returns 0 rows).
+      expect(findFilter(filters, metricName)).toBeUndefined();
+      // The named fields must ride on a single carrier filter object.
+      const holder = filters.find(
+        (f) => (f as Record<string, unknown>)[minField] !== undefined,
+      ) as Record<string, unknown> | undefined;
+      expect(holder).toBeDefined();
+      expect(holder?.[minField]).toBe(1);
+      expect(holder?.[maxField]).toBe(2);
+    });
+  }
+
+  it("ownership-only request creates the synthetic market_capitalization carrier", () => {
+    // No other range filter is active → a synthetic metric carrier is needed
+    // because ScreenFilterRequest requires `metric` (regex-validated), but it
+    // applies no numeric bound itself (the snapshot column is LEFT-JOINed).
+    const filters = buildScreenerFilters(makeFilters({ shortPctMin: 0.05 }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect((filters[0] as Record<string, unknown>).short_percent_min).toBe(0.05);
+  });
+
+  it("merges onto an existing range filter rather than spawning a new entry", () => {
+    const filters = buildScreenerFilters(
+      makeFilters({ peMin: 10, instOwnPctMin: 0.6 }),
+    );
+    const holder = filters.find(
+      (f) => (f as Record<string, unknown>).institutional_ownership_pct_min !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    // It rode on the pe_ratio filter, not a separate object.
+    expect(holder?.metric).toBe("pe_ratio");
+    expect(holder?.institutional_ownership_pct_min).toBe(0.6);
+  });
+
+  it("sends only the side that is set (min-only / max-only)", () => {
+    const minOnly = buildScreenerFilters(makeFilters({ shortPctMin: 0.02 }));
+    expect((minOnly[0] as Record<string, unknown>).short_percent_min).toBe(0.02);
+    expect((minOnly[0] as Record<string, unknown>).short_percent_max).toBeUndefined();
+
+    const maxOnly = buildScreenerFilters(makeFilters({ shortPctMax: 0.15 }));
+    expect((maxOnly[0] as Record<string, unknown>).short_percent_max).toBe(0.15);
+    expect((maxOnly[0] as Record<string, unknown>).short_percent_min).toBeUndefined();
+  });
+
+  it("emits nothing ownership-related when all inputs are unset", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    const ownershipFields = [
+      "analyst_target_price_min", "analyst_target_price_max",
+      "analyst_consensus_rating_min", "analyst_consensus_rating_max",
+      "insider_net_buy_90d_min", "insider_net_buy_90d_max",
+      "institutional_ownership_pct_min", "institutional_ownership_pct_max",
+      "short_percent_min", "short_percent_max",
+    ];
+    for (const f of filters) {
+      for (const field of ownershipFields) {
+        expect((f as Record<string, unknown>)[field]).toBeUndefined();
+      }
+    }
+  });
+
+  it("composes with intelligence + volume named fields on one carrier", () => {
+    // All three named-field blocks (intel, volume, ownership) merge onto the
+    // same filters[0] carrier — they must compose, not clobber.
+    const filters = buildScreenerFilters(
+      makeFilters({ hasAiBrief: true, avgVolume30dMin: 2_000_000, shortPctMax: 0.1 }),
+    );
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.has_ai_brief).toBe(true);
+    expect(f.avg_volume_30d_min).toBe(2_000_000);
+    expect(f.short_percent_max).toBe(0.1);
+  });
+});
+
+// ── IB-L5c calendar windows (2026-06-18) ──────────────────────────────────────
+
+describe("buildScreenerFilters — IB-L5c calendar windows", () => {
+  it("maps upcomingEarningsWithinDays to the scalar next_earnings_within_days", () => {
+    // Backend contract: next_earnings_within_days is a SCALAR "≤ N days" filter
+    // (not a _min/_max pair) — fundamental_metrics.py:80. Send N directly.
+    const filters = buildScreenerFilters(makeFilters({ upcomingEarningsWithinDays: 7 }));
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_earnings_within_days).toBe(7);
+    expect(f.next_earnings_within_days_max).toBeUndefined(); // the wrong field must NOT be sent
+    expect(f.metric).toBe("market_capitalization"); // synthetic carrier
+  });
+
+  it("maps upcomingDividendWithinDays to the scalar next_dividend_within_days", () => {
+    const filters = buildScreenerFilters(makeFilters({ upcomingDividendWithinDays: 14 }));
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_dividend_within_days).toBe(14);
+    expect(f.next_dividend_within_days_max).toBeUndefined();
+  });
+
+  it("omits both calendar fields when unset", () => {
+    const filters = buildScreenerFilters(makeFilters({ peMin: 10 }));
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.next_earnings_within_days).toBeUndefined();
+    expect(f.next_dividend_within_days).toBeUndefined();
+  });
+});
+
+// ── NL-translate reverse mapping (PLAN-0091) ───────────────────────────────────
+
+describe("nlFiltersToFilterState", () => {
+  it("maps a metric range row back to its FilterState min/max pair", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "pe_ratio", min_value: 5, max_value: 20 },
+    ]);
+    expect(fs.peMin).toBe(5);
+    expect(fs.peMax).toBe(20);
+  });
+
+  it("maps multiple metrics + sector across several filter rows", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "market_capitalization", min_value: 10_000_000_000 },
+      { metric: "dividend_yield", min_value: 0.02, sector: "Information Technology" },
+    ]);
+    expect(fs.marketCapMin).toBe(10_000_000_000);
+    expect(fs.divYieldMin).toBe(0.02);
+    expect(fs.sector).toBe("Information Technology");
+  });
+
+  it("maps IB-L5 intelligence named siblings (news + alert)", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "market_capitalization", news_count_7d_min: 5, has_active_alert: true },
+    ]);
+    expect(fs.newsCount7dMin).toBe(5);
+    expect(fs.hasActiveAlert).toBe(true);
+  });
+
+  it("skips unknown metrics without throwing (forward-compatible)", () => {
+    const fs = nlFiltersToFilterState([
+      { metric: "some_future_metric_we_dont_know", min_value: 1 },
+      { metric: "pe_ratio", max_value: 15 },
+    ]);
+    // Unknown dropped; known one still applied.
+    expect(fs.peMax).toBe(15);
+  });
+
+  it("returns clean DEFAULT_FILTERS-based state for an empty filter list", () => {
+    const fs = nlFiltersToFilterState([]);
+    expect(fs.search).toBe("");
+    expect(fs.capTier).toBe("ALL");
+    expect(fs.peMin).toBeUndefined();
   });
 });

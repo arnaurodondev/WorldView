@@ -22,6 +22,7 @@ from rag_chat.api.schemas import (
     EntityContextChatResponse,
 )
 from rag_chat.domain.errors import (
+    ClassifierUnavailableError,
     InsufficientRetrievalError,
     PIIDetectedError,
     PromptInjectionError,
@@ -97,6 +98,10 @@ async def chat(
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
+    except ClassifierUnavailableError as e:
+        # Layer 2 safety classifier could not run (provider unavailable).
+        # 503 + retryable, accurate message — NOT a 400 "injection" rejection.
+        raise HTTPException(status_code=503, detail=e.message) from e
     except (PIIDetectedError, PromptInjectionError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ThreadNotFoundError as e:
@@ -164,6 +169,11 @@ async def chat_stream(
                     yield event
             except RateLimitExceededError as e:
                 yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
+            except ClassifierUnavailableError as e:
+                # Layer 2 safety classifier could not run (provider unavailable).
+                # Distinct, ACCURATE code — NOT the misleading INPUT_REJECTED
+                # "Semantic injection detected" the old fail-closed path emitted.
+                yield emitter.emit_error("CLASSIFIER_UNAVAILABLE", e.message)
             except (PIIDetectedError, PromptInjectionError) as e:
                 yield emitter.emit_error("INPUT_REJECTED", str(e))
             except ProviderUnavailableError as e:
@@ -179,7 +189,21 @@ async def chat_stream(
                 )
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        # Explicit SSE cache headers (PLAN-0099 W4) — prevent the response body
+        # from being buffered by middleware (Prometheus, RequestId) or by
+        # intermediate proxies. Without these, the client receives the full
+        # answer in a single chunk instead of token-by-token streaming.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/entity-context", status_code=200)
@@ -237,6 +261,10 @@ async def entity_context_chat(
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
+    except ClassifierUnavailableError as e:
+        # Layer 2 safety classifier could not run (provider unavailable).
+        # 503 + retryable, accurate message — NOT a 400 "injection" rejection.
+        raise HTTPException(status_code=503, detail=e.message) from e
     except (PIIDetectedError, PromptInjectionError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except ThreadNotFoundError as e:
@@ -289,6 +317,11 @@ async def entity_context_chat_stream(
                     yield event
             except RateLimitExceededError as e:
                 yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
+            except ClassifierUnavailableError as e:
+                # Layer 2 safety classifier could not run (provider unavailable).
+                # Distinct, ACCURATE code — NOT the misleading INPUT_REJECTED
+                # "Semantic injection detected" the old fail-closed path emitted.
+                yield emitter.emit_error("CLASSIFIER_UNAVAILABLE", e.message)
             except (PIIDetectedError, PromptInjectionError) as e:
                 yield emitter.emit_error("INPUT_REJECTED", str(e))
             except ProviderUnavailableError as e:
@@ -297,4 +330,18 @@ async def entity_context_chat_stream(
                 log.error("entity_context_stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        # Explicit SSE cache headers (PLAN-0099 W4) — prevent the response body
+        # from being buffered by middleware (Prometheus, RequestId) or by
+        # intermediate proxies. Without these, the client receives the full
+        # answer in a single chunk instead of token-by-token streaming.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

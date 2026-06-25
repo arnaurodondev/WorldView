@@ -152,6 +152,55 @@ class TestRetrievalOrchestratorTenantIdPassThrough:
         assert req.tenant_id is not None  # nil UUID is still a UUID string
 
     @pytest.mark.asyncio
+    async def test_ann_only_intent_applies_min_score_floor(self) -> None:
+        """PLAN-0111 B-4: pure-ANN searches carry the cosine-similarity floor.
+
+        SIGNAL_INTEL / PORTFOLIO are ANN-only intents (see _ANN_ONLY_INTENTS), so
+        _fetch_chunks sends search_type="ann" and must set min_score to the floor
+        — keeping near-orthogonal LIGHT stub hits out of the candidate pool.
+        """
+        from rag_chat.application.pipeline.retrieval_orchestrator import _ANN_MIN_SCORE_FLOOR
+
+        s6 = _make_s6()
+        orchestrator = _make_orchestrator(s6)
+        resolved = ResolvedQuery(intent=QueryIntent.SIGNAL_INTEL, rephrased_query="apple earnings beat")
+
+        with patch.object(orchestrator._archive, "get_latest", new=AsyncMock(return_value=None)):
+            await orchestrator.retrieve(
+                plan=_make_chunk_only_plan(),
+                resolved_query=resolved,
+                request=_make_request(tenant_id=uuid4()),
+                query_embedding=[0.1] * 1024,
+            )
+
+        req: ChunkSearchRequest = s6.search_chunks.call_args[0][0]
+        assert req.search_type == "ann"
+        assert req.min_score == _ANN_MIN_SCORE_FLOOR
+
+    @pytest.mark.asyncio
+    async def test_hybrid_intent_does_not_apply_min_score_floor(self) -> None:
+        """PLAN-0111 B-4: hybrid searches must NOT carry the floor.
+
+        For hybrid, S6 applies min_score to BOTH legs; the lexical leg's
+        ts_rank_cd scores are tiny, so a 0.20 floor would erase it. GENERAL intent
+        with query_text → hybrid → min_score must stay 0.0.
+        """
+        s6 = _make_s6()
+        orchestrator = _make_orchestrator(s6)
+
+        with patch.object(orchestrator._archive, "get_latest", new=AsyncMock(return_value=None)):
+            await orchestrator.retrieve(
+                plan=_make_chunk_only_plan(),
+                resolved_query=_make_resolved_query(),  # GENERAL + query_text → hybrid
+                request=_make_request(tenant_id=uuid4()),
+                query_embedding=[0.1] * 1024,
+            )
+
+        req: ChunkSearchRequest = s6.search_chunks.call_args[0][0]
+        assert req.search_type == "hybrid"
+        assert req.min_score == 0.0
+
+    @pytest.mark.asyncio
     async def test_s6_client_forwards_tenant_id_in_payload(self) -> None:
         """S6Client must include tenant_id in the HTTP payload to nlp-pipeline.
 

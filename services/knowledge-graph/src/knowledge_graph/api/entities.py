@@ -52,15 +52,22 @@ async def get_entity_detail(
 ) -> EntityPublic:
     """Return the canonical entity with enrichment fields (description, metadata, completeness).
 
+    PLAN-0099 (node-click panel): also returns ``health_score``, active
+    ``aliases``, the ``top_relations`` (ranked by summary_authority) and the
+    total ``relation_count``.  Recent article/mention counts are NOT here —
+    they live in nlp_db (S6) and are exposed via the gateway's
+    GET /v1/entities/{id}/articles (R9: no cross-service DB access).
+
     - 200: entity found (enrichment fields may be null if not yet enriched)
     - 404: entity does not exist
     """
-    entity = await uc.execute(entity_id)
-    if entity is None:
+    result = await uc.execute(entity_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="Entity not found")
 
-    from knowledge_graph.api.schemas import EntityMetadata
+    from knowledge_graph.api.schemas import EntityAliasPublic, EntityMetadata, EntityRelationBrief
 
+    entity = result.entity
     return EntityPublic(
         entity_id=entity.entity_id,
         canonical_name=entity.canonical_name,
@@ -72,6 +79,29 @@ async def get_entity_detail(
         data_completeness=entity.data_completeness,
         enriched_at=entity.enriched_at,
         metadata=EntityMetadata.model_validate(entity.metadata),
+        health_score=entity.health_score,
+        aliases=[
+            EntityAliasPublic(
+                alias_text=str(a["alias_text"]),
+                alias_type=str(a["alias_type"]),
+            )
+            for a in result.aliases
+        ],
+        top_relations=[
+            EntityRelationBrief(
+                relation_id=r["relation_id"],
+                canonical_type=str(r["canonical_type"]),
+                direction=str(r.get("direction") or "outbound"),
+                other_entity_id=r["other_entity_id"],
+                other_entity_name=r.get("other_entity_name"),
+                other_entity_type=r.get("other_entity_type"),
+                confidence=r.get("confidence"),
+                evidence_count=int(r.get("evidence_count") or 0),
+                relation_summary=r.get("relation_summary"),
+            )
+            for r in result.top_relations
+        ],
+        relation_count=result.relation_count,
     )
 
 

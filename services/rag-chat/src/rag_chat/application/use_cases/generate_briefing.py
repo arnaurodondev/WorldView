@@ -40,6 +40,20 @@ _DAILY_RATE_LIMIT = 100
 _BRIEFING_RL_PREFIX = "rag:v1:briefing:rl"
 _BRIEFING_RL_TTL = 90_000  # 25 hours — covers DST edge cases
 
+# AI-brief-flag fix (2026-06-19): entity (instrument) briefs are NOT user-scoped
+# — the same brief is valid for everyone viewing the same instrument, and the
+# screener ``has_ai_brief`` flag is a per-instrument coverage indicator. The
+# ``user_briefs`` table requires NOT NULL ``user_id``/``tenant_id`` though, so
+# we attribute system-generated entity briefs to a fixed all-zero "system"
+# owner. The flag query ignores user/tenant (it matches only ``brief_type`` +
+# ``entity_id``), so this attribution does not affect coverage detection.
+_SYSTEM_OWNER_ID = UUID("00000000-0000-0000-0000-000000000000")
+
+# How long an entity brief stays "fresh" before the on-demand/pre-gen paths will
+# regenerate it. 24h matches the Valkey instrument-brief cache TTL so the DB row
+# and the cache age out together.
+_ENTITY_BRIEF_FRESHNESS_HOURS = 24
+
 # Module-level singletons — stateless helpers shared across all instances.
 # WHY module-level: no per-request state, no DI needed; avoids repeated allocation.
 _parser = BriefParser()
@@ -67,10 +81,23 @@ class GenerateBriefingUseCase:
         valkey: ValkeyClient,  # type: ignore[name-defined]
         context_gatherer: BriefingContextGatherer | None = None,  # optional — degrades gracefully
         brief_archive: BriefArchivePort | None = None,  # PLAN-0066 Wave B — optional persistence
+        *,
+        morning_brief_max_tokens: int = 8000,  # FIX-LIVE-BRIEF — reasoning-model budget
+        instrument_brief_max_tokens: int = 6000,  # FIX-LIVE-BRIEF — reasoning-model budget
     ) -> None:
         self._llm_chain = llm_chain
         self._valkey = valkey
         self._context_gatherer = context_gatherer  # None when wired without context gathering
+        # FIX-LIVE-BRIEF (2026-06-19): the synthesis completion model is a
+        # REASONING model (gpt-oss-120b live / DeepSeek-*-Thinking by default)
+        # whose chain-of-thought tokens count against ``max_tokens``.  The old
+        # hardcoded 2000/1500 budgets were eaten by reasoning on the heavy
+        # brief prompt, truncating the structured ``## section`` answer
+        # (finish_reason=length) → 0 parsed sections → all-placeholder 300-char
+        # output.  These budgets are env-tunable (config.py) so the floor moves
+        # with the model, never the prompt.
+        self._morning_brief_max_tokens = morning_brief_max_tokens
+        self._instrument_brief_max_tokens = instrument_brief_max_tokens
         # WHY NullBriefArchive default: callers that do not wire a real archive
         # (e.g. unit tests, email briefing path) continue to work without any
         # code change. Production wires BriefArchiveRepository via DI.
@@ -446,7 +473,7 @@ class GenerateBriefingUseCase:
 
         # ── 4. LLM completion (collect streaming tokens) ──────────────────────
         chunks: list[str] = []
-        async for chunk in self._llm_chain.stream(prompt, max_tokens=2000, temperature=0.1):
+        async for chunk in self._llm_chain.stream(prompt, max_tokens=self._morning_brief_max_tokens, temperature=0.1):
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 
@@ -514,6 +541,18 @@ class GenerateBriefingUseCase:
         # (BP-624 regression caught by test_morning_v22_two_tier_split).
         if summary_paragraph is not None and post_summary_content and summary is None:
             narrative = post_summary_content
+
+        # Brief-quality eval BUG 5: the displayed narrative keeps singular [cN]
+        # markers (the frontend resolves them into chips) but MUST NOT carry an
+        # unresolvable range marker like [c13-c20] — the frontend resolver only
+        # matches a single [cN], so a range would leak as a dangling token. Strip
+        # range markers from the final narrative (the structured-section path
+        # strips them too, but the v4.x morning brief has no ``---`` divider so it
+        # renders this raw narrative directly). Applied AFTER the post-Summary
+        # overwrite above so the chosen narrative variant is always cleaned.
+        from rag_chat.application.use_cases.brief_parser import _CN_RANGE_MARKER_RE
+
+        narrative = _CN_RANGE_MARKER_RE.sub("", narrative)
 
         # ── 4d. PLAN-0103 W6 (v4.3): defensive section + summary injection ────
         # The v4.3 prompt teaches the desired shape via few-shot examples but
@@ -694,11 +733,34 @@ class GenerateBriefingUseCase:
     async def execute_public_instrument(
         self,
         entity_id: str,
+        *,
+        persist: bool = True,
+        skip_if_fresh: bool = False,
     ) -> dict[str, Any]:
         """Generate an instrument-specific briefing.
 
-        Called by GET /api/v1/briefings/instrument/{entity_id}.
+        Called by GET /api/v1/briefings/instrument/{entity_id} and by the
+        InstrumentBriefPregenerationWorker.
+
         Uses BriefingContextGatherer to fetch entity graph + fundamentals + news.
+
+        Args:
+            entity_id: the KG entity id (route param). The persisted entity-brief
+                row is keyed by the RESOLVED market-data instrument_id when the
+                ticker resolves (so the screener ``has_ai_brief`` flag matches),
+                falling back to ``entity_id`` otherwise.
+            persist: when True (default), the generated brief is persisted to
+                ``user_briefs`` with ``brief_type='entity'`` so the
+                ``GetAiBriefFlagUseCase`` (and therefore the screener
+                ``has_ai_brief`` column) reports coverage for this instrument.
+                Persistence is best-effort / fire-and-forget — a DB failure
+                never affects the returned brief.
+            skip_if_fresh: when True, the use case first checks whether a fresh
+                (< _ENTITY_BRIEF_FRESHNESS_HOURS) entity brief already exists for
+                the resolved id and, if so, returns it WITHOUT paying for an LLM
+                call. Used by the pre-gen worker to avoid regenerating the whole
+                active set on every interval. The on-demand route leaves this
+                False (Valkey already absorbs the freshness window there).
 
         Returns dict with keys: content, risk_summary (None), entity_mentions, citations, generated_at
 
@@ -724,12 +786,59 @@ class GenerateBriefingUseCase:
         # — let the exception propagate to the route handler for a 404 response
         ctx = await self._context_gatherer.gather_instrument_context(entity_id=entity_id)
 
+        # AI-brief-flag fix (2026-06-19): the persisted row + freshness check key
+        # on the RESOLVED market-data instrument_id (what the screener flag uses),
+        # falling back to the KG entity_id only when the ticker did not resolve.
+        persist_id_str = getattr(ctx, "resolved_instrument_id", None) or entity_id
+        try:
+            persist_entity_id = UUID(persist_id_str)
+        except (ValueError, AttributeError):
+            # Malformed id — disable persistence rather than crash; the brief is
+            # still returned to the caller.
+            persist_entity_id = None
+
+        # ── Freshness skip (pre-gen path only) ───────────────────────────────
+        # When asked to skip-if-fresh, avoid the (expensive) LLM call entirely if
+        # a recent entity brief already exists for this instrument. The on-demand
+        # route never sets this (its Valkey cache already short-circuits there).
+        if skip_if_fresh and persist_entity_id is not None:
+            existing = await self._brief_archive.get_latest_entity_brief(persist_entity_id, limit=1)
+            if existing:
+                from common.time import utc_now  # type: ignore[import-untyped]
+
+                latest = existing[0]
+                age_seconds = (utc_now() - latest.generated_at).total_seconds()
+                if age_seconds < _ENTITY_BRIEF_FRESHNESS_HOURS * 3600:
+                    log.info(  # type: ignore[no-any-return]
+                        "instrument_brief_skipped_fresh",
+                        entity_id=entity_id,
+                        persist_entity_id=str(persist_entity_id),
+                        age_hours=round(age_seconds / 3600, 2),
+                    )
+                    return {
+                        "content": latest.headline,
+                        "risk_summary": None,
+                        "entity_mentions": [],
+                        "citations": latest.citations_json,
+                        "generated_at": latest.generated_at.isoformat(),
+                        "sections": latest.sections_json,
+                        "lead": latest.lead,
+                        "confidence": latest.confidence,
+                        "skipped_fresh": True,
+                    }
+
         # ── Build prompt sections ─────────────────────────────────────────────
         entity_text = _formatter.format_entity_context(ctx)
         fundamentals_text = _formatter.format_fundamentals(ctx)
         # WHY citation offsets: instrument brief uses news + events only (no alerts).
         # news = [c1..cN], events = [c(N+1)..].
-        news_count_inst = len((ctx.news_articles or [])[:8]) if ctx else 0
+        # Brief-quality eval BUG 1: the events offset MUST equal the number of
+        # news citations the LLM actually sees, which is the deduped+capped
+        # ``_ordered_news`` list (NOT a raw ``[:8]`` slice). The old ``[:8]``
+        # diverged from format_news (deduped+get_news_limit()) whenever dedupe
+        # dropped an item or the list exceeded 8 — mis-numbering every event +
+        # the trailing KG definition/narrative citations.
+        news_count_inst = len(_formatter._ordered_news(ctx)) if ctx else 0
         news_text = _formatter.format_news(ctx, citation_offset=0)
         events_text = _formatter.format_events(ctx, citation_offset=news_count_inst)
         relationships_text = _formatter.format_relationships(ctx)
@@ -745,7 +854,9 @@ class GenerateBriefingUseCase:
 
         # ── LLM completion ────────────────────────────────────────────────────
         chunks: list[str] = []
-        async for chunk in self._llm_chain.stream(prompt, max_tokens=1500, temperature=0.1):
+        async for chunk in self._llm_chain.stream(
+            prompt, max_tokens=self._instrument_brief_max_tokens, temperature=0.1
+        ):
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 
@@ -781,6 +892,53 @@ class GenerateBriefingUseCase:
             sections_count=len(sections),
             confidence=confidence,
         )
+
+        # ── AI-brief-flag fix (2026-06-19): persist as a brief_type='entity' row ─
+        # WHY: the screener ``has_ai_brief`` column is materialised from S8's
+        # ``GetAiBriefFlagUseCase``, which reports True only when a ``user_briefs``
+        # row exists with ``brief_type='entity' AND entity_id=<instrument_id>``.
+        # Before this fix NOTHING wrote such a row, so the flag was structurally
+        # always false. We now fire the same best-effort persist the morning path
+        # uses, but with the entity fields set and the id keyed to the resolved
+        # market-data instrument_id (so the flag query matches).
+        # WHY fire-and-forget (asyncio.shield + swallow): persistence is a
+        # coverage/analytics write, never on the user's critical path. A DB blip
+        # must never turn a generated brief into a 503.
+        if persist and persist_entity_id is not None:
+            from common.ids import new_uuid7  # type: ignore[import-untyped]
+            from common.time import utc_now  # type: ignore[import-untyped]
+
+            _sections_json: list[dict] = [
+                s.to_dict() if hasattr(s, "to_dict") else (s if isinstance(s, dict) else {}) for s in sections
+            ]
+            _citations_json: list[dict] = [
+                c.to_dict() if hasattr(c, "to_dict") else (c if isinstance(c, dict) else {}) for c in citations
+            ]
+            _record = UserBriefRecord(
+                id=new_uuid7(),
+                user_id=_SYSTEM_OWNER_ID,
+                tenant_id=_SYSTEM_OWNER_ID,
+                brief_type="entity",  # ← the previously-missing piece
+                entity_id=persist_entity_id,  # ← keyed to the screener's instrument_id
+                generated_at=utc_now(),
+                headline=(lead or content or "")[:500],
+                lead=lead,
+                sections_json=_sections_json,
+                citations_json=_citations_json,
+                confidence=confidence,
+                source_version="v2",
+            )
+            _archive = self._brief_archive
+
+            async def _persist_entity_brief(record: UserBriefRecord) -> None:
+                try:
+                    await _archive.save(record)
+                except Exception as exc:
+                    log.warning("entity_brief_persist_failed", error=str(exc))  # type: ignore[no-any-return]
+
+            # RUF006: keep a reference so the GC does not collect the pending task.
+            _task = asyncio.ensure_future(asyncio.shield(_persist_entity_brief(_record)))
+            _task.add_done_callback(lambda _: None)
 
         return {
             "content": content,

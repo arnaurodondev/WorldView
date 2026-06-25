@@ -31,6 +31,19 @@ export interface SectionProps {
   activeCount: number;
   /** Whether the section is open by default — true for sections users hit most. */
   defaultOpen?: boolean;
+  /**
+   * Optional extra node rendered in the header row, right of the active-count
+   * badge (e.g. the Intelligence section's "data N h stale" pill).
+   *
+   * WHY a render slot (not a fixed prop): only one section uses it today, and a
+   * generic slot keeps Section free of feature-specific knowledge. It is purely
+   * additive — every existing caller that omits it renders unchanged.
+   *
+   * WHY rendered OUTSIDE the toggle <button>: a tooltip-bearing element nested
+   * inside a <button> produces invalid interactive-nesting HTML and would steal
+   * the header click. The pill sits in a sibling flex container instead.
+   */
+  headerExtra?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -38,6 +51,7 @@ export function Section({
   title,
   activeCount,
   defaultOpen = false,
+  headerExtra,
   children,
 }: SectionProps) {
   const [open, setOpen] = useState(defaultOpen);
@@ -45,17 +59,29 @@ export function Section({
 
   return (
     <div className="border-b border-border/60">
-      {/* Section header — clickable row */}
+      {/* Section header — clickable row.
+          WHY a wrapping flex row when headerExtra is present: the extra pill
+          (e.g. the stale-data indicator) must live OUTSIDE the toggle <button>
+          (invalid interactive nesting + click theft otherwise). The button keeps
+          flex-1 so it still fills the row and stays the full-width click target. */}
+      <div className="flex items-center pr-2">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={sectionId}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full h-7 items-center justify-between px-2 hover:bg-white/[0.03] transition-colors"
+        // ROUND-3 item 6: focus-visible ring (inset so it isn't clipped by the
+        // parent's overflow-hidden) — the section headers are the primary
+        // keyboard path through the filter panel.
+        className="flex flex-1 h-7 items-center justify-between px-2 hover:bg-white/[0.03] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <div className="flex items-center gap-2">
-          {/* WHY 10px ALL CAPS: matches DESIGN_SYSTEM.md §section labels exactly */}
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+          {/* WHY 10px ALL CAPS font-mono: ROUND-3 typography audit (item 2) —
+              this was the ONE section-label in the screener set in font-sans;
+              every sibling header (the "SCREENER" bar label, ScreenerHeader's
+              h1, preset chips) uses IBM Plex Mono per the filter bar's own
+              "section labels use IBM Plex Mono" rule. Aligned for consistency. */}
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
             {title}
           </span>
           {activeCount > 0 && (
@@ -78,13 +104,19 @@ export function Section({
           aria-hidden
         />
       </button>
+        {/* Optional header extra (e.g. stale-data pill) — sibling of the button
+            so it never sits inside an interactive element. */}
+        {headerExtra}
+      </div>
 
       {/* Section body — uses the §0.5 grid-rows trick for cheap collapse animation */}
       <div
         id={sectionId}
         role="region"
         aria-label={title}
-        className="grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out"
+        // ROUND-3 item 7: duration 200→150ms — collapse/expand capped at
+        // ≤150ms ease-out per the polish spec (matches the outer panel).
+        className="grid overflow-hidden transition-[grid-template-rows] duration-150 ease-out"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden min-h-0">

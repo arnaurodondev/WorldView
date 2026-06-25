@@ -117,13 +117,21 @@ async def screen_instruments_get(
     Convenience GET endpoint mirroring POST /fundamentals/screen with no
     filters. Useful for frontend sanity checks and the screener default state.
     """
-    results, total = await uc.execute(
-        [],
-        limit=limit,
-        offset=offset,
-        sort_by=None,
-        sort_order="asc",
-    )
+    try:
+        results, total = await uc.execute(
+            [],
+            limit=limit,
+            offset=offset,
+            sort_by=None,
+            sort_order="asc",
+        )
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if exc_name == "QueryCanceledError" or "QueryCanceled" in exc_name:
+            raise HTTPException(
+                status_code=504, detail="Screener query timed out — try narrowing your filters."
+            ) from None
+        raise
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(
@@ -189,6 +197,13 @@ async def screen_instruments(
         "next_dividend_date",
         # Wave L-4b: insider 90d sortable column.
         "insider_net_buy_90d",
+        # ── Wave L-5b: intelligence rollup sortable columns (PLAN-0089) ──────
+        "news_count_7d",
+        "llm_relevance_7d_max",
+        "display_relevance_7d_weighted",
+        "recent_contradiction_count",
+        "has_active_alert",
+        "has_ai_brief",
     }
     # Wave L-3: computed OHLCV-derived metrics are addressable as sort targets too.
     # They are stored as fundamental_metrics rows (period_type=SNAPSHOT,
@@ -206,6 +221,9 @@ async def screen_instruments(
         "return_ytd",
         "return_1y",
         "return_3y",
+        # L-3 ops follow-up: realised volatility + adjusted-close quality flag.
+        "volatility_30d",
+        "returns_adjustment_quality",
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
@@ -259,6 +277,17 @@ async def screen_instruments(
             # Wave L-4b: insider 90d range.
             insider_net_buy_90d_min=f.insider_net_buy_90d_min,
             insider_net_buy_90d_max=f.insider_net_buy_90d_max,
+            # ── Wave L-5b: intelligence rollup filters (PLAN-0089) ────────────
+            news_count_7d_min=f.news_count_7d_min,
+            news_count_7d_max=f.news_count_7d_max,
+            llm_relevance_7d_max_min=f.llm_relevance_7d_max_min,
+            llm_relevance_7d_max_max=f.llm_relevance_7d_max_max,
+            display_relevance_7d_weighted_min=f.display_relevance_7d_weighted_min,
+            display_relevance_7d_weighted_max=f.display_relevance_7d_weighted_max,
+            recent_contradiction_count_min=f.recent_contradiction_count_min,
+            recent_contradiction_count_max=f.recent_contradiction_count_max,
+            has_active_alert=f.has_active_alert,
+            has_ai_brief=f.has_ai_brief,
         )
         for f in body.filters
     ]
@@ -278,17 +307,25 @@ async def screen_instruments(
         "return_ytd",
         "return_1y",
         "return_3y",
+        # L-3 ops follow-up: realised volatility + adjusted-close quality flag.
+        "volatility_30d",
+        "returns_adjustment_quality",
     )
     existing_filter_metrics = {f.metric for f in screen_filters}
     for _field in computed_fields:
         min_attr = f"{_field}_min"
         max_attr = f"{_field}_max"
+        # ``getattr(..., None)`` default: not every computed field has a dedicated
+        # ``<field>_min/_max`` on ScreenFilterRequest (e.g. the return metrics are
+        # expanded purely for sort/projection, with no shorthand range input). The
+        # default keeps the loop from raising AttributeError on those fields while
+        # still picking up the explicit shorthand where it exists (volatility_30d).
         _min = next(
-            (getattr(f, min_attr) for f in body.filters if getattr(f, min_attr) is not None),
+            (getattr(f, min_attr, None) for f in body.filters if getattr(f, min_attr, None) is not None),
             None,
         )
         _max = next(
-            (getattr(f, max_attr) for f in body.filters if getattr(f, max_attr) is not None),
+            (getattr(f, max_attr, None) for f in body.filters if getattr(f, max_attr, None) is not None),
             None,
         )
         # Also inject a no-bound filter if sort_by references the metric so the
@@ -309,13 +346,25 @@ async def screen_instruments(
             )
         )
 
-    results, total = await uc.execute(
-        screen_filters,
-        limit=body.limit,
-        offset=body.offset,
-        sort_by=body.sort_by,
-        sort_order=body.sort_order,
-    )
+    # asyncpg.QueryCanceledError fires when the 8s SET LOCAL statement_timeout
+    # in query_screen is hit. Without this handler it surfaces as a 500 and
+    # corrupts the connection pool (MissingGreenlet during cleanup). Map it to
+    # 504 so callers can distinguish a timeout from a server error.
+    try:
+        results, total = await uc.execute(
+            screen_filters,
+            limit=body.limit,
+            offset=body.offset,
+            sort_by=body.sort_by,
+            sort_order=body.sort_order,
+        )
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if exc_name == "QueryCanceledError" or "QueryCanceled" in exc_name:
+            raise HTTPException(
+                status_code=504, detail="Screener query timed out — try narrowing your filters."
+            ) from None
+        raise
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(

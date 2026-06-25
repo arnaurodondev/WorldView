@@ -10,29 +10,40 @@
  * truth and lets us bump the refetchInterval to 15s (the cadence the plan
  * audit demands) in a single place.
  *
- * WHY 15s (was 30s): institutional traders expect their account header to
- * track the live tape. A 30s lag is visible — the user clicks "Buy" then
- * waits 30s for the rail to acknowledge the new position. 15s halves that
- * worst-case visible lag while keeping the underlying batch quote endpoint
- * well within its rate budget (a single instrument list per refresh).
+ * ── "ALL PORTFOLIOS" AGGREGATION (2026-06-10 PortfolioSwitcher fix) ────────
+ * The TopBar chip's selection semantics are now honoured end-to-end:
+ *   - activePortfolioId === <uuid>  → metrics scope to THAT portfolio only.
+ *   - activePortfolioId === null ("All Portfolios"):
+ *       * if a ROOT portfolio exists (kind === "root", PLAN-0046 aggregate),
+ *         use its holdings — the backend-supported aggregate.
+ *       * otherwise AGGREGATE CLIENT-SIDE: fan out one holdings query per
+ *         portfolio (shared ["holdings", id] cache keys, so per-portfolio
+ *         widgets on the same page reuse the responses) and sum the rail
+ *         values across all of them. The previous behaviour silently showed
+ *         portfolios[0] under the "All Portfolios" label — a lie for any
+ *         user with 2+ portfolios.
  *
- * Why TanStack Query (not setInterval): the hook composes three S9 queries
- * (portfolios → holdings → batch quotes) that already share their query keys
- * with PortfolioSummary and the dashboard. Reusing the same keys means
- * TanStack dedupes the HTTP requests across consumers — even with the layout
- * AND PortfolioSummary AND a future account widget all calling this hook,
- * we never fire more than one batch-quote refresh per 15s window.
+ * WHY 15s (was 30s): institutional traders expect their account header to
+ * track the live tape. 15s halves the worst-case visible lag while keeping
+ * the batch quote endpoint well within its rate budget.
+ *
+ * Why TanStack Query (not setInterval): the queries share their keys with
+ * PortfolioSummary and the dashboard, so TanStack dedupes the HTTP requests
+ * across consumers — we never fire more than one batch-quote refresh per
+ * 15s window no matter how many components call this hook.
  *
  * Returns nullable values during the loading window because the TopBar slots
  * stay visually empty (a hidden value) until real data is known — better than
  * showing "$0.00" which technically lies about the account state.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { qk } from "@/lib/query/keys";
-import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
+import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
+import type { HoldingsResponse } from "@/types/api";
 
 /** Snapshot of the user's portfolio at a moment in time, for the TopBar rail. */
 export interface PortfolioMetrics {
@@ -42,7 +53,7 @@ export interface PortfolioMetrics {
   dailyPnl: number | null;
   /** Total unrealised P&L (mark-to-market value − cost basis). null while loading. */
   unrealisedPnl: number | null;
-  /** True until at least the holdings query has resolved — useful for skeleton timing. */
+  /** True until at least the holdings queries have resolved — useful for skeleton timing. */
   isLoading: boolean;
 }
 
@@ -60,22 +71,18 @@ export const HOLDINGS_REFETCH_MS = 30_000;
  * usePortfolioMetrics — composite hook returning the live portfolio header.
  *
  * Composes:
- *   1. GET /v1/portfolios            — pick the first portfolio (single-portfolio MVP)
- *   2. GET /v1/portfolios/{id}/holdings
- *   3. POST /v1/quotes/batch         — refreshed every 15s during the trading day
- *
- * The hook is layer-thin: the original layout-level math (NAV / day P&L /
- * unrealised) was already correct, we just move it here so any caller gets
- * the same answers from the same query cache.
+ *   1. GET /v1/portfolios                 — full list (also resolves the scope)
+ *   2. GET /v1/portfolios/{id}/holdings   — one per portfolio in scope
+ *   3. POST /v1/quotes/batch              — refreshed every 15s, union of holdings
  */
 export function usePortfolioMetrics(): PortfolioMetrics {
   const { accessToken, isAuthenticated } = useAuth();
+  // The TopBar PortfolioSwitcher writes here; null = "All Portfolios".
+  const { activePortfolioId } = useActivePortfolio();
 
-  // QA A-F-001 (2026-05-21) — migrate from the bare ["portfolios"] key to
-  // the central qk.portfolios.list() factory. PortfolioSwitcher (W1.1
-  // F-002) already uses the factory; the bare key here was forking the
-  // cache, causing TWO /v1/portfolios fetches per authenticated page
-  // render instead of one.
+  // QA A-F-001 (2026-05-21) — central qk.portfolios.list() factory so the
+  // PortfolioSwitcher / PortfolioSummary / bundle hydrator share ONE cache
+  // entry (the bare ["portfolios"] key used to fork the cache → 2 fetches).
   const { data: portfoliosData } = useQuery({
     queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
@@ -83,20 +90,68 @@ export function usePortfolioMetrics(): PortfolioMetrics {
     staleTime: 60_000,
   });
 
-  // Resolve effective portfolio id via the shared helper so this hook and
-  // every other portfolio-scoped widget use ONE selection contract
-  // (active-portfolio context first, fallback to portfolios[0], guard
-  // against stale persisted ids that no longer exist).
-  const firstPortfolioId = useResolvedPortfolioId(portfoliosData);
+  // ── Resolve the SCOPE: which portfolio ids feed the rail ──────────────────
+  // Mirrors useResolvedPortfolioId's stale-id guard (selection must still
+  // exist in the list) but extends the null/"All" branch to a true aggregate.
+  const scopeIds: string[] = useMemo(() => {
+    const portfolios = portfoliosData ?? [];
+    if (portfolios.length === 0) return [];
+    // Explicit single-portfolio selection (and it still exists) → scope to it.
+    if (
+      activePortfolioId &&
+      portfolios.some((p) => p.portfolio_id === activePortfolioId)
+    ) {
+      return [activePortfolioId];
+    }
+    // "All Portfolios": prefer the backend ROOT aggregate when provisioned
+    // (PLAN-0046) — its holdings already represent the whole household.
+    const root = portfolios.find((p) => p.kind === "root");
+    if (root) return [root.portfolio_id];
+    // No ROOT row → client-side aggregate across every portfolio. For the
+    // common single-portfolio account this degenerates to exactly the old
+    // portfolios[0] behaviour (one holdings query, same cache key).
+    return portfolios.map((p) => p.portfolio_id);
+  }, [portfoliosData, activePortfolioId]);
 
-  const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["holdings", firstPortfolioId],
-    queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
-    enabled: !!accessToken && isAuthenticated && !!firstPortfolioId,
-    staleTime: HOLDINGS_REFETCH_MS,
+  // ── Holdings: one query per portfolio in scope ────────────────────────────
+  // WHY ["holdings", id] keys: identical to PortfolioSummary /
+  // WatchlistQuickViewWidget / HoldingsMoversWidget — when those widgets are
+  // mounted on the same page the fetches dedupe to zero extra requests.
+  const holdingsQueries = useQueries({
+    queries: scopeIds.map((id) => ({
+      queryKey: ["holdings", id],
+      queryFn: () => createGateway(accessToken).getHoldings(id),
+      enabled: !!accessToken && isAuthenticated,
+      staleTime: HOLDINGS_REFETCH_MS,
+    })),
   });
 
-  const navInstrumentIds = holdingsResp?.holdings.map((h) => h.instrument_id) ?? [];
+  // Merge holdings across the scope. A position held in two portfolios stays
+  // as two rows — the reduce below sums contributions, which is exactly the
+  // aggregate semantics ("household exposure"), and the quote lookup keys by
+  // instrument_id so both rows price off the same quote.
+  const mergedHoldings = useMemo(
+    () =>
+      holdingsQueries.flatMap(
+        (q) => (q.data as HoldingsResponse | undefined)?.holdings ?? [],
+      ),
+    [holdingsQueries],
+  );
+
+  const holdingsLoading =
+    scopeIds.length === 0 || holdingsQueries.some((q) => q.isLoading);
+  // "Resolved" = every holdings query in scope has an answer. Guards the
+  // null-vs-zero distinction below: we only declare "no holdings" (null rail)
+  // once we have actually heard back from every portfolio in scope.
+  const holdingsResolved =
+    scopeIds.length > 0 && holdingsQueries.every((q) => q.data !== undefined);
+
+  // Union of instrument ids across the scope (Set dedupes cross-portfolio
+  // overlap so the batch-quote payload stays minimal).
+  const navInstrumentIds = useMemo(
+    () => [...new Set(mergedHoldings.map((h) => h.instrument_id))],
+    [mergedHoldings],
+  );
 
   // The 15s window is a deliberate, plan-mandated cadence (T-A-1-02).
   const { data: navQuotes } = useQuery({
@@ -114,8 +169,10 @@ export function usePortfolioMetrics(): PortfolioMetrics {
   // ── Derive the rail values ──────────────────────────────────────────────────
   // WHY null when no holdings: the TopBar slot then renders empty — better than
   // "$0.00" which would lie ("nothing" vs "definitely zero").
-  const portfolioValue: number | null = holdingsResp?.holdings.length
-    ? holdingsResp.holdings.reduce((sum, h) => {
+  const hasHoldings = holdingsResolved && mergedHoldings.length > 0;
+
+  const portfolioValue: number | null = hasHoldings
+    ? mergedHoldings.reduce((sum, h) => {
         const quote = navQuotes?.quotes?.[h.instrument_id];
         // Fall back to average_cost when the quote hasn't arrived yet so the NAV
         // doesn't flicker to a partial sum during the 15s refetch tick.
@@ -126,8 +183,8 @@ export function usePortfolioMetrics(): PortfolioMetrics {
 
   // Day P&L = sum across holdings of (per-share daily change × qty).
   // Missing change => 0 contribution, so the value snaps to truth once quotes resolve.
-  const dailyPnl: number | null = holdingsResp?.holdings.length
-    ? holdingsResp.holdings.reduce((sum, h) => {
+  const dailyPnl: number | null = hasHoldings
+    ? mergedHoldings.reduce((sum, h) => {
         const q = navQuotes?.quotes?.[h.instrument_id];
         return sum + (q?.change ?? 0) * h.quantity;
       }, 0)
@@ -135,8 +192,10 @@ export function usePortfolioMetrics(): PortfolioMetrics {
 
   // Total P&L (Unrealised) = mark-to-market − cost basis.
   // Use h.average_cost (NOT q.price) for cost — cost basis is locked at trade time.
-  const totalCost: number =
-    holdingsResp?.holdings.reduce((s, h) => s + h.average_cost * h.quantity, 0) ?? 0;
+  const totalCost: number = mergedHoldings.reduce(
+    (s, h) => s + h.average_cost * h.quantity,
+    0,
+  );
   const unrealisedPnl: number | null =
     portfolioValue != null ? portfolioValue - totalCost : null;
 

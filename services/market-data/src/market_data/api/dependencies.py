@@ -39,6 +39,11 @@ if TYPE_CHECKING:
         GetPredictionMarketUseCase,
         ListPredictionMarketsUseCase,
     )
+    from market_data.application.use_cases.query_quote_stats import (
+        GetIntradayStatsUseCase,
+        GetMultiPeriodReturnsUseCase,
+        GetPriceLevelsUseCase,
+    )
     from market_data.application.use_cases.query_quotes import GetQuotesBatchUseCase, GetQuoteUseCase
     from market_data.application.use_cases.query_securities import GetSecurityUseCase, ListSecuritiesUseCase
     from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
@@ -202,6 +207,27 @@ def get_ohlcv_range_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetOH
     from market_data.application.use_cases.query_ohlcv import GetOHLCVRangeUseCase
 
     return GetOHLCVRangeUseCase(uow)
+
+
+# ── Quote-tab statistics deps (B-Q-2 / B-Q-3 / B-Q-4) ────────────────────────
+
+
+def get_intraday_stats_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetIntradayStatsUseCase:
+    from market_data.application.use_cases.query_quote_stats import GetIntradayStatsUseCase
+
+    return GetIntradayStatsUseCase(uow)
+
+
+def get_multi_period_returns_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetMultiPeriodReturnsUseCase:
+    from market_data.application.use_cases.query_quote_stats import GetMultiPeriodReturnsUseCase
+
+    return GetMultiPeriodReturnsUseCase(uow)
+
+
+def get_price_levels_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetPriceLevelsUseCase:
+    from market_data.application.use_cases.query_quote_stats import GetPriceLevelsUseCase
+
+    return GetPriceLevelsUseCase(uow)
 
 
 # ── PLAN-0066 Wave G: temporal endpoint deps ──────────────────────────────────

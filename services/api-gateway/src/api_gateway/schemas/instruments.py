@@ -76,5 +76,14 @@ class QuoteResponse(BaseModel):
     price: float
     change: float | None = None
     change_pct: float | None = None
+    # 2026-06-11 (backend-gaps wave 3): previous session close, derived in the
+    # gateway as price - change (exact inverse of S3's price_change formula).
+    # None = unknown (e.g. single-session instruments with no prior close).
+    previous_close: float | None = None
     timestamp: str | None = None
     volume: int | None = None
+    # B-Q bid/ask plumbing (2026-06-10): populated only when S3's PriceSnapshot
+    # was quote-sourced (fresh_quote/bulk_quote ≤15 min old); bar-derived prices
+    # carry no order-book context. Null = "no live quote", never 0.
+    bid: float | None = None
+    ask: float | None = None

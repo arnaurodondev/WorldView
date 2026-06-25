@@ -106,7 +106,7 @@ def _make_pipeline(
         side_effect=lambda name, inp, **kw: {"event": "tool_call", "data": json.dumps({"tool": name})}
     )
     pipeline.emitter.emit_tool_result = MagicMock(
-        side_effect=lambda name, status="ok", item_count=0: {
+        side_effect=lambda name, status="ok", item_count=0, **kw: {
             "event": "tool_result",
             "data": json.dumps({"tool": name, "status": status, "item_count": item_count}),
         }

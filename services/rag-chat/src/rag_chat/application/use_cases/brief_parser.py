@@ -46,6 +46,15 @@ _CODE_FENCE_RE = re.compile(r"^\s*```(?:markdown)?\s*\n?(.*?)\n?\s*```\s*$", re.
 # not supported.
 _CN_CITATION_RE = re.compile(r"\[c(\d+)\]")
 
+# Brief-quality eval BUG 5: the LLM occasionally emits a non-singular RANGE
+# marker like ``[c13-c20]`` ("Multiple GRAPH_CHANGE alerts"). These are
+# unresolvable (the resolver only maps a SINGLE [cN] to one citation) and would
+# render as a dangling token. We strip them defensively BEFORE the singular [cN]
+# resolver runs so they never reach the user. The dash class covers ASCII '-'
+# and the unicode en/em dashes the model sometimes uses (load-bearing here, so
+# the noqa keeps the literal dashes the matcher must see).
+_CN_RANGE_MARKER_RE = re.compile(r"\s*\[c\d+\s*[-–—]\s*c?\d+\]")  # noqa: RUF001
+
 # D-R4-002 (PLAN-0087, 2026-05-09): the LLM occasionally echoes the prompt's
 # Jinja variable names as bracketed tokens (e.g. ``[relationships_context]``,
 # ``[entity_context]``, ``[fundamentals_context]``, ``[news_context]``,
@@ -173,6 +182,8 @@ class BriefParser:
         paragraph = " ".join(summary_lines).strip()
         # Strip [cN]/[N#] citation markers — the collapsed view doesn't show
         # citation chips, so the markers would render as raw "[N1]" noise.
+        # Brief-quality eval BUG 5: strip range markers ([c13-c20]) first.
+        paragraph = _CN_RANGE_MARKER_RE.sub("", paragraph)
         paragraph = _CN_CITATION_RE.sub("", paragraph)
         paragraph = re.sub(r"\[N\d+\]", "", paragraph)
         paragraph = re.sub(r"\s{2,}", " ", paragraph).strip()
@@ -362,7 +373,9 @@ class BriefParser:
             return narrative, None
 
         # Strip citation markers — collapsed view doesn't render chips.
-        cleaned = _CN_CITATION_RE.sub("", chosen_bullet)
+        # Brief-quality eval BUG 5: strip range markers ([c13-c20]) first.
+        cleaned = _CN_RANGE_MARKER_RE.sub("", chosen_bullet)
+        cleaned = _CN_CITATION_RE.sub("", cleaned)
         cleaned = re.sub(r"\[N\d+\]", "", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip().lstrip("-* •").strip()
 
@@ -471,6 +484,8 @@ class BriefParser:
         # Strip [cN] citation markers from the summary — they're produced by the v3.0
         # prompt for inline citation tracking but are meaningless to end-users in the
         # collapsed card view (the resolved source chips appear in the expanded view).
+        # Brief-quality eval BUG 5: strip range markers ([c13-c20]) first.
+        summary_block = _CN_RANGE_MARKER_RE.sub("", summary_block)
         summary_block = _CN_CITATION_RE.sub("", summary_block).strip()
 
         # Defensive: if the summary block is empty after stripping, fall back to
@@ -611,8 +626,21 @@ class BriefParser:
 
         citations: list[BriefCitation] = []
 
-        # 1. News articles (up to 8, matches _format_news cap)
-        for a in (ctx.news_articles or [])[:8]:
+        # 1. News articles — MUST mirror format_news ordering exactly so [cN]
+        #    markers resolve to the right source (PRD-0030 P0). Previously this
+        #    used a raw ``[:8]`` slice while format_news deduped + capped at
+        #    get_news_limit() (12); the two diverged whenever a duplicate sat in
+        #    the first 8 raw items, mis-resolving citations. We now share
+        #    BriefContextFormatter._ordered_news (dedupe + get_news_limit()).
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            BriefContextFormatter as _Fmt,
+        )
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            get_alerts_limit,
+            get_events_limit,
+        )
+
+        for a in _Fmt._ordered_news(ctx):
             title_part = (a.title or "")[:240]
             summary_part = (a.summary or "")[:160] if hasattr(a, "summary") and a.summary else ""
             snippet = (f"{title_part} — {summary_part}" if summary_part else title_part)[:400]
@@ -627,8 +655,14 @@ class BriefParser:
                 )
             )
 
-        # 2. Recent events (up to 6, matches _format_events cap)
-        for ev in (ctx.recent_events or [])[:6]:
+        # 2. Recent events — MUST mirror format_events ordering+cap exactly so
+        #    [cN] markers resolve to the right source AND the KG definition/
+        #    narrative (appended after events) land at the FIRST free index
+        #    above every displayed event (brief-quality eval BUG 1). Previously
+        #    this used a hardcoded ``[:6]`` while format_events showed up to
+        #    get_events_limit() (10) events, so the KG offset collided with a
+        #    real event citation. Now both share get_events_limit().
+        for ev in (ctx.recent_events or [])[: get_events_limit()]:
             event_text = getattr(ev, "event_text", "") or ""
             event_type = getattr(ev, "event_type", "") or ""
             snippet = f"{event_type}: {event_text[:240]}"[:400]
@@ -642,8 +676,10 @@ class BriefParser:
                 )
             )
 
-        # 3. Active alerts (up to 5, matches _format_alerts cap) — morning brief only
-        for alert in (getattr(ctx, "active_alerts", None) or [])[:5]:
+        # 3. Active alerts — mirror format_alerts cap (get_alerts_limit()) so the
+        #    citation list length matches what the LLM sees (brief-quality eval
+        #    BUG 1). Morning brief only — instrument briefs feed no alerts.
+        for alert in (getattr(ctx, "active_alerts", None) or [])[: get_alerts_limit()]:
             severity = getattr(alert, "severity", "").upper()
             alert_type = getattr(alert, "alert_type", "")
             message = (getattr(alert, "payload", None) or {}).get("message", "")
@@ -655,6 +691,84 @@ class BriefParser:
                     url=None,
                     source_type="alert",
                     title=f"[{severity}] {alert_type}",
+                )
+            )
+
+        # 4. KG vector descriptions (instrument brief only) — definition then
+        #    narrative. These are appended AFTER news/events/alerts so the
+        #    existing news/event citation numbering is UNCHANGED; the KG items
+        #    simply take the NEXT [cN] indices. ``format_entity_context`` numbers
+        #    them with exactly the same offset (news+events+alerts) via the shared
+        #    ``kg_description_offset`` helper, so the markers the LLM emits resolve
+        #    here to these BriefCitation objects.
+        #
+        #    GUARD: we add these ONLY for a real instrument context — i.e. an
+        #    ``EntityGraphSnapshot`` with a non-empty string ``description`` and/or
+        #    a non-empty string ``entity_narrative``. Morning-brief contexts (and
+        #    MagicMock-shaped unit-test ctx where these are auto-Mocks, not str)
+        #    are excluded, so morning-brief numbering is byte-identical.
+        #
+        #    WHY source_type="event": BriefCitation.source_type is a closed Literal
+        #    {"article","event","alert"}; the KG descriptions are non-clickable
+        #    reference items (like events), so we reuse "event" rather than widen
+        #    the wire contract + frontend Literal. The human label in ``title``
+        #    ("Entity definition (KG)" / "Thematic context (KG)") carries the
+        #    provenance for the citation chip.
+        from rag_chat.application.models.briefing_context import (
+            EntityGraphSnapshot as _EntityGraphSnapshot,
+        )
+
+        eg = getattr(ctx, "entity_graph", None)
+        if isinstance(eg, _EntityGraphSnapshot):
+            description = eg.description
+            if isinstance(description, str) and description.strip():
+                snippet = f"{_Fmt._KG_DEFINITION_LABEL}: {description}"[:400]
+                citations.append(
+                    BriefCitation(
+                        document_id=f"kg-definition:{eg.entity_id}",
+                        snippet=snippet,
+                        url=None,
+                        source_type="event",
+                        title=_Fmt._KG_DEFINITION_LABEL,
+                    )
+                )
+        narrative = getattr(ctx, "entity_narrative", None)
+        if isinstance(narrative, str) and narrative.strip():
+            # Carry the staleness note INTO the snippet so the resolved chip
+            # also reads "not a recent catalyst" (mirrors the in-prompt caveat).
+            snippet = f"{_Fmt._KG_NARRATIVE_STALENESS}: {narrative}"[:400]
+            entity_id = getattr(eg, "entity_id", None) if eg is not None else None
+            citations.append(
+                BriefCitation(
+                    document_id=f"kg-narrative:{entity_id}",
+                    snippet=snippet,
+                    url=None,
+                    source_type="event",
+                    title=_Fmt._KG_NARRATIVE_LABEL,
+                )
+            )
+
+        # 5. Fundamentals snapshot (instrument brief only) — brief-quality eval
+        #    BUG 2. Appended AFTER the KG items so the Price & Fundamentals
+        #    bullets the LLM writes from the structured fundamentals block have a
+        #    RESOLVABLE [cN] marker to cite. Without this the model echoed the
+        #    literal ``[fundamentals_context]`` placeholder, which the parser
+        #    stripped — leaving those bullets uncited and the whole section
+        #    dropped (BriefBullet requires ≥1 citation). The index matches
+        #    ``fundamentals_citation_index`` / ``format_fundamentals`` exactly.
+        fundamentals = getattr(ctx, "fundamentals", None)
+        fdata = getattr(fundamentals, "data", None) if fundamentals is not None else None
+        if isinstance(fdata, dict) and fdata:
+            instrument_id = getattr(fundamentals, "instrument_id", None)
+            # Compact one-line provenance snippet from the curated fundamentals.
+            snippet = f"{_Fmt._FUNDAMENTALS_LABEL} for {instrument_id or 'entity'}"[:400]
+            citations.append(
+                BriefCitation(
+                    document_id=f"fundamentals:{instrument_id}",
+                    snippet=snippet,
+                    url=None,
+                    source_type="event",
+                    title=_Fmt._FUNDAMENTALS_LABEL,
                 )
             )
 
@@ -690,6 +804,29 @@ class BriefParser:
         # WHY list[tuple]: store (display_text, citations) so we can build BriefBullet
         # objects at flush time (after all bullets for the section are collected).
         current_bullets: list[tuple[str, list[BriefCitation]]] = []
+
+        # Brief-quality eval BUG 2: locate the fundamentals snapshot citation
+        # (appended last by materialize_brief_citations) so a Price & Fundamentals
+        # bullet that lacks a numeric [cN] (e.g. the LLM echoed the literal
+        # ``[fundamentals_context]`` token, which gets stripped) can still be
+        # backed by the structured-data citation instead of being dropped.
+        # Fundamentals are model-summarised structured data, not a news source,
+        # so a missing news-style citation must NOT cost the whole section.
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            BriefContextFormatter as _FmtLabels,
+        )
+
+        fundamentals_citation: BriefCitation | None = next(
+            (c for c in context_citations if c.title == _FmtLabels._FUNDAMENTALS_LABEL),
+            None,
+        )
+
+        def _is_fundamentals_section(title: str | None) -> bool:
+            """True for the 'Price & Fundamentals' (or 'Fundamentals') section heading."""
+            if not title:
+                return False
+            t = title.strip().lower()
+            return "fundamental" in t
 
         heading_re = re.compile(r"^\s{0,3}(#{2,3})\s+(.+?)\s*$")
         bold_only_re = re.compile(r"^\s*\*\*(.+?)\*\*\s*:?\s*$")
@@ -737,6 +874,10 @@ class BriefParser:
                 raw_text = m_bullet.group(1).strip()
                 if not raw_text:
                     continue
+                # Brief-quality eval BUG 5: drop unresolvable range markers
+                # ([c13-c20]) BEFORE singular-marker extraction so they neither
+                # resolve nor leak as dangling tokens.
+                raw_text = _CN_RANGE_MARKER_RE.sub("", raw_text).strip()
                 # Extract [cN] markers and resolve to BriefCitation objects
                 raw_indices = [int(m) - 1 for m in _CN_CITATION_RE.findall(raw_text)]
                 bullet_citations = [context_citations[idx] for idx in raw_indices if 0 <= idx < len(context_citations)]
@@ -745,6 +886,17 @@ class BriefParser:
                 # D-R4-002: defensively strip bracketed prompt-template variable
                 # names the LLM occasionally echoes back (e.g. [relationships_context]).
                 display_text = _TEMPLATE_PLACEHOLDER_RE.sub("", display_text).strip()
+                # Brief-quality eval BUG 2: a Price & Fundamentals bullet that
+                # lost its only marker (the stripped ``[fundamentals_context]``
+                # placeholder) is backed by the structured fundamentals citation
+                # rather than dropped — fundamentals are model-summarised
+                # structured data, not a citable news source.
+                if (
+                    not bullet_citations
+                    and fundamentals_citation is not None
+                    and _is_fundamentals_section(current_title)
+                ):
+                    bullet_citations = [fundamentals_citation]
                 if display_text:
                     current_bullets.append((display_text, bullet_citations))
         flush()
@@ -815,7 +967,11 @@ class BriefParser:
         lead_block = lead_block.strip()
         # D-R4-002: strip echoed Jinja variable names from the lead too.
         lead_block = _TEMPLATE_PLACEHOLDER_RE.sub("", lead_block).strip()
+        # Brief-quality eval BUG 5: strip unresolvable range markers ([c13-c20])
+        # from both blocks so they never leak as dangling tokens.
+        lead_block = _CN_RANGE_MARKER_RE.sub("", lead_block).strip()
         details_block = _TEMPLATE_PLACEHOLDER_RE.sub("", details_block)
+        details_block = _CN_RANGE_MARKER_RE.sub("", details_block)
 
         lead_citations: list[BriefCitation] = []
         lead_text: str | None = None

@@ -17,17 +17,33 @@
  */
 
 "use client";
-// WHY "use client": this component uses useQuery (TanStack Query hook) which
+// WHY "use client": this component uses useInfiniteQuery (TanStack Query hook) which
 // requires client-side rendering. Next.js App Router runs Server Components
 // by default — "use client" opts this subtree into the React client bundle.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle } from "lucide-react";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) — the copy key
+// carries the exact strings pinned by __tests__/earnings-calendar-widget.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { AlertTriangle, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { EarningsEvent } from "@/types/api";
+import type { EarningsCalendarResponse, EarningsEvent } from "@/types/api";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * PAGE_SIZE — earnings events per page.
+ *
+ * WHY 30 (user request 2026-06-12 "blocks of 30"): standardised with the other
+ * dashboard listing widgets so each "Load more" reveals a full block of 30
+ * events. The S9 earnings-calendar endpoint accepts `limit` 1–2000
+ * (docs/services/api-gateway.md), so 30 is well within the cap. (Was 10; before
+ * that `.slice(0, 8)` silently dropped further events.)
+ */
+const PAGE_SIZE = 30;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -41,26 +57,49 @@ import type { EarningsEvent } from "@/types/api";
 export function EarningsCalendarWidget() {
   const { accessToken } = useAuth();
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    // WHY "earnings-calendar" queryKey: TanStack Query uses this to cache and
-    // deduplicate fetches across components. Using the same key as the route
-    // name keeps it easy to invalidate when real-time earnings data arrives.
-    queryKey: ["earnings-calendar"],
-    queryFn: () => createGateway(accessToken).getEarningsCalendar(),
-    // WHY enabled guard: if the user is not authenticated yet, accessToken is
-    // undefined. We must not fire the request — S9 would return 401 which
-    // counts as an error state and would show the error banner on first render.
-    enabled: !!accessToken,
-    // WHY 10min staleTime: earnings dates are announced weeks in advance and
-    // only change when companies pre-announce. 10-minute cache is safe and
-    // matches EconomicCalendar's staleness budget.
-    staleTime: 10 * 60_000,
-    refetchInterval: 10 * 60_000,
-  });
+  // WHY useInfiniteQuery: drives a "Load more" button at the bottom of the
+  // list. The previous useQuery + .slice(0, 8) approach silently dropped any
+  // events beyond the 8th row even when the user wanted to see more
+  // (Dashboard Regression #3). Offset-based pagination lets the user page
+  // through every event in the 7-day window without re-fetching seen rows.
+  const { data, isLoading, isError, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      EarningsCalendarResponse,
+      Error,
+      InfiniteData<EarningsCalendarResponse>,
+      readonly unknown[],
+      number
+    >({
+      queryKey: ["earnings-calendar-infinite"],
+      queryFn: ({ pageParam }) =>
+        createGateway(accessToken).getEarningsCalendar({ limit: PAGE_SIZE, offset: pageParam }),
+      initialPageParam: 0,
+      getNextPageParam: (lastPage, allPages) => {
+        // WHY total-based check: backend always returns `total` (S7 earnings
+        // calendar endpoint). Stop paging once we've fetched all rows.
+        const loaded = allPages.reduce((n, p) => n + p.events.length, 0);
+        const total = lastPage.total;
+        if (total != null) return loaded < total ? loaded : undefined;
+        // Fallback: stop when a partial page is returned.
+        return lastPage.events.length === PAGE_SIZE ? loaded : undefined;
+      },
+      // WHY enabled guard: if the user is not authenticated yet, accessToken is
+      // undefined. We must not fire the request — S9 would return 401 which
+      // counts as an error state and would show the error banner on first render.
+      enabled: !!accessToken,
+      // WHY 10min staleTime: earnings dates are announced weeks in advance and
+      // only change when companies pre-announce. 10-minute cache is safe and
+      // matches EconomicCalendar's staleness budget.
+      staleTime: 10 * 60_000,
+      refetchInterval: 10 * 60_000,
+    });
 
-  // WHY ?? []: TanStack Query `data` is undefined while loading/error.
-  // Defaulting to [] ensures the empty-state branch renders cleanly.
-  const events = data?.events ?? [];
+  // WHY flatMap across pages: each page is a slice of the leaderboard; we
+  // render the concatenation as a single scrollable list.
+  const events = data?.pages.flatMap((p) => p.events) ?? [];
+  // WHY total fallback to events.length: when backend omits total we can still
+  // hide the "Load more" button once we hit the end.
+  const total = data?.pages[0]?.total ?? events.length;
 
   // WHY single outer wrapper for all render paths:
   // All states (loading, error, empty, data) live inside the same bg-background
@@ -70,7 +109,8 @@ export function EarningsCalendarWidget() {
     // WHY bg-background + h-full flex-col: consistent with EconomicCalendar —
     // all Row-4 dashboard panels use this outer container pattern so the gap-px
     // hairline separators look uniform.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Earnings calendar">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       {/* WHY uppercase tracking: terminal-style section label per DESIGN_SYSTEM.md §0.9 */}
@@ -84,18 +124,19 @@ export function EarningsCalendarWidget() {
       {/* WHY 4 skeleton rows: matches the visible row count when data is present.
           animationDelay staggers the pulse so it doesn't look like a single block. */}
       {isLoading && (
-        // SA-2 PLAN-0088 density: space-y-1.5 (was space-y-2) + py-1.5 (was py-2)
-        // — conservative 1-unit reduction in skeleton spacing to match the
-        // actual 22px row height when data renders. Readability is unchanged.
-        <div className="flex-1 space-y-1.5 px-3 py-1.5">
-          {Array.from({ length: 4 }).map((_, i) => (
+        // Round 3 (item 3): skeleton rows mirror the loaded EarningsRow
+        // geometry — h-[22px] divide-y at px-2 with the real column slots
+        // (date+time 72 · ticker 48 · title flex · EPS snippet) — replacing
+        // the previous taller spaced bars that re-laid-out on data arrival.
+        <div className="flex-1 divide-y divide-border/30">
+          {Array.from({ length: 6 }).map((_, i) => (
             // WHY key={i}: index-keyed skeleton rows are safe — they have no
             // identity beyond "placeholder slot N" and never reorder.
-            <div key={i} className="flex gap-2">
-              <Skeleton className="h-5 w-10" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-10" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-16" style={{ animationDelay: `${i * 50}ms` }} />
+            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
+              <Skeleton className="h-3 w-[72px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-12 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-[88px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
@@ -118,25 +159,52 @@ export function EarningsCalendarWidget() {
       {/* WHY two-line message: first line tells what is missing; second line tells
           WHY it is missing (no earnings in the default 7-day window). This avoids
           confusion where traders might think the widget is broken. */}
+      {/* Round 3 (item 4): shared EmptyState primitive — copy key
+          dashboard.no-earnings carries the EXACT strings pinned by
+          __tests__/earnings-calendar-widget.test.tsx ("No upcoming earnings
+          events scheduled." + "Earnings calendar data populates as company
+          reporting…"), so the migration changes layout, not copy (R19). */}
       {!isLoading && !isError && events.length === 0 && (
-        // WHY px-3 py-2: T-F-6-03 standardised inner content padding
-        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
-          <p className="text-[10px] text-muted-foreground">No upcoming earnings events scheduled.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Earnings calendar data populates as company reporting schedules are ingested.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-earnings"
+            icon={CalendarClock}
+          />
         </div>
       )}
 
       {/* ── Event rows ──────────────────────────────────────────────────── */}
+      {/* WHY no .slice(): we now render every event the server returned across
+          all loaded pages. The "Load more" button at the bottom drives the
+          next page fetch via useInfiniteQuery.fetchNextPage(). */}
       {!isLoading && !isError && events.length > 0 && (
         // WHY divide-y: hairline separators between rows without explicit border classes
         // on each row — same pattern as EconomicCalendar.
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => (
+          {events.map((event) => (
             <EarningsRow key={event.event_id} event={event} />
           ))}
+
+          {/* ── Load more button ──────────────────────────────────────── */}
+          {/* WHY render at the bottom of the scrollable list: discoverability —
+              user scrolls to the bottom and sees the action. Only rendered when
+              hasNextPage is true so the panel stays clean at end-of-list. */}
+          {hasNextPage && (
+            <div className="flex items-center justify-center border-t border-border/30 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                // Round 3 (item 5): hover bg + keyboard focus ring on the pager.
+                className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
+              >
+                {isFetchingNextPage
+                  ? "Loading…"
+                  : `Load more (${events.length}/${total})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

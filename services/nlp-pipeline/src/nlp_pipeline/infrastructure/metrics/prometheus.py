@@ -44,10 +44,88 @@ s6_extraction_entity_ref_hallucinated_total = prometheus_client.Counter(
     "(hallucination signal — refs invented by the model rather than copied from input)",
 )
 
+# Task #22 (BP-677): deep-extraction window-level transient failures (timeouts,
+# 429s, 5xx, connection errors — anything the extraction adapter raises as a
+# RetryableError). Previously these were silently swallowed and substituted with
+# an empty {events:[], claims:[], relations:[]} result, making a timed-out
+# extraction indistinguishable from a genuinely empty article (the ~16% timeout
+# rate was hidden as fake "0 events/0 claims/0 relations" completions). This
+# counter makes the per-window timeout rate observable in Prometheus.
+deep_extraction_window_timeout_total = prometheus_client.Counter(
+    "deep_extraction_window_timeout_total",
+    "Deep-extraction (Block 10) windows that failed with a transient/timeout error "
+    "(RetryableError) instead of returning a parsed result. A non-zero rate here "
+    "explains all-zero extraction completions that are degraded, not truly empty.",
+)
+
 nlp_sectioning_fallback_total = prometheus_client.Counter(
     "nlp_sectioning_fallback_total",
     "Times the synthetic (fallback) sectioner was used because source_type was unknown",
 )
+
+# ── Extraction-endpoint recovery (2026-06-14 entity-ref-matching mitigation) ──
+#
+# When the deep-extraction LLM emits a relation/event/claim whose endpoint ref
+# is NOT one of THIS document's NER mentions, the doc-local ``entity_id_by_ref``
+# lookup misses it and the whole row was previously dropped silently (the
+# F-CRIT-07 residual: the *opposite* endpoint of a Jackery-style relation was a
+# real entity GLiNER never minted a mention for). The layered fix tries two
+# precision-safe recoveries before any drop:
+#
+#   M1 — canonical-store fall-back (cheap, batched): resolve the missed ref
+#        against ``entity_aliases``/``canonical_entities`` (exact alias +
+#        ticker/ISIN, optional gated fuzzy) behind the 0.75 floor + 0.15 delta
+#        gate. A hit binds to a REAL canonical (entity_provisional=False).
+#   M2 — provisional minting (live first-touch): for refs still unresolved
+#        after M1 and not junk/common-noun, mint a provisional_entity_queue row
+#        so the relation PERSISTS with entity_provisional=True and is
+#        canonicalized later by the UnresolvedResolutionWorker → KG promotion.
+#
+# Labelled by ``outcome`` so the recall lift is observable per stage:
+#   m1_recovered    — bound to a canonical via the store fall-back
+#   m2_minted       — minted a provisional queue row for an unknown endpoint
+#   dropped_junk    — failed both M1 and M2 (empty/junk/common-noun ref)
+s6_extraction_endpoint_recovery_total = prometheus_client.Counter(
+    "s6_extraction_endpoint_recovery_total",
+    "Deep-extraction endpoint refs that missed the document-local entity_id_by_ref "
+    "lookup, by recovery outcome (M1 canonical-store fall-back / M2 provisional mint / "
+    "still-dropped junk). Quantifies the relation-drop mitigation lift.",
+    ["outcome"],  # m1_recovered | m2_minted | dropped_junk
+)
+
+# Fixed enum of allowed outcome label values — bounds cardinality.
+EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES: tuple[str, ...] = (
+    "m1_recovered",
+    "m2_minted",
+    "dropped_junk",
+)
+
+# Pre-initialise every outcome child to 0 at import time.  A *labelled*
+# prometheus Counter exports NO time series for a label value until that value
+# is first ``.inc()``-ed — so a fresh article-consumer process that has not yet
+# hit the recovery path exposes the HELP/TYPE header but ZERO
+# ``s6_extraction_endpoint_recovery_total{outcome=...}`` samples.  That made the
+# metric look "missing" on the /metrics endpoint (port 9100) and broke any
+# Grafana panel / alert that expects all three series to exist from boot.
+# Seeding each child here guarantees all three outcome series are scrape-able the
+# instant the module is imported by the consumer entrypoint — without changing
+# any observed value (they start at 0.0, exactly the true count).
+for _outcome in EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES:
+    s6_extraction_endpoint_recovery_total.labels(outcome=_outcome)
+
+
+def record_extraction_endpoint_recovery(outcome: str, count: int = 1) -> None:
+    """Increment the endpoint-recovery counter for *count* refs.
+
+    ``outcome`` MUST be one of ``EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES``;
+    anything else is coerced to ``"dropped_junk"`` to keep cardinality bounded.
+    Best-effort — never let a metrics error break the article pipeline.
+    """
+    if count <= 0:
+        return
+    label = outcome if outcome in EXTRACTION_ENDPOINT_RECOVERY_OUTCOMES else "dropped_junk"
+    s6_extraction_endpoint_recovery_total.labels(outcome=label).inc(count)
+
 
 # ── Backpressure gauge (polled from BackpressureController) ──────────────────
 
@@ -89,6 +167,32 @@ def record_pre_persist_tenant_substituted(block_source: str) -> None:
     """
     label = block_source if block_source in PRE_PERSIST_BLOCK_SOURCES else "unknown"
     nlp_pipeline_pre_persist_tenant_id_substituted_total.labels(block_source=label).inc()
+
+
+# ── Learned routing classifier shadow comparison (PLAN-0111 C-6) ─────────────
+#
+# Cross-tabulates the LIVE (static weighted-sum) tier against the learned
+# classifier's PROPOSED tier for every article processed while the learned
+# router runs in shadow mode. The {actual_tier, proposed_tier} matrix lets us
+# measure agreement / disagreement structure (e.g. "learned upgrades 30% of
+# LIGHT to MEDIUM") before any LIVE flip. Cardinality is bounded: both labels
+# take values from the fixed 4-tier RoutingTier enum (4x4 = 16 series max).
+nlp_pipeline_learned_router_shadow_total = prometheus_client.Counter(
+    "nlp_pipeline_learned_router_shadow_total",
+    "Learned-router SHADOW comparisons: live static tier vs proposed learned tier "
+    "(PLAN-0111 C-6). Labelled by the actual (deployed) tier and the proposed tier.",
+    ["actual_tier", "proposed_tier"],
+)
+
+
+def record_learned_router_shadow(actual_tier: str, proposed_tier: str) -> None:
+    """Increment the shadow comparison counter for one article.
+
+    Both labels come from the fixed RoutingTier enum, so cardinality is bounded.
+    Best-effort: callers invoke this inside a try/except so a metrics error can
+    never break the article pipeline.
+    """
+    nlp_pipeline_learned_router_shadow_total.labels(actual_tier=actual_tier, proposed_tier=proposed_tier).inc()
 
 
 s6_ollama_queue_depth_current = prometheus_client.Gauge(

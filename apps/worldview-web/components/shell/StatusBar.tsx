@@ -143,7 +143,7 @@ export function StatusBar() {
           hints.map((b) => (
             <span
               key={b.id}
-              className="flex items-center gap-1 text-[10px] text-muted-foreground/50 whitespace-nowrap"
+              className="flex items-center gap-1 text-[10px] text-muted-foreground-dim whitespace-nowrap"
               // The full label (e.g., "Go to Dashboard") is on the kbd's title
               // for tooltip discovery; the visible label is short.
               title={b.label}
@@ -161,7 +161,7 @@ export function StatusBar() {
       <div className="flex items-center gap-3 shrink-0">
         {/* Active page breadcrumb — shows which section of the terminal is active */}
         {activeLabel && (
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/50 font-mono">
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground-dim font-mono">
             {activeLabel}
           </span>
         )}
@@ -178,7 +178,7 @@ export function StatusBar() {
             }`}
             aria-hidden
           />
-          <span className="text-[10px] text-muted-foreground/50 font-mono">
+          <span className="text-[10px] text-muted-foreground-dim font-mono">
             {isConnected ? "WS Live" : "WS Offline"}
           </span>
         </div>
@@ -199,7 +199,7 @@ export function StatusBar() {
             }`}
             aria-hidden
           />
-          <span className="text-[10px] text-muted-foreground/50 font-mono">
+          <span className="text-[10px] text-muted-foreground-dim font-mono">
             {marketClosed ? "MARKET CLOSED" : "Quotes Live"}
           </span>
         </div>

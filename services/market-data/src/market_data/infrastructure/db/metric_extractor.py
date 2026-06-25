@@ -309,6 +309,49 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
             "net_working_capital",
             ("netWorkingCapital", "net_working_capital", "NetWorkingCapital"),
         ),
+        # WHY: The following 10 metrics were present in every EODHD Balance_Sheet
+        # payload but silently dropped (logged as unmapped on every ingest cycle).
+        # They are high-value screener / quality inputs:
+        #   goodwill + intangible_assets    — acquisition-heavy balance sheet detection
+        #   net_tangible_assets             — tangible book value
+        #   short/long_term_investments     — liquidity composition beyond cash
+        #   treasury_stock                  — buyback accumulation
+        #   additional_paid_in_capital,
+        #   common_stock                    — equity structure decomposition
+        #   accumulated_depreciation        — PP&E age proxy
+        #   capital_lease_obligations       — lease-adjusted leverage
+        # No schema change needed: fundamental_metrics is a generic key-value store.
+        _MetricDef("goodwill", ("goodWill", "goodwill", "GoodWill")),
+        _MetricDef(
+            "intangible_assets",
+            ("intangibleAssets", "intangible_assets", "IntangibleAssets"),
+        ),
+        _MetricDef(
+            "net_tangible_assets",
+            ("netTangibleAssets", "net_tangible_assets", "NetTangibleAssets"),
+        ),
+        _MetricDef(
+            "short_term_investments",
+            ("shortTermInvestments", "short_term_investments", "ShortTermInvestments"),
+        ),
+        _MetricDef(
+            "long_term_investments",
+            ("longTermInvestments", "long_term_investments", "LongTermInvestments"),
+        ),
+        _MetricDef("treasury_stock", ("treasuryStock", "treasury_stock", "TreasuryStock")),
+        _MetricDef(
+            "additional_paid_in_capital",
+            ("additionalPaidInCapital", "additional_paid_in_capital", "AdditionalPaidInCapital"),
+        ),
+        _MetricDef("common_stock", ("commonStock", "common_stock", "CommonStock")),
+        _MetricDef(
+            "accumulated_depreciation",
+            ("accumulatedDepreciation", "accumulated_depreciation", "AccumulatedDepreciation"),
+        ),
+        _MetricDef(
+            "capital_lease_obligations",
+            ("capitalLeaseObligations", "capital_lease_obligations", "CapitalLeaseObligations"),
+        ),
     ],
     FundamentalsSection.CASH_FLOW: [
         _MetricDef(
@@ -345,11 +388,84 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
         _MetricDef("dividends_paid", ("dividendsPaid", "dividends_paid", "DividendsPaid")),
         _MetricDef("net_borrowings", ("netBorrowings", "net_borrowings", "NetBorrowings")),
         _MetricDef("depreciation", ("depreciation", "Depreciation")),
+        # WHY: The following 6 metrics were silently dropped on every EODHD ingest
+        # cycle despite being present in every fundamentals payload.  They are
+        # high-value inputs for the fundamentals screener and FCF quality analysis:
+        #   stock_based_compensation  — non-cash SBC add-back in OCF reconciliation
+        #   end_period_cash_flow      — end-of-period cash balance (cash waterfall)
+        #   begin_period_cash_flow    — beginning-of-period cash balance (delta check)
+        #   change_in_working_capital — working capital change in OCF (quality signal)
+        #   sale_purchase_of_stock    — net share buybacks / issuances (capital return)
+        #   net_income_cash_flow      — net income OCF reconciliation starting line
+        # No schema change needed: fundamental_metrics is a generic key-value store.
+        # Historical data can be backfilled from cash_flow_statements.data (83 434 rows
+        # present as of 2026-06-06) by re-running the extractor against that JSONB.
+        _MetricDef("stock_based_compensation", ("stockBasedCompensation",)),
+        _MetricDef("end_period_cash_flow", ("endPeriodCashFlow",)),
+        _MetricDef("begin_period_cash_flow", ("beginPeriodCashFlow",)),
+        _MetricDef("change_in_working_capital", ("changeInWorkingCapital",)),
+        _MetricDef("sale_purchase_of_stock", ("salePurchaseOfStock",)),
+        # EODHD field name is changeToNetincome (lowercase 'i') — not a typo.
+        _MetricDef("net_income_cash_flow", ("changeToNetincome",)),
     ],
 }
 
 # Sections in the catalog (for fast membership check)
 _CATALOGUED_SECTIONS: frozenset[FundamentalsSection] = frozenset(_METRIC_CATALOG.keys())
+
+# WHY: EODHD Cash_Flow rows always include these three structural / metadata fields
+# alongside the numeric metrics.  They are not metrics and should never appear in
+# the unmapped_keys warning — excluding them prevents inflating the warning count
+# by 3 (21 → 24) on every ingest cycle and eliminates false noise in monitoring.
+_CASH_FLOW_ADMIN_KEYS: frozenset[str] = frozenset({"date", "filing_date", "currency_symbol"})
+
+# WHY: Deliberately-unmapped EODHD keys, per section.  These fields ARE present in
+# the payloads but were reviewed (2026-06-11) and intentionally NOT promoted to
+# metrics — they are either redundant aggregates of fields we already extract
+# (e.g. liabilitiesAndStockholdersEquity == totalAssets by accounting identity,
+# retainedEarningsTotalEquity / commonStockTotalEquity duplicate the non-suffixed
+# fields, propertyPlantEquipment duplicates propertyPlantAndEquipmentNet/Gross),
+# rare-population minutiae (warrants, negativeGoodwill, earningAssets), or
+# residual "other" buckets with no screener value.  Excluding them from the
+# unmapped_keys warning means the warning only fires when EODHD introduces a
+# genuinely NEW field that needs a mapping decision — restoring its signal value.
+_IGNORED_KEYS: dict[FundamentalsSection, frozenset[str]] = {
+    FundamentalsSection.BALANCE_SHEET: frozenset(
+        {
+            "accumulatedAmortization",
+            "accumulatedOtherComprehensiveIncome",
+            "capitalStock",
+            "capitalSurpluse",  # EODHD's spelling — not a typo on our side
+            "commonStockTotalEquity",
+            "currentDeferredRevenue",
+            "deferredLongTermAssetCharges",
+            "deferredLongTermLiab",
+            "earningAssets",
+            "liabilitiesAndStockholdersEquity",
+            "longTermDebtTotal",
+            "negativeGoodwill",
+            "netInvestedCapital",
+            "nonCurrentAssetsTotal",
+            "nonCurrentLiabilitiesOther",
+            "nonCurrentLiabilitiesTotal",
+            "nonCurrrentAssetsOther",  # EODHD's triple-r spelling — not a typo on our side
+            "noncontrollingInterestInConsolidatedEntity",
+            "otherAssets",
+            "otherCurrentAssets",
+            "otherCurrentLiab",
+            "otherLiab",
+            "otherStockholderEquity",
+            "preferredStockRedeemable",
+            "preferredStockTotalEquity",
+            "propertyPlantAndEquipmentGross",
+            "propertyPlantEquipment",
+            "retainedEarningsTotalEquity",
+            "temporaryEquityRedeemableNoncontrollingInterests",
+            "totalPermanentEquity",
+            "warrants",
+        }
+    ),
+}
 
 
 def extract_metrics(
@@ -408,11 +524,18 @@ def extract_metrics(
                 period_type=period_type,
                 section=section_value,
                 ingested_at=ingested_at,
-            )
+            ),
         )
 
     if data:
-        unmapped_keys = sorted([k for k in data if k not in matched_keys])
+        # Exclude structural / metadata keys that are never metrics (date,
+        # filing_date, currency_symbol) AND the per-section deliberately-ignored
+        # keys (see _IGNORED_KEYS).  After both exclusions the warning fires only
+        # for genuinely NEW EODHD fields that need a mapping decision.
+        ignored_keys = _IGNORED_KEYS.get(section, frozenset())
+        unmapped_keys = sorted(
+            k for k in data if k not in matched_keys and k not in _CASH_FLOW_ADMIN_KEYS and k not in ignored_keys
+        )
         if unmapped_keys:
             payload = {
                 "section": section_value,

@@ -63,7 +63,7 @@ export function BriefRating({ token, briefId }: BriefRatingProps) {
     <div className="flex items-center gap-1" data-testid="brief-rating">
       {/* WHY small label: lets the trader know what the stars represent without
           dedicating a lot of visual weight to the rating UI. */}
-      <span className="text-[9px] text-muted-foreground/60 mr-1">Rate brief:</span>
+      <span className="text-[9px] text-muted-foreground-dim mr-1">Rate brief:</span>
 
       {STARS.map((s) => (
         <button
@@ -93,7 +93,7 @@ export function BriefRating({ token, briefId }: BriefRatingProps) {
       {/* WHY confirmation message: after rating, replace the stars with a brief
           confirmation so the trader knows their rating was received. */}
       {selected !== null && (
-        <span className="ml-1 text-[9px] text-muted-foreground/60">Thanks!</span>
+        <span className="ml-1 text-[9px] text-muted-foreground-dim">Thanks!</span>
       )}
     </div>
   );

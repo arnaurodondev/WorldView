@@ -31,12 +31,19 @@
 // the bearer token, useState for the period selector and the open popover.
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query/keys";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// Round 3 (item 4): panel-level empty/error states use the shared EmptyState
+// primitive (§15.12) with named dashboard.* copy keys.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): error state gains a Retry action wired to refetch() —
+// Round 3 named the state but left the trader with no recovery path.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+import { LayoutGrid } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import type { HeatmapSector, Mover } from "@/types/api";
@@ -63,45 +70,71 @@ type SectorPeriod = "1D" | "1W" | "1M";
 const MIN_WEIGHT = 0.05;
 
 /**
- * TILE_HEIGHT_PX — fixed tile height. Locked at 56px so wrap rows are
- * predictable and the widget fits within Row 2's 130px allowance even when
- * 11 sectors wrap into 2 rows.
+ * TILE_HEIGHT_PX — fixed tile height.
+ *
+ * W4 COMPACT (user report 2026-06-12 — "row 1 has too much vertical space"):
+ * shrunk 40px → 26px. The whole Sector widget previously STRETCHED to fill the
+ * row's `max-content` height (it was the tallest cell, so it dragged the entire
+ * macro band tall). By pinning the tile height small AND laying the 13 tiles
+ * out as a FIXED 2-row grid (7 + 6) we make this widget short on purpose, which
+ * in turn lets the dashboard row collapse to a compact height. 26px still fits
+ * the 2-line label + % at 10px/9px without clipping (tested in jsdom layout).
  */
-const TILE_HEIGHT_PX = 56;
+const TILE_HEIGHT_PX = 26;
 
 /**
- * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
- * so wrap rows never overflow due to gap accumulation.
- *
- * WHY 2 (was 4): at 11 sectors with 4px gaps, sub-pixel rounding pushed the
- * last column past the widget border at 1280px viewports (B-2-03). 2px gives
- * the same visual "card margin" feel without overflow risk.
+ * ROW_1_TILES / ROW_2_TILES — fixed split of the 13 GICS sectors into two
+ * rows (W4 task 2a). The user's "13 sectors" label maps to a 7-over-6 grid:
+ * the first 7 (largest-magnitude after the API's default ordering) sit on top,
+ * the remaining 6 below. We use an explicit two-row CSS grid (NOT auto-fit
+ * wrapping) so the layout is deterministic at every width — auto-fit would
+ * reflow to 1/2/3 rows depending on the cell width and re-introduce the
+ * height variance we're trying to kill.
  */
-const GAP_PX = 2;
+const ROW_1_TILES = 7;
+const ROW_2_TILES = 6;
+
+// NOTE (Round 3): the old GAP_PX flex-basis constant was removed — both the
+// loaded treemap (FR-1.7) and the loading skeleton now use the same CSS-grid
+// container (`gap-0.5` = 2px), so no manual gap subtraction is needed.
 
 /**
- * colorClassFor — map an absolute % change to a Tailwind opacity-step utility
- * class. Steps are chosen so a routine ±0.3% change is barely tinted, while
- * ±4%+ moves saturate to a strong fill — matching the "intensity ≈ magnitude"
- * intuition users expect from heat tiles.
+ * colorClassFor — map a % change to a Tailwind opacity-step utility class
+ * using a PROPORTIONAL scale derived from the current payload's data range.
  *
- * Steps (mirrors PRD-0031 HeatCell 7-step scale, simplified):
- *   |x| < 0.5 → /10
- *   |x| < 1.0 → /20
- *   |x| < 2.0 → /30
- *   |x| ≥ 2.0 → /40   (also catches |x| ≥ 4 — saturated tier)
+ * WHY proportional (Round 1 foundation fix, replaces the fixed ±0.5/1/2%
+ * thresholds): on a quiet session where every sector moves <0.5%, the fixed
+ * scale rendered ALL tiles at the faintest /10 tint — the heatmap conveyed
+ * zero relative information. Conversely on a violent day (±4% everywhere)
+ * every tile saturated at /40. Normalising each tile's magnitude against the
+ * session's MAX |change| guarantees the strongest sector always renders at
+ * full intensity and the rest scale relative to it — "intensity ≈ relative
+ * magnitude *today*", which is what sector-rotation scanning actually needs.
  *
- * Why explicit class strings (not template literals): Tailwind's JIT scans
- * source for full class names. `bg-positive/${n}` would not be detected at
- * build time and the class would be purged from the final CSS bundle.
+ * Steps (ratio = |x| / maxAbs of the current payload):
+ *   ratio < 0.25 → /10
+ *   ratio < 0.50 → /20
+ *   ratio < 0.75 → /30
+ *   ratio ≥ 0.75 → /40   (saturated tier — the day's leaders)
+ *
+ * WHY still 4 discrete steps (not a continuous opacity style): Tailwind's JIT
+ * scans source for full class names. `bg-positive/${n}` would not be detected
+ * at build time and the class would be purged from the final CSS bundle —
+ * the explicit string literals below are load-bearing.
+ *
+ * @param changePct  the sector's % change (null = no data → muted tile)
+ * @param maxAbs     max |change_pct| across the CURRENT payload (≤0 treated
+ *                   as "no range" → faintest tint, avoids divide-by-zero)
  */
-function colorClassFor(changePct: number | null): string {
+function colorClassFor(changePct: number | null, maxAbs: number): string {
   if (changePct === null) return "bg-muted/30";
-  const m = Math.abs(changePct);
   const positive = changePct >= 0;
-  if (m < 0.5) return positive ? "bg-positive/10" : "bg-negative/10";
-  if (m < 1.0) return positive ? "bg-positive/20" : "bg-negative/20";
-  if (m < 2.0) return positive ? "bg-positive/30" : "bg-negative/30";
+  // WHY guard maxAbs <= 0: an all-zero payload (every sector flat) has no
+  // range to normalise against — everything gets the faintest tint.
+  const ratio = maxAbs > 0 ? Math.abs(changePct) / maxAbs : 0;
+  if (ratio < 0.25) return positive ? "bg-positive/10" : "bg-negative/10";
+  if (ratio < 0.5) return positive ? "bg-positive/20" : "bg-negative/20";
+  if (ratio < 0.75) return positive ? "bg-positive/30" : "bg-negative/30";
   return positive ? "bg-positive/40" : "bg-negative/40";
 }
 
@@ -127,6 +160,10 @@ export function SectorHeatmapWidget() {
     data: heatmap,
     isLoading: isHeatmapLoading,
     isError: isHeatmapError,
+    // Round 4 (item 1): refetch + isFetching drive the error-state Retry
+    // button (label flips to "Retrying…" while the re-fetch is in flight).
+    refetch: refetchHeatmap,
+    isFetching: isHeatmapFetching,
   } = useQuery({
     // WHY period in queryKey: TanStack identifies cached entries by key. Adding
     // `period` ensures each period switch hits a fresh fetch (or a fresh cache
@@ -165,30 +202,34 @@ export function SectorHeatmapWidget() {
   const movers: Mover[] = useMemo(() => moversData?.movers ?? [], [moversData]);
 
   // ── Per-mover company-overview lookups (sector join) ───────────────────
-  // WHY useQueries (not one query per row in a child): hooks cannot be called
-  // conditionally inside .map(). useQueries fans out N parallel queries and
-  // returns an aligned result array.
-  // WHY staleTime 600_000 (10min): a company's GICS sector changes very
-  // rarely — caching aggressively avoids re-fetching the same overview
-  // payload every time the popover re-renders.
-  const overviewQueries = useQueries({
-    queries: movers.map((m) => ({
-      queryKey: ["company-overview-sector", m.instrument_id],
-      queryFn: () => createGateway(accessToken).getCompanyOverview(m.instrument_id),
-      enabled: !!accessToken && !!m.instrument_id,
-      staleTime: 600_000,
-    })),
+  // FIX F-1 (2026-06-05): previously this widget spawned N parallel useQueries
+  // — one /v1/companies/{id}/overview per mover. With 50 movers in the
+  // popover that's 50 sequential gateway round-trips just to read GICS sector.
+  // The batch endpoint runs the legs in parallel server-side; the FE makes
+  // exactly one HTTP request and gets back a `{ <uuid>: CompanyOverview | null }`
+  // map.
+  // WHY staleTime 10min: sectors change rarely; aggressive caching kills
+  // re-fetches on every popover open.
+  const moverIds = useMemo(
+    () => movers.map((m) => m.instrument_id).filter(Boolean),
+    [movers],
+  );
+  const { data: overviewsMap } = useQuery({
+    queryKey: qk.instruments.overviewsBatch(moverIds),
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverviewsBatch(moverIds),
+    enabled: !!accessToken && moverIds.length > 0,
+    staleTime: 600_000,
   });
+  const overviewByid = useMemo(() => overviewsMap ?? {}, [overviewsMap]);
 
   // ── Group movers by sector for popover display ──────────────────────────
   // WHY useMemo: the grouping iterates N movers × map look-ups; recomputing
   // on every render (e.g. on each popover open/close) would be wasteful.
-  // The memo cache invalidates only when `movers` or the overview list
-  // changes — which is exactly what we want.
   const moversBySector = useMemo(() => {
     const map = new Map<string, Mover[]>();
-    movers.forEach((mover, i) => {
-      const overview = overviewQueries[i]?.data;
+    movers.forEach((mover) => {
+      const overview = overviewByid[mover.instrument_id];
       const sector = overview?.instrument?.gics_sector;
       if (!sector) return;
       const list = map.get(sector) ?? [];
@@ -196,7 +237,7 @@ export function SectorHeatmapWidget() {
       map.set(sector, list);
     });
     return map;
-  }, [movers, overviewQueries]);
+  }, [movers, overviewByid]);
 
   // ── Compute weight + width for each sector ──────────────────────────────
   // WHY useMemo: the weight calc only changes when `heatmap.sectors` does;
@@ -218,13 +259,33 @@ export function SectorHeatmapWidget() {
     }));
   }, [heatmap]);
 
+  // ── Data range for the proportional color scale ──────────────────────────
+  // Round 1 foundation fix: tile color intensity is normalised against the
+  // CURRENT payload's max |change| (see colorClassFor). Computed once per
+  // payload here (not per tile) so all tiles share the same reference range.
+  // WHY useMemo: a scan over ≤13 sectors is cheap, but recomputing on every
+  // popover open/close re-render is pointless churn.
+  const maxAbsChange = useMemo(() => {
+    const sectors = heatmap?.sectors ?? [];
+    return sectors.reduce(
+      (acc, s) => Math.max(acc, Math.abs(s.change_pct ?? 0)),
+      0,
+    );
+  }, [heatmap]);
+
   return (
     // WHY flex flex-col h-full: fills the grid cell so the wrap container can
     // expand to multiple tile rows when many sectors are present.
     // WHY overflow-hidden: any sub-pixel rounding from `flex-basis: calc(...)`
     // on the inner tiles is clipped at the widget border instead of bleeding
     // into adjacent grid cells (B-2-03 fix).
-    <div className="flex h-full flex-col overflow-hidden bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark — see
+    // MarketSnapshotWidget for the SR-navigation rationale.
+    <div
+      className="flex h-full flex-col overflow-hidden bg-background"
+      role="region"
+      aria-label="Sector performance"
+    >
 
       {/* ── Section header (matches §0.9 panel-header pattern) ──────────── */}
       {/* WHY h-5 (20px): Row 2 cap is 130px. Saving 4px vs h-6 keeps two tile
@@ -236,7 +297,7 @@ export function SectorHeatmapWidget() {
         <div className="flex items-center gap-2">
           {/* Sector count — font-mono so digits align if it ever changes. */}
           {heatmap?.sectors && (
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground/60">
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground-dim">
               {heatmap.sectors.length} sectors
             </span>
           )}
@@ -246,11 +307,16 @@ export function SectorHeatmapWidget() {
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
+                // Round 3 (item 5): hover gets a bg (not just text-color) per
+                // the bg-muted hover convention, and keyboard focus shows the
+                // ring token. text-[9px] is allowed here — period toggles are
+                // chrome labels, not financial data values (§15.9).
                 className={cn(
                   "px-1.5 font-mono text-[9px] uppercase transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   period === p
                     ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
                 aria-pressed={period === p}
               >
@@ -261,23 +327,34 @@ export function SectorHeatmapWidget() {
         </div>
       </div>
 
-      {/* ── Loading state — shimmer of 8 grey tiles in a flex row ────────── */}
+      {/* ── Loading state — shape-matched grid of grey tiles ─────────────── */}
+      {/* Round 3 (item 3): the skeleton now uses the SAME CSS-grid container
+          (auto-fit / minmax(48px, 1fr) / gap-0.5) as the loaded treemap — the
+          previous flex-wrap + flexBasis approximation wrapped differently at
+          some widths, producing a visible re-layout when tiles arrived.
+          11 placeholders ≈ the typical GICS sector count (matches 2 rows). */}
       {isHeatmapLoading && (
-        // Match the loaded-state padding/gap so there is no visible jump.
-        <div className="flex flex-1 flex-wrap gap-0.5 px-0.5 py-0">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton
-              key={i}
-              // Equal-width skeletons (1/8 ≈ 12.5%) approximate the loaded
-              // layout closely enough that there is no visible jump when
-              // real tiles render.
-              className="min-h-[56px]"
-              style={{
-                height: `${TILE_HEIGHT_PX}px`,
-                flexBasis: `calc(${100 / 8}% - ${GAP_PX}px)`,
-                animationDelay: `${i * 40}ms`,
-              }}
-            />
+        // W4 task 2a: skeleton mirrors the new FIXED 7+6 two-row grid so the
+        // panel height is identical before and after the tiles arrive (no
+        // data-arrival re-layout). Two rows of fixed-height (26px) placeholder
+        // tiles — 7 then 6 — exactly matching the loaded layout below.
+        <div className="flex shrink-0 flex-col gap-0.5 px-0.5 py-0.5">
+          {[ROW_1_TILES, ROW_2_TILES].map((count, rowIdx) => (
+            <div
+              key={rowIdx}
+              className="grid gap-0.5"
+              style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
+            >
+              {Array.from({ length: count }).map((_, i) => (
+                <Skeleton
+                  key={i}
+                  style={{
+                    height: `${TILE_HEIGHT_PX}px`,
+                    animationDelay: `${(rowIdx * ROW_1_TILES + i) * 40}ms`,
+                  }}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -285,45 +362,90 @@ export function SectorHeatmapWidget() {
       {/* ── Error state ──────────────────────────────────────────────────── */}
       {/* WHY separate from "no data": API/network failure ≠ empty result. A
           trader needs to triage these differently — a feed outage requires
-          ops attention; an empty list might be expected pre-market. */}
+          ops attention; an empty list might be expected pre-market.
+          Round 3 (item 4): shared EmptyState primitive + named copy key. */}
+      {/* Round 4 (item 1): WidgetErrorState adds the Retry → refetch() wiring
+          the Round-3 EmptyState lacked. Same copy key + icon, so the named
+          state (and any text-matching tests) are unchanged. */}
       {isHeatmapError && (
-        <div className="flex-1 px-2">
-          <InlineEmptyState message="Sector data failed to load — check connection" />
-        </div>
+        <WidgetErrorState
+          copyKey="dashboard.sector-error"
+          icon={LayoutGrid}
+          onRetry={() => void refetchHeatmap()}
+          retrying={isHeatmapFetching}
+        />
       )}
 
       {/* ── Empty state ──────────────────────────────────────────────────── */}
       {!isHeatmapLoading && !isHeatmapError && sectorTiles.length === 0 && (
-        <div className="flex-1 px-2">
-          <InlineEmptyState message="No sector data available" />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-sector-data"
+            icon={LayoutGrid}
+          />
         </div>
       )}
 
-      {/* ── Treemap tile container ───────────────────────────────────────── */}
+      {/* ── Treemap tile container — FIXED 2-row (7 + 6) grid ─────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
-        // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
-        // reflow cleanly at any viewport width without the sub-pixel overflow
-        // that occasionally pushed the last column past the container edge at
-        // 1280px (B-2-03). `auto-fit` + `minmax(120px, 1fr)` means:
-        //   - Each tile is at least 120px wide (enough for "HEALTH" + "+1.23%").
-        //   - Tiles grow to fill remaining space equally (1fr).
-        //   - The browser auto-computes the column count from the container
-        //     width — no hardcoded "11 columns" that breaks at non-standard
-        //     resolutions or when the number of GICS sectors changes.
-        // WHY gap-0.5 (2px): matches the previous flex gap; tight enough for
-        // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
+        // W4 task 2a (user report 2026-06-12 — "row 1 has too much vertical
+        // space"). The widget previously used `flex-1` + `gridAutoRows:
+        // minmax(40px, 1fr)`, which STRETCHED the tiles to fill whatever
+        // height the row gave it. Because this was the tallest cell in the
+        // macro band, it dragged the entire row tall. The new layout is the
+        // opposite: a DETERMINISTIC fixed-height grid that makes the widget
+        // SHORT, so the row can collapse around it.
+        //
+        // We render up to TWO rows: the first ROW_1_TILES (7) sectors on the
+        // top row, the remaining ROW_2_TILES (6) on the bottom row. Each row
+        // is its own CSS grid so the column count is fixed per row (7 and 6
+        // equal columns) rather than auto-fit wrapping — that guarantees the
+        // exact "7 over 6" shape the user asked for at every width ≥1024px.
+        //
+        // NOTE: `shrink-0` (not flex-1) + the explicit row template means the
+        // widget's total height is now ~ header(20) + 2×26 + gaps ≈ 76px,
+        // far shorter than the old ~300px stretch.
         <div
-          className="grid gap-0.5 flex-1 px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+          className="flex shrink-0 flex-col gap-0.5 px-0.5 py-0.5"
+          data-testid="sector-heatmap-grid"
         >
-          {sectorTiles.map(({ sector, weight }) => (
-            <SectorTile
-              key={sector.name}
-              sector={sector}
-              weight={weight}
-              relatedMovers={moversBySector.get(sector.name) ?? []}
-            />
-          ))}
+          {/* Split the tiles into the two fixed rows. We compute the slices
+              defensively: if the API ever returns <13 sectors, row 1 takes up
+              to 7 and row 2 takes the rest — no blank tiles, no crash. */}
+          {[
+            sectorTiles.slice(0, ROW_1_TILES),
+            sectorTiles.slice(ROW_1_TILES, ROW_1_TILES + ROW_2_TILES),
+          ].map((rowTiles, rowIdx) =>
+            // Skip an empty second row entirely (e.g. exactly 7 sectors).
+            rowTiles.length === 0 ? null : (
+              <div
+                key={rowIdx}
+                data-testid={`sector-heatmap-row-${rowIdx + 1}`}
+                className="grid gap-0.5"
+                style={{
+                  // Equal-width columns: row 1 → 7 cols, row 2 → 6 cols. We use
+                  // the per-row tile COUNT (not a constant) so a short final
+                  // row still fills the width edge-to-edge instead of leaving a
+                  // gap on the right.
+                  gridTemplateColumns: `repeat(${rowTiles.length}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowTiles.map(({ sector, weight }) => (
+                  <SectorTile
+                    key={sector.name}
+                    sector={sector}
+                    weight={weight}
+                    relatedMovers={moversBySector.get(sector.name) ?? []}
+                    // Round 1: the payload-wide max |change| drives the
+                    // proportional color scale — every tile normalises against
+                    // the same range.
+                    maxAbsChange={maxAbsChange}
+                  />
+                ))}
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
@@ -347,10 +469,13 @@ function SectorTile({
   sector,
   weight: _weight,
   relatedMovers,
+  maxAbsChange,
 }: {
   sector: HeatmapSector;
   weight: number;
   relatedMovers: Mover[];
+  /** Max |change_pct| across the whole payload — drives the proportional color scale. */
+  maxAbsChange: number;
 }) {
   const router = useRouter();
   const changePct = sector.change_pct;
@@ -365,33 +490,67 @@ function SectorTile({
   // gives the strongest movers first.
   const topMovers = relatedMovers.slice(0, 3);
 
+  // ── Hover tooltip (Round 1 foundation) ────────────────────────────────────
+  // WHY native title= (not shadcn <Tooltip>): the tile button is already the
+  // PopoverTrigger (click drill-down). Nesting a Radix Tooltip trigger inside
+  // a Radix Popover trigger on the same node requires ref-merging gymnastics
+  // and double asChild composition for marginal visual gain — the native
+  // browser tooltip carries the same information with zero extra DOM.
+  // WHY top mover may be absent: the heatmap API itself does NOT return a
+  // per-sector top mover (backend gap) — we derive it client-side by joining
+  // the top-movers list against per-instrument GICS sectors. While those
+  // queries resolve (or when no mover in the top-20 belongs to this sector),
+  // the tooltip truthfully shows sector + % only.
+  const fmtPct =
+    changePct === null
+      ? "no data"
+      : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+  const tooltip =
+    topMovers.length > 0
+      ? `${sector.name} ${fmtPct} · Top: ${topMovers[0].ticker}`
+      : `${sector.name} ${fmtPct}`;
+
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
-          // WHY height only (no flex-basis): the parent container switched from
-          // flex-wrap to CSS grid (FR-1.7). In grid layout flex-basis is
-          // ignored — column widths are driven by auto-fit/minmax on the
-          // container. We keep height fixed so the treemap maintains a uniform
-          // row height; the proportional-weight variable (still computed in
-          // useMemo) is retained for future use if we switch back to flex.
-          style={{
-            height: `${TILE_HEIGHT_PX}px`,
-          }}
+          // WHY h-full (dead-space fix 2026-06-10, was a fixed 40px height):
+          // the parent grid now stretches rows via gridAutoRows:
+          // minmax(40px, 1fr) so tiles share the panel's full height budget.
+          // A fixed-height tile inside a stretched row would re-create the
+          // dead band INSIDE each row. min-h via the auto-rows floor keeps the
+          // 40px label+% readability minimum. The proportional-weight variable
+          // (still computed in useMemo) is retained for future use if we
+          // switch back to flex-basis treemap widths.
+          // Round 1: hover tooltip — sector name, % change, top mover ticker
+          // (when the client-side sector join has resolved; see WHY above).
+          title={tooltip}
+          // W4 task 2a: explicit fixed tile height. The parent grid no longer
+          // stretches rows, so the tile must declare its own height here —
+          // inline style (not a Tailwind class) because TILE_HEIGHT_PX is a
+          // shared JS constant the skeleton reuses, keeping the two in lockstep.
+          style={{ height: `${TILE_HEIGHT_PX}px` }}
           className={cn(
-            // Base layout: vertical stack, centred horizontally, vertically
-            // centred on a fixed-height tile.
-            "flex min-h-[56px] flex-col items-center justify-center px-1",
-            // Color encoding: bg-positive/N or bg-negative/N at 4 magnitude steps.
-            colorClassFor(changePct),
+            // W4 task 2a: fixed compact height (26px) instead of the old
+            // `h-full min-h-[40px]` stretch. The parent is no longer a
+            // height-stretching grid, so each tile owns its own small height —
+            // this is what makes the whole widget short. 26px still fits the
+            // 2-line abbreviation + % at the 10px/9px font sizes below.
+            "flex flex-col items-center justify-center gap-0 px-1",
+            // Color encoding: bg-positive/N or bg-negative/N at 4 PROPORTIONAL
+            // steps normalised against the payload's max |change| (Round 1).
+            colorClassFor(changePct, maxAbsChange),
             // Foreground colour: kept neutral so the *background* tint carries
             // the direction signal — readable on every magnitude step.
             "text-foreground",
             // Border + hover: faint outline to separate adjacent same-colour
             // tiles; brighter ring on hover signals the tile is interactive.
             "rounded-[2px] border border-border/40 transition-colors hover:border-border",
-            // Focus state for keyboard nav.
-            "focus:outline-none focus:ring-1 focus:ring-primary/60",
+            // Round 3 (item 5): focus → focus-visible so the ring only shows
+            // for keyboard navigation (mouse clicks don't leave a lingering
+            // ring on the tile that just opened a popover). ring-ring is the
+            // canonical --ring token (focus rings match primary by design).
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
           )}
           aria-label={`${sector.name} sector, ${
             changePct === null ? "no data" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)} percent`
@@ -403,12 +562,14 @@ function SectorTile({
           {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
               rendering on dark themes — 600-weight is the maximum for terminal chrome text
               at small sizes (Bloomberg density rule) */}
-          <span className="w-full truncate text-center font-mono text-[11px] font-semibold uppercase tabular-nums">
+          <span className="w-full truncate text-center font-mono text-[10px] font-semibold uppercase tabular-nums">
             {abbreviation}
           </span>
-          {/* Bottom line — % change. text-[10px] keeps it secondary to the
-              sector identifier, but font-mono + tabular-nums ensure the digits
-              align across tiles (the trader's eye scans these as a column). */}
+          {/* Bottom line — % change. Round 3 (item 1, §15.9): bumped from 9px
+              to 10px — a sector % change is a FINANCIAL DATA VALUE and the
+              design system sets a hard 10px floor for those (9px is reserved
+              for timestamps/counts/category labels). Hierarchy vs the 10px
+              semibold label above is preserved via weight, not size. */}
           <span className="font-mono text-[10px] tabular-nums">
             {changePct === null
               ? "—"
@@ -460,7 +621,9 @@ function SectorTile({
                 <button
                   key={mover.instrument_id}
                   onClick={() => router.push(`/instruments/${navId}`)}
-                  className="flex w-full items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-muted/30"
+                  // Round 3 (item 5): focus-visible ring for keyboard nav
+                  // inside the drill-down popover (inset — rows are flush).
+                  className="flex w-full items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                   aria-label={`Navigate to ${mover.ticker}`}
                 >
                   <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">

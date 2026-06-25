@@ -1,0 +1,458 @@
+{
+  "baseline": {
+    "model": "Qwen/Qwen3.5-9B",
+    "reasoning": "none",
+    "n": 20,
+    "empties": 0,
+    "mae_vs_baseline_score": 0.06,
+    "sentiment_agree_pct": 90.0,
+    "lat_p50": 1.02,
+    "lat_mean": 1.03,
+    "rows": [
+      {
+        "title": "TSMC's Price Hike Is Bad For Nvidia Margins \u2014 And Potentially Great For Nvidia Stock",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "mixed",
+        "base_sent": "mixed"
+      },
+      {
+        "title": "FLEX LNG Ltd. Q1 2026 Earnings Call Summary",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Palantir CEO Warns AI Could Supercharge Wealth Inequality",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Why Uranium Energy Stock Is Plummeting Again Today",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Airline profits forecast to halve in 2026 as Middle East conflict, fuel costs weigh",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Jim Cramer on Adobe: \u201cI Don\u2019t Want You in It\u201d",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "12 Months From Now, Will You Wish You'd Bought This Industrial Stock?",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Alphabet (GOOGL): A Must-Buy Stock with the Strongest 1Q2026 Earnings Beats",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "The difference between on-prem AI vs. data centers",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Intel Gains as Google Reportedly Eyes Major AI Chip Order",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "$ADMA Fraud Notice: ADMA Biologics Accused of Securities Fraud over Channel Stuffing",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Visa plugs its payment network into ChatGPT, letting AI agents shop and pay for users",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "New Ownership of PostalAnnex in San Jose Brings Fresh Energy to the Business",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Apple Inc. (AAPL) Is A Top Stock In Ken Griffin\u2019s Portfolio",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "Western Digital Stock Skyrockets 185% YTD: Is More Growth on the Horizon?",
+        "score": 0.9,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "U.S. Bancorp Names Brian Mauney Head of Investor Relations",
+        "score": 0.3,
+        "base": 0.6,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Nvidia Says Anthropic, OpenAI Among Users of New Vera Chip",
+        "score": 0.9,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Has Temu-Owner PDD's Story Changed After Double Miss?",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "1 Value Stock to Keep an Eye On and 2 We Brush Off",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "United Airlines Targets Distressed Rival Assets To Refine Premium Network Growth",
+        "score": 0.9,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      }
+    ]
+  },
+  "20b@low": {
+    "model": "openai/gpt-oss-20b",
+    "reasoning": "low",
+    "n": 20,
+    "empties": 0,
+    "mae_vs_baseline_score": 0.1,
+    "sentiment_agree_pct": 90.0,
+    "lat_p50": 1.19,
+    "lat_mean": 1.33,
+    "rows": [
+      {
+        "title": "TSMC's Price Hike Is Bad For Nvidia Margins \u2014 And Potentially Great For Nvidia Stock",
+        "score": 0.6,
+        "base": 0.9,
+        "sentiment": "mixed",
+        "base_sent": "mixed"
+      },
+      {
+        "title": "FLEX LNG Ltd. Q1 2026 Earnings Call Summary",
+        "score": 0.6,
+        "base": 0.9,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Palantir CEO Warns AI Could Supercharge Wealth Inequality",
+        "score": 0.3,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Why Uranium Energy Stock Is Plummeting Again Today",
+        "score": 0.6,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Airline profits forecast to halve in 2026 as Middle East conflict, fuel costs weigh",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Jim Cramer on Adobe: \u201cI Don\u2019t Want You in It\u201d",
+        "score": 0.4,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "12 Months From Now, Will You Wish You'd Bought This Industrial Stock?",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Alphabet (GOOGL): A Must-Buy Stock with the Strongest 1Q2026 Earnings Beats",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "The difference between on-prem AI vs. data centers",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Intel Gains as Google Reportedly Eyes Major AI Chip Order",
+        "score": 0.6,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "$ADMA Fraud Notice: ADMA Biologics Accused of Securities Fraud over Channel Stuffing",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Visa plugs its payment network into ChatGPT, letting AI agents shop and pay for users",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "New Ownership of PostalAnnex in San Jose Brings Fresh Energy to the Business",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Apple Inc. (AAPL) Is A Top Stock In Ken Griffin\u2019s Portfolio",
+        "score": 0.3,
+        "base": 0.6,
+        "sentiment": "neutral",
+        "base_sent": "positive"
+      },
+      {
+        "title": "Western Digital Stock Skyrockets 185% YTD: Is More Growth on the Horizon?",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "U.S. Bancorp Names Brian Mauney Head of Investor Relations",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Nvidia Says Anthropic, OpenAI Among Users of New Vera Chip",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Has Temu-Owner PDD's Story Changed After Double Miss?",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "1 Value Stock to Keep an Eye On and 2 We Brush Off",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "United Airlines Targets Distressed Rival Assets To Refine Premium Network Growth",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      }
+    ]
+  },
+  "120b@low": {
+    "model": "openai/gpt-oss-120b",
+    "reasoning": "low",
+    "n": 20,
+    "empties": 0,
+    "mae_vs_baseline_score": 0.087,
+    "sentiment_agree_pct": 85.0,
+    "lat_p50": 2.0,
+    "lat_mean": 2.12,
+    "rows": [
+      {
+        "title": "TSMC's Price Hike Is Bad For Nvidia Margins \u2014 And Potentially Great For Nvidia Stock",
+        "score": 0.8,
+        "base": 0.9,
+        "sentiment": "mixed",
+        "base_sent": "mixed"
+      },
+      {
+        "title": "FLEX LNG Ltd. Q1 2026 Earnings Call Summary",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Palantir CEO Warns AI Could Supercharge Wealth Inequality",
+        "score": 0.3,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Why Uranium Energy Stock Is Plummeting Again Today",
+        "score": 0.8,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Airline profits forecast to halve in 2026 as Middle East conflict, fuel costs weigh",
+        "score": 0.7,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Jim Cramer on Adobe: \u201cI Don\u2019t Want You in It\u201d",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "12 Months From Now, Will You Wish You'd Bought This Industrial Stock?",
+        "score": 0.6,
+        "base": 0.3,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Alphabet (GOOGL): A Must-Buy Stock with the Strongest 1Q2026 Earnings Beats",
+        "score": 0.95,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "The difference between on-prem AI vs. data centers",
+        "score": 0.6,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Intel Gains as Google Reportedly Eyes Major AI Chip Order",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "$ADMA Fraud Notice: ADMA Biologics Accused of Securities Fraud over Channel Stuffing",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "Visa plugs its payment network into ChatGPT, letting AI agents shop and pay for users",
+        "score": 0.7,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "New Ownership of PostalAnnex in San Jose Brings Fresh Energy to the Business",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Apple Inc. (AAPL) Is A Top Stock In Ken Griffin\u2019s Portfolio",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "Western Digital Stock Skyrockets 185% YTD: Is More Growth on the Horizon?",
+        "score": 0.7,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      },
+      {
+        "title": "U.S. Bancorp Names Brian Mauney Head of Investor Relations",
+        "score": 0.6,
+        "base": 0.6,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Nvidia Says Anthropic, OpenAI Among Users of New Vera Chip",
+        "score": 0.8,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "Has Temu-Owner PDD's Story Changed After Double Miss?",
+        "score": 0.9,
+        "base": 0.9,
+        "sentiment": "negative",
+        "base_sent": "negative"
+      },
+      {
+        "title": "1 Value Stock to Keep an Eye On and 2 We Brush Off",
+        "score": 0.3,
+        "base": 0.3,
+        "sentiment": "neutral",
+        "base_sent": "neutral"
+      },
+      {
+        "title": "United Airlines Targets Distressed Rival Assets To Refine Premium Network Growth",
+        "score": 0.7,
+        "base": 0.6,
+        "sentiment": "positive",
+        "base_sent": "positive"
+      }
+    ]
+  }
+}

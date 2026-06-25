@@ -40,6 +40,8 @@ import { createScreenerApi } from "./api/screener";
 import { createPortfoliosApi } from "./api/portfolios";
 import { createWatchlistsApi } from "./api/watchlists";
 import { createAlertsApi } from "./api/alerts";
+// PLAN-0113 W4: standing alert-rules CRUD (separate resource from fired alerts).
+import { createAlertRulesApi } from "./api/alertRules";
 import { createChatApi } from "./api/chat";
 import { createPredictionMarketsApi } from "./api/prediction-markets";
 import { createDashboardApi } from "./api/dashboard";
@@ -88,6 +90,7 @@ export function createGateway(token?: string | null) {
     ...createPortfoliosApi(t),
     ...createWatchlistsApi(t),
     ...createAlertsApi(t),
+    ...createAlertRulesApi(t),
     ...createChatApi(t),
     ...createPredictionMarketsApi(t),
     ...createDashboardApi(t),

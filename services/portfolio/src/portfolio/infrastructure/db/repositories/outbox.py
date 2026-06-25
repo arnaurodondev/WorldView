@@ -104,7 +104,10 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
             ),
         )
 
-    async def move_to_dead_letter(self, record_id: UUID) -> None:
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+        # ``error_detail`` accepted for OutboxRepositoryProtocol parity (BUG-1);
+        # this outbox table has no error column so it is not persisted (the cause
+        # is in the dispatcher log).
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)

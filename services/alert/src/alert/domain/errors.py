@@ -26,6 +26,19 @@ class DuplicateAlertError(DomainError):
 
 
 # ---------------------------------------------------------------------------
+# Alert rule errors (PLAN-0113)
+# ---------------------------------------------------------------------------
+
+
+class RuleNotFoundError(DomainError):
+    """Raised when a rule cannot be found / is not owned by the caller."""
+
+
+class RuleLimitExceededError(DomainError):
+    """Raised when a user has reached the per-user rule cap (PRD §9)."""
+
+
+# ---------------------------------------------------------------------------
 # Delivery errors
 # ---------------------------------------------------------------------------
 

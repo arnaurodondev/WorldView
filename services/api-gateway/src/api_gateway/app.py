@@ -285,6 +285,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(InternalJWTIssuerMiddleware)  # innermost of this pair — runs after OIDCAuth
     app.add_middleware(OIDCAuthMiddleware)  # outermost of this pair — runs first (last added)
 
+    # Dashboard Regression #5 — /api/v1 prefix compatibility.
+    #
+    # WHY: The frontend (apps/worldview-web/lib/api/_client.ts) sets BASE="/api",
+    # so the browser issues requests against `/api/v1/...`. In local dev, Next.js
+    # rewrites `/api/*` → `/*` before forwarding to the gateway (next.config.ts).
+    # In production, the ingress forwards the path verbatim and the gateway —
+    # which only mounts routers at `/v1/...` — returns 404 (observed for
+    # `GET /api/v1/market/top-movers`, Cloudflare egress 172.67.214.221).
+    #
+    # FIX: Rewrite the request scope path BEFORE any downstream middleware sees
+    # it, so OIDC allow-lists, rate-limit buckets, and the router itself all
+    # operate on the canonical `/v1/...` path. Added LAST → outermost → runs
+    # FIRST at request time, ensuring everything downstream is path-skew free.
+    #
+    # See investigation: docs/audits/2026-06-01-chat-quality-aapl-pe-investigation.md
+    # (Dashboard Regression #5).
+    @app.middleware("http")
+    async def strip_api_prefix(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        path = request.scope.get("path", "")
+        if path.startswith("/api/"):
+            new_path = path[len("/api") :]  # "/api/v1/foo" → "/v1/foo"
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("utf-8")
+        return await call_next(request)
+
     # Metrics endpoint
     @app.get("/metrics")
     async def metrics_endpoint() -> Response:

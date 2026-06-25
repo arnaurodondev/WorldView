@@ -50,17 +50,26 @@ class GetIntelligenceRollup7dUseCase:
         instrument_id: UUID,
     ) -> IntelligenceRollup7d:
         """Return the contradiction count for ``instrument_id`` (= entity_id)."""
-        # The subject side is enough — any contradiction WHERE this entity is
-        # the subject of either side of the link counts. We join through
-        # ``relation_evidence_raw`` (subject_entity_id) like
-        # ``fetch_contradictions_for_entity`` does in claim_repository.py.
+        # COLUMN-NAMING DEBT (BP / 2026-06-16 data-pipeline-gaps Gap 1):
+        # ``relation_contradiction_links.relation_evidence_id`` is named as though
+        # it were a ``relation_evidence_raw.raw_id`` FK, but the detection worker
+        # (contradiction_batch.py:99) actually writes the *subject claim's*
+        # ``claims.claim_id`` into it. There is no FK constraint, so the mismatch
+        # was accepted silently. Live proof: 7180/7180 links match
+        # ``claims.claim_id`` and 0/7180 match ``relation_evidence_raw.raw_id``.
+        #
+        # The previous query joined ``rer.raw_id = rcl.relation_evidence_id`` and
+        # therefore returned 0 for EVERY instrument (universe-wide zero — the
+        # keystone bug that made the "Live Catalysts" screener empty). We resolve
+        # the subject by joining ``claims`` on the value actually stored, mirroring
+        # the write path.
         sql = text(
             """
             SELECT COUNT(*)
             FROM relation_contradiction_links rcl
-            JOIN relation_evidence_raw rer
-                ON rer.raw_id = rcl.relation_evidence_id
-            WHERE rer.subject_entity_id = :entity_id
+            JOIN claims c
+                ON c.claim_id = rcl.relation_evidence_id
+            WHERE c.subject_entity_id = :entity_id
               AND rcl.invalidated_at IS NULL
               AND rcl.detected_at >= now() - INTERVAL ':days days'::interval
             """.replace(":days", str(_WINDOW_DAYS)),

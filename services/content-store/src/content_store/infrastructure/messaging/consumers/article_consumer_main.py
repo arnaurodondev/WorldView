@@ -19,6 +19,8 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -33,6 +35,10 @@ async def main() -> None:
         ArticleConsumerConfig,
     )
     from content_store.infrastructure.valkey.lsh_client import LSHConfig, ValkeyLSHClient
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -49,9 +55,14 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # F-005/BP-704: bind a liveness probe so /healthz turns 503 when the poll
+    # loop wedges or the run() task dies — otherwise a wedged consumer keeps a
+    # GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="content-store-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -93,22 +104,30 @@ async def main() -> None:
         object_store=object_store,
         lsh_client=lsh_client,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "content-store-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+        },
+    )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # F-005/BP-704 FAILURE MODE 2 supervision: a crashed run() no longer
+        # hangs main() behind a green healthcheck — it raises ConsumerExited so
+        # we exit non-zero and Docker restarts the container.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("article_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("article_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("article_consumer_stopped")
     finally:
         await valkey_client.close()
         await _engine.dispose()
@@ -118,6 +137,7 @@ async def main() -> None:
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("article_consumer_stopped")
 
 
 if __name__ == "__main__":

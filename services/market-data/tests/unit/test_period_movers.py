@@ -22,7 +22,23 @@ def test_period_movers_gainers_sorted_desc():
     uow = _make_uow([])
     uc = GetPeriodMoversUseCase(uow)
     asyncio.run(uc.execute("1W", "gainers", 5))
-    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(7, "gainers", 5)
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(7, "gainers", 5, 0)
+
+
+def test_period_movers_offset_plumbed_through():
+    """Offset parameter is forwarded to the repo for pagination."""
+    uow = _make_uow([])
+    uc = GetPeriodMoversUseCase(uow)
+    asyncio.run(uc.execute("1W", "gainers", 20, 40))
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(7, "gainers", 20, 40)
+
+
+def test_period_movers_negative_offset_rejected():
+    """Negative offsets raise ValueError."""
+    uow = _make_uow([])
+    uc = GetPeriodMoversUseCase(uow)
+    with pytest.raises(ValueError, match="offset"):
+        asyncio.run(uc.execute("1W", "gainers", 10, -1))
 
 
 def test_period_movers_losers_sorted_asc():
@@ -30,7 +46,7 @@ def test_period_movers_losers_sorted_asc():
     uow = _make_uow([])
     uc = GetPeriodMoversUseCase(uow)
     asyncio.run(uc.execute("1W", "losers", 5))
-    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(7, "losers", 5)
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(7, "losers", 5, 0)
 
 
 def test_period_movers_1m_uses_30_day_lookback():
@@ -38,7 +54,7 @@ def test_period_movers_1m_uses_30_day_lookback():
     uow = _make_uow([])
     uc = GetPeriodMoversUseCase(uow)
     asyncio.run(uc.execute("1M", "gainers", 10))
-    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(30, "gainers", 10)
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(30, "gainers", 10, 0)
 
 
 def test_period_movers_sparse_data_returns_whatever_repo_gives():
@@ -58,7 +74,7 @@ def test_period_movers_1d_uses_1_day_lookback():
     uow = _make_uow([])
     uc = GetPeriodMoversUseCase(uow)
     asyncio.run(uc.execute("1D", "gainers", 10))
-    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(1, "gainers", 10)
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(1, "gainers", 10, 0)
 
 
 def test_period_movers_invalid_period():

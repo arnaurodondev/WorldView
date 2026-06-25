@@ -51,6 +51,9 @@ vi.mock("@react-sigma/core", () => ({
       getNodeAttributes: vi.fn(() => ({ label: "Test Node", nodeType: "company" })),
       getEdgeAttributes: vi.fn(() => ({ label: "CEO_OF", weight: 0.9 })),
       degree: vi.fn(() => 3),
+      // W4: FilterController counts visible/total edges via graph.forEachEdge for
+      // the "X of Y edges" indicator; no edges in the mock so the callback no-ops.
+      forEachEdge: vi.fn(),
     })),
     // WHY setSettings/refresh: EntityGraph H-4 adds FilterController which calls
     // sigma.setSettings({edgeReducer, nodeReducer}) + sigma.refresh() on mount.

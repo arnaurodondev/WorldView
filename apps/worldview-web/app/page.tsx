@@ -17,23 +17,31 @@
  * directly in the page is the recommended approach per
  * developers.google.com/search/docs/appearance/structured-data.
  *
- * SECTION ORDER (top to bottom):
- *   1. LandingNav         — sticky nav with section anchors + auth CTAs
- *   2. HeroSection        — tagline + 2 CTAs + animated terminal mock
- *   3. LiveDataStrip      — 6 mock tickers with live-pulse dot
- *   4. SectorHeatmapPreview — 6 SPDR sector tiles using shared 7-step gradient
- *   5. DifferentiatorsSection — 3-column News / KG / Multi-source
- *   6. WorkflowSection    — 4-step Discover → Analyze → Track → Act
- *   7. AIDemoSection      — example Q + cited answer + sources box
- *   8. ComparisonTable    — Worldview vs Bloomberg / IBKR / TV / Finviz
- *   9. TrustBadges        — data-source attributions
- *  10. PricingTiers       — Free / Pro / Enterprise + monthly/annual toggle
- *  11. Testimonials       — 3 persona scenarios (no fake customer quotes)
- *  12. FAQAccordion       — 10 hardcoded Q&A
- *  13. FinalCTA           — closing "open the terminal" CTA
- *  14. Footer             — 5-column secondary nav + status badge
+ * SECTION ORDER (top to bottom) — refreshed by the 2026-06-23 landing
+ * redesign (docs/design/2026-06-23-landing-page-redesign.md §6). The three
+ * flagship "show, don't tell" showcases are FeatureGrid, KnowledgeGraph-
+ * Spotlight, and the refreshed AIDemoSection; HowItWorks adds architecture
+ * credibility.
+ *   1. LandingNav            — sticky nav with section anchors + auth CTAs
+ *   2. HeroSection           — tagline + 2 CTAs + real product screenshot
+ *   3. LiveDataStrip         — 6 mock tickers with live-pulse dot
+ *   4. SectorHeatmapPreview  — 6 SPDR sector tiles using shared 7-step gradient
+ *   5. FeatureGrid           — six-surface map (replaces DifferentiatorsSection)
+ *   6. KnowledgeGraphSpotlight — flagship KG + weird-connections showcase
+ *   7. AIDemoSection         — grounded chat: slash-commands + cited answer +
+ *                              citation-confidence bar
+ *   8. WorkflowSection       — 4-step Discover → Analyze → Track → Act
+ *   9. HowItWorks            — hybrid-retrieval pipeline + 4 credibility pillars
+ *  10. ComparisonTable       — Worldview vs Bloomberg / IBKR / TV / Finviz
+ *  11. TrustBadges           — data-source attributions
+ *  12. PricingTiers          — Free / Pro / Enterprise + monthly/annual toggle
+ *  13. Testimonials          — 3 persona scenarios (no fake customer quotes)
+ *  14. FAQAccordion          — 11 hardcoded Q&A
+ *  15. FinalCTA              — closing "open the terminal" CTA
+ *  16. Footer                — 5-column secondary nav + status badge
  *
- * DESIGN REFERENCE: PLAN-0052 §Wave A; docs/audits/2026-04-28-qa-frontend-design-roadmap.md
+ * DESIGN REFERENCE: docs/design/2026-06-23-landing-page-redesign.md;
+ * PLAN-0052 §Wave A (original).
  */
 
 import { headers } from "next/headers";
@@ -41,9 +49,11 @@ import { LandingNav } from "@/components/landing/LandingNav";
 import { HeroSection } from "@/components/landing/HeroSection";
 import { LiveDataStrip } from "@/components/landing/LiveDataStrip";
 import { SectorHeatmapPreview } from "@/components/landing/SectorHeatmapPreview";
-import { DifferentiatorsSection } from "@/components/landing/DifferentiatorsSection";
+import { FeatureGrid } from "@/components/landing/FeatureGrid";
+import { KnowledgeGraphSpotlight } from "@/components/landing/KnowledgeGraphSpotlight";
 import { WorkflowSection } from "@/components/landing/WorkflowSection";
 import { AIDemoSection } from "@/components/landing/AIDemoSection";
+import { HowItWorks } from "@/components/landing/HowItWorks";
 import { ComparisonTable } from "@/components/landing/ComparisonTable";
 import { TrustBadges } from "@/components/landing/TrustBadges";
 import { PricingTiers } from "@/components/landing/PricingTiers";
@@ -70,7 +80,7 @@ const ORG_JSONLD = {
   url: SITE_URL,
   logo: `${SITE_URL}/icon-512.png`,
   description:
-    "Bloomberg-grade market intelligence terminal. Real-time market data, AI-powered news intelligence, knowledge graph, and prediction markets in one workspace.",
+    "Market intelligence terminal that fuses real-time market data, impact-scored news, and an entity knowledge graph with a grounded, citation-backed AI assistant. Knowledge-graph path discovery, portfolio analytics, and a fundamentals screener in one workspace.",
   sameAs: ["https://github.com"],
 };
 
@@ -92,6 +102,8 @@ const SITE_JSONLD = {
  * QA iter-1 (SEO M1): expanded from 3 → 10 entries to match the visible
  * FAQAccordion. Google penalises structured-data / page-content mismatches
  * as "structured data misuse" and downranks the rich snippet eligibility.
+ * 2026-06-23 landing redesign: added the knowledge-graph path-discovery Q&A
+ * (11 total) — kept in lockstep with FAQAccordion.tsx for parity.
  */
 const FAQ_JSONLD = {
   "@context": "https://schema.org",
@@ -127,6 +139,14 @@ const FAQ_JSONLD = {
       acceptedAnswer: {
         "@type": "Answer",
         text: "Every AI answer is grounded in retrieval — articles, filings, and structured data points retrieved from your subscribed sources. The model cites the source for each claim; if it can't ground a claim, it says so. We don't ship answers without citations.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "How does the graph find indirect relationships between companies?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Every article and filing is run through entity and relation extraction, building a knowledge graph of typed edges (supplied_by, equipment_from, regulated_by, executive_of, …) over ~80K canonical entities. To connect two names, we run a variable-length path search over the graph and rank the chains by a weirdness score — reliability × unexpectedness × semantic-distance × novelty — so the most surprising, non-obvious connections surface first (e.g. Apple → TSMC → ASML).",
       },
     },
     {
@@ -227,9 +247,11 @@ export default async function LandingPage() {
         <HeroSection />
         <LiveDataStrip />
         <SectorHeatmapPreview />
-        <DifferentiatorsSection />
-        <WorkflowSection />
+        <FeatureGrid />
+        <KnowledgeGraphSpotlight />
         <AIDemoSection />
+        <WorkflowSection />
+        <HowItWorks />
         <ComparisonTable />
         <TrustBadges />
         <PricingTiers />

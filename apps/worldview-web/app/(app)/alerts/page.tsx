@@ -32,9 +32,10 @@
 // WHY "use client": useSearchParams (tab deep-linking), useQuery (data fetching),
 // useState (category filter). Tabs from shadcn/ui uses Radix state (client runtime).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import type { AlertSeverity } from "@/types/api";
 import { BellRing, Newspaper, TrendingUp } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -59,10 +60,12 @@ const AlertsList = dynamic(
   },
 );
 import { AlertHistoryTab } from "@/components/alerts/AlertHistoryTab";
-import { AlertRuleBuilder } from "@/components/alerts/AlertRuleBuilder";
 import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";
 import { NotificationPreferencesDialog } from "@/components/alerts/NotificationPreferencesDialog";
-import { countAlertRules } from "@/lib/alerts/rules";
+// PLAN-0113 W4: the rule count comes from the SERVER list (useAlertRules), not
+// localStorage. AlertRuleBuilder is retired — creation goes through the
+// type-first AlertWizard opened from RuleManagerDialog.
+import { useAlertRules } from "@/lib/api/useAlertRules";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -184,6 +187,112 @@ function filterByCategory(articles: Article[], category: NewsCategory): Article[
 
 // ── Page component ────────────────────────────────────────────────────────────
 
+// ── Severity filter constants ─────────────────────────────────────────────────
+
+/**
+ * SEVERITY_PILLS — ordered pill definitions for the filter strip.
+ *
+ * WHY null for ALL: the AlertsList expects AlertSeverity | null.
+ * null = show all severities (no filter active).
+ *
+ * WHY include keyboard shortcut metadata here: the pill strip renders the hint
+ * text (⌘1) and the keydown listener registers the same shortcut. Keeping them
+ * co-located prevents drift between hint and behaviour.
+ *
+ * Design reference: PRD-0089 DESIGN-09 §C.2 severity filter keyboard pills.
+ */
+const SEVERITY_PILLS: Array<{
+  label: string;
+  value: AlertSeverity | null;
+  shortcutKey: string;
+  shortcutHint: string;
+}> = [
+  { label: "ALL",      value: null,       shortcutKey: "1", shortcutHint: "⌘1" },
+  { label: "CRITICAL", value: "CRITICAL", shortcutKey: "2", shortcutHint: "⌘2" },
+  { label: "HIGH",     value: "HIGH",     shortcutKey: "3", shortcutHint: "⌘3" },
+  { label: "MEDIUM",   value: "MEDIUM",   shortcutKey: "4", shortcutHint: "⌘4" },
+  { label: "LOW",      value: "LOW",      shortcutKey: "5", shortcutHint: "⌘5" },
+];
+
+// ── SeverityFilterPills ───────────────────────────────────────────────────────
+
+/**
+ * SeverityFilterPills — horizontal pill strip for filtering the active alerts
+ * list by severity, with ⌘1–⌘5 keyboard shortcuts.
+ *
+ * WHY keyboard shortcuts (Cmd+number): matches the design spec §C.2.
+ * Institutional traders are keyboard-heavy — providing one-key severity
+ * switching lets them triage CRITICAL-only in milliseconds.
+ *
+ * WHY Cmd (metaKey) instead of plain number: number keys would conflict with
+ * row-level `a` (ack) / `s` (snooze) shortcuts defined elsewhere. The meta
+ * modifier namespaces these to the page-level pill filter.
+ */
+interface SeverityFilterPillsProps {
+  active: AlertSeverity | null;
+  onChange: (v: AlertSeverity | null) => void;
+}
+
+function SeverityFilterPills({ active, onChange }: SeverityFilterPillsProps) {
+  // Register keyboard shortcuts: Cmd+1 → ALL, Cmd+2 → CRITICAL, etc.
+  // WHY useCallback: stable reference across renders so the effect cleanup
+  // receives the same function it registered, preventing stale-closure leaks.
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      // WHY metaKey (Cmd on Mac): see comment above about conflict avoidance.
+      if (!e.metaKey) return;
+      const pill = SEVERITY_PILLS.find((p) => p.shortcutKey === e.key);
+      if (!pill) return;
+      e.preventDefault();
+      onChange(pill.value);
+    },
+    [onChange],
+  );
+
+  useEffect(() => {
+    // WHY document-level listener (not button-level): the shortcuts should work
+    // whenever the alerts tab is visible, not just when a pill button has focus.
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
+
+  return (
+    // WHY sticky top-0 z-10: the pill strip must stay visible while the alerts
+    // list scrolls, so the user can change filters mid-scroll.
+    <div
+      data-testid="severity-filter-pills"
+      className="sticky top-0 z-10 flex items-center gap-0 border-b border-border bg-background"
+    >
+      {SEVERITY_PILLS.map((pill) => (
+        <button
+          key={pill.label}
+          type="button"
+          data-testid={`severity-pill-${pill.label}`}
+          onClick={() => onChange(pill.value)}
+          aria-pressed={active === pill.value}
+          className={cn(
+            "flex h-6 items-center gap-1 border-b-2 px-2 font-mono text-[9px] uppercase tracking-[0.08em]",
+            "transition-colors duration-0",
+            active === pill.value
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {pill.label}
+          {/* WHY keyboard shortcut hint (not tooltip): the hint is always visible
+              so the user learns the shortcut passively. 60% opacity makes it
+              subordinate to the pill label. */}
+          <span className="text-[8px] text-muted-foreground/60" aria-hidden>
+            {pill.shortcutHint}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Page component ────────────────────────────────────────────────────────────
+
 export default function AlertsPage() {
   const searchParams = useSearchParams();
   const { accessToken } = useAuth();
@@ -201,15 +310,16 @@ export default function AlertsPage() {
   // closed on initial render.
   const selectedAlertId = searchParams.get("selected");
 
-  // ── Rule count — read from localStorage for Manage Rules badge ────────────
-  // WHY not state: rule count updates after AlertRuleBuilder saves; we re-read
-  // localStorage synchronously via countAlertRules() on each render.
-  // This is safe — countAlertRules() is cheap (one localStorage.getItem).
-  const [ruleCount, setRuleCount] = useState(() =>
-    // WHY guard: localStorage is not available in SSR (server component context).
-    // "use client" ensures this runs in the browser, but typeof check is belt-and-suspenders.
-    typeof window !== "undefined" ? countAlertRules() : 0,
-  );
+  // PRD-0089 Wave J: severity filter state for the pill strip.
+  // WHY null as default: null = "show ALL", consistent with the AlertsList prop contract.
+  const [filterSeverity, setFilterSeverity] = useState<AlertSeverity | null>(null);
+
+  // ── Rule count — from the SERVER rules list (PLAN-0113 W4) ─────────────────
+  // WHY useAlertRules: rules are real backend rows now. `total` is the canonical
+  // count; mutations (create/delete via the wizard/manager) invalidate this query
+  // so the badge updates automatically — no manual refresh callback needed.
+  const { data: rulesData } = useAlertRules();
+  const ruleCount = rulesData?.total ?? 0;
 
   return (
     // WHY flex h-full flex-col overflow-hidden (not space-y-1 p-3):
@@ -238,9 +348,10 @@ export default function AlertsPage() {
           {/* Notification preferences — quiet hours + severity floor */}
           <NotificationPreferencesDialog />
 
-          {/* Manage Rules — opens RuleManagerDialog (List + Edit tabs) */}
+          {/* Manage Rules — opens RuleManagerDialog (server rules + AlertWizard).
+              The wizard's "New rule" button inside the dialog covers creation, so
+              the legacy separate "+ Create Rule" (AlertRuleBuilder) is removed. */}
           <RuleManagerDialog
-            onRulesChanged={() => setRuleCount(countAlertRules())}
             trigger={
               <button
                 type="button"
@@ -251,9 +362,6 @@ export default function AlertsPage() {
               </button>
             }
           />
-
-          {/* Create Rule — opens AlertRuleBuilder dialog (legacy quick-add) */}
-          <AlertRuleBuilder onRuleSaved={() => setRuleCount(countAlertRules())} />
 
         </div>
       </div>
@@ -306,7 +414,9 @@ export default function AlertsPage() {
             </TabsList>
 
             <TabsContent value="active">
-              <AlertsList selectedId={selectedAlertId} />
+              {/* PRD-0089 Wave J: severity filter pills above the active alert list */}
+              <SeverityFilterPills active={filterSeverity} onChange={setFilterSeverity} />
+              <AlertsList selectedId={selectedAlertId} filterSeverity={filterSeverity} />
             </TabsContent>
 
             <TabsContent value="snoozed">

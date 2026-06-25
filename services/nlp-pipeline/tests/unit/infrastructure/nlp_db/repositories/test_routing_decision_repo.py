@@ -200,3 +200,56 @@ async def test_routing_decision_writes_processing_path() -> None:
     params = captured[0]
     assert params["processing_path"] is not None, "processing_path must be written for all post-W5-4 rows"
     assert params["processing_path"] == "full_pipeline"
+
+
+# ── PLAN-0111 C-6: learned-router shadow columns ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_persists_learned_router_shadow_fields() -> None:
+    """A decision carrying a learned shadow proposal writes learned_* columns."""
+    session, captured = _make_session()
+    repo = RoutingDecisionRepository(session)
+
+    decision = RoutingDecision(
+        decision_id=UUID("00000000-0000-0000-0000-000000000020"),
+        doc_id=UUID("00000000-0000-0000-0000-000000000021"),
+        routing_tier=RoutingTier.MEDIUM,
+        composite_score=0.5,
+        feature_scores={"source_reliability": 0.8},
+        processing_path=ProcessingPath.FULL_PIPELINE,
+        learned_tier=RoutingTier.DEEP,
+        learned_p_yield=0.91,
+        learned_router_mode="shadow",
+    )
+
+    await repo.add(decision)
+
+    params = captured[0]
+    # The static (actual) tier is unchanged — learned columns are separate.
+    assert params["routing_tier"] == "medium"
+    assert params["learned_tier"] == "deep"
+    assert params["learned_p_yield"] == 0.91
+    assert params["learned_router_mode"] == "shadow"
+
+
+@pytest.mark.asyncio
+async def test_add_learned_columns_null_when_router_off() -> None:
+    """Decisions with no learned proposal write NULL learned_* columns (default)."""
+    session, captured = _make_session()
+    repo = RoutingDecisionRepository(session)
+
+    decision = RoutingDecision(
+        decision_id=UUID("00000000-0000-0000-0000-000000000022"),
+        doc_id=UUID("00000000-0000-0000-0000-000000000023"),
+        routing_tier=RoutingTier.LIGHT,
+        composite_score=0.25,
+        feature_scores={},
+    )
+
+    await repo.add(decision)
+
+    params = captured[0]
+    assert params["learned_tier"] is None
+    assert params["learned_p_yield"] is None
+    assert params["learned_router_mode"] is None

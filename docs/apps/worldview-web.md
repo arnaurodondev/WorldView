@@ -54,8 +54,8 @@ never localStorage, sessionStorage, or cookies that the frontend writes.
 | Styling | Tailwind CSS | 3.4.17 | Terminal Dark design tokens |
 | Icons | lucide-react | 0.454.0 | |
 | Package manager | pnpm | 10.x exact | `pnpm audit` must show 0 CVEs |
-| Unit tests | Vitest + RTL + MSW | 2.1.9 | jsdom environment, 130+ test files |
-| E2E tests | Playwright | 1.59.1 | Chrome + WebKit |
+| Unit tests | Vitest + RTL + MSW | 2.1.9 | jsdom environment, 400+ test files |
+| E2E tests | Playwright | 1.59.1 | Chrome + WebKit; 40+ spec files |
 | Component catalogue | Storybook | 8.6.12 | `pnpm storybook` |
 
 ---
@@ -106,6 +106,27 @@ make seed
 
 After `make dev` + `make seed`, navigate to `http://localhost:3001`, click **Dev Login**.
 
+### 4.3 Dev Server Protocol (HTTP/1.1 — no HTTP/2)
+
+The Next.js dev server (`next dev`) runs over **HTTP/1.1** only. Next.js 15 has an
+`--experimental-https` flag but **no `--experimental-http2` flag**; the HTTPS dev
+mode still serves H/1.1 underneath. We evaluated two paths to enable H/2 in dev:
+
+| Option | Decision | Rationale |
+| --- | --- | --- |
+| `next dev --experimental-https --experimental-http2` | **Rejected** | No such flag exists in Next.js 15. The closest (`--experimental-https`) is still H/1.1. |
+| Add a Caddy/nginx reverse proxy in front of `worldview-web:3000` serving H/2 to the browser | **Deferred** | Adds infra complexity and a TLS cert dance for a dev-only optimization. Production already runs over H/2 behind the platform's TLS terminator. |
+
+**Mitigation** for the dev-mode H/1.1 connection cap (6 concurrent sockets per
+origin to `/api`): below-fold dashboard widgets defer their TanStack queries by
+two animation frames via [`hooks/useAboveFoldReady.ts`](../../apps/worldview-web/hooks/useAboveFoldReady.ts).
+This lets above-fold widgets enqueue their fetches first so the dev waterfall
+prioritises what the user actually sees.
+
+In **production**, requests fan out through the platform's TLS terminator which
+multiplexes them over a single H/2 connection — the dev cap does not apply.
+See `/investigate` report F-3/F-4 for the full network-waterfall analysis.
+
 ### 4.3 Environment Variables
 
 Copy `apps/worldview-web/.env.example` to `apps/worldview-web/.env.local`:
@@ -152,7 +173,6 @@ apps/worldview-web/
 │   ├── page.tsx                 # Public landing page (marketing)
 │   ├── error.tsx                # Global error boundary
 │   ├── not-found.tsx            # 404 page
-│   ├── middleware.ts            # Per-request nonce-based Content-Security-Policy
 │   ├── login/page.tsx           # OIDC login: PKCE code_verifier → Zitadel redirect
 │   ├── callback/page.tsx        # OIDC callback: code + verifier → tokens via S9
 │   ├── register/page.tsx        # New user registration
@@ -160,16 +180,18 @@ apps/worldview-web/
 │   │   ├── layout.tsx           # Guards auth, renders shell: TopBar + CollapsibleSidebar
 │   │   ├── dashboard/           # Morning brief, portfolio summary, alerts, movers, heatmap
 │   │   ├── workspace/           # Drag-drop multi-panel terminal workspace
-│   │   ├── instruments/[entityId]/  # Instrument detail: OHLCV chart, tabs, graph
+│   │   ├── instruments/[ticker]/    # Instrument detail: OHLCV chart, tabs, graph (+ /insiders sub-page)
+│   │   ├── indices/[ticker]/         # Index detail page (e.g. SPY, QQQ)
 │   │   ├── screener/            # Fundamentals screener with filter builder
-│   │   ├── portfolio/           # Holdings, P&L, equity curve, transactions
+│   │   ├── portfolio/           # Holdings, P&L, equity curve; sub-pages: /analytics, /transactions, /brokerage (+ /callback)
 │   │   ├── alerts/              # Alert rules, history, notification preferences
 │   │   ├── news/                # News feed and top today tabs
 │   │   ├── chat/                # RAG chat threads with slash commands
 │   │   ├── watchlists/[id]/     # Watchlist hub and members
 │   │   ├── prediction-markets/  # Polymarket prediction market page
 │   │   ├── search/              # Search results page
-│   │   ├── settings/            # User profile, notifications, appearance, integrations
+│   │   ├── connections/         # Global "Weird Connections" feed (PLAN-0112)
+│   │   ├── settings/            # Profile, notifications, appearance, data, integrations, security, preferences, beta-program
 │   │   ├── status/              # Platform status page
 │   │   └── dev-tools/sentry-test/ # Dev-only: synthetic error for Sentry testing
 │   ├── (public)/                # Public (unauthenticated) pages
@@ -215,13 +237,15 @@ apps/worldview-web/
 │   ├── HotkeyContext.tsx         # Global keyboard shortcut registration
 │   └── SelectedEntityContext.tsx # Cross-panel entity sync (intelligence page)
 ├── lib/                         # Pure utilities and API client
-│   ├── gateway.ts               # Typed S9 API client (composition shim, ~91 call sites)
+│   ├── gateway.ts               # Typed S9 API client (composition shim merging 16 domain modules, ~91 call sites)
 │   ├── api/                     # Per-domain API modules (auth, instruments, portfolios, …)
 │   │   ├── _client.ts           # Base fetch wrapper + GatewayError
 │   │   ├── auth.ts
 │   │   ├── instruments.ts
 │   │   ├── portfolios.ts
-│   │   └── ... (14 domain files total)
+│   │   ├── alertRules.ts + useAlertRules.ts  # Standing-rule CRUD + TanStack hooks
+│   │   ├── briefing.ts + intelligence.ts + notification-preferences.ts
+│   │   └── ... (19 source files total)
 │   ├── api-client.tsx           # ApiClientProvider: memoises createGateway(token)
 │   ├── format.ts                # Currency, percentage, compact number formatters
 │   ├── market-schedule.ts       # Exchange hours and market status helpers
@@ -243,8 +267,8 @@ apps/worldview-web/
 │   └── utils.ts                 # cn() (clsx + tailwind-merge), misc formatters
 ├── types/
 │   └── api.ts                   # TypeScript API contract types
-├── __tests__/                   # 130+ Vitest unit test files
-├── e2e/                         # 20+ Playwright e2e spec files
+├── __tests__/                   # Co-located Vitest unit tests (400+ files across the tree)
+├── e2e/                         # 40+ Playwright e2e spec files
 ├── next.config.ts               # API rewrite, security headers, Sentry wrap
 ├── tailwind.config.ts           # Terminal Dark palette tokens
 ├── vitest.config.ts             # Vitest + jsdom + path alias
@@ -279,9 +303,10 @@ apps/worldview-web/
 |-----|---------|----------|
 | `/dashboard` | Morning brief, market snapshot | Briefings, portfolio summary, top movers, heatmap, alerts |
 | `/workspace` | Drag-drop multi-panel terminal | User-configurable panel grid (localStorage, v2 key) |
-| `/instruments/[entityId]` | Instrument detail | OHLCV chart, fundamentals, intelligence, entity graph, news |
+| `/instruments/[ticker]` | Instrument detail | OHLCV chart, fundamentals, intelligence, entity graph, news. Sub-page `/instruments/[ticker]/insiders` for insider transactions |
+| `/indices/[ticker]` | Index detail | Index quote + constituents (e.g. SPY, QQQ, DIA) |
 | `/screener` | Fundamental screener | `POST /v1/fundamentals/screen`; collapsible filter sections; saved screens; column settings; CSV/Excel/PDF export; inline sparklines |
-| `/portfolio` | Holdings, P&L | Portfolios, holdings, equity curve, sector allocation, realized P&L, transactions |
+| `/portfolio` | Holdings, P&L | Portfolios, holdings, equity curve, sector allocation, realized P&L. Sub-pages: `/portfolio/analytics`, `/portfolio/transactions`, `/portfolio/brokerage` (+ `/callback`) |
 | `/alerts` | Alerts & news | Pending + history alerts; snooze/acknowledge; alert rules (CRUD); notification preferences |
 | `/news` | News feed | Top today + full feed tabs |
 | `/chat` | RAG chat | Thread list with rename/search; slash commands (`/quote`, `/portfolio`, `/news`, etc.); citation confidence bar; context-aware starters |
@@ -290,6 +315,7 @@ apps/worldview-web/
 | `/search` | Search results | Full-text entity + instrument search |
 | `/settings` | User settings | Profile, notifications, appearance, data, integrations, security, beta program |
 | `/intelligence/[entity_id]` | Entity intelligence | 3-column: sigma.js graph, relations/evidence/paths, entity sidebar; full-width RAG chat panel |
+| `/connections` | Weird Connections feed | Global graph-wide "weird connections" feed (PLAN-0112 W5). `WeirdConnectionsFeed` consumes `GET /v1/connections/weird` via `useWeirdConnections` (TanStack Query, 5-min staleTime); ranked connections with the reliability/unexpectedness/semantic-distance/novelty sub-score breakdown + a pairwise "how are these related?" picker (`usePathBetween` → `GET /v1/paths/between`). PathsTab/PathInsightsBlock re-labelled from harmonic/diversity/surprise → weirdness. |
 | `/status` | Platform status | Service health |
 | `/dev-tools/sentry-test` | Dev only | Throws synthetic Sentry error; `notFound()` in production |
 
@@ -297,9 +323,10 @@ apps/worldview-web/
 
 | URL | Purpose |
 |-----|---------|
-| `/api/v1/*` | Rewritten to `API_GATEWAY_URL` (S9) by `next.config.ts` |
+| `/api/v1/*` | Rewritten to `API_GATEWAY_URL` (S9) by `next.config.ts` rewrites |
+| `/api/v1/chat/[...path]` | **Dedicated route handler** (not a rewrite) — proxies all `/api/v1/chat/*` (incl. SSE `/stream`) with `no-transform` to avoid gzip-buffering the event stream. App Router route handlers take precedence over `rewrites()` |
 | `/api/version` | Returns frontend version info |
-| `/api/feedback` | Feedback submission endpoint |
+| `/status/api/uptime` | Public uptime probe for the status page (`app/(public)/status/api/uptime/route.ts`) |
 
 ### Redirect
 
@@ -367,9 +394,36 @@ apps/worldview-web/
 | `AlertsList` | Severity-grouped pending alerts |
 | `AlertHistoryTab` | Paginated history with severity + date + entity filters + Load More |
 | `AlertDetailSheet` | Right-anchored sheet + Suggested Actions strip |
-| `RuleManagerDialog` | Full CRUD alert rule manager (List + Edit tabs) |
+| `RuleManagerDialog` | Server-backed standing-rule manager (list/pause/edit/delete); opens `AlertWizard` (PLAN-0113) |
+| `AlertWizard` | Type-first 2-step rule creator/editor: 5 type cards → per-type editor + severity + notify + live NL summary; real `/v1/alert-rules` CRUD. Accepts `initialRuleType` + a partial `prefillCondition`/`prefillNames` so entry points can pre-scope a rule (PLAN-0113 W5) |
+| `condition-editors/*` | Per-type structured editors: `PriceCrossEditor`, `FundamentalCrossEditor`, `NewsVolumeEditor`, `NewsMomentumEditor`, `KgConnectionEditor`. Each accepts an optional partial `value` (prefill) + `names` (id→display-name for seeded chips) |
+| `InstrumentAlertButton` | "＋ Alert" affordance on the instrument detail header — opens `AlertWizard` pre-scoped to `PRICE_CROSS` with the instrument seeded (PLAN-0113 W5) |
+| `MetricPicker` | Fundamental metric dropdown sourced from S3 `/v1/fundamentals/screen/fields` (emits a backend-valid `metric_key`) |
 | `NotificationPreferencesDialog` | Quiet hours + severity floor settings |
 | `SeverityBadge` | LOW / MEDIUM / HIGH / CRITICAL colored badge |
+
+> **Standing alert rules (PLAN-0113 W4):** rule CRUD goes through `lib/api/alertRules.ts`
+> (gateway factory) + `lib/api/useAlertRules.ts` (TanStack hooks) → S9 `/v1/alert-rules`.
+> The 5 rule types (`PRICE_CROSS`, `NEWS_COUNT`, `NEWS_MOMENTUM`, `KG_CONNECTION`,
+> `FUNDAMENTAL_CROSS`) carry a discriminated-union `condition`. The legacy
+> localStorage rule layer (`lib/alerts/rules.ts`, `AlertRuleBuilder`) is retired —
+> `rules.ts` is now a thin type/`defaultRuleName` shim with no browser persistence.
+> Shared pickers: `components/common/EntityPicker` (real KG `entity_id` via
+> `searchFundamentals`) and `components/common/InstrumentPicker` (S3 `instrument_id`
+> via `searchInstruments`).
+>
+> **Creation entry points (PLAN-0113 W5, FR-11):** besides the `/alerts` page
+> (`RuleManagerDialog`), users can launch the wizard pre-scoped where they already
+> are: (1) the **instrument detail header** "＋ Alert" button
+> (`components/instrument/header/InstrumentAlertButton`) opens it on `PRICE_CROSS`
+> with the current `instrument_id` seeded (the user can switch to fundamental/news
+> types via Back — they key on the same subject); (2) the **KG path panel**
+> (`components/intelligence/PathBetweenPanel`) shows an "Alert on connection"
+> button once both entities are chosen, opening the wizard on `KG_CONNECTION` with
+> both `source_entity_id`/`target_entity_id` seeded. Both pass a partial
+> `prefillCondition` + a `prefillNames` map so the seeded chips and live NL summary
+> show tickers/names instead of UUIDs; the wizard still requires the user to
+> complete the remaining fields before Save enables.
 
 ### Chat Components (`components/chat/`)
 
@@ -410,7 +464,8 @@ This means:
 
 ### Gateway Client (`lib/gateway.ts`)
 
-The typed API client is a composition shim that merges 14 per-domain modules:
+The typed API client is a composition shim that merges 16 per-domain modules (spread in dependency
+order so cross-domain `this.*` calls resolve — e.g. instruments before search):
 
 ```typescript
 import { createGateway } from "@/lib/gateway"
@@ -434,17 +489,20 @@ pattern ensures the latest token is always used on every refetch.
 | `instruments.ts` | overview, quotes, OHLCV, fundamentals, context |
 | `portfolios.ts` | portfolios CRUD, holdings, transactions, realized P&L |
 | `watchlists.ts` | watchlists CRUD, members |
-| `alerts.ts` | alerts, history, acknowledge, snooze, rules |
+| `alerts.ts` | pending alerts, history, acknowledge, snooze |
+| `alertRules.ts` | standing alert-rule CRUD (`/v1/alert-rules`); `useAlertRules.ts` wraps it in TanStack hooks |
 | `news.ts` | top news, entity articles, article detail |
 | `screener.ts` | screen, saved screens |
 | `chat.ts` | threads, stream, messages |
-| `dashboard.ts` | briefing, movers, heatmap, economic calendar |
+| `briefing.ts` | morning brief, brief diff, brief chat/discuss, brief→alert |
+| `dashboard.ts` | dashboard bundle/snapshot, movers, heatmap, sparklines, calendars |
 | `knowledge-graph.ts` | entity graph, paths |
 | `intelligence.ts` | entity intelligence page data |
 | `search.ts` | entity + instrument search |
 | `brokerage.ts` | brokerage connections |
-| `prediction-markets.ts` | Polymarket data |
-| `feedback.ts` | user feedback submission |
+| `prediction-markets.ts` | Polymarket signals, categories, history |
+| `feedback.ts` | feedback submissions, feature votes, NPS, micro-survey, beta-program |
+| `notification-preferences.ts` | per-user notification preferences (`/v1/users/me/notification-preferences`) |
 
 ### Real-Time Patterns
 
@@ -456,7 +514,8 @@ pattern ensures the latest token is always used on every refetch.
 - Security: production enforces `wss://` (plain `ws://` throws a startup error in `next.config.ts`)
 
 **SSE (Chat Streaming)**:
-- `EventSource` on `/api/v1/chat/stream`
+- `fetch()` **POST** to `/api/v1/chat/stream` (not `EventSource` — EventSource is GET-only and cannot send the message body or `Authorization` header). The response body is read as a `ReadableStream` and parsed by `lib/sse-parser.ts`.
+- Served by the dedicated route handler `app/api/v1/chat/[...path]/route.ts` (with `no-transform`) rather than the `next.config.ts` rewrite, so the event stream is not gzip-buffered (frontend-rework Wave 3 streaming-paint fix).
 - State machine: `idle → sending → streaming → reconciling → settled`
 - `AbortController` per request for cancel support
 - Auto-scroll to bottom; stops if user scrolls up
@@ -639,7 +698,7 @@ The client component's `useQuery` finds prefetched data in cache → renders imm
 | Environment | jsdom (browser DOM simulation) |
 | Component testing | @testing-library/react 16.1.0 |
 | API mocking | MSW 2.6.8 (Mock Service Worker) |
-| Location | `__tests__/*.test.{ts,tsx}` — 130+ files |
+| Location | Co-located `**/__tests__/*.test.{ts,tsx}` — 400+ files |
 | Coverage | v8 provider; `pnpm test:coverage` |
 
 ```bash
@@ -657,7 +716,7 @@ Error states and empty states must also be covered for data-fetching components.
 |--------|--------|
 | Test runner | Playwright 1.59.1 |
 | Browsers | Desktop Chrome + Desktop Safari (WebKit) |
-| Location | `e2e/*.spec.ts` — 20+ spec files |
+| Location | `e2e/*.spec.ts` — 40+ spec files |
 | Server | Auto-started by Playwright (`pnpm dev`; `reuseExistingServer` locally) |
 | A11y | `@axe-core/playwright` for accessibility scans |
 
@@ -805,8 +864,12 @@ docker compose -f infra/compose/docker-compose.yml logs -f worldview-web
 
 ### 15.5 Keyboard Shortcuts
 
-Global shortcuts are registered in `lib/hotkey-registry.ts` via `react-hotkeys-hook`.
-Chord shortcuts (e.g., `g d` for dashboard) are handled by `hooks/useChordHotkeys.ts`.
+Global shortcuts use a custom data-driven registry: bindings are registered at runtime in
+`lib/hotkey-registry.ts` (the single source of truth that `StatusBar` and `HotkeyCheatSheet`
+also read, so the UI can't advertise an unwired chord). A single document-level keydown listener
+in `hooks/useChordHotkeys.ts` resolves completed chords (e.g. `g d`) against the registry,
+respecting a scope stack (modal > input > chart > table > page > global). No third-party
+hotkey library is used.
 
 | Shortcut | Action |
 |----------|--------|
@@ -831,7 +894,7 @@ Chord shortcuts (e.g., `g d` for dashboard) are handled by `hooks/useChordHotkey
 | ADR-F-04 | Dark mode only — `class="dark"` permanent on `<html>`; no toggle |
 | ADR-F-06 | `/(app)/*` protected route group — auth guard in group layout |
 | ADR-F-07 | Workspace layout in localStorage — user-customizable grid persists across sessions |
-| ADR-F-12 | `entity_id` ≠ `instrument_id` — distinct UUIDs; S9 `GET /v1/instruments/{id}/context` resolves both |
+| ADR-F-12 | `entity_id` ≠ `instrument_id` — distinct UUIDs; S9 `GET /v1/instruments/{id}/page-bundle` resolves both alongside the rest of the instrument-page data |
 | ADR-F-14 | HeatCell for % change values — 7-step colour scale for data-heavy tables |
 | ADR-F-15 | IBM Plex Mono for ALL numbers — single highest-impact change for professional appearance |
 

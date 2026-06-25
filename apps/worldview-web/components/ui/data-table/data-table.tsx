@@ -347,7 +347,7 @@ export function DataTable<TData>({
             : { height: ROW_HEIGHT_PX[density] }
         }
         className={cn(
-          "flex items-center border-b border-white/[0.06] cursor-default transition-none",
+          "flex items-center border-b border-border cursor-default transition-none",
           rowIdx % 2 === 0 ? "bg-white/[0.02]" : "",
           onRowClick && "cursor-pointer hover:bg-white/[0.05]",
           // PRD-0031 institutional convention: selected rows get a 2px left-border

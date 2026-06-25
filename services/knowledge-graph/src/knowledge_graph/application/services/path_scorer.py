@@ -27,6 +27,7 @@ from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
+from knowledge_graph.application.ports.graph_path_engine import edge_forward_at as _forward_at
 from knowledge_graph.domain.entities.path_insight import (
     PathEdge,
     PathInsight,
@@ -227,12 +228,16 @@ class PathScorer:
                 strict=False,
             )
         )
+        # ``forward`` carries per-edge traversal orientation for correct rendering
+        # (direction-agnostic for scoring — no sub-score reads it).  Missing entry
+        # (legacy RawPath) defaults to forward.
         edges = tuple(
             PathEdge(
                 relation_type=str(rt),
                 confidence=float(conf),
+                forward=_forward_at(raw_path.edge_forward, i),
             )
-            for rt, conf in zip(raw_path.rel_types, raw_path.edge_confs, strict=False)
+            for i, (rt, conf) in enumerate(zip(raw_path.rel_types, raw_path.edge_confs, strict=False))
         )
 
         harmonic = _harmonic_mean(raw_path.edge_confs)

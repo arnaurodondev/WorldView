@@ -6,17 +6,21 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
+from api_gateway.application.http_utils import downstream_to_http
 from api_gateway.clients import DownstreamError, get_map_layers, get_relevant_news
 from api_gateway.resolution import (
     InstrumentNotFoundError,
     resolve_security_id,
 )
-from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
+from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers, proxy_json_response
 from api_gateway.schemas import InstrumentSearchResult
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -76,12 +80,123 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         # Downstream now always receives a canonical instrument_id UUID
         # string (no ticker, no entity_id). The translation dance in
         # clients.get_company_overview has been deleted.
+        # WHY include_ohlcv=True: the single-instrument overview is requested
+        # by the instruments detail page which renders a chart.  The dashboard
+        # batch endpoint (overviews:batch) passes include_ohlcv=False instead
+        # to skip the OHLCV leg and save 1-3 s per instrument on page load.
         return await use_case.execute(
             company_id=str(resolved.instrument_id),
             make_headers=lambda: _auth_headers(request),
+            include_ohlcv=True,
         )
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
+
+
+# ── Batched company overview (FIX F-1) ──────────────────────────────────────
+#
+# WHY THIS EXISTS: dashboard widgets (PreMarketMoversWidget, SectorHeatmapWidget,
+# PortfolioSummary) previously fired one /v1/companies/{id}/overview per ticker
+# via TanStack `useQueries`. For a default page that meant 10-50+ parallel HTTP
+# round-trips just to look up GICS sector + ticker/name fields. This batch
+# endpoint fans-in to one POST request: the gateway runs the N legs in parallel
+# server-side and returns a `{ uuid: CompanyOverview | null }` map.
+#
+# WHY return_exceptions=True + null per-leg: each individual leg may fail
+# independently (instrument tombstoned, market-data slow, etc). The caller
+# treats `null` as "missing data, render placeholder" rather than failing the
+# whole widget. This mirrors the per-leg degradation policy in
+# `/v1/instruments/{id}/page-bundle`.
+#
+# WHY make_headers PER LEG (not a single header dict): InternalJWTMiddleware on
+# every downstream service enforces JTI replay detection. If we reused one
+# X-Internal-JWT across N parallel legs, all but one would be rejected.
+
+
+_BATCH_OVERVIEW_MAX_IDS = 50
+
+
+class _CompanyOverviewBatchRequest(BaseModel):
+    """Request body for POST /v1/companies/overviews:batch.
+
+    WHY max 50: 50 covers every legitimate use case today (the dashboard
+    widgets call with ≤20 ids) and bounds worst-case fan-out so a single
+    request can never DDoS market-data with hundreds of legs.
+    """
+
+    instrument_ids: list[str] = Field(..., min_length=1, max_length=_BATCH_OVERVIEW_MAX_IDS)
+
+
+@router.post("/companies/overviews:batch")
+async def company_overviews_batch(
+    body: _CompanyOverviewBatchRequest,
+    request: Request,
+) -> dict[str, dict[str, dict[str, Any] | None]]:
+    """Fan-in N company-overview lookups into one round-trip.
+
+    Returns ``{ "overviews": { "<uuid>": CompanyOverview | null, ... } }`` —
+    null for any leg that errored (downstream 404/500/timeout). The shape
+    preserves request mapping via id-keyed map so callers don't need to align
+    indices.
+
+    Auth: same as the single-overview route — 401 when unauthenticated.
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Dedupe in case the caller passes the same id twice (cheap insurance
+    # against burning extra downstream calls). dict.fromkeys preserves order.
+    unique_ids: list[str] = list(dict.fromkeys(body.instrument_ids))
+
+    from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
+
+    clients = _clients(request)
+    use_case = CompanyOverviewUseCase(
+        http_client=clients.market_data,
+        settings=request.app.state.settings,
+        service_clients=clients,
+    )
+
+    async def _one(instrument_id: str) -> dict[str, Any]:
+        # WHY resolve per id: callers may pass tickers OR UUIDs (the single-id
+        # route accepts both via PRD-0089 F2). Resolving here keeps batch
+        # behaviour symmetric with the single-id endpoint.
+        try:
+            resolved = await resolve_security_id(
+                instrument_id,
+                clients=clients,
+                headers=_auth_headers(request),
+            )
+        except InstrumentNotFoundError as exc:
+            raise DownstreamError("market-data", 404, f"Not found: {exc.identifier}") from exc
+
+        return await use_case.execute(
+            company_id=str(resolved.instrument_id),
+            # WHY lambda calling _auth_headers afresh: each leg mints a unique
+            # JTI so InternalJWTMiddleware's replay detection accepts the fan-out.
+            make_headers=lambda: _auth_headers(request),
+        )
+
+    # asyncio.gather with return_exceptions=True so a single failure doesn't
+    # tank the whole batch — we map exceptions to null below.
+    results = await asyncio.gather(
+        *(_one(_id) for _id in unique_ids),
+        return_exceptions=True,
+    )
+
+    overviews: dict[str, dict[str, Any] | None] = {}
+    for original_id, result in zip(unique_ids, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.info(
+                "company_overviews_batch_leg_failed",
+                instrument_id=original_id,
+                error=str(result),
+            )
+            overviews[original_id] = None
+        else:
+            overviews[original_id] = result
+
+    return {"overviews": overviews}
 
 
 @router.get("/instruments/{instrument_id}/page-bundle")
@@ -137,6 +252,151 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
     )
 
 
+# ── Paginated OHLCV (PLAN-0099 W4-I) ─────────────────────────────────────────
+#
+# WHY this endpoint exists: the instruments page currently fetches 60/90 days of
+# bars via the page-bundle and has no way to scroll into the past.  This endpoint
+# adds cursor-based backwards pagination so the chart can lazy-load more history
+# without re-fetching recent bars.
+#
+# Cursor design: ``before`` is an exclusive ISO-date upper bound.  The caller
+# receives ``cursor`` in the response pointing at the oldest bar returned; the
+# next page is fetched as ``?before=<cursor>``.  This mirrors the "load older"
+# UX pattern used by most financial chart libraries.
+#
+# WHY ``limit`` cap at 500: 300 bars is ~1 year of daily data — more than enough
+# for a single chart view.  Capping at 500 prevents accidentally returning the
+# entire multi-year dataset in one call.
+
+
+@router.get("/instruments/{instrument_id}/ohlcv")
+async def instrument_ohlcv_paginated(
+    instrument_id: str,
+    request: Request,
+    timeframe: str = Query("1d", pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1w|1M)$"),
+    limit: int = Query(300, ge=1, le=500, description="Number of bars to return"),
+    before: str | None = Query(
+        None,
+        description="ISO date cursor (exclusive upper bound). "
+        "Omit to get the most recent `limit` bars. "
+        "Pass the `cursor` from a previous response to page backwards.",
+    ),
+) -> Any:
+    """Paginated OHLCV bars for a single instrument (PLAN-0099 W4-I).
+
+    Returns ``{ "bars": [...], "cursor": "<oldest_bar_date>" }`` so the frontend
+    can call ``?before=<cursor>`` to load older history without re-fetching
+    recent bars.
+
+    Query params:
+      - ``timeframe``: bar resolution (default ``1d``).
+      - ``limit``: number of bars (default 300, max 500).
+      - ``before``: exclusive ISO-date upper bound.  Omit to get the most
+        recent ``limit`` bars.
+
+    WHY resolve_security_id: PRD-0089 F2 — the URL slug may be a ticker
+    (e.g. "AAPL").  market-data OHLCV only accepts UUIDs.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+
+    # Build S3 query params.
+    # WHY compute start from limit when before is set: S3 accepts start/end
+    # date-range params, not a bare row count.  When the caller supplies a
+    # ``before`` cursor we compute a start date far enough back to cover
+    # ``limit`` trading days (using 1.5x calendar-day multiplier to account
+    # for weekends + holidays) and use before as the exclusive end date.
+    # When no cursor is given, we compute start relative to today instead.
+    #
+    # The S3 ``limit`` param (default 200, no declared upper cap) is forwarded
+    # to ensure no silent truncation below our requested bar count.
+    params: dict[str, Any] = {"timeframe": timeframe, "limit": limit}
+
+    if timeframe in ("1m", "5m", "15m", "30m"):
+        # Intraday: 1 calendar day ≈ 1 trading day of bars
+        cal_days_per_bar = 1
+    elif timeframe == "1h":
+        cal_days_per_bar = 1
+    else:
+        # Daily / weekly / monthly: use 1.5 calendar-day factor to cover
+        # weekends and public holidays so we don't under-fetch.
+        cal_days_per_bar = 2  # conservative: 2 calendar days per trading day
+
+    lookback_days = limit * cal_days_per_bar
+
+    if before is not None:
+        # Cursor-based page: [start, before) window sized to cover ``limit`` bars.
+        # WHY fromisoformat: before is user-supplied; parse strictly to validate
+        # the date format before forwarding to S3.
+        try:
+            before_date = datetime.fromisoformat(before).date()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid `before` date format: {before!r}. Use ISO format YYYY-MM-DD.",
+            ) from exc
+        start_date = before_date - timedelta(days=lookback_days)
+        params["start"] = start_date.isoformat()
+        params["end"] = before_date.isoformat()
+    else:
+        # Most-recent page: look back far enough from today to cover ``limit`` bars.
+        params["start"] = (datetime.now(tz=UTC) - timedelta(days=lookback_days)).date().isoformat()
+
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{resolved.instrument_id}",
+        params=params,
+        headers=_auth_headers(request),
+    )
+
+    if resp.status_code >= 400:
+        # Forward 4xx verbatim (caller-safe) and sanitize 5xx (BUG-7).
+        return proxy_json_response(request, resp)
+
+    raw = resp.json()
+    items: list[dict[str, Any]] = raw.get("items") or []
+
+    # Normalise S3 OHLCV bar shape → frontend-friendly float-typed bars.
+    # WHY normalise here (not in the frontend): keeps the TypeScript types
+    # simple (all numeric fields are number, not string | number).
+    bars: list[dict[str, Any]] = [
+        {
+            "timestamp": item.get("bar_date", ""),
+            "open": float(item["open"]) if item.get("open") else 0.0,
+            "high": float(item["high"]) if item.get("high") else 0.0,
+            "low": float(item["low"]) if item.get("low") else 0.0,
+            "close": float(item["close"]) if item.get("close") else 0.0,
+            "volume": item.get("volume") or 0,
+        }
+        for item in items
+    ]
+
+    # Cursor: the timestamp of the oldest (first) bar in the sorted result.
+    # WHY oldest bar: the frontend pages backwards (loads older history), so
+    # passing the oldest returned date as ``before`` on the next call yields
+    # the next earlier page without overlap.
+    cursor: str | None = bars[0]["timestamp"] if bars else None
+
+    return {
+        "instrument_id": str(resolved.instrument_id),
+        "timeframe": timeframe,
+        "bars": bars,
+        # ``cursor`` is None when there are no bars (exhausted history).
+        "cursor": cursor,
+    }
+
+
 # ── News (public) ─────────────────────────────────────────
 
 
@@ -153,7 +413,7 @@ async def relevant_news(
     try:
         return await get_relevant_news(_clients(request), limit=limit, headers=_system_headers(request))
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail) from e
+        raise downstream_to_http(e) from e
 
 
 # ── Map ───────────────────────────────────────────────────
@@ -190,7 +450,51 @@ async def instruments_lookup(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
+
+
+# ── Batch ticker → instrument_id resolve (PLAN-0099 W4) ─────────────────────
+
+
+class _TickerResolveBatchRequest(BaseModel):
+    tickers: list[str] = Field(..., min_length=1, max_length=30, description="Ticker symbols to resolve")
+
+
+@router.post("/instruments/resolve-tickers")
+async def resolve_tickers_batch(body: _TickerResolveBatchRequest, request: Request) -> Any:
+    """Batch-resolve ticker symbols → instrument_id in one round-trip.
+
+    WHY THIS EXISTS: MarketSnapshotWidget used to fire N parallel
+    GET /v1/search/instruments?q={ticker} requests (one per ticker) which
+    each take 2-4s on cold start because the search does an ILIKE '%AAPL%'
+    scan. This endpoint fans out to GET /api/v1/instruments/lookup?symbol=X
+    (exact indexed match, ~20ms) for each ticker concurrently and returns
+    a single {ticker: instrument_id | null} map. On a 9-ticker dashboard
+    snapshot this reduces 9 serial-start 2-4s calls to one ~200ms call.
+
+    Requires authentication. Returns null for tickers not found in S3.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    async def _resolve_one(ticker: str) -> tuple[str, str | None]:
+        try:
+            resp = await clients.market_data.get(
+                "/api/v1/instruments/lookup",
+                params={"symbol": ticker},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return ticker, data.get("instrument_id") or data.get("id")
+            return ticker, None
+        except Exception:
+            return ticker, None
+
+    pairs = await asyncio.gather(*[_resolve_one(t) for t in body.tickers])
+    return dict(pairs)
 
 
 # ── Peers (W5-T-S9-01) ───────────────────────────────────────────────────────
@@ -231,7 +535,7 @@ async def instrument_peers(instrument_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Manual price refresh (PLAN-0036 W1-11) ────────────────────────────────────
@@ -392,7 +696,7 @@ async def search_instruments(
         params={"query": q, "limit": limit},
         headers=_system_headers(request),
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)
 
 
 # ── Document Search (PLAN-0064 Wave 4) ──────────────────────────────────────
@@ -422,4 +726,4 @@ async def search_documents(request: Request) -> Any:
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise HTTPException(status_code=503, detail="Search backend unavailable") from exc
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return proxy_json_response(request, resp)

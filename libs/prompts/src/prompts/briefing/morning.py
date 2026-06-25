@@ -2,6 +2,49 @@
 
 VERSION HISTORY
 ---------------
+- 4.8 — Brief-quality eval 2026-06-14 fixes (BUG 4 + BUG 5):
+          (BUG 4 — causal over-attribution / sentiment-sign mismatch) The brief
+          grounded a holding's driver on a topically-adjacent article even when
+          the article's sentiment SIGN contradicted the price move (e.g. AMZN
+          -0.88% "explained" by a POSITIVE Graviton5 margin article) and pinned
+          unrelated articles to the wrong holding. v4.8 strengthens rung 1 of the
+          attribution ladder: a ``related: [cN]`` article may back a holding's
+          driver ONLY IF (a) it is THAT holding's own ``related:`` line (never
+          another holding's), AND (b) its sentiment sign is CONSISTENT with the
+          move (a positive article cannot explain a down move, and vice-versa).
+          When the only related article's sign contradicts the move, the model
+          must NOT assert it as the cause — it downgrades to the sector rung, or
+          flags the contradiction explicitly, or falls to "idiosyncratic — no
+          identifiable driver". A sign-consistent same-entity article still
+          grants a grounded driver (we do NOT make everything idiosyncratic).
+          (BUG 5 — stray market-snapshot citation + range markers) The Market
+          Snapshot / tape line (SPY/QQQ/VIX) is derived from QUOTE data, not an
+          article, yet the model attached a random run-varying [cN] to it and
+          sometimes emitted a range marker like [c13-c20]. v4.8 instructs that
+          the Market Snapshot line carries NO [cN], and that citation markers are
+          always SINGULAR [cN] — never a [cA-cB] range. (Parser-side: the backend
+          now strips non-singular range markers so they never leak to the user.)
+- 4.7 — PRD-0030 causal-attribution slice (P2, 2026-06-14): the prior brief
+        DESCRIBED price moves the user can already see and filled the "why"
+        gap with fabricated guesses ("TSLA +3.17% — no direct news;
+        momentum-driven move"). Investigation (design report) found the root
+        cause: the global /news/top feed carries NO entity attribution, so
+        the LLM could never link a holding to a story, AND the prompt had no
+        mechanism (or licence) to attribute drivers. v4.7 adds:
+          (a) a per-holding DRIVER ATTRIBUTION ladder — entity news (cited) →
+              sector/peer (hedged) → macro/event (cited) → else literally
+              "idiosyncratic — no identifiable driver";
+          (b) a FORBIDDEN list for speculative filler ("momentum-driven",
+              "may be riding", "no catalyst confirmed", generic "tracking the
+              broader market");
+          (c) documentation of the new per-holding ``related: [cN]`` and
+              ``sector:`` context lines the gatherer now feeds (PRD-0030
+              P0/P1 in briefing_context.py + brief_context_formatter.py);
+          (d) a marker-convention fix [N#] → [cN]: the backend resolver
+              ``brief_parser._CN_CITATION_RE`` only matches [cN], so the
+              prior [N#] markers were stripped as orphans and morning-brief
+              per-bullet citations never resolved. Few-shot Examples A/B were
+              re-shot to demonstrate the ladder + [cN] markers.
 - 2.1 — Original section-based prompt: ``Market Overview`` / ``Portfolio Impact`` / etc.
 - 2.2 — PLAN-0048 Wave A: split output into a ``## SUMMARY`` block (1-2 sentences)
         and a ``## DETAILS`` block (the structured sections), separated by a literal
@@ -111,20 +154,17 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.4 → 4.5 as part of PLAN-0103 W11 (adaptive Summary length).
-    # User feedback on v4.4: a fixed 50-word Summary is fine for a small
-    # portfolio on a quiet day but truncates the useful synthesis for a
-    # 30+ position book or a very active overnight session.  v4.5 replaces
-    # the fixed cap with a ~100-word target and explicit size bands keyed
-    # off portfolio breadth + market activity (hard cap 200 words).
-    version="4.6",
+    # Bumped 4.7 → 4.8: brief-quality eval BUG 4 (sentiment-sign gate on driver
+    # attribution + same-holding-only) and BUG 5 (no [cN] on the Market Snapshot
+    # tape line; singular [cN] markers only, no [cA-cB] ranges).
+    version="4.8",
     description=(
-        "Morning market briefing v4.5 — v4.4 contract (## Summary + 6 mandatory "
-        "sections + few-shot Examples A/B + split word budget) plus ADAPTIVE "
-        "Summary length: target ~100 words, scaling between 30 and 200 words "
-        "based on portfolio breadth and overnight market activity (small + "
-        "quiet → 30-60w; medium + normal → 80-150w; large or very active → "
-        "up to 200w).  Details cap remains ≤ 700 words"
+        "Morning market briefing v4.8 — v4.7 causal-attribution ladder plus a "
+        "sentiment-SIGN + same-holding gate (a [cN] article may back a driver "
+        "only if it is THAT holding's related: line AND its sentiment sign "
+        "matches the move; else downgrade to sector/idiosyncratic), the Market "
+        "Snapshot tape line carries NO citation (it is quote-derived), and all "
+        "markers are singular [cN] (no [cA-cB] ranges)."
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -132,10 +172,57 @@ MORNING_BRIEFING = PromptTemplate(
         "before market open.\n"
         "Goal: tell them what changed overnight that affects their decisions today.\n\n"
         "You have:\n"
-        "  - Portfolio: <holdings + sector + last close>\n"
+        "  - Portfolio: <holdings + overnight P&L>. Each holding may carry "
+        "indented context lines directly beneath its price:\n"
+        "      * ``related: [cN] <headline> (sentiment, rel%)`` — entity-specific "
+        "news already attributed to THIS holding (the likely driver of its move).\n"
+        "      * ``sector: <Sector> +X.XX%`` — the holding's sector and its "
+        "overnight return (a grounded fallback driver when there is no direct news).\n"
         "  - Overnight tape: <SPY/QQQ/VIX>\n"
         "  - Macro calendar: <events today + tomorrow>\n"
         "  - News (pre-ranked by relevance x portfolio overlap): <list>\n\n"
+        # ── Causal-attribution ladder (PRD-0030 P2) ───────────────────────────
+        # WHY: the prior brief restated price moves the user can already see and
+        # filled the gap with fabricated guesses ("momentum-driven move", "may be
+        # riding broader tech rally", "no catalyst confirmed"). For EVERY holding
+        # you MUST explain the LIKELY DRIVER of its move by walking this ladder
+        # IN ORDER, stopping at the first rung that has data — and cite the fed
+        # item you used.
+        "## Driver Attribution (MANDATORY for every holding)\n"
+        "For each holding, explain WHY it moved by walking this ladder in order, "
+        "stopping at the first rung with supporting data IN THE CONTEXT:\n"
+        "  1. ENTITY NEWS — if the holding has its OWN ``related: [cN]`` line, you "
+        "MAY attribute the move to that story and cite its [cN] — but ONLY IF BOTH "
+        "guards hold:\n"
+        "       (a) SAME HOLDING: the ``related:`` line is the one printed directly "
+        "beneath THIS holding. NEVER attribute a holding's move to another "
+        "holding's article or to an article in the general News list. If an "
+        "article is not on this holding's own ``related:`` line, it is not its "
+        "driver.\n"
+        "       (b) SIGN MATCH: the article's sentiment sign (shown as "
+        "'(positive/negative/neutral, rel%)') must be CONSISTENT with the move. A "
+        "POSITIVE article cannot explain a DOWN move, and a NEGATIVE article cannot "
+        "explain an UP move. If the sign contradicts the move, do NOT assert that "
+        "article as the cause: either (i) state the contradiction explicitly "
+        "('the [cN] story is positive but the stock is down — net effect "
+        "unclear'), or (ii) drop to the SECTOR rung below, or (iii) fall to "
+        "'idiosyncratic — no identifiable driver'. A NEUTRAL article may support "
+        "either direction. When the sign matches, lead with the driver and cite "
+        "[cN].\n"
+        "  2. SECTOR / PEER — else if the holding has a ``sector:`` line, attribute "
+        "the move to the sector ('tracking <Sector> +X.XX%'), using hedged "
+        "language (tracking, in line with) — sector co-movement is correlation, "
+        "not proven causation.\n"
+        "  3. MACRO / EVENT — else if a macro print or scheduled event in the "
+        "context plausibly explains it, attribute to that and cite it.\n"
+        "  4. IDIOSYNCRATIC — else, and ONLY when the holding has NEITHER a "
+        "``related:`` line NOR a ``sector:`` line, write exactly: "
+        "'idiosyncratic — no identifiable driver'.\n"
+        "FORBIDDEN: never write speculative filler such as 'momentum-driven', "
+        "'may be riding', 'no catalyst confirmed', 'tracking the broader market', "
+        "or any guess not grounded in a fed item. If you cannot ground it, it is "
+        "'idiosyncratic — no identifiable driver'.\n"
+        "NEVER fabricate a driver or cite a [cN] that is not in the context.\n\n"
         # ── Output structure (Summary + 6 mandatory sections) ─────────────────
         # WHY a leading ``## Summary``: the dashboard renders only this block
         # in the collapsed card; the user clicks "Read more" to expand into
@@ -159,8 +246,10 @@ MORNING_BRIEFING = PromptTemplate(
         "heading and a single placeholder line (e.g. ``- No notable risks "
         "identified today``); do NOT omit the heading. Empty sections still need "
         "their bullet line.\n\n"
-        "  1. **Market Snapshot** — one sentence. Futures + VIX. If market data is missing, "
-        "emit ``- Market data unavailable``.\n"
+        "  1. **Market Snapshot** — one sentence. Futures + VIX. This line is "
+        "derived from QUOTE/tape data, NOT from a news article — it MUST carry NO "
+        "[cN] citation (do not attach a citation to the SPY/QQQ/VIX line). If "
+        "market data is missing, emit ``- Market data unavailable``.\n"
         "  2. **Your Portfolio Today** — bullet per material holding. Lead with "
         "implication. If portfolio is empty, emit ``- No material holdings to report``.\n"
         "  3. **Macro Today** — bullet list of today/tomorrow's prints. If empty, "
@@ -179,12 +268,20 @@ MORNING_BRIEFING = PromptTemplate(
         # on every factual assertion — the LLM is forbidden from citing a
         # number that is not in the supplied context block.
         "## Citation Rules (MANDATORY)\n"
-        "The context items below are numbered [N1], [N2], [N3], … in order.\n"
-        "Every factual bullet (especially in **News That Matters To You** and "
-        "**Macro Today**) must end with at least one [N#] citation referencing "
-        "the context item(s) it draws from.\n"
+        "The context items below are numbered [c1], [c2], [c3], … in order.\n"
+        "Every factual bullet (especially in **Your Portfolio Today**, **News That "
+        "Matters To You** and **Macro Today**) must end with at least one [cN] "
+        "citation referencing the context item(s) it draws from.\n"
+        "When a holding has a ``related: [cN]`` line, REUSE that exact [cN] in the "
+        "holding's bullet so the driver resolves to its source.\n"
         "Use ONLY citation numbers that exist in the context (i.e. ≤ total items).\n"
-        "Do NOT use [c1]/[c2] (legacy v3.0 marker form) — only [N1]/[N2]/[N3].\n"
+        "Use the [cN] form (e.g. [c1], [c2]) — do NOT use the bare [N#] form, "
+        "which the backend cannot resolve into a source.\n"
+        "Markers are ALWAYS SINGULAR: write [c3][c7] for two sources — NEVER a "
+        "range like [c3-c7] (a hyphen/dash between two numbers). A range marker "
+        "is unresolvable and the backend strips it.\n"
+        "The **Market Snapshot** SPY/QQQ/VIX line is quote-derived, NOT a news "
+        "claim — it MUST carry NO [cN]. Never attach a citation to the tape line.\n"
         "Placeholder lines (when a section has no data) do NOT need a citation.\n\n"
         # ── Tightened MUST language (v4.3) + few-shot examples ────────────────
         # WHY tighten + show: v4.2 imperative language alone wasn't enough — live
@@ -205,11 +302,11 @@ MORNING_BRIEFING = PromptTemplate(
         "## Summary\n"
         "AI-infrastructure rally extends overnight and tilts the book "
         "constructive: your top three by impact — **MSFT** (+1.1% on the "
-        "Anthropic-Azure win [N3]), **AAPL** (+0.8% on the Vision Pro "
-        "shipment beat [N2]) and **NVDA** (flat but Dell's +40% AI-server "
-        "backlog [N6] re-confirms hyperscaler capex into next print) — "
+        "Anthropic-Azure win [c3]), **AAPL** (+0.8% on the Vision Pro "
+        "shipment beat [c2]) and **NVDA** (flat but Dell's +40% AI-server "
+        "backlog [c6] re-confirms hyperscaler capex into next print) — "
         "should add to a strong open. Watch the 08:30 CPI print "
-        "(consensus 3.1% YoY [N4]): a hot read would re-price the duration "
+        "(consensus 3.1% YoY [c4]): a hot read would re-price the duration "
         "leg and amplify drawdown given top-3 concentration at 38% of the "
         "book. FOMC minutes at 14:00 ET could re-rate Q3-cut probability. "
         "VIX 13.8 keeps protective puts cheap if you want to hedge AAPL "
@@ -218,23 +315,33 @@ MORNING_BRIEFING = PromptTemplate(
         "\n"
         "## Details\n"
         "**Market Snapshot**\n"
-        "- SPY +0.35%, QQQ +0.62%, VIX 13.8 — risk-on tone pre-mkt [N1]\n"
+        "- SPY +0.35%, QQQ +0.62%, VIX 13.8 — risk-on tone pre-mkt\n"
+        # WHY this Portfolio block (PRD-0030): demonstrates the attribution
+        # ladder per holding — rung 1 (entity news, cited), rung 2 (sector
+        # fallback, hedged), rung 4 (idiosyncratic, only when no related/
+        # sector line was fed). The LLM imitates this SHAPE.
         "**Your Portfolio Today**\n"
-        "- AAPL +0.8% pre-mkt on Vision Pro shipment beat — tailwind for your 12% weight [N2]\n"
-        "- MSFT +1.1% on Azure-AI win at Anthropic — confirms cloud capex thesis [N3]\n"
-        "- NVDA flat — no overnight news; earnings still 2 weeks out\n"
+        "- AAPL +0.8% pre-mkt — driven by the Vision Pro shipment beat [c2]; tailwind for your 12% weight\n"
+        "- MSFT +1.1% — Azure-AI win at Anthropic confirms the cloud capex thesis [c3]\n"
+        "- JPM +0.4% — no stock-specific news; tracking Financial Services +0.30% [c10]\n"
+        # WHY (BUG 4 — sign gate): AMZN's only related: article is POSITIVE but the
+        # stock is DOWN, so the model must NOT assert it as the cause — it flags the
+        # contradiction instead of inventing a "sell the news" story.
+        "- AMZN -0.9% — the [c11] Graviton5 margin story is positive but the stock "
+        "is down; net effect unclear, tracking Consumer Discretionary -0.4% [c12]\n"
+        "- NVDA +0.1% — idiosyncratic — no identifiable driver\n"
         "**Macro Today**\n"
-        "- CPI 08:30 ET, consensus 3.1% YoY (prev 3.2%); hot print would re-price your duration risk [N4]\n"
-        "- FOMC minutes 14:00 ET — watch language on Q3 cuts [N5]\n"
+        "- CPI 08:30 ET, consensus 3.1% YoY (prev 3.2%); hot print would re-price your duration risk [c4]\n"
+        "- FOMC minutes 14:00 ET — watch language on Q3 cuts [c5]\n"
         "**News That Matters To You**\n"
-        "- Dell +40% on AI-server backlog — confirms hyperscaler capex; MSFT/AAPL beneficiaries [N6]\n"
-        "- Palantir +12% on DoD contract — adjacent to your defence sleeve [N7]\n"
-        "- Anthropic raises $65B at $965B — cloud demand tailwind for MSFT Azure [N8]\n"
+        "- Dell +40% on AI-server backlog — confirms hyperscaler capex; MSFT/AAPL beneficiaries [c6]\n"
+        "- Palantir +12% on DoD contract — adjacent to your defence sleeve [c7]\n"
+        "- Anthropic raises $65B at $965B — cloud demand tailwind for MSFT Azure [c8]\n"
         "**Risks + Opportunities**\n"
         "- Concentration: top-3 holdings = 38% of book; CPI surprise would amplify drawdown\n"
         "- Opportunity: VIX 13.8 makes protective AAPL puts cheap if you want hedge through earnings\n"
         "**Bonus context**\n"
-        "- 10Y yield 4.21% (+3bps overnight) — duration drag on growth names if it breaks 4.30% [N9]\n"
+        "- 10Y yield 4.21% (+3bps overnight) — duration drag on growth names if it breaks 4.30% [c9]\n"
         "\n"
         # ── Example B — Quiet day ─────────────────────────────────────────────
         "### Example B — Quiet day (sparse data, placeholder lines)\n"
@@ -244,10 +351,12 @@ MORNING_BRIEFING = PromptTemplate(
         "\n"
         "## Details\n"
         "**Market Snapshot**\n"
-        "- SPY closed 521.40, QQQ 445.10, VIX 12.6 — market data thin pre-mkt [N1]\n"
+        "- SPY closed 521.40, QQQ 445.10, VIX 12.6 — market data thin pre-mkt\n"
+        # WHY: on a quiet day a holding with NO related: and NO sector: line
+        # must read 'idiosyncratic — no identifiable driver' — never a guess.
         "**Your Portfolio Today**\n"
-        "- AAPL flat pre-mkt — no news\n"
-        "- MSFT flat pre-mkt — no news\n"
+        "- AAPL flat pre-mkt — idiosyncratic — no identifiable driver\n"
+        "- MSFT flat pre-mkt — idiosyncratic — no identifiable driver\n"
         "**Macro Today**\n"
         "- No major economic releases scheduled\n"
         "**News That Matters To You**\n"
@@ -256,7 +365,7 @@ MORNING_BRIEFING = PromptTemplate(
         "- No notable risk signals identified today. Watch for tomorrow's CPI release.\n"
         "**Bonus context**\n"
         "- Anthropic raised $65B at $965B valuation — cloud capex tailwind "
-        "for hyperscalers if you re-weight to AAPL/MSFT [N2]\n"
+        "for hyperscalers if you re-weight to AAPL/MSFT [c2]\n"
         "\n"
         # ── End examples ──────────────────────────────────────────────────────
         "Now produce the brief for the input below. Follow the shape of "
@@ -277,7 +386,7 @@ MORNING_BRIEFING = PromptTemplate(
         "(5+ material developments overnight): up to 200 words.\n"
         "Hard cap: 200 words.\n"
         "Lead with the single most important takeaway. Mention top 1-3 holdings "
-        "by P&L impact when summary > 50 words. Always cite [N#] for facts.\n"
+        "by P&L impact when summary > 50 words. Always cite [cN] for facts.\n"
         "## Details block: ≤ 1200 words across all 6 sections combined. "
         "Per-section guidance — bullet length is a SOFT target: aim for ~30-50 "
         "words per bullet, but EXPAND up to ~100 words when the data is complex, "

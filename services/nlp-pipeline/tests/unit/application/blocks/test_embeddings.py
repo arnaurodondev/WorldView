@@ -182,9 +182,31 @@ class TestChunkSection:
 @pytest.mark.unit
 class TestRunEmbeddingsBlock:
     @pytest.mark.asyncio
-    async def test_section_embeddings_for_all_tiers(self) -> None:
-        """Section embeddings are generated for ALL routing tiers."""
+    async def test_section_embeddings_default_on(self) -> None:
+        """Section embeddings default to ON (MEDIUM/DEEP keep their old behavior)."""
         sections = [_make_section("Apple quarterly results exceeded guidance.")]
+        client = _make_embedding_client()
+
+        _, _chunk_embeddings, section_embeddings, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,  # MEDIUM/DEEP
+        )
+
+        assert len(section_embeddings) == 1
+        assert not failures
+
+    @pytest.mark.asyncio
+    async def test_light_tier_chunks_yes_sections_no(self) -> None:
+        """PLAN-0111 B-1/B-2: LIGHT gets chunk embeddings but NOT section embeddings.
+
+        This mirrors what the article consumer now passes for the LIGHT tier:
+        chunk embeddings ON (so LIGHT is semantically retrievable), section
+        embeddings OFF (dead weight — chat only queries chunk granularity).
+        """
+        sections = [_make_section("Apple. Tesla. Google. Amazon. Microsoft raised quarterly dividends.")]
         client = _make_embedding_client()
 
         _, chunk_embeddings, section_embeddings, failures = await run_embeddings_block(
@@ -192,11 +214,12 @@ class TestRunEmbeddingsBlock:
             embedding_client=client,
             model_id="bge",
             instruction_prefix="",
-            generate_chunk_embeddings=False,  # LIGHT tier
+            generate_chunk_embeddings=True,
+            generate_section_embeddings=False,  # LIGHT — no section vectors
         )
 
-        assert len(section_embeddings) == 1
-        assert len(chunk_embeddings) == 0  # LIGHT — no chunks
+        assert len(chunk_embeddings) >= 1  # LIGHT now IS chunk-embedded
+        assert len(section_embeddings) == 0  # dead-weight section vectors suppressed
         assert not failures
 
     @pytest.mark.asyncio

@@ -82,6 +82,264 @@ class TestOHLCVBulkUpsertSQL:
         session.execute.assert_not_called()
 
 
+def _make_bars(n: int) -> list[OHLCVBar]:
+    """Build *n* distinct OHLCV bars (distinct bar_date so no in-batch conflict)."""
+    base = datetime(2020, 1, 1, tzinfo=UTC)
+    return [
+        OHLCVBar(
+            instrument_id="inst-1",
+            timeframe=Timeframe.ONE_MIN,
+            bar_date=base.replace(minute=i % 60, hour=(i // 60) % 24, day=1 + (i // 1440)),
+            open=Decimal("100"),
+            high=Decimal("105"),
+            low=Decimal("99"),
+            close=Decimal("103"),
+            volume=1000 + i,
+            provider_priority=ProviderPriority(provider="alpaca", priority=100),
+        )
+        for i in range(n)
+    ]
+
+
+class TestOHLCVBulkUpsertChunking:
+    """Regression: combined upserts must chunk under Postgres's 65_535 param cap.
+
+    HEAD batched an entire consume-batch (tens of thousands of bars) into ONE
+    multi-row INSERT.  With ~12-13 columns/row that blew past the 65_535
+    bound-parameter wire limit, failed the statement, stalled the Kafka offset
+    and crash-looped the ohlcv-consumer.  The repository now chunks every
+    multi-row INSERT so no single statement can ever exceed the limit.
+    """
+
+    # Derive expectations from the repository's REAL constants so this regression
+    # test follows boundary changes (BUG: hardcoded 5_000/65_535 broke when the
+    # guard was tightened to the true asyncpg limit 32_767 + 2_000-row chunks).
+    from market_data.infrastructure.db.repositories.ohlcv_repo import (
+        _MAX_PARAMS as _PARAM_CEILING,
+    )
+    from market_data.infrastructure.db.repositories.ohlcv_repo import (
+        _UPSERT_CHUNK_ROWS as _CHUNK_ROWS,
+    )
+
+    _MAX_COLS = 13
+
+    @staticmethod
+    def _expected_chunks(n_rows: int, chunk: int) -> int:
+        return (n_rows + chunk - 1) // chunk  # ceil
+
+    async def test_with_priority_chunks_large_batch(self):
+        """A multi-chunk batch is split into multiple bounded INSERTs."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        n = self._CHUNK_ROWS * 6 + 345
+        await repo.bulk_upsert_with_priority(_make_bars(n))
+        assert session.execute.call_count == self._expected_chunks(n, self._CHUNK_ROWS)
+        self._assert_chunks_bounded(session, n_total=n)
+
+    async def test_derived_chunks_large_batch(self):
+        """The derived upsert path chunks identically."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        n = self._CHUNK_ROWS * 5 + 1
+        await repo.bulk_upsert_derived(_make_bars(n))
+        assert session.execute.call_count == self._expected_chunks(n, self._CHUNK_ROWS)
+        self._assert_chunks_bounded(session, n_total=n)
+
+    async def test_exactly_one_chunk_at_boundary(self):
+        """Exactly one chunk's worth of rows fits in a single INSERT (boundary)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        await repo.bulk_upsert_with_priority(_make_bars(self._CHUNK_ROWS))
+        assert session.execute.call_count == 1
+
+    async def test_one_over_boundary_splits(self):
+        """One row over a chunk boundary must split into 2 chunks (none exceeding the cap)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        await repo.bulk_upsert_with_priority(_make_bars(self._CHUNK_ROWS + 1))
+        assert session.execute.call_count == 2
+        self._assert_chunks_bounded(session, n_total=self._CHUNK_ROWS + 1)
+
+    def _assert_chunks_bounded(self, session: AsyncMock, *, n_total: int) -> None:
+        """Every executed chunk's row count keeps params < the wire limit, and
+        the chunks together cover exactly ``n_total`` rows (round-trip safety)."""
+        total_rows = 0
+        for call in session.execute.call_args_list:
+            stmt = call.args[0]
+            # Compile against the postgres dialect and count the bound params —
+            # this is exactly what the wire protocol would carry.
+            compiled = stmt.compile(
+                dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect()
+            )
+            n_params = len(compiled.params)
+            assert n_params < self._PARAM_CEILING, f"chunk has {n_params} params (>= {self._PARAM_CEILING})"
+            # Derive the row count from params / columns; must be <= chunk size.
+            rows_in_chunk = n_params // self._MAX_COLS
+            assert rows_in_chunk <= self._CHUNK_ROWS
+            total_rows += rows_in_chunk
+        # Round-trip: chunks must reconstruct the full batch (no rows dropped or
+        # duplicated by the chunker).  Allow the column-count estimate to be a
+        # lower bound (with-priority has 12 cols, derived 13) — assert coverage
+        # by re-counting against the actual per-statement VALUES length instead.
+        actual_rows = sum(self._rows_in_stmt(call.args[0]) for call in session.execute.call_args_list)
+        assert actual_rows == n_total
+
+    @staticmethod
+    def _rows_in_stmt(stmt) -> int:
+        """Number of VALUES rows in a multi-row INSERT statement."""
+        # SQLAlchemy stores multi-VALUES rows on the compile state; the simplest
+        # robust count is the number of parameter dicts the insert was built from.
+        compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+        # postgres multi-row insert names params open_m0, open_m1, ... so count
+        # the distinct row suffixes for a single column.
+        suffixes = {k.rsplit("_m", 1)[-1] for k in compiled.params if k.startswith("open")}
+        # Single-row inserts use bare "open" (no _mN suffix) → 1 row.
+        numeric = {s for s in suffixes if s.isdigit()}
+        return len(numeric) if numeric else 1
+
+
+def _make_bar(
+    *,
+    instrument_id: str = "inst-1",
+    minute: int = 0,
+    priority: int = 100,
+    open_: str = "100",
+    source: str = "alpaca",
+    timeframe: Timeframe = Timeframe.ONE_MIN,
+) -> OHLCVBar:
+    """A single OHLCV bar; ``minute`` controls the (conflict-key) bar_date."""
+    return OHLCVBar(
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        bar_date=datetime(2026, 6, 19, 0, minute, tzinfo=UTC),
+        open=Decimal(open_),
+        high=Decimal("105"),
+        low=Decimal("99"),
+        close=Decimal("103"),
+        volume=1000,
+        source=source,
+        provider_priority=ProviderPriority(provider=source, priority=priority),
+    )
+
+
+def _compiled_rows(stmt) -> list[dict]:
+    """Reconstruct the per-row VALUES dicts from a compiled multi-row INSERT.
+
+    Lets a test assert WHICH rows survived dedup (and their winning values),
+    not just how many — params are named ``open_m0``, ``open_m1``, ... for
+    multi-row inserts and bare ``open`` for a single row.
+    """
+    compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+    params = compiled.params
+    cols = ("bar_date", "open", "provider_priority", "source")
+    # Single-row insert → bare column names.
+    if "open" in params:
+        return [{c: params.get(c) for c in cols}]
+    # Multi-row insert → suffixed names; collect distinct row indices.
+    idxs = sorted({int(k.rsplit("_m", 1)[-1]) for k in params if k.startswith("open_m")})
+    return [{c: params.get(f"{c}_m{i}") for c in cols} for i in idxs]
+
+
+@pytest.mark.unit
+class TestOHLCVUpsertDedup:
+    """Regression: within-batch duplicate conflict keys must be collapsed.
+
+    A bulk ``ON CONFLICT DO UPDATE`` that sees the same
+    ``(instrument_id, timeframe, bar_date)`` key twice in one statement raises
+    ``CardinalityViolationError: ON CONFLICT DO UPDATE command cannot affect row
+    a second time``.  Overlapping crypto backfill/replay windows (e.g. ARB-USD
+    re-published with overlapping ranges) produce exactly this, crash-looping the
+    ohlcv-consumer (2_686 restarts).  The repo dedupes by conflict key BEFORE the
+    upsert, keeping the winner the ON CONFLICT clause would have resolved to.
+    """
+
+    async def test_priority_path_keeps_highest_priority_winner(self):
+        """Duplicate keys collapse to one row; the highest-priority value wins."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        # Two bars, SAME conflict key, different priority. The priority-guarded
+        # ON CONFLICT would keep the higher-priority value → so must dedup.
+        bars = [
+            _make_bar(minute=0, priority=50, open_="111", source="yahoo"),
+            _make_bar(minute=0, priority=100, open_="222", source="alpaca"),
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1, "duplicate key must collapse to a single VALUES row"
+        assert rows[0]["open"] == Decimal("222")  # higher-priority winner
+        assert rows[0]["provider_priority"] == 100
+
+    async def test_priority_path_equal_priority_keeps_last(self):
+        """On equal priority the LAST occurrence wins (mirrors ON CONFLICT order)."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, priority=100, open_="111"),
+            _make_bar(minute=0, priority=100, open_="333"),  # last → wins
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("333")
+
+    async def test_priority_path_lower_priority_does_not_overwrite(self):
+        """A later LOWER-priority dup must NOT displace the earlier higher one."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, priority=100, open_="222"),  # higher → wins
+            _make_bar(minute=0, priority=50, open_="111"),
+        ]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("222")
+        assert rows[0]["provider_priority"] == 100
+
+    async def test_distinct_keys_all_survive(self):
+        """Distinct conflict keys are untouched by dedup."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [_make_bar(minute=m, priority=100) for m in range(5)]
+        await repo.bulk_upsert_with_priority(bars)
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 5
+
+    async def test_dedup_composes_with_chunking(self):
+        """A batch full of dups dedupes FIRST, then chunks the deduped result.
+
+        2_000 distinct keys each duplicated 3x = 6_000 input rows.  Dedup must
+        collapse to 2_000 rows → a single chunk (no CardinalityViolation, and no
+        spurious extra chunk from the pre-dedup 6_000 count).
+        """
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars: list[OHLCVBar] = []
+        for m in range(2_000):
+            for _ in range(3):  # 3 copies of each conflict key
+                bars.append(_make_bar(minute=m % 60, instrument_id=f"i{m}", priority=100))
+        await repo.bulk_upsert_with_priority(bars)
+        # 2_000 deduped rows fit in a single chunk.
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 2_000
+
+    async def test_derived_path_dedupes_last_wins(self):
+        """The derived (unconditional) path keeps the LAST occurrence per key."""
+        session = AsyncMock()
+        repo = PgOHLCVRepository(session)
+        bars = [
+            _make_bar(minute=0, timeframe=Timeframe.ONE_WEEK, open_="111", priority=10),
+            _make_bar(minute=0, timeframe=Timeframe.ONE_WEEK, open_="333", priority=5),  # last → wins
+        ]
+        await repo.bulk_upsert_derived(bars)
+        assert session.execute.call_count == 1
+        rows = _compiled_rows(session.execute.call_args.args[0])
+        assert len(rows) == 1
+        assert rows[0]["open"] == Decimal("333")  # unconditional → last wins regardless of priority
+
+
 class TestInstrumentSearch:
     """Verify that instrument search generates correct WHERE clauses."""
 

@@ -43,6 +43,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { ClusterArticlesModal } from "@/components/news/ClusterArticlesModal";
 import { SignalBadge } from "@/components/ui/SignalBadge";
+// DESIGN-QA N-2 (2026-06-18): the dense news row left a wide empty band between
+// the (short) headline and the right-side metadata cluster. We fill that band
+// with a compact price-impact micro-trend (T0→T5 windows) so the row "earns its
+// width" — reusing the shared Sparkline primitive (whose empty-state was also
+// cleaned up this sprint, so rows without impact data degrade to a calm flat
+// baseline rather than a dotted placeholder).
+import { Sparkline } from "@/components/primitives/Sparkline";
 import { cn } from "@/lib/utils";
 import type { RankedArticle, TopNewsParams } from "@/types/api";
 
@@ -389,6 +396,19 @@ function ArticleRow({
   // LIGHT tier: dim per existing convention (PRD-0027 OQ-6 → opacity 0.6).
   const isDim = a.routing_tier === "LIGHT";
 
+  // DESIGN-QA N-2: build the price-impact micro-trend series from the T0→T5
+  // windows. We anchor at 0 (publication baseline) then chart the cumulative
+  // impact at T0/T1/T2/T5 so the Sparkline shows the post-publication drift.
+  // WHY filter null: windows are null until OHLCV lands (< ~25h old articles);
+  // a series with < 2 real points falls into the Sparkline's clean flat-baseline
+  // empty state, so the gap still reads as intentional (not broken).
+  const iw = a.impact_windows;
+  const impactSeries = iw
+    ? [0, iw.day_t0, iw.day_t1, iw.day_t2, iw.day_t5].filter(
+        (v): v is number => v != null,
+      )
+    : [];
+
   // WHY single-line: Bloomberg terminal news ticker format. Two-line layout was
   // ~42px/row; single-line is ~26px/row (62% reduction). With 50 articles,
   // viewport shows all instead of needing 4+ screens of scroll.
@@ -452,6 +472,17 @@ function ArticleRow({
         {/* Title — fills remaining horizontal space, truncates at right cluster */}
         <span className="flex-1 truncate text-[11px] leading-snug text-foreground">
           {a.title ?? "(untitled)"}
+        </span>
+
+        {/* DESIGN-QA N-2: price-impact micro-trend — fills the dead band the
+            short headlines used to leave between the title and the right cluster.
+            Trend colour is the Sparkline's auto first-vs-last delta (positive
+            green / negative red), giving an at-a-glance "did this move the
+            stock" signal per row. Hidden on the narrowest layouts (sm:block) so
+            it never crowds the title on small viewports; aria-hidden because the
+            timestamp/score already carry the row's text signal for SR users. */}
+        <span className="hidden shrink-0 sm:block" aria-hidden>
+          <Sparkline data={impactSeries} width={56} height={14} label="price impact" />
         </span>
 
         {/* Right cluster — source, relevance, timestamp, external icon */}

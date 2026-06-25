@@ -173,10 +173,35 @@ class S6Client(BaseUpstreamClient):
             _log.warning("s6_resolve_ticker_failed", error=str(exc), ticker=ticker)
             return None
         # Prefer a candidate whose ``ticker`` field matches the input.
-        for cand in candidates:
-            cand_ticker = getattr(cand, "ticker", None)
-            if cand_ticker and cand_ticker.upper() == ticker.upper():
-                return UUID(str(cand.entity_id))
+        # BP-661: multiple canonicals can share the SAME ticker when a
+        # BP-459-style phantom twin exists ("AAPL Stock" and "Apple Inc."
+        # both carry ticker=AAPL). Phantom twins almost always EMBED the
+        # ticker in their canonical name ("AAPL Stock", "AAPL.US",
+        # "NasdaqGS:AAPL") while the real canonical does not ("Apple Inc."),
+        # so among exact-ticker matches we prefer candidates whose name does
+        # NOT contain the ticker as a token. Falls back to the first
+        # (highest-confidence) exact match when every candidate looks
+        # ticker-derived.
+        import re as _re
+
+        _ticker_norm = ticker.strip().upper()
+        exact = [cand for cand in candidates if (getattr(cand, "ticker", None) or "").upper() == _ticker_norm]
+        if exact:
+            clean = [
+                cand
+                for cand in exact
+                if _ticker_norm.lower() not in {t for t in _re.split(r"[^a-z0-9]+", cand.canonical_name.lower()) if t}
+            ]
+            pick = (clean or exact)[0]
+            if len(exact) > 1:
+                _log.info(
+                    "ticker_resolved_twin_disambiguated",
+                    ticker=ticker,
+                    entity_id=str(pick.entity_id),
+                    canonical_name=pick.canonical_name,
+                    n_exact_matches=len(exact),
+                )
+            return UUID(str(pick.entity_id))
         if not candidates:
             _log.warning("ticker_unresolved", ticker=ticker)
             return None

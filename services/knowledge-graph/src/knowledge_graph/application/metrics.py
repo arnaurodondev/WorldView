@@ -60,3 +60,28 @@ fundamentals_refresh_failed_total = Counter(
     "FundamentalsRefreshWorker failures by structured error class.",
     ["error_kind"],
 )
+
+# 2026-06-11 relations-FK-crash fix: entity-existence gate in materialize_graph.
+# Before this gate, ``relation_repo.upsert`` was called unconditionally and a
+# missing subject/object entity raised ForeignKeyViolationError, aborting the
+# WHOLE enriched-article transaction — so ``relations`` stopped growing (stuck
+# at 959 edges) while ``relation_evidence_raw`` kept writing. The gate now defers
+# such relations (writes the evidence row with entity_provisional=true) instead
+# of crashing. ``reason`` is one of: subject_missing | object_missing | both_missing.
+s7_relation_entity_missing_total = Counter(
+    "s7_relation_entity_missing_total",
+    "Relations deferred because subject/object entity did not yet exist in "
+    "canonical_entities (would have FK-crashed the upsert).",
+    ["reason"],
+)
+
+# 2026-06-11 edge-materialization-on-unblock fix: when an entity finally lands
+# (entity.canonical.created.v1), its previously-deferred provisional evidence
+# rows are unblocked AND the now-resolvable graph edges are upserted into
+# ``relations``. This counter tracks edges materialized via that deferred path
+# (as opposed to the hot enriched path), so we can see the backlog draining.
+s7_relation_edge_materialized_on_unblock_total = Counter(
+    "s7_relation_edge_materialized_on_unblock_total",
+    "Graph edges upserted into ``relations`` when a newly-created entity "
+    "unblocked previously-deferred provisional relation evidence.",
+)

@@ -49,8 +49,9 @@ class SchedulerProcess:
     def stop(self) -> None:
         """Signal the scheduler loop to stop after the current tick.
 
-        Also stops the FundamentalsRefreshWorker (PLAN-0099 W2-T02) and the
-        InstrumentPolicySyncWorker (PLAN-0106 D-1) if they were spawned, so
+        Also stops the FundamentalsRefreshWorker (PLAN-0099 W2-T02), the
+        InstrumentPolicySyncWorker (PLAN-0106 D-1), and the
+        InsiderUniverseRefreshWorker (PRD-0089 L-4b) if they were spawned, so
         SIGTERM tears down all loops together.
         """
         self._stop_event.set()
@@ -60,6 +61,9 @@ class SchedulerProcess:
         sync_worker = getattr(self, "_instrument_policy_sync_worker", None)
         if sync_worker is not None:
             sync_worker.stop()
+        insider_worker = getattr(self, "_insider_universe_refresh_worker", None)
+        if insider_worker is not None:
+            insider_worker.stop()
 
     async def run(self) -> None:
         """Run the scheduler loop until ``stop()`` is called."""
@@ -88,6 +92,14 @@ class SchedulerProcess:
         # ``instrument_policy_sync_enabled`` (default True).
         if getattr(self._settings, "instrument_policy_sync_enabled", True):
             self._spawn_instrument_policy_sync()
+
+        # PRD-0089 L-4b: spawn the InsiderUniverseRefreshWorker, which weekly
+        # re-runs the insider-universe load. Gated by
+        # ``insider_universe_refresh_enabled`` — OFF BY DEFAULT so merging this
+        # never silently spends EODHD credits (the worker's own run() also
+        # re-checks the gate and no-ops when off).
+        if getattr(self._settings, "insider_universe_refresh_enabled", False):
+            self._spawn_insider_universe_refresh()
 
         while not self._stop_event.is_set():
             # WHY try/except here: _tick() catches DB errors internally, but an
@@ -180,6 +192,30 @@ class SchedulerProcess:
         except Exception as exc:  # — scheduler must boot regardless
             logger.exception(
                 "instrument_policy_sync_spawn_failed",
+                error=str(exc),
+            )
+
+    def _spawn_insider_universe_refresh(self) -> None:
+        """Detach the insider-universe-refresh loop on a background task (PRD-0089 L-4b).
+
+        Mirrors ``_spawn_instrument_policy_sync`` — stashes the worker so stop()
+        can tear it down, and stashes the task to avoid GC before completion
+        (RUF006).
+        """
+        from market_ingestion.infrastructure.workers.insider_universe_loader import (
+            InsiderUniverseRefreshWorker,
+        )
+
+        try:
+            worker = InsiderUniverseRefreshWorker(settings=self._settings)
+            self._insider_universe_refresh_worker = worker
+            self._insider_universe_refresh_task = asyncio.create_task(
+                worker.run(),
+                name="insider_universe_refresh_worker",
+            )
+        except Exception as exc:  # — scheduler must boot regardless
+            logger.exception(
+                "insider_universe_refresh_spawn_failed",
                 error=str(exc),
             )
 

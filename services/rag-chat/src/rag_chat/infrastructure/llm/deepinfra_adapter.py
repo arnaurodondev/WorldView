@@ -319,6 +319,11 @@ class DeepInfraCompletionAdapter:
                 # OpenAI format: list of {"type": "function", "function": {...}}
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
+            # gpt-oss-* are reasoning models that return EMPTY content unless
+            # reasoning_effort is set explicitly. Guarded on the model id so it is a
+            # no-op for Qwen3/others. Enables gpt-oss as completion or grounding-rewrite model.
+            if "gpt-oss" in model.lower():
+                payload["reasoning_effort"] = "medium"
             resp = await self._client.post(
                 f"{_BASE_URL}/chat/completions",
                 json=payload,
@@ -414,6 +419,8 @@ class DeepInfraCompletionAdapter:
         max_tokens: int,
         temperature: float,
         usage_sink: dict | None = None,
+        tools: list[dict] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Run a single stream_chat call against a specific model.
 
@@ -441,6 +448,27 @@ class DeepInfraCompletionAdapter:
         # carry token counts and the cost recorder would always log zeros.
         if usage_sink is not None:
             payload["stream_options"] = {"include_usage": True}
+        # PLAN-0107 follow-up Fix #2: forward tools list verbatim AND, when the
+        # caller passed an explicit empty list (synthesis turn), set
+        # tool_choice="none" so the provider unambiguously knows tool calls
+        # are forbidden in the response. Without this, some providers treat
+        # tools=[] as "any tool allowed", which keeps the model in
+        # planning-mode and produces <function_calls> XML in the answer.
+        if tools is not None:
+            payload["tools"] = tools
+            if not tools:
+                payload["tool_choice"] = "none"
+        # PLAN-0107 follow-up (eval framework v2 2026-06-06): forward an optional
+        # `seed` to DeepInfra's OpenAI-compatible endpoint so the benchmark
+        # harness (--judge mode) gets reproducible generations. We OMIT the key
+        # when seed is None — sending `"seed": null` triggers schema validation
+        # errors on some provider builds.
+        if seed is not None:
+            payload["seed"] = seed
+        # gpt-oss reasoning models emit empty content without reasoning_effort — set it on
+        # the streaming path too (covers synthesis AND the grounding-rewrite). Guarded.
+        if "gpt-oss" in model.lower():
+            payload["reasoning_effort"] = "medium"
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",
@@ -477,8 +505,20 @@ class DeepInfraCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        tools: list[dict] | None = None,
+        seed: int | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
+
+        RC-1 (2026-06-18): ``model`` overrides the adapter's configured
+        ``self._model`` for THIS call only — used by the combined
+        grounding-repair rewrite so an operator can A/B the repair completion
+        on a cheaper/faster model (gpt-oss-120b / -20b) without code changes.
+        ``None`` (the default) preserves the prior behaviour exactly. The
+        same-provider zero-chunk fallback (``_stream_chat_fallback_model``)
+        still applies relative to the EFFECTIVE primary model so the override
+        does not bypass the recovery net.
 
         WHY a separate method from stream(): stream() takes a raw prompt string
         and wraps it in a single-message list internally.  stream_chat() accepts
@@ -504,6 +544,11 @@ class DeepInfraCompletionAdapter:
         unaffected on the happy path — we yield the buffered tokens as soon
         as the primary stream completes (one extra event-loop tick).
         """
+        # RC-1: resolve the effective primary model for THIS call. ``model``
+        # (when supplied) overrides ``self._model`` for the primary request,
+        # the cost-record model_id, and the fallback-guard comparison so the
+        # whole method stays internally consistent.
+        _effective_model = model or self._model
         primary_chunks: list[str] = []
         # PLAN-0107 Agent-B: usage sink fed by the final SSE chunk. Empty dict
         # = "stream completed without a usage frame" (still triggers a record()
@@ -517,10 +562,12 @@ class DeepInfraCompletionAdapter:
         try:
             async for chunk in self._stream_chat_one_model(
                 messages,
-                model=self._model,
+                model=_effective_model,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 usage_sink=primary_usage,
+                tools=tools,
+                seed=seed,
             ):
                 primary_chunks.append(chunk)
         except Exception as exc:
@@ -537,14 +584,14 @@ class DeepInfraCompletionAdapter:
             # the client from receiving tokens.
             await self._record_cost(
                 thread_id=thread_id,
-                model_id=self._model,
+                model_id=_effective_model,
                 usage=primary_usage or None,
                 call_site="synthesis",
             )
             return
 
         fallback_model = self._stream_chat_fallback_model
-        if not fallback_model or fallback_model == self._model:
+        if not fallback_model or fallback_model == _effective_model:
             # No fallback configured; propagate any captured exception so the
             # provider chain sees the real failure mode (W40 zero-chunk guard
             # + W36 degraded-synthesis still catch this downstream).
@@ -560,7 +607,7 @@ class DeepInfraCompletionAdapter:
 
         log.warning(  # type: ignore[no-any-return]
             "deepinfra_stream_chat_model_fallback",
-            primary_model=self._model,
+            primary_model=_effective_model,
             fallback_model=fallback_model,
             n_messages=len(messages),
             reason=(type(_primary_exc).__name__ if _primary_exc is not None else "zero_chunk_primary"),
@@ -573,6 +620,8 @@ class DeepInfraCompletionAdapter:
             max_tokens=max_tokens,
             temperature=temperature,
             usage_sink=fallback_usage,
+            tools=tools,
+            seed=seed,
         ):
             yield chunk
         # PLAN-0107 Agent-B: record cost on the fallback model (model_id MUST

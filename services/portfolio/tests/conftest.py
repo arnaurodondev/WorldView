@@ -134,7 +134,7 @@ async def integration_client(postgres_container: str) -> AsyncGenerator[AsyncCli
                 id=UUID(INTEGRATION_USER_ID),
                 tenant_id=UUID(INTEGRATION_TENANT_ID),
                 email="integration@test.com",
-            )
+            ),
         )
         await session.commit()
 

@@ -26,6 +26,8 @@ import type {
   PortfolioBundleResponse,
   HoldingLotsResponse,
   ConcentrationResponse,
+  SectorBreakdownResponse,
+  TwrResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -102,6 +104,12 @@ export function createPortfoliosApi(t: string | undefined) {
         ticker: string | null; // from instruments table (null if not synced yet)
         name: string | null; // from instruments table
         entity_id: string | null; // from instruments table
+        // 2026-06-10 sprint gap #1: asset_class now arrives server-side via
+        // the instruments LEFT JOIN (VERIFIED LIVE 2026-06-11: "equity" for
+        // every demo holding). Optional + nullable — older S9 builds omit it.
+        asset_class?: string | null;
+        // PLAN-0114 W6 (T-W6-04): S9 returns annualised dividend yield as a ratio.
+        annualized_dividend_yield?: number | null;
       };
       const raw = await apiFetch<
         RawHolding[] | { items: RawHolding[]; total: number; limit: number; offset: number }
@@ -127,6 +135,12 @@ export function createPortfoliosApi(t: string | undefined) {
         // field_serializer for Numeric(18,8)). The frontend expects numbers for arithmetic.
         quantity: parseFloat(h.quantity) || 0,
         average_cost: parseFloat(h.average_cost) || 0,
+        // 2026-06-10 sprint gap #1: forward the server-side asset class.
+        // Strict null preservation — null/absent on the wire stays null so
+        // the ASSET column renders "—" instead of a fabricated default.
+        asset_class: h.asset_class ?? null,
+        // PLAN-0114 W6 (T-W6-04): forward S9's annualised dividend yield (ratio) → YIELD column.
+        annualizedDividendYield: h.annualized_dividend_yield ?? null,
         // WHY null: These fields are computed client-side from live quote data, not stored in S1.
         current_price: null,
         unrealised_pnl: null,
@@ -273,6 +287,10 @@ export function createPortfoliosApi(t: string | undefined) {
         // "not stale" so the UI renders no badge.
         prices_stale?: boolean;
         prices_as_of?: string | null;
+        // 2026-06-10 sprint gap #5: explicit buying power (Decimal string).
+        // v1 semantics: equals cash (margin not modelled). Optional on the
+        // wire — older S1 builds omit it.
+        buying_power?: string | null;
       }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/exposure`, { token: t });
       return {
         invested: parseFloat(raw.invested),
@@ -282,6 +300,59 @@ export function createPortfoliosApi(t: string | undefined) {
         leverage: parseFloat(raw.leverage),
         prices_stale: raw.prices_stale ?? false,
         prices_as_of: raw.prices_as_of ?? null,
+        // Strict null preservation: absent/null on the wire → null, so the
+        // KPI strip can fall back to cash explicitly (never a forged $0).
+        buying_power: raw.buying_power != null ? parseFloat(raw.buying_power) : null,
+      };
+    },
+
+    /**
+     * getTwr — flow-adjusted time-weighted return series.
+     * (2026-06-10 sprint gap #3 — GET /v1/portfolios/{id}/twr?days=N)
+     *
+     * WHY this replaces the NAV-rebase approximation: S1 computes sub-period
+     * returns BETWEEN external cash flows and geometrically links them, so a
+     * $10k deposit no longer reads as a +20% "return" on the analytics chart.
+     * The first point of the window is always 0 (VERIFIED LIVE 2026-06-11),
+     * so consumers never need to re-rebase.
+     *
+     * UNIT CONVERSION AT THE BOUNDARY: the wire carries `twr_cum_pct` in
+     * percent units (4.21 = +4.21%) and `nav` as an 8-dp Decimal string.
+     * We convert to fraction + number here so every consumer can use the
+     * codebase-wide fraction convention (formatPercent/fmtPct multiply by
+     * 100 themselves) without remembering a one-off unit.
+     *
+     * @param portfolioId  portfolio UUID
+     * @param days         lookback window, 1–3650 (server default 90)
+     */
+    async getTwr(portfolioId: string, days?: number): Promise<TwrResponse> {
+      const qs = days != null ? `?days=${days}` : "";
+      const raw = await apiFetch<{
+        portfolio_id: string;
+        from_date: string;
+        to_date: string;
+        points: Array<{
+          date: string;
+          twr_cum_pct: number;
+          nav: string; // Decimal serialised as 8-dp string
+        }>;
+        flow_days: number;
+      }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/twr${qs}`, { token: t });
+
+      return {
+        portfolio_id: raw.portfolio_id,
+        from_date: raw.from_date,
+        to_date: raw.to_date,
+        // BP-265 awareness: only default to [] when the server genuinely
+        // omitted the field — otherwise pass through what we got, parsed.
+        points: (raw.points ?? []).map((p) => ({
+          date: p.date,
+          // percent → fraction (see docstring). NOT `|| 0`: 0 is a real value
+          // here and twr_cum_pct is a JSON number, no parse can fail.
+          twr_cum: p.twr_cum_pct / 100,
+          nav: parseFloat(p.nav) || 0,
+        })),
+        flow_days: raw.flow_days ?? 0,
       };
     },
 
@@ -476,7 +547,7 @@ export function createPortfoliosApi(t: string | undefined) {
      * @param name     - Portfolio display name (e.g., "My Main Portfolio")
      * @param currency - 3-letter ISO currency code (default: "USD")
      */
-    async createPortfolio(name: string, currency = "USD"): Promise<Portfolio> {
+    async createPortfolio(name: string, currency = "USD", cost_basis_method: "FIFO" | "AVCO" = "FIFO"): Promise<Portfolio> {
       // POST to S9, which injects owner_user_id from JWT before forwarding to S1
       const raw = await apiFetch<{
         id: string;
@@ -495,6 +566,16 @@ export function createPortfoliosApi(t: string | undefined) {
         token: t,
       });
 
+      // PLAN-0114 W6: two-step create — POST creates the portfolio (default FIFO),
+      // then PATCH sets cost_basis_method if non-FIFO.
+      // WHY two-step: avoids changing the POST schema (backward compatible).
+      if (cost_basis_method !== "FIFO") {
+        await apiFetch<unknown>(
+          `/v1/portfolios/${encodeURIComponent(raw.id)}`,
+          { method: "PATCH", body: { cost_basis_method }, token: t },
+        );
+      }
+
       // Map S1's PortfolioResponse (id) → frontend Portfolio type (portfolio_id)
       return {
         portfolio_id: raw.id,
@@ -504,6 +585,19 @@ export function createPortfoliosApi(t: string | undefined) {
         created_at: raw.created_at,
         updated_at: raw.created_at, // S1 has no updated_at; use created_at as fallback
       };
+    },
+
+    /**
+     * patchPortfolio — partial-update portfolio settings (PLAN-0114 W6 / T-W6-02).
+     *
+     * WHY PATCH instead of PUT: only mutable settings (cost_basis_method) live
+     * here; name changes go through the rename endpoint.
+     */
+    async patchPortfolio(portfolioId: string, patch: { cost_basis_method?: "FIFO" | "AVCO" }): Promise<void> {
+      await apiFetch<unknown>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}`,
+        { method: "PATCH", body: patch, token: t },
+      );
     },
 
     /**
@@ -550,11 +644,11 @@ export function createPortfoliosApi(t: string | undefined) {
       const s1Body = {
         portfolio_id: portfolioId,
         instrument_id: instrumentId,
-        // WHY TRADE + BUY: S1 uses two separate fields for what the frontend combines as "type".
+        // WHY TRADE + trade_side: S1 uses two separate fields for what the frontend combines as "type".
         // transaction_type=TRADE covers manual equity purchases (vs DIVIDEND, FEE, TRANSFER).
-        // direction=BUY increases the holding; direction=SELL decreases it.
+        // trade_side=BUY increases the holding (W1 renamed `direction` → `trade_side` in PLAN-0108).
         transaction_type: "TRADE",
-        direction: "BUY",
+        trade_side: "BUY",
         quantity,
         price: averageCost,
         fees: 0, // manual entry has no brokerage fee
@@ -779,6 +873,34 @@ export function createPortfoliosApi(t: string | undefined) {
         })),
         prices_stale: raw.prices_stale,
       };
+    },
+
+    /**
+     * getSectorBreakdown — fast server-side sector allocation snapshot.
+     *
+     * WHY this replaces the old client-side `computeAllocations()` sector path:
+     *   1. Speed: 31–86ms (60s Valkey cache) vs 640ms for the legacy
+     *      sector-attribution endpoint — a 7–20× improvement.
+     *   2. Accuracy: server has complete market-data access; client-side
+     *      computation was limited to whichever quotes arrived in the batch
+     *      quote response, so thinly-traded positions fell back to cost basis.
+     *   3. Coverage signal: `covered_pct` tells the UI how much of the portfolio
+     *      had price data — client-side lacked this signal entirely.
+     *
+     * WHY no transform needed: the endpoint already returns float JSON (not
+     * Decimal-as-string). Segments are sorted server-side largest first so
+     * the SectorAllocationBar, SectorAllocationPanel, and SectorExposurePanel
+     * can render without a client-side sort.
+     *
+     * WHY staleTime = 60 s: matches the Valkey cache TTL on the S1/S9 side.
+     * Fetching more often than 60s would always get a cached response, so
+     * there is no benefit to a shorter stale window.
+     */
+    getSectorBreakdown(portfolioId: string): Promise<SectorBreakdownResponse> {
+      return apiFetch<SectorBreakdownResponse>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}/sector-breakdown`,
+        { token: t },
+      );
     },
 
     /**

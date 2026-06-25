@@ -41,6 +41,17 @@ class StorageSettings(BaseSettings):
     default_bucket: str = "worldview"
     """Default bucket name used by the factory and health check."""
 
+    max_pool_connections: int = 50
+    """Max size of the underlying urllib3 connection pool (botocore ``max_pool_connections``).
+
+    The botocore/urllib3 default is 10, which is too small for consumers that
+    issue many concurrent object fetches (e.g. the market-data ohlcv-consumer
+    under dataset replay). When the pool is exhausted, urllib3 logs
+    ``Connection pool is full, discarding connection`` and re-creates the
+    connection, wasting time under load. Raise via ``STORAGE_MAX_POOL_CONNECTIONS``
+    to match the consumer's concurrency.
+    """
+
     @computed_field  # type: ignore[misc]
     @property
     def endpoint_url(self) -> str | None:

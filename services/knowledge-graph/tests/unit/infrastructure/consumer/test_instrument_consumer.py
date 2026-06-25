@@ -29,6 +29,7 @@ def _make_consumer(
     entity_exists: bool = False,
     embedding_model_id: str | None = None,
     with_def_worker: bool = True,
+    narrative_use_case: Any = None,
 ) -> tuple[Any, Any, Any]:
     """Build an InstrumentEntityConsumer with mocked infrastructure.
 
@@ -36,6 +37,8 @@ def _make_consumer(
         entity_exists:      If True, entity_repo.get() returns an existing entity dict.
         embedding_model_id: model_id in the embedding state row (None = no embedding).
         with_def_worker:    Whether to wire in a DefinitionRefreshWorker mock.
+        narrative_use_case: Optional GenerateNarrativeUseCase mock for the
+                            2026-06-14 P2 create-time narrative trigger.
 
     Returns:
         (consumer, def_worker_mock, alias_repo_mock)
@@ -86,6 +89,10 @@ def _make_consumer(
         entity_repo_mock.create = AsyncMock(return_value=_ENTITY_ID)
         emb_repo_mock.ensure_rows_exist = AsyncMock()
         emb_repo_mock.get = AsyncMock(return_value=None)
+    # BP-459 ticker-dup detection (PLAN-0111): default to "no pre-existing
+    # ticker holder" so the create path runs unchanged. Individual tests
+    # override this to simulate a news-minted dup that already owns the ticker.
+    entity_repo_mock.find_by_ticker = AsyncMock(return_value=None)
 
     # Patch repo constructors to return our mocks
 
@@ -120,6 +127,7 @@ def _make_consumer(
         session_factory=sf,
         llm_client=llm_client,
         definition_worker=def_worker,
+        narrative_use_case=narrative_use_case,
     )
 
     return consumer, def_worker, entity_repo_mock, emb_repo_mock
@@ -161,6 +169,62 @@ class TestInstrumentEntityConsumerNew:
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args
         assert call_args.args[1] == _DESCRIPTION  # source_text
+
+    def test_pre_existing_ticker_dup_is_detected_and_logged(self) -> None:
+        """BP-459: a news-minted canonical already owning the ticker is logged.
+
+        Root-cause symmetry (PLAN-0111): the instrument MUST keep entity_id ==
+        instrument_id (M-017), so we still create the anchored canonical, but we
+        emit ``instrument_consumer_ticker_dup_detected`` so the standing merge
+        job can consolidate the pre-existing dup (the historical SHEL case where
+        "Shell Plc" was minted 8h before the "Shell PLC ADR" instrument event).
+        """
+        import structlog.testing
+
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(entity_exists=False)
+        # Simulate a pre-existing news-minted canonical that already owns SHEL
+        # under a DIFFERENT entity_id (NULL exchange).
+        _pre_existing_id = uuid4()
+        entity_repo.find_by_ticker = AsyncMock(
+            return_value={"entity_id": _pre_existing_id, "canonical_name": "Shell Plc", "exchange": None},
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Shell PLC ADR",
+            "ticker": "SHEL",
+            "exchange": "US",
+            "isin": "US7802593050",
+            "description": _DESCRIPTION,
+        }
+
+        from unittest import mock
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+            structlog.testing.capture_logs() as captured,
+        ):
+            asyncio.run(consumer.process_message(None, msg, {}))
+
+        # The anchored canonical is still created (M-017 holds).
+        entity_repo.create.assert_awaited_once()
+        # The collision is surfaced for the merge job.
+        events = [e for e in captured if e.get("event") == "instrument_consumer_ticker_dup_detected"]
+        assert events, f"Expected ticker-dup detection log; captured: {captured}"
+        assert events[0]["pre_existing_entity_id"] == str(_pre_existing_id)
+        assert events[0]["merge_required"] is True
 
     def test_no_description_skips_embedding(self) -> None:
         """No description → definition_worker not called even for new entity."""
@@ -259,6 +323,192 @@ class TestInstrumentEntityConsumerReplay:
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args
         assert call_args.args[1] == _DESCRIPTION
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-14 P2 — create-time narrative trigger
+# ---------------------------------------------------------------------------
+#
+# A newly-minted instrument must kick off narrative generation immediately
+# (reason="INITIAL") instead of waiting up to a full Worker 13D-3 cycle.  The
+# trigger is fire-and-forget (a detached asyncio task), so tests run
+# process_message AND then drain the consumer's background tasks before
+# asserting on the use case mock.
+
+
+async def _process_and_drain(consumer: Any, msg: dict[str, Any]) -> None:
+    """Run process_message then await any background narrative tasks.
+
+    The create-time narrative trigger schedules a detached asyncio task; we must
+    await it before asserting, otherwise the assertion races the task.
+    """
+    await consumer.process_message(None, msg, {})
+    # _narrative_tasks holds strong refs to in-flight background tasks.
+    pending = list(consumer._narrative_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+
+
+class TestInstrumentEntityConsumerNarrativeTrigger:
+    def test_new_entity_triggers_narrative_once(self) -> None:
+        """Brand-new mint → GenerateNarrativeUseCase.execute called exactly once with INITIAL."""
+        from unittest import mock
+
+        narrative_uc = mock.AsyncMock()
+        narrative_uc.execute = mock.AsyncMock(return_value=True)
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(
+            entity_exists=False,
+            narrative_use_case=narrative_uc,
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
+            "exchange": "NASDAQ",
+            "isin": "US0378331005",
+            "description": _DESCRIPTION,
+        }
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+        ):
+            asyncio.run(_process_and_drain(consumer, msg))
+
+        narrative_uc.execute.assert_awaited_once()
+        kwargs = narrative_uc.execute.call_args.kwargs
+        assert kwargs["entity_id"] == _ENTITY_ID
+        assert kwargs["reason"] == "INITIAL"
+        assert kwargs["tenant_id"] is None
+
+    def test_replay_existing_entity_does_not_trigger_narrative(self) -> None:
+        """Replay of an already-enriched entity → narrative NOT re-triggered (idempotency)."""
+        from unittest import mock
+
+        narrative_uc = mock.AsyncMock()
+        narrative_uc.execute = mock.AsyncMock(return_value=False)
+        # entity_exists=True with an embedding present → plain replay path that
+        # returns early BEFORE the narrative trigger.
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(
+            entity_exists=True,
+            embedding_model_id="nomic-embed-text",
+            narrative_use_case=narrative_uc,
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
+            "description": _DESCRIPTION,
+        }
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+        ):
+            asyncio.run(_process_and_drain(consumer, msg))
+
+        narrative_uc.execute.assert_not_awaited()
+
+    def test_narrative_llm_failure_is_swallowed(self) -> None:
+        """Use case raising → consumer does NOT crash; failure is logged (BP-114)."""
+        from unittest import mock
+
+        import structlog.testing
+
+        narrative_uc = mock.AsyncMock()
+        narrative_uc.execute = mock.AsyncMock(side_effect=RuntimeError("deepinfra 503"))
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(
+            entity_exists=False,
+            narrative_use_case=narrative_uc,
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
+            "description": _DESCRIPTION,
+        }
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+            structlog.testing.capture_logs() as captured,
+        ):
+            # Must NOT raise — the background wrapper swallows the failure.
+            asyncio.run(_process_and_drain(consumer, msg))
+
+        narrative_uc.execute.assert_awaited_once()
+        events = [e for e in captured if e.get("event") == "instrument_consumer_narrative_trigger_failed"]
+        assert events, f"Expected narrative trigger failure log; captured: {captured}"
+        assert "deepinfra 503" in events[0]["error"]
+
+    def test_no_narrative_use_case_skips_trigger(self) -> None:
+        """No narrative use case wired → create path still succeeds, no trigger."""
+        from unittest import mock
+
+        consumer, _def_worker, entity_repo, emb_repo = _make_consumer(
+            entity_exists=False,
+            narrative_use_case=None,
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
+            "description": _DESCRIPTION,
+        }
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+        ):
+            asyncio.run(_process_and_drain(consumer, msg))
+
+        # No background tasks scheduled, entity still created.
+        entity_repo.create.assert_awaited_once()
+        assert not consumer._narrative_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -902,3 +1152,16 @@ class TestIsValidLlmAlias:
 
         assert not _is_valid_llm_alias("ignore me")
         assert not _is_valid_llm_alias("IgNoRe ThIs")
+
+
+def test_ticker_notation_variant_swaps_dot_and_dash():
+    """Share-class tickers get their dot/dash twin as a notation variant (FR-11 follow-up)."""
+    from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+        _ticker_notation_variant,
+    )
+
+    assert _ticker_notation_variant("BRK-A") == "BRK.A"
+    assert _ticker_notation_variant("BRK.B") == "BRK-B"
+    assert _ticker_notation_variant("bf.b") == "BF-B"  # case-normalised
+    assert _ticker_notation_variant("AAPL") is None  # no separator -> no twin
+    assert _ticker_notation_variant("") is None

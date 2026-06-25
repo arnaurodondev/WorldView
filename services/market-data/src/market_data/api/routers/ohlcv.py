@@ -82,7 +82,7 @@ async def get_ohlcv_bars_flexible(
     isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
     from_date: date = ...,  # type: ignore[assignment]
     to_date: date = ...,  # type: ignore[assignment]
-    interval: str = Query(default="day", pattern="^(day|week|month)$"),
+    interval: str = Query(default="day", pattern="^(1m|5m|15m|30m|1h|4h|day|1d|week|1w|month|1mo|1M)$"),
     max_bars: int = Query(default=252, ge=1, le=1000),
     uc: Annotated[GetOHLCVBarsFlexibleUseCase, Depends(get_ohlcv_bars_flexible_uc)] = ...,  # type: ignore[assignment]
     lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
@@ -91,8 +91,14 @@ async def get_ohlcv_bars_flexible(
 
     WHY this endpoint: The brief-intelligence and temporal RAG pipelines need a
     finance-ready endpoint that accepts ticker/isin/UUID identifiers and returns
-    plain float values (not Decimal strings) ordered ASC by date with interval
-    resampling (day/week/month) handled server-side.
+    plain float values (not Decimal strings) ordered ASC by date.
+
+    Interval handling: intraday (1m/5m/15m/30m/1h/4h) and daily (``day``/``1d``)
+    are plain table reads.  Weekly (``week``/``1w``) and monthly
+    (``month``/``1mo``/``1M``) are DERIVED on the fly from the stored daily bars
+    in the requested range — no provider polling, no storage growth, no
+    write-on-read (PLAN-0036 intent; R27-safe).  ``ohlcv_bars`` itself holds only
+    {1m,5m,15m,30m,1h,4h,1d}; week/month never live in the table.
 
     At least one of instrument_id, symbol, or isin is required.
     from_date and to_date are required query parameters.

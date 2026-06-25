@@ -77,7 +77,7 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
         except IntegrityError as exc:
             if "uq_watchlists_user_name" in str(exc.orig):
                 raise WatchlistAlreadyExistsError(
-                    f"Watchlist '{watchlist.name}' already exists for user {watchlist.user_id}"
+                    f"Watchlist '{watchlist.name}' already exists for user {watchlist.user_id}",
                 ) from exc
             raise
 

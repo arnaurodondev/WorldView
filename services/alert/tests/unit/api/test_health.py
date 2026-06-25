@@ -10,7 +10,7 @@ Covers:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -26,6 +26,18 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 # ── Setup helpers ─────────────────────────────────────────────────────────────
+
+
+def _patch_admin_client() -> object:
+    """Patch confluent_kafka AdminClient so /readyz's Kafka check succeeds.
+
+    The readiness handler now builds a throwaway AdminClient per call (BP-350 fix)
+    instead of reusing a long-lived producer, so we patch the class at its import
+    site and stub list_topics to return immediately.
+    """
+    mock_admin = MagicMock()
+    mock_admin.list_topics = MagicMock(return_value=MagicMock())
+    return patch("confluent_kafka.admin.AdminClient", return_value=mock_admin)
 
 
 def _make_app(*, s1_healthy: bool = True) -> FastAPI:
@@ -50,10 +62,9 @@ def _make_app(*, s1_healthy: bool = True) -> FastAPI:
     app.state.session_factory = mock_factory
     app.state.ws_manager = ConnectionManager()
 
-    # Kafka health producer (for /readyz Kafka connectivity check)
-    mock_producer = MagicMock()
-    mock_producer.list_topics = MagicMock(return_value=None)
-    app.state.kafka_health_producer = mock_producer
+    # Kafka readiness check config (handler builds a fresh AdminClient per call;
+    # the AdminClient class itself is patched in each test via _patch_admin_client).
+    app.state.kafka_bootstrap_servers = "localhost:9092"
 
     # Valkey
     mock_valkey = AsyncMock()
@@ -88,20 +99,35 @@ class TestReadyz:
     @pytest.mark.unit
     async def test_readyz_200_when_all_deps_ok(self) -> None:
         app = _make_app(s1_healthy=True)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/readyz")
+        with _patch_admin_client():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/readyz")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
+        assert body["kafka"] == "ok"
 
     @pytest.mark.unit
     async def test_readyz_200_when_s1_degraded(self) -> None:
         app = _make_app(s1_healthy=False)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/readyz")
+        with _patch_admin_client():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/readyz")
         assert resp.status_code == 200
         body = resp.json()
         assert body["s1"] == "degraded"
+
+    @pytest.mark.unit
+    async def test_readyz_503_when_kafka_fails(self) -> None:
+        app = _make_app()
+        # AdminClient.list_topics raising → kafka check fails → 503.
+        mock_admin = MagicMock()
+        mock_admin.list_topics = MagicMock(side_effect=Exception("broker transport failure"))
+        with patch("confluent_kafka.admin.AdminClient", return_value=mock_admin):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/readyz")
+        assert resp.status_code == 503
+        assert resp.json()["kafka"] == "error"
 
     @pytest.mark.unit
     async def test_readyz_503_when_db_fails(self) -> None:
@@ -110,8 +136,9 @@ class TestReadyz:
         app.state.session_factory.return_value.__aenter__.return_value.execute = AsyncMock(
             side_effect=Exception("db down")
         )
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/readyz")
+        with _patch_admin_client():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/readyz")
         assert resp.status_code == 503
         body = resp.json()
         assert body["alert_db"] == "error"
@@ -120,8 +147,9 @@ class TestReadyz:
     async def test_readyz_503_when_valkey_fails(self) -> None:
         app = _make_app()
         app.state.valkey.ping = AsyncMock(side_effect=Exception("valkey down"))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/readyz")
+        with _patch_admin_client():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/readyz")
         assert resp.status_code == 503
         assert resp.json()["valkey"] == "error"
 

@@ -120,3 +120,75 @@ class RenamePortfolioUseCase:
             new_name=cmd.new_name,
         )
         return portfolio
+
+
+# PLAN-0114 W1 (W6 surface) ───────────────────────────────────────────────────
+
+
+@dataclass
+class UpdatePortfolioCommand:
+    """Partial PATCH payload for a portfolio.
+
+    PLAN-0114 W1 / T-W1-01 (PATCH /portfolios/{id} route wiring).
+    Currently supports changing ``cost_basis_method``. All fields are optional
+    — only non-None values are applied.
+    """
+
+    portfolio_id: UUID
+    owner_id: UUID
+    tenant_id: UUID
+    cost_basis_method: str | None = None  # validated against CostBasisMethod enum in execute()
+
+
+class UpdatePortfolioUseCase:
+    """Apply a partial update to a MANUAL portfolio's metadata.
+
+    Currently supports:
+    - ``cost_basis_method``: switch between FIFO and AVCO. The change takes
+      effect on the NEXT ManualHoldingsRecomputeConsumer run or nightly sweep.
+
+    Raises:
+    ------
+        PortfolioNotFoundError — portfolio doesn't exist or wrong tenant.
+        AuthorizationError    — caller is not the portfolio owner.
+    """
+
+    async def execute(
+        self,
+        cmd: UpdatePortfolioCommand,
+        uow: UnitOfWork,
+    ) -> Portfolio:
+        from portfolio.domain.enums import CostBasisMethod
+
+        portfolio = await uow.portfolios.get(cmd.portfolio_id, cmd.tenant_id)
+        if portfolio is None:
+            raise PortfolioNotFoundError(
+                f"Portfolio {cmd.portfolio_id} not found",
+                details={"portfolio_id": str(cmd.portfolio_id)},
+            )
+
+        if portfolio.owner_id != cmd.owner_id:
+            raise AuthorizationError(
+                "You do not own this portfolio",
+                details={"portfolio_id": str(cmd.portfolio_id), "owner_id": str(cmd.owner_id)},
+            )
+
+        changed = False
+
+        # Apply cost_basis_method if provided and different from current value.
+        if cmd.cost_basis_method is not None:
+            new_method = CostBasisMethod(cmd.cost_basis_method)
+            if portfolio.cost_basis_method != new_method:
+                portfolio.cost_basis_method = new_method
+                changed = True
+
+        if changed:
+            await uow.portfolios.save(portfolio)
+            await uow.commit()
+            logger.info(
+                "portfolio_updated",
+                portfolio_id=str(cmd.portfolio_id),
+                cost_basis_method=str(portfolio.cost_basis_method),
+            )
+
+        return portfolio

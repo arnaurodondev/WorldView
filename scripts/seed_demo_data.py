@@ -80,7 +80,14 @@ CONTENT_INGESTION_DB_URL = os.environ.get(
 
 # Deterministic entity UUIDs for intelligence_db canonical_entities.
 # WHY deterministic: idempotent ON CONFLICT DO NOTHING requires stable PKs.
-# Prefix "11111111" visually distinguishes demo entities from real UUIDv7 IDs.
+# M-017 (2026-06-14 fix): a tradable security's canonical KG entity_id MUST equal
+# its instrument id (01900000-…-00000000100X) — that is the id news mentions,
+# relations and the page-bundle resolve to. These were previously seeded with
+# placeholder "11111111-000X" ids that existed nowhere in the live KG, which
+# broke per-holding portfolio news and would now collide with the
+# uq_canonical_entities_ticker_fi index (migration 0051). Only the non-tradable
+# demo THEME/sector entities below (11111111-0101..0105, ticker=None) keep the
+# 11111111 prefix — they are demo-only concepts with no instrument counterpart.
 INSTRUMENTS: list[dict] = [
     {
         "ticker": "AAPL",
@@ -92,7 +99,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US0378331005",
-        "entity_id": "11111111-0001-7000-8000-000000000001",  # stable KG entity UUID
+        "entity_id": "01900000-0000-7000-8000-000000001001",  # stable KG entity UUID
         "description": (
             "Apple Inc. designs, manufactures, and markets smartphones, personal computers, "
             "tablets, wearables, and accessories worldwide. The Company sells its products "
@@ -128,7 +135,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US5949181045",
-        "entity_id": "11111111-0002-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001002",
         "description": (
             "Microsoft Corporation develops, licenses, and supports software, services, devices, "
             "and solutions worldwide. The company's Productivity and Business Processes segment "
@@ -164,7 +171,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US67066G1040",
-        "entity_id": "11111111-0003-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001006",
         "description": (
             "NVIDIA Corporation provides graphics, computing and networking solutions globally. "
             "Its two segments are Graphics and Compute & Networking. The company's products "
@@ -200,7 +207,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US0231351067",
-        "entity_id": "11111111-0004-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001005",
         "description": (
             "Amazon.com Inc. engages in the retail sale of consumer products and subscriptions "
             "through online and physical stores in North America and internationally. It also "
@@ -236,7 +243,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US88160R1014",
-        "entity_id": "11111111-0005-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001004",
         "description": (
             "Tesla, Inc. designs, develops, manufactures, leases, and sells electric vehicles, "
             "energy generation and storage systems, and related services. The company also offers "
@@ -272,7 +279,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US02079K3059",
-        "entity_id": "11111111-0006-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001003",
         "description": (
             "Alphabet Inc. provides various products and platforms worldwide through Google Search, "
             "YouTube, Google Maps, Google Play, Chrome, Android, and Google Cloud. Its segments "
@@ -308,7 +315,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US30303M1027",
-        "entity_id": "11111111-0007-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001007",
         "description": (
             "Meta Platforms, Inc. develops products that enable people to connect and share "
             "through mobile devices, PCs, virtual reality headsets, and wearables worldwide. "
@@ -344,7 +351,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US46625H1005",
-        "entity_id": "11111111-0008-7000-8000-000000000001",
+        "entity_id": "01900000-0000-7000-8000-000000001008",
         "description": (
             "JPMorgan Chase & Co. operates as a financial services company worldwide. "
             "Its Consumer & Community Banking segment offers deposit and investment products, "
@@ -415,9 +422,9 @@ KG_EXTRA_ENTITIES: list[dict] = [
 # (subject_entity_id, canonical_type, object_entity_id, decay_class, confidence)
 KG_RELATIONS: list[tuple] = [
     # AAPL relations
-    ("11111111-0001-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.85),
+    ("01900000-0000-7000-8000-000000001001", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.85),
     (
-        "11111111-0001-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001001",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
@@ -425,14 +432,14 @@ KG_RELATIONS: list[tuple] = [
     ),
     # MSFT relations
     (
-        "11111111-0002-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001002",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
     (
-        "11111111-0002-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001002",
         "EXPOSED_TO_THEME",
         "11111111-0103-7000-8000-000000000001",
         "MEDIUM",
@@ -440,33 +447,33 @@ KG_RELATIONS: list[tuple] = [
     ),
     # NVDA relations
     (
-        "11111111-0003-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001006",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.98,
     ),
-    ("11111111-0003-7000-8000-000000000001", "EXPOSED_TO_THEME", "11111111-0102-7000-8000-000000000001", "SLOW", 0.92),
-    ("11111111-0003-7000-8000-000000000001", "SUPPLIER_OF", "11111111-0001-7000-8000-000000000001", "SLOW", 0.75),
+    ("01900000-0000-7000-8000-000000001006", "EXPOSED_TO_THEME", "11111111-0102-7000-8000-000000000001", "SLOW", 0.92),
+    ("01900000-0000-7000-8000-000000001006", "SUPPLIER_OF", "01900000-0000-7000-8000-000000001001", "SLOW", 0.75),
     # AMZN relations
     (
-        "11111111-0004-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001005",
         "EXPOSED_TO_THEME",
         "11111111-0103-7000-8000-000000000001",
         "MEDIUM",
         0.93,
     ),
-    ("11111111-0004-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.80),
+    ("01900000-0000-7000-8000-000000001005", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.80),
     # TSLA relations
     (
-        "11111111-0005-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001004",
         "EXPOSED_TO_THEME",
         "11111111-0104-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
     (
-        "11111111-0005-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001004",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
@@ -474,39 +481,39 @@ KG_RELATIONS: list[tuple] = [
     ),
     # GOOGL relations
     (
-        "11111111-0006-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001003",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.90,
     ),
     (
-        "11111111-0006-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001003",
         "EXPOSED_TO_THEME",
         "11111111-0105-7000-8000-000000000001",
         "MEDIUM",
         0.88,
     ),
-    ("11111111-0006-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.82),
+    ("01900000-0000-7000-8000-000000001003", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.82),
     # META relations
     (
-        "11111111-0007-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001007",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.85,
     ),
     (
-        "11111111-0007-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001007",
         "EXPOSED_TO_THEME",
         "11111111-0105-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
-    ("11111111-0007-7000-8000-000000000001", "COMPETES_WITH", "11111111-0006-7000-8000-000000000001", "SLOW", 0.88),
+    ("01900000-0000-7000-8000-000000001007", "COMPETES_WITH", "01900000-0000-7000-8000-000000001003", "SLOW", 0.88),
     # JPM relations
     (
-        "11111111-0008-7000-8000-000000000001",
+        "01900000-0000-7000-8000-000000001008",
         "EXPOSED_TO_THEME",
         "11111111-0101-7000-8000-000000000001",
         "MEDIUM",

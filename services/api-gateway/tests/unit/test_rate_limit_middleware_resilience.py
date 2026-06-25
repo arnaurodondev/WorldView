@@ -11,8 +11,16 @@ FIX-LIVE-D adds:
 1. 1-retry with 50ms backoff on transient (network/timeout) Valkey errors
 2. Structured ``valkey_op_failed`` logs with ``valkey_retry_attempt`` field
 3. A Prometheus counter ``rate_limiting_unavailable_total`` labelled by
-   ``fallback_action`` (``retry_succeeded`` / ``503_after_retry`` /
+   ``fallback_action`` (``retry_succeeded`` / ``fail_open_after_retry`` /
    ``503_no_retry``) so Grafana can alert on degradation.
+
+F-007 (2026-06-21) amends the policy: an exhausted-retry *transient* error now
+FAILS OPEN (200) rather than fail-closed (503). The original FIX-LIVE-D allowlist
+listed only the Python builtin ConnectionError/TimeoutError, which do NOT match
+redis-py's own ConnectionError/TimeoutError (they inherit from RedisError), so
+every real Valkey timeout under load fell into ``503_no_retry`` and 503ed
+/v1/quotes. The middleware now (a) classifies the redis exception classes as
+transient and (b) fails open on transient errors so a blip never 503s traffic.
 
 These tests use ``AsyncMock`` with ``side_effect`` lists to drive the
 retry state machine deterministically. We assert the Prometheus counter
@@ -118,23 +126,27 @@ async def test_rate_limit_retry_succeeds_after_transient_failure() -> None:
     assert after - before == pytest.approx(1.0), f"retry_succeeded counter delta expected 1, got {after - before}"
 
 
-# ── Test 2: transient error twice → 503 + counter increments ──────────────────
+# ── Test 2: transient error twice → FAIL-OPEN (200) + counter increments ──────
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_503_after_retry_exhausted() -> None:
-    """FIX-LIVE-D: both attempts raise ConnectionError → 503, counter += 1.
+async def test_rate_limit_failopen_after_retry_exhausted() -> None:
+    """F-007 (2026-06-21): both attempts raise a transient error → FAIL-OPEN (200).
 
-    Sustained Valkey outage: retry budget exhausted, fail-closed kicks in,
-    counter increments with the ``503_after_retry`` label so Grafana can
-    distinguish "single hiccup we recovered from" vs "sustained outage".
+    This reverses the prior FIX-LIVE-D fail-CLOSED-on-transient policy. Rate
+    limiting is a protective control, not a correctness invariant: a sustained
+    (or momentary) Valkey blip must NOT 503 every real caller — that was the
+    /v1/quotes F-007 symptom. After the retry budget is exhausted on a transient
+    error the request is allowed through (200) and the degradation is counted
+    under the ``fail_open_after_retry`` label so Grafana can alert on a
+    *sustained* open-degradation window.
     """
     from api_gateway.middleware import RateLimitMiddleware
 
-    before = _counter_value("503_after_retry")
+    before = _counter_value("fail_open_after_retry")
 
     valkey = AsyncMock()
-    # Both attempts raise — retry budget exhausted, fail-closed kicks in.
+    # Both attempts raise — retry budget exhausted, fail-OPEN kicks in.
     valkey.incr = AsyncMock(
         side_effect=[ConnectionError("conn refused"), ConnectionError("conn refused")],
     )
@@ -154,12 +166,12 @@ async def test_rate_limit_503_after_retry_exhausted() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
 
-    assert resp.status_code == 503, f"expected 503 after exhausted retries, got {resp.status_code}"
+    assert resp.status_code == 200, f"expected 200 fail-open after exhausted retries, got {resp.status_code}"
     # Both attempts ran — proves the retry loop iterated max_attempts times.
     assert valkey.incr.call_count == 2
-    # Counter incremented with the post-retry label (NOT the no-retry label).
-    after = _counter_value("503_after_retry")
-    assert after - before == pytest.approx(1.0), f"503_after_retry counter delta expected 1, got {after - before}"
+    # Counter incremented with the fail-open label (NOT a 503 label).
+    after = _counter_value("fail_open_after_retry")
+    assert after - before == pytest.approx(1.0), f"fail_open_after_retry counter delta expected 1, got {after - before}"
 
 
 # ── Test 3: non-transient (auth) error → no retry, 503 + no_retry label ───────

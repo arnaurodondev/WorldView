@@ -28,6 +28,13 @@ dev = [
     "observability",
     "fakeredis[aioredis]>=2.23,<3",
     "sqlalchemy>=2.0,<3",
+    # asyncpg is NOT a runtime dependency of messaging (the consumer guards its
+    # import with try/except so alternate drivers keep working), but the unit
+    # test ``tests/unit/test_base_consumer_db_retry.py`` imports concrete asyncpg
+    # exception classes to assert the connection-retry path. Declaring it in
+    # [dev] keeps CI's fresh ``pip install -e libs/messaging[dev]`` able to
+    # collect the test suite (otherwise collection fails with exit 2).
+    "asyncpg>=0.29,<1",
 ]
 
 [tool.hatch.build.targets.wheel]

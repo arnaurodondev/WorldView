@@ -49,11 +49,11 @@ export function WatchlistSummaryStrip({ insights }: WatchlistSummaryStripProps) 
   // Slot colours for the top-3 buckets — chosen for legibility on the dark
   // panel background, not by sector identity (sectors aren't colour-coded
   // canonically anywhere in the design system).
-  const slotColors = [
-    "bg-[hsl(var(--primary))]",
-    "bg-[hsl(var(--warning))]",
-    "bg-[hsl(var(--positive))]",
-  ] as const;
+  // Round 3 (item 2, §15.11): semantic Tailwind utilities replace the
+  // arbitrary-value bg-[hsl(var(--token))] forms — the hsl(var()) spelling is
+  // reserved for canvas/SVG/raw-CSS contexts; JSX backgrounds use the mapped
+  // utilities so the no-off-palette arch gate can reason about them.
+  const slotColors = ["bg-primary", "bg-warning", "bg-positive"] as const;
 
   return (
     <div

@@ -26,6 +26,132 @@ import type {
 } from "@/types/api";
 import { apiFetch, GatewayError } from "./_client";
 
+/**
+ * FinancialsBundleResponse — structural mirror of the S9
+ * `FinancialsBundleResponse` Pydantic model (PLAN-0099 follow-up E).
+ *
+ * WHY structural (not from `@/types/api`): the generated OpenAPI types
+ * have not been re-rolled since this endpoint landed; defining the shape
+ * here unblocks callers immediately. Each leg is `unknown | null` because
+ * downstream legs preserve their own per-endpoint shapes (`Fundamentals`,
+ * `FundamentalsSnapshot`, section envelopes) — the bundle hook narrows
+ * them when hydrating per-widget caches.
+ *
+ * All fields are nullable: a failed downstream leg degrades to `null` so
+ * the page renders partial UIs rather than failing whole-tab.
+ */
+export interface FinancialsBundleResponse {
+  fundamentals: unknown | null;
+  fundamentals_snapshot: unknown | null;
+  income_statement: unknown | null;
+  earnings_history: unknown | null;
+  share_statistics: unknown | null;
+  splits_dividends: unknown | null;
+  beat_miss_history: unknown | null;
+  fundamentals_timeseries: unknown | null;
+}
+
+/**
+ * RawFundamentalsSections — minimal structural type for the S3 all-sections
+ * payload ({security_id, records:[{section, data, ingested_at}, …]}).
+ *
+ * WHY structural (not FundamentalsSectionResponse from types/api): the
+ * transformer only touches these three fields; accepting the loosest shape
+ * lets the financials-bundle hydrator (whose legs are typed `unknown`) call
+ * it without lying through a cast to the full generated type.
+ */
+export interface RawFundamentalsSections {
+  security_id?: string;
+  records?: Array<Record<string, unknown>>;
+}
+
+/**
+ * transformFundamentalsSections — S3 all-sections payload → flat Fundamentals.
+ *
+ * WHY EXPORTED (Round-2 fix, 2026-06-10): this transform used to live inline
+ * in getFundamentals(). useFinancialsBundle then hydrated the
+ * qk.instruments.fundamentals cache with the bundle's RAW all-sections leg
+ * cast to `Fundamentals` — the exact BP-379 wrong-shape-seeding failure: every
+ * consumer of that key (DenseMetricsGrid, MetricsTable, KeyStatsBar) read
+ * `undefined` for all flat fields until the 1-hour staleTime expired.
+ * Exporting the transformer lets the hydrator seed the CORRECT shape from the
+ * same single source of truth (no duplicated mapping to drift).
+ *
+ * Mapping notes (unchanged from the original inline implementation):
+ *   - extracts the singleton "highlights", "valuation_ratios",
+ *     "technicals_snapshot" and "analyst_consensus" sections;
+ *   - derives gross margin (GrossProfitTTM / RevenueTTM) and payout ratio
+ *     (DividendShare / EarningsShare) when the inputs are positive;
+ *   - balance-sheet ratios stay null (require the snapshot endpoint — BP-369).
+ */
+export function transformFundamentalsSections(
+  raw: RawFundamentalsSections,
+  instrumentId: string,
+): Fundamentals {
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Extract singleton sections (one record each)
+  let hi: Record<string, unknown> = {};
+  let vr: Record<string, unknown> = {};
+  let ts: Record<string, unknown> = {};
+  // Audit 2026-05-09: also extract analyst_consensus (Buy/Hold/Sell/StrongBuy/StrongSell/Rating/TargetPrice)
+  // — previously dropped which forced AnalystConsensusStrip to render a hardcoded placeholder.
+  let ac: Record<string, unknown> = {};
+  let updatedAt: string | null = null;
+  for (const rec of raw.records ?? []) {
+    const data = (rec["data"] ?? {}) as Record<string, unknown>;
+    const section = rec["section"] as string | undefined;
+    if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
+    else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
+    else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
+    else if (section === "analyst_consensus" && !Object.keys(ac).length) ac = data;
+  }
+  const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
+    ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
+    : null;
+  const eps = num(hi["EarningsShare"]);
+  const div = num(hi["DividendShare"]);
+  const payoutRatio = eps != null && eps > 0 && div != null ? div / eps : null;
+  return {
+    instrument_id: raw.security_id ?? instrumentId,
+    ticker: "",  // populated by overview; FundamentalsTab doesn't render this
+    name: "",    // populated by overview
+    market_cap:           num(hi["MarketCapitalization"]),
+    pe_ratio:             num(hi["PERatio"]),
+    forward_pe:           num(vr["ForwardPE"]),
+    price_to_book:        num(vr["PriceBookMRQ"]),
+    price_to_sales:       num(vr["PriceSalesTTM"]),
+    ev_to_ebitda:         num(vr["EnterpriseValueEbitda"]),
+    gross_margin:         grossMarginTTM,
+    operating_margin:     num(hi["OperatingMarginTTM"]),
+    net_margin:           num(hi["ProfitMargin"]),
+    roe:                  num(hi["ReturnOnEquityTTM"]),
+    roa:                  num(hi["ReturnOnAssetsTTM"]),
+    revenue_growth_yoy:   num(hi["QuarterlyRevenueGrowthYOY"]),
+    earnings_growth_yoy:  num(hi["QuarterlyEarningsGrowthYOY"]),
+    dividend_yield:       num(hi["DividendYield"]),
+    payout_ratio:         payoutRatio,
+    debt_to_equity:       null, // requires balance-sheet join; populated by snapshot
+    current_ratio:        null, // requires balance-sheet join; populated by snapshot
+    quick_ratio:          null, // requires balance-sheet join; populated by snapshot
+    week_52_high:         num(ts["52WeekHigh"]),
+    week_52_low:          num(ts["52WeekLow"]),
+    daily_return:         null, // derived from OHLCV; available in overview.fundamentals
+    // Analyst consensus — see audit 2026-05-09. Field names match EODHD exactly.
+    analyst_strong_buy_count:   num(ac["StrongBuy"]),
+    analyst_buy_count:          num(ac["Buy"]),
+    analyst_hold_count:         num(ac["Hold"]),
+    analyst_sell_count:         num(ac["Sell"]),
+    analyst_strong_sell_count:  num(ac["StrongSell"]),
+    analyst_rating:             num(ac["Rating"]),
+    analyst_target_price:       num(ac["TargetPrice"]),
+    updated_at:           updatedAt,
+  };
+}
+
 export function createInstrumentsApi(t: string | undefined) {
   return {
     /**
@@ -37,6 +163,37 @@ export function createInstrumentsApi(t: string | undefined) {
         `/v1/companies/${encodeURIComponent(instrumentId)}/overview`,
         { token: t },
       );
+    },
+
+    /**
+     * getCompanyOverviewsBatch — fan-in N company-overview lookups (FIX F-1).
+     *
+     * WHY THIS EXISTS: Dashboard widgets (PreMarketMoversWidget,
+     * SectorHeatmapWidget, PortfolioSummary) used to spawn N parallel
+     * `useQueries` calls — each one a /v1/companies/{id}/overview HTTP
+     * round-trip. With 10-20 visible rows that's 10-20 sequential auth checks
+     * + downstream fan-outs on the gateway. This batch endpoint POSTs the full
+     * id list in a single request; S9 runs the legs in parallel server-side
+     * and returns an id-keyed map.
+     *
+     * RESPONSE SHAPE: `{ overviews: { "<uuid>": CompanyOverview | null } }`.
+     * `null` means "this leg failed downstream" — the caller should render a
+     * placeholder rather than tripping a global error.
+     *
+     * WHY return a plain map (not the envelope): callers always immediately
+     * `overviewsMap[id]` so unwrapping at the boundary saves boilerplate.
+     */
+    async getCompanyOverviewsBatch(
+      instrumentIds: string[],
+    ): Promise<Record<string, CompanyOverview | null>> {
+      const resp = await apiFetch<{
+        overviews: Record<string, CompanyOverview | null>;
+      }>(`/v1/companies/overviews:batch`, {
+        token: t,
+        method: "POST",
+        body: { instrument_ids: instrumentIds },
+      });
+      return resp.overviews ?? {};
     },
 
     /**
@@ -75,7 +232,12 @@ export function createInstrumentsApi(t: string | undefined) {
      */
     async getOHLCV(
       instrumentId: string,
-      params: { timeframe?: string; start?: string; end?: string } = {},
+      // WHY `limit` (added Wave-4, 2026-06-12): S3's OHLCV endpoint caps the
+      // result at 200 bars when no limit is given. The chart's default daily
+      // view wants the full ~500-bar history (so panning back has data), so it
+      // passes an explicit high limit. Other callers omit it and keep the
+      // 200-bar default. The value is sent as a query-string `limit=`.
+      params: { timeframe?: string; start?: string; end?: string; limit?: number } = {},
     ): Promise<OHLCVResponse> {
       // WHY special-case "1M": S3's Timeframe enum is case-sensitive.
       // All timeframes are lowercase EXCEPT ONE_MONTH which is "1M" (uppercase M).
@@ -298,68 +460,10 @@ export function createInstrumentsApi(t: string | undefined) {
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}`,
         { token: t },
       );
-      const num = (v: unknown): number | null => {
-        if (v == null || v === "") return null;
-        const n = typeof v === "number" ? v : Number(v);
-        return Number.isFinite(n) ? n : null;
-      };
-      // Extract singleton sections (one record each)
-      let hi: Record<string, unknown> = {};
-      let vr: Record<string, unknown> = {};
-      let ts: Record<string, unknown> = {};
-      // Audit 2026-05-09: also extract analyst_consensus (Buy/Hold/Sell/StrongBuy/StrongSell/Rating/TargetPrice)
-      // — previously dropped which forced AnalystConsensusStrip to render a hardcoded placeholder.
-      let ac: Record<string, unknown> = {};
-      let updatedAt: string | null = null;
-      for (const rec of raw.records ?? []) {
-        const data = (rec["data"] ?? {}) as Record<string, unknown>;
-        const section = rec["section"] as string | undefined;
-        if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
-        else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
-        else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
-        else if (section === "analyst_consensus" && !Object.keys(ac).length) ac = data;
-      }
-      const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
-        ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
-        : null;
-      const eps = num(hi["EarningsShare"]);
-      const div = num(hi["DividendShare"]);
-      const payoutRatio = eps != null && eps > 0 && div != null ? div / eps : null;
-      return {
-        instrument_id: raw.security_id ?? instrumentId,
-        ticker: "",  // populated by overview; FundamentalsTab doesn't render this
-        name: "",    // populated by overview
-        market_cap:           num(hi["MarketCapitalization"]),
-        pe_ratio:             num(hi["PERatio"]),
-        forward_pe:           num(vr["ForwardPE"]),
-        price_to_book:        num(vr["PriceBookMRQ"]),
-        price_to_sales:       num(vr["PriceSalesTTM"]),
-        ev_to_ebitda:         num(vr["EnterpriseValueEbitda"]),
-        gross_margin:         grossMarginTTM,
-        operating_margin:     num(hi["OperatingMarginTTM"]),
-        net_margin:           num(hi["ProfitMargin"]),
-        roe:                  num(hi["ReturnOnEquityTTM"]),
-        roa:                  num(hi["ReturnOnAssetsTTM"]),
-        revenue_growth_yoy:   num(hi["QuarterlyRevenueGrowthYOY"]),
-        earnings_growth_yoy:  num(hi["QuarterlyEarningsGrowthYOY"]),
-        dividend_yield:       num(hi["DividendYield"]),
-        payout_ratio:         payoutRatio,
-        debt_to_equity:       null, // requires balance-sheet join; populated by snapshot
-        current_ratio:        null, // requires balance-sheet join; populated by snapshot
-        quick_ratio:          null, // requires balance-sheet join; populated by snapshot
-        week_52_high:         num(ts["52WeekHigh"]),
-        week_52_low:          num(ts["52WeekLow"]),
-        daily_return:         null, // derived from OHLCV; available in overview.fundamentals
-        // Analyst consensus — see audit 2026-05-09. Field names match EODHD exactly.
-        analyst_strong_buy_count:   num(ac["StrongBuy"]),
-        analyst_buy_count:          num(ac["Buy"]),
-        analyst_hold_count:         num(ac["Hold"]),
-        analyst_sell_count:         num(ac["Sell"]),
-        analyst_strong_sell_count:  num(ac["StrongSell"]),
-        analyst_rating:             num(ac["Rating"]),
-        analyst_target_price:       num(ac["TargetPrice"]),
-        updated_at:           updatedAt,
-      };
+      // WHY delegate: the section→flat mapping is shared with the
+      // financials-bundle cache hydrator (useFinancialsBundle) — see
+      // transformFundamentalsSections above for the full mapping rationale.
+      return transformFundamentalsSections(raw, instrumentId);
     },
 
     /**
@@ -530,5 +634,272 @@ export function createInstrumentsApi(t: string | undefined) {
         { token: t },
       );
     },
+
+    /**
+     * getFinancialsBundle — PLAN-0099 follow-up E single-RTT composite for the
+     * Financials tab.
+     *
+     * WHY THIS EXISTS: Opening the Financials tab cold previously fired ~8
+     * unique S9 round-trips (fundamentals, snapshot, income-statement,
+     * earnings history, technicals, share statistics, splits/dividends,
+     * plus per-panel beat-miss-history + fundamentals-timeseries). Each
+     * goes through S9 auth + internal-JWT issuance, so the page was
+     * wave-serialized by the slowest leg.
+     *
+     * The bundle endpoint fans these legs out in parallel server-side and
+     * returns a composite object. The matching `useFinancialsBundle` hook
+     * (see ../../components/instrument/hooks/) pre-warms each per-widget
+     * TanStack cache key via `queryClient.setQueryData(...)` so existing
+     * child components (`BeatMissHistoryPanel`, `IncomeStatementTable`,
+     * etc.) hit warm cache instead of refetching.
+     *
+     * WHY POST (not GET): symmetric with `/v1/companies/overviews:batch`.
+     * The endpoint is resource-composition, not a simple resource fetch.
+     *
+     * WHY response typed as a structural interface (not generated types):
+     * the generated types haven't been re-rolled for this endpoint yet —
+     * keeping the structural interface here lets callers use the bundle
+     * today without waiting for `pnpm generate-types`. Each leg is `unknown`
+     * because the bundle simply forwards the underlying S3 response shapes
+     * which the per-widget hooks already type at hydration time.
+     */
+    getFinancialsBundle(instrumentId: string): Promise<FinancialsBundleResponse> {
+      return apiFetch<FinancialsBundleResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/financials-bundle`,
+        { token: t, method: "POST" },
+      );
+    },
+
+    // ── T-02 W3 additions ─────────────────────────────────────────────────
+
+    /**
+     * getInstitutionalHolders — top 10 institutional holders from S3
+     *
+     * WHY T-02: PLAN-0089 W3 adds an InstitutionalHoldersTable to the Financials
+     * tab. The data lives in EODHD's InstitutionHolders section — Vanguard,
+     * BlackRock, State Street etc. Analysts use this to gauge passive-vs-active
+     * ownership concentration and predict sell-off behaviour (passive holders
+     * can't exit quickly; concentrated hedge fund ownership amplifies moves).
+     *
+     * Returns FundamentalsSection with section="institutional_holders_snapshot".
+     * The `data` dict is {"0": {name, currentShares, currentValue, ...}, "1": ...}.
+     * S9 route added in T-S9-01 (PLAN-0089 W3).
+     */
+    getInstitutionalHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/institutional-holders`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getFundHolders — top 10 mutual/ETF fund holders from S3
+     *
+     * WHY T-02: Mirrors getInstitutionalHolders but for fund-level holders
+     * (e.g. Fidelity 500 Index Fund). Fund holders often indicate passive ETF
+     * inflow; institutional holders are more likely to be active managers.
+     * Knowing the split helps analysts model price-insensitive vs price-sensitive
+     * flows (important for estimating liquidity around rebalancing dates).
+     *
+     * Returns FundamentalsSection with section="fund_holders_snapshot".
+     * S9 route added in T-S9-02 (PLAN-0089 W3).
+     */
+    getFundHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/fund-holders`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPeers — 5 closest peers by market cap in the same GICS industry
+     *
+     * WHY T-02: PeerComparisonTable (T-12) lets analysts benchmark valuation
+     * ratios (P/E, P/B, EV/EBITDA) against same-industry peers in one row.
+     * This is the primary workflow for relative-value equity analysis:
+     * "AAPL at 28× P/E vs MSFT at 35×; who is cheap?"
+     *
+     * WHY /v1/instruments/{id}/peers (not /v1/fundamentals): peers are derived
+     * from the instruments table (gics_sector + market_cap ranking) not from
+     * EODHD fundamentals. The S2 market-data service owns this query.
+     *
+     * Returns { instrument_id, peers: PeerInstrument[] } with 1Y return included.
+     * S9 route T-S9-03 was shipped in W5 (feat(w5): T-S9-01).
+     */
+    getPeers(instrumentId: string, n = 5): Promise<PeersResponse> {
+      return apiFetch<PeersResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/peers?n=${n}`,
+        { token: t },
+      );
+    },
+
+    // ── Quote-tab Wave-1 endpoints (2026-06 backend; live-verified shapes) ──
+
+    /**
+     * getIntradayStats — current session O / H / L / VWAP / volume from the
+     * intraday bar store (richer than the last OHLCV bar: includes prev_close,
+     * VWAP with its source resolution, and volume vs 30-day-average ratio).
+     *
+     * UNITS: volume_vs_30d_ratio is a plain ratio (1.0 = exactly the 30-day
+     * average partial-day volume). vwap_source tags the bar resolution VWAP
+     * was computed from ("1m" / "5m" / "1h") — surfaced as a tooltip so the
+     * analyst knows the precision of the number.
+     */
+    getIntradayStats(instrumentId: string): Promise<IntradayStatsResponse> {
+      return apiFetch<IntradayStatsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/intraday-stats`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getMultiPeriodReturns — trailing returns for 1D…5Y in ONE round-trip.
+     *
+     * UNITS (live-verified 2026-06-10): values are PERCENT-FORM numbers
+     * (-7.9289 means -7.93%), NOT decimals — render with formatPercentDirect.
+     * Horizons with insufficient price history (e.g. 3Y/5Y for dev data that
+     * only has ~1.5y of bars) come back null → the strip renders "—".
+     */
+    getMultiPeriodReturns(instrumentId: string): Promise<MultiPeriodReturnsResponse> {
+      return apiFetch<MultiPeriodReturnsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/returns`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPriceLevels — 52-week range position, MA50/MA200, prior-session
+     * high/low and fractal swing-point support/resistance levels.
+     *
+     * UNITS: pct_from_52w_high / pct_from_52w_low are percent-form
+     * (-7.93 = 7.93% below the high). support[]/resistance[] are price
+     * arrays nearest-first; sr_method is a human-readable description of the
+     * algorithm — surfaced as a tooltip on the S/R chips so the levels are
+     * auditable rather than magic numbers.
+     */
+    getPriceLevels(instrumentId: string): Promise<PriceLevelsResponse> {
+      return apiFetch<PriceLevelsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/price-levels`,
+        { token: t },
+      );
+    },
+
+    /**
+     * triggerInstrumentBriefingGeneration — lazy-generate POST for AIBriefPanel
+     *
+     * WHY T-02: The AIBriefPanel (T-22) uses a GET→404→POST→poll flow (Δ16 / Δ19):
+     * on 404 (brief not yet generated), fire this POST to queue generation.
+     * The backend is idempotent (one brief per instrument per 60-min window).
+     * After POST, the hook polls GET every 30s up to 5 times until the brief appears.
+     *
+     * WHY separate from getInstrumentBrief: the POST is not a read — it mutates
+     * backend state (enqueues a generation job). Keeping it separate makes it
+     * clear at the call site that this is a lazy mutation, not a standard query.
+     *
+     * S9 + S8 route shipped in W5 (T-S8-05).
+     */
+    triggerInstrumentBriefingGeneration(entityId: string): Promise<void> {
+      return apiFetch<void>(
+        `/v1/briefings/instrument/${encodeURIComponent(entityId)}/generate`,
+        { token: t, method: "POST" },
+      );
+    },
   };
+}
+
+// ── W3 type additions ─────────────────────────────────────────────────────────
+
+/**
+ * PeerInstrument — one row in the peers response.
+ *
+ * WHY separate type (not in types/api.ts): peers are a new W3 shape; adding
+ * to the generated-types file would require re-rolling the generation script.
+ * This structural interface unblocks callers immediately and can be moved to
+ * types/api.ts in a future cleanup pass.
+ *
+ * WHY return_1y optional: the S2 query computes it from OHLCV; if no bars
+ * exist for a peer (newly listed, delisted) the field is omitted.
+ */
+export interface PeerInstrument {
+  instrument_id: string;
+  ticker: string;
+  name: string;
+  /** Trailing 12-month P/E; null = no earnings / not computed. */
+  pe_ratio: number | null;
+  market_cap: number | null;
+  /** 1-year price return as a DECIMAL (0.18 = +18%). null = insufficient history. */
+  return_1y: number | null;
+  /**
+   * Day change in PERCENT FORM (1.61 = +1.61%) — note the unit mismatch with
+   * return_1y (decimal). Live-verified 2026-06-10; render with
+   * formatPercentDirect, NOT formatPercent.
+   */
+  change_pct?: number | null;
+  /** Last traded/close price in USD. */
+  last_price?: number | null;
+  gics_sector?: string | null;
+}
+
+export interface PeersResponse {
+  instrument_id: string;
+  /** GICS industry label the peer set was drawn from (e.g. "Technology"). */
+  industry?: string | null;
+  peers: PeerInstrument[];
+}
+
+// ── Quote-tab Wave-1 response shapes (structural; live-verified 2026-06-10) ──
+//
+// WHY structural interfaces here (not types/api.ts): same rationale as
+// PeerInstrument above — these endpoints are new and the generated-types file
+// hasn't been re-rolled. Keeping them next to their fetchers also documents
+// the unit quirks (percent-form vs decimal) at the point of use.
+
+/** GET /v1/instruments/{id}/intraday-stats */
+export interface IntradayStatsResponse {
+  instrument_id: string;
+  session_date: string;            // ISO date of the session the stats cover
+  open: number | null;
+  prev_close: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  vwap: number | null;
+  /** Bar resolution VWAP was computed from ("1m" / "5m" / "1h"). */
+  vwap_source: string | null;
+  volume: number | null;
+  /** Session volume ÷ 30-day average (1.0 = average). */
+  volume_vs_30d_ratio: number | null;
+}
+
+/** The 9 return horizons the backend computes, in display order. */
+export const RETURN_HORIZONS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y"] as const;
+export type ReturnHorizon = (typeof RETURN_HORIZONS)[number];
+
+/** GET /v1/instruments/{id}/returns — values are PERCENT-FORM, null = insufficient history. */
+export interface MultiPeriodReturnsResponse {
+  instrument_id: string;
+  as_of: string;
+  returns: Partial<Record<ReturnHorizon, number | null>>;
+}
+
+/** GET /v1/instruments/{id}/price-levels */
+export interface PriceLevelsResponse {
+  instrument_id: string;
+  as_of: string;
+  last_close: number | null;
+  high_52w: number | null;
+  low_52w: number | null;
+  /** Percent-form distance from the 52w high (negative = below). */
+  pct_from_52w_high: number | null;
+  /** Percent-form distance from the 52w low (positive = above). */
+  pct_from_52w_low: number | null;
+  ma_50: number | null;
+  ma_200: number | null;
+  prior_session_high: number | null;
+  prior_session_low: number | null;
+  /** Nearest swing-low prices below last close (nearest first). */
+  support: number[];
+  /** Nearest swing-high prices above last close (nearest first). */
+  resistance: number[];
+  /** Human-readable description of the S/R algorithm — chip tooltip. */
+  sr_method: string | null;
 }

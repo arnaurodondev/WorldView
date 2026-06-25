@@ -26,12 +26,57 @@ discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
 }
 
+// ── PLAN-0108 Wave A: target-level relabel ──
+// `loki.source.docker.relabel_rules` (set below) operates on log-entry
+// labels, where `__meta_docker_container_*` are NOT present. To produce
+// the `service` / `service_name` stream labels we must rewrite TARGETS
+// before they reach `loki.source.docker`. `discovery.relabel` does this:
+// it runs the same regex extraction over `__meta_docker_container_name`
+// at discovery time, and the resulting labels are attached to each
+// stream produced by `loki.source.docker`. The existing
+// `loki.relabel "docker"` block (kept as-is) is now effectively a no-op
+// for label production but is preserved for any consumer that references
+// it via the live debug API.
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Keep only worldview application containers — drop infra noise
+  // (Kafka, Postgres, MinIO, etc.) to reduce Loki volume. (F-031)
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/worldview-(portfolio|market-ingestion|market-data|content-ingestion|content-store|api-gateway|nlp-pipeline|knowledge-graph|rag-chat|alert|worldview-web).*"
+    action        = "keep"
+  }
+
+  // Extract clean service name from compose-generated container name
+  // (e.g. `/worldview-portfolio-1` → `portfolio`). Sets BOTH `service`
+  // (legacy) and `service_name` (Loki 3 auto-label axis).
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "service"
+    regex         = "/worldview-(.*)-\\d+"
+    replacement   = "$1"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "service_name"
+    regex         = "/worldview-(.*)-\\d+"
+    replacement   = "$1"
+  }
+}
+
 // ── Tail container logs ──
+// PLAN-0108 Wave A: `relabel_rules` removed. The `loki.relabel "docker"`
+// block (below) operates on log-entry labels where `__meta_docker_*`
+// labels are NOT present, so its `keep` rule silently dropped every
+// stream's `service`/`service_name` labels (matched against an empty
+// value → regex fail → drop). All labelling now happens in
+// `discovery.relabel "containers"` above at target-discovery time, and
+// those labels flow through unchanged.
 loki.source.docker "containers" {
   host = "unix:///var/run/docker.sock"
-  targets = discovery.docker.containers.targets
+  targets = discovery.relabel.containers.output
   forward_to = [loki.write.default.receiver]
-  relabel_rules = loki.relabel.docker.rules
 }
 
 // ── Add service name label from container name ──
@@ -57,11 +102,29 @@ loki.relabel "docker" {
     regex         = "/worldview-(.*)-\\d+"
     replacement   = "$1"
   }
+
+  // FU-OBS-LOKI-LABELS (PLAN-0107 C-5): Loki's auto-label is `service_name`
+  // (not `service`), so without this rule every stream collapsed to the
+  // single bucket `unknown_service` and panels like "Workers Ready
+  // (last 5 min)" returned zero series. Mirror the `service` extraction
+  // into `service_name` so panel queries `count_over_time({service_name=~".+"} [5m])`
+  // get one stream per container. We ADD a parallel rule instead of
+  // renaming `service` because other dashboards/Promtail joins may still
+  // reference it.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "service_name"
+    regex         = "/worldview-(.*)-\\d+"
+    replacement   = "$1"
+  }
 }
 
 // ── Push logs to Loki ──
 loki.write "default" {
   endpoint {
     url = "http://loki:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    stack = "worldview",
   }
 }

@@ -97,6 +97,129 @@ export interface AgentIterationEvent {
   elapsed_ms: number;
 }
 
+/**
+ * ToolTraceEntry — one tool invocation captured for the debug ToolTraceDrawer
+ * (PRD-0089 Q-8, completed in Round 1 Foundation).
+ *
+ * WHY A SEPARATE TYPE FROM ToolCallState:
+ * ToolCallState is the *user-facing* progress view-model (label + status) shown
+ * in the streaming bubble and cleared the moment the stream ends. The trace is
+ * the *debug* record: it keeps the raw tool name, the JSON arguments the LLM
+ * passed, the raw result metadata, and a latency measurement — and it survives
+ * past the end of the stream so an engineer can open the drawer AFTER the
+ * answer settles and inspect what happened.
+ *
+ * LATENCY SOURCE (frontend-rework Wave 2): the SSE `tool_result` event now
+ * carries a SERVER-MEASURED `duration_ms` (Wave-1 backend change) — when
+ * present it is the authoritative latency and `latencySource` is "server".
+ * For older backends (or a missing field) we fall back to the client
+ * wall-clock approximation (tool_call receipt → tool_result receipt via
+ * `performance.now()`, includes network jitter) and mark it "client" so the
+ * drawer can qualify the number (`~123 ms`) instead of presenting an
+ * estimate as truth.
+ */
+export interface ToolTraceEntry {
+  /** Internal tool name from the SSE event, e.g. "search_documents". */
+  tool: string;
+  /** User-friendly label, e.g. "Searching documents..." */
+  label: string;
+  /** JSON arguments the LLM passed to the tool (from the tool_call event). */
+  args: Record<string, unknown>;
+  /** Terminal status once tool_result arrives; "running" until then. */
+  status: "running" | "ok" | "empty" | "error";
+  /**
+   * Raw result metadata from the tool_result event (item_count, error info,
+   * any future fields) — everything except the demux keys (type/tool/status).
+   * Null until the tool_result event arrives.
+   */
+  result: Record<string, unknown> | null;
+  /**
+   * Tool latency in ms. Server-measured (`duration_ms` from the tool_result
+   * event) when available, else client wall-clock (tool_call → tool_result).
+   * Null while the tool is still running. See `latencySource` for which.
+   */
+  latencyMs: number | null;
+  /**
+   * Where `latencyMs` came from — "server" (authoritative `duration_ms`
+   * from S8) or "client" (wall-clock approximation incl. network jitter).
+   * Null while the tool is still running. The ToolTraceDrawer prefixes
+   * client-measured values with "~" and drops the qualifier for server ones.
+   */
+  latencySource: "server" | "client" | null;
+  /**
+   * Phase-1 Research timeline: the 0-indexed agent-loop iteration this tool was
+   * called in (the latest `agent_iteration.iteration` seen when the `tool_call`
+   * arrived). Lets the timeline group steps under "Step 1 / Step 2" headers.
+   * 0 when no agent_iteration event has been seen yet (single-iteration or
+   * classical answers) — they all fold into one implicit step.
+   */
+  iteration: number;
+  /**
+   * Phase-1 Research timeline: the input-aware human label from the
+   * `tool_result` SSE event (e.g. "Searching news for NVIDIA"). Falls back to
+   * the `tool_call` label when the result omits it (older backends). This is
+   * what the timeline renders; `label` (the call-time label) is kept for the
+   * debug drawer's verbatim record.
+   */
+  resultLabel: string | null;
+}
+
+/**
+ * ResultPreviewItem — one item from the `result_preview` array on a
+ * tool_result SSE event (Wave-1 backend addition).
+ *
+ * WHY {id, title}: the preview answers "WHAT did this tool actually return?"
+ * at a glance — titles are the human-meaningful part; ids let an engineer
+ * correlate with backend logs. The full payload never travels over SSE
+ * (could be megabytes for a screener call); the preview is the curated
+ * top-N summary S8 considers representative.
+ */
+export interface ResultPreviewItem {
+  id: string;
+  title: string;
+}
+
+/**
+ * ToolUsageSample — one completed tool invocation, accumulated across the
+ * WHOLE conversation (unlike ToolTraceEntry, which is per-turn).
+ *
+ * WHY A SEPARATE ACCUMULATOR (frontend-rework Wave 2 — context-rail "Tools
+ * Used" section): toolTrace is deliberately reset at the start of every send
+ * so the ?debug=1 drawer always shows the LATEST turn. The rail's Tools Used
+ * section answers a different question — "which platform tools produced the
+ * answers in this conversation, how often, and how fast on average" — which
+ * requires samples to survive across turns. Cleared only on thread switch
+ * (resetForThread), mirroring how localMessages is scoped.
+ */
+export interface ToolUsageSample {
+  /** Internal tool name from the SSE event, e.g. "get_entity_narrative". */
+  tool: string;
+  /** Server-measured duration_ms when emitted; client wall-clock fallback; null when neither was available. */
+  latencyMs: number | null;
+}
+
+/**
+ * AssistantTurnMeta — end-of-stream `metadata` SSE fields attached to the
+ * finalized assistant message (frontend-rework Wave 2 — message meta strip).
+ *
+ * WHY AN INTERSECTION TYPE (not editing types/api.ts Message): the server's
+ * ThreadDetailResponse already returns intent/provider/model/latency_ms per
+ * message — the canonical Message type just never declared them. Declaring
+ * the optional extension HERE (chat-owned file) lets the meta strip read the
+ * fields from both historical messages (server-supplied) and just-streamed
+ * ones (captured from the `metadata` SSE event) without touching the shared
+ * types/api.ts surface owned by another workstream.
+ */
+export interface AssistantTurnMeta {
+  intent?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  latency_ms?: number | null;
+}
+
+/** Message possibly carrying the assistant-turn metadata extension. */
+export type MessageWithMeta = Message & AssistantTurnMeta;
+
 export interface PendingActionEvent {
   /** Server-generated UUID — sent back as the path param on confirm. */
   proposal_id: string;

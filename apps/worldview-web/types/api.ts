@@ -168,6 +168,12 @@ export interface Quote {
   change_pct: number;   // percentage change
   timestamp: string;    // ISO 8601 UTC
   volume: number | null;
+  // WHY optional + nullable (Wave-1 2026-06 backend): S9 QuoteResponse now
+  // carries best bid/ask, but most dev-data price sources (daily/intraday
+  // close snapshots) have no order book and return null. The header renders
+  // "—×—" with an explanatory tooltip when null — never a fake spread.
+  bid?: number | null;
+  ask?: number | null;
   // WHY optional: freshness fields added in PLAN-0036 Wave 1 — backward compatible
   // during rollout. Once all S9 quote routes call the new PriceSnapshot endpoint,
   // these will be populated on every response.
@@ -436,8 +442,23 @@ export interface InstrumentPageBundle {
   overview: CompanyOverview | null;
   /** Full all-sections fundamentals (mirrors /v1/fundamentals/{id}). */
   fundamentals: FundamentalsSectionResponse | null;
+  /**
+   * Pre-computed derived-metrics snapshot (eps_ttm, beta, free_cash_flow, etc.).
+   * PLAN-0099 follow-up G: bundled so the Quote-tab MetricsTable hook
+   * (useMetricsTableData) finds it pre-seeded in qk.instruments.fundamentalsSnapshot
+   * cache on first paint, eliminating the dedicated /snapshot RTT. Null when the
+   * downstream leg fails — the MetricsTable renders "—" on null.
+   */
+  fundamentals_snapshot: FundamentalsSnapshot | null;
   /** Technicals snapshot (52-week range etc.). */
   technicals: FundamentalsSectionResponse | null;
+  /**
+   * Share count + insider/institution ownership % records.
+   * PLAN-0099 follow-up G: bundled so the Quote-tab MetricsTable hook finds
+   * it pre-seeded in qk.instruments.shareStatistics cache, eliminating the
+   * dedicated /share-statistics RTT on first paint.
+   */
+  share_statistics: FundamentalsSectionResponse | null;
   /** Insider transactions records. */
   insider: FundamentalsSectionResponse | null;
   /** Top-N entity-scoped news (limit=5). */
@@ -458,6 +479,18 @@ export interface GraphNode {
    *  Empty string for non-instrument entities (sectors, people, events).
    *  WHY needed: KG entity_id ≠ S3 instrument_id; ticker is the stable bridge. */
   ticker?: string;
+  // B-01 (Block I): enrichment fields forwarded from S7 EntitySummary.
+  // Used by EdgeDetailCard breadcrumb + node hover tooltip (acceptance checks 26/28).
+  /** Short description from S7 enrichment (Worker 13J). Null when not yet enriched. */
+  description?: string | null;
+  /** GICS sector string, e.g. "Technology", "Energy". Null for non-company entities. */
+  sector?: string | null;
+  /** Primary exchange code, e.g. "NASDAQ", "NYSE". Null for non-instrument entities. */
+  exchange?: string | null;
+  /** GICS industry sub-classification (finer than sector). */
+  industry?: string | null;
+  /** Market capitalisation in USD (raw number from S3/EODHD). */
+  market_cap?: number | null;
 }
 
 export interface GraphEdge {
@@ -473,6 +506,22 @@ export interface GraphEdge {
   relation_summary?: string | null;
   /** Top evidence text snippets (max 3, from relation_evidence_raw). */
   evidence_snippets?: string[];
+  // B-02 (Block I): decay_class drives edge opacity in the sigma edgeReducer.
+  // PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4.
+  /** Temporal decay class. Null when S7 omits it — frontend defaults to MEDIUM opacity. */
+  decay_class?: string | null;
+  /** Edge directionality relative to the center node: outbound | inbound | lateral. */
+  direction?: string;
+  /** ISO timestamp of the most recent evidence document for this relation. */
+  latest_evidence_at?: string | null;
+  /** Total count of evidence documents supporting this relation. */
+  evidence_count?: number | null;
+  /** ISO timestamp of when this relation was first established. */
+  valid_from?: string | null;
+  /** ISO timestamp of when this relation expired (null = still active). */
+  valid_to?: string | null;
+  /** True when the confidence score is older than 7 days and may be stale. */
+  confidence_stale?: boolean;
 }
 
 export interface EntityGraph {
@@ -732,6 +781,24 @@ export interface ScreenerFilter {
   min_value?: number;
   max_value?: number;
   sector?: string;
+  // ── PLAN-0089 IB-L5 — intelligence rollup per-filter named fields ──────────
+  // WHY these live as siblings of min_value/max_value (not in a parallel filters
+  // array): the backend ScreenFilterRequest exposes them as PER-FILTER fields —
+  // see services/market-data/.../api/schemas/fundamental_metrics.py:115-124.
+  // Sending them as `{metric: "has_ai_brief", min_value: 1}` silently fails
+  // because `has_ai_brief` is not a known computed metric and the INNER JOIN
+  // drops the row. Sending them by name on the filter object hits the column
+  // directly on instrument_fundamentals_snapshot.
+  news_count_7d_min?: number;
+  news_count_7d_max?: number;
+  llm_relevance_7d_max_min?: number;
+  llm_relevance_7d_max_max?: number;
+  display_relevance_7d_weighted_min?: number;
+  display_relevance_7d_weighted_max?: number;
+  recent_contradiction_count_min?: number;
+  recent_contradiction_count_max?: number;
+  has_active_alert?: boolean;
+  has_ai_brief?: boolean;
 }
 
 export interface ScreenerRequest {
@@ -761,10 +828,41 @@ export interface ScreenerResult {
   current_price?: number | null;       // live quote price (from quote enrichment)
   revenue?: number | null;             // trailing 12-month revenue (USD)
   beta?: number | null;                // market beta vs S&P 500
+  avg_volume_30d?: number | null;      // 30-day average daily volume (from snapshot)
   forward_pe?: number | null;          // forward P/E ratio (next-twelve-months EPS)
   dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
   revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)
   roe?: number | null;                 // return on equity (decimal)
+  // PRD-0089 Wave I new columns — echoed by backend when filter is active (design §3.2)
+  operating_margin?: number | null;    // operating margin TTM (decimal, e.g. 0.281 = 28.1%)
+  // IB-L3 — Returns + 52W distance (computed nightly at 02:00 UTC, stored as decimals)
+  // WHY decimals: backend stores 0.124 = +12.4%; multiply ×100 to display as percent
+  dist_from_52w_high_pct?: number | null; // distance from 52-week high (negative = below high)
+  dist_from_52w_low_pct?: number | null;  // distance from 52-week low (positive = above low)
+  return_1m?: number | null;    // 1-month total return (decimal)
+  return_3m?: number | null;    // 3-month total return (decimal)
+  return_6m?: number | null;    // 6-month total return (decimal)
+  return_ytd?: number | null;   // year-to-date return (decimal)
+  return_1y?: number | null;    // 1-year total return (decimal)
+  return_3y?: number | null;    // 3-year total return (decimal)
+  // IB-L4 — Analyst / Insider / Ownership
+  // WHY analyst_target_price separate from ANALYST UPSIDE: upside is derived
+  // client-side as (target / price) - 1; backend never exposes a pre-computed upside field.
+  analyst_target_price?: number | null;      // analyst consensus target price (USD)
+  analyst_consensus_rating?: number | null;  // 1-5 scale (5=strong buy, 1=strong sell)
+  insider_net_buy_90d?: number | null;       // net insider buy/sell in USD over 90 days (null ≠ $0)
+  institutional_ownership_pct?: number | null; // fraction 0–1 (multiply ×100 for display)
+  short_percent?: number | null;             // fraction 0–1 (multiply ×100 for display)
+  // IB-L5 — Intelligence rollup (nightly S7→S3 sync via L-5b worker)
+  // WHY optional (not null): pre-L-5 payloads won't include these keys; optional vs null
+  // lets the renderer show "—" for missing rather than "0" for explicitly null.
+  news_count_7d?: number | null;               // article count last 7 days (INTEGER)
+  llm_relevance_7d_max?: number | null;        // max LLM relevance score last 7d (FLOAT 0–1)
+  display_relevance_7d_weighted?: number | null; // weighted avg display relevance 7d (FLOAT 0–1)
+  recent_contradiction_count?: number | null;  // KG contradiction events (INTEGER)
+  has_ai_brief?: boolean | null;               // TRUE = S8 brief exists for this instrument
+  has_active_alert?: boolean | null;           // TRUE = live S10 alert for this instrument
+  intelligence_rollup_synced_at?: string | null; // ISO-8601 UTC, last L-5b sync timestamp
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 
@@ -809,6 +907,23 @@ export interface Holding {
   unrealised_pnl?: number | null; // computed: (current_price - avg_cost) * qty
   unrealised_pnl_pct?: number | null;
   portfolio_weight?: number | null; // % of total portfolio value
+  /**
+   * 2026-06-10 sprint gap #1: instrument asset class surfaced directly on
+   * the holdings payload (instruments LEFT JOIN server-side). Same open
+   * vocabulary as Transaction.asset_class (``equity | etf | fund | option |
+   * future | bond | crypto | …``). Nullable when the instrument row hasn't
+   * synced — the ASSET column renders "—" rather than a fabricated default.
+   * Optional in the type so older S9 builds (and existing test fixtures)
+   * that omit the field keep compiling.
+   */
+  asset_class?: string | null;
+  /**
+   * PLAN-0114 W6 (T-W6-04): annualised dividend yield as a ratio (0.024 = 2.4%),
+   * surfaced by S9 GET /v1/holdings/{portfolio_id} (wire field
+   * `annualized_dividend_yield`, renamed in lib/api/portfolios.ts). Optional +
+   * nullable so older S9 builds / fixtures keep compiling and YIELD renders "—".
+   */
+  annualizedDividendYield?: number | null;
 }
 
 export interface Transaction {
@@ -860,6 +975,20 @@ export interface HoldingsResponse {
   total_cost: number | null;
   total_unrealised_pnl: number | null;
   total_unrealised_pnl_pct: number | null;
+  /**
+   * PRD-0114 W3/W4 (FR-4 / G-4): ISO 8601 UTC timestamp of the last successful
+   * SnapTrade sync for BROKERAGE portfolios. null for MANUAL and ROOT portfolios,
+   * and for BROKERAGE portfolios that have never synced successfully.
+   * Optional so older S9 builds (pre-W3) keep compiling.
+   */
+  brokerage_last_synced_at?: string | null;
+  /**
+   * PRD-0114 W3/W4 (FR-7 / G-7): count of unresolved rows in the
+   * brokerage_sync_errors table for this portfolio's brokerage connection.
+   * 0 for MANUAL, ROOT, and BROKERAGE portfolios with no errors.
+   * Optional so older S9 builds (pre-W3) keep compiling — treat undefined as 0.
+   */
+  brokerage_sync_error_count?: number;
 }
 
 export interface TransactionsResponse {
@@ -939,6 +1068,13 @@ export interface ExposureResponse {
   // ``prices_as_of`` is reserved for v2 (currently always null on the wire).
   prices_stale?: boolean;
   prices_as_of?: string | null;
+  /**
+   * 2026-06-10 sprint gap #5: explicit buying power from S1. v1 semantics:
+   * equals ``cash`` (margin is not modelled). Nullable/optional so older
+   * S9 builds that omit the field degrade to the previous "BUYING PWR =
+   * cash" client-side fallback instead of breaking the parse.
+   */
+  buying_power?: number | null;
 }
 
 /**
@@ -957,6 +1093,25 @@ export interface RiskMetricsResponse {
   sharpe: number | null;
   sortino: number | null;
   beta_vs_spy: number | null;
+  /**
+   * 2026-06-10 sprint: the risk-metrics endpoint now also returns Calmar,
+   * win rate, alpha, VaR(95), period return, and CAGR (VERIFIED LIVE
+   * 2026-06-11 against the dev gateway). All optional + nullable —
+   * older S9 builds omit them entirely; null means "undefined for the
+   * series" (e.g. insufficient data / benchmark unavailable). The UI
+   * renders "—" for both absent and null, never a fabricated number.
+   */
+  calmar?: number | null;
+  /** Fraction of positive daily returns in the window [0, 1]. */
+  win_rate?: number | null;
+  /** Jensen's alpha vs SPY — null while benchmark data is unavailable. */
+  alpha?: number | null;
+  /** 1-day 95% historical Value-at-Risk as a (negative) fraction. */
+  var_95?: number | null;
+  /** Simple window return ((last/first) − 1) — computes from 2+ points. */
+  period_return?: number | null;
+  /** Annualised growth rate — wildly unstable on short windows; gate on data_quality. */
+  cagr?: number | null;
   n_returns: number;
   // F-014 / F-015 (QA 2026-04-28): context fields so the UI can render
   // a meaningful hint when metrics are null. ``as_of`` is the UTC ISO-8601
@@ -1257,12 +1412,63 @@ export interface Message {
   citations: Citation[];
 }
 
+/**
+ * Citation — LEGACY chat citation shape (PRD-0028 era).
+ *
+ * @deprecated Use `CitationV2` for all new code. This is the field naming the
+ * original chat components were built against; rag-chat (S8) now emits the
+ * canonical `CitationV2` names (`id`/`source_name`/`confidence`/`item_type`)
+ * and `lib/api/chat.ts#normalizeCitation` writes BOTH shapes onto every
+ * citation object so pre-migration call sites keep working. Kept exported
+ * (NOT removed/renamed — forward-compat only, R11) until the atomic rename in
+ * PLAN-0089-K-FU; the `no-legacy-citation` architecture test blocks NEW bare
+ * `Citation` imports in `features/chat/**` and `components/chat/**`.
+ */
 export interface Citation {
   article_id: string;
   title: string;
   url: string;
   source: string;
   relevance_score: number;
+}
+
+/**
+ * CitationV2 — canonical chat citation shape (PLAN-0089 Wave K, Q-10).
+ *
+ * WHY V2: rag-chat's ThreadDetailResponse + SSE `citations` events emit this
+ * shape natively (PLAN-0107 added `Citation.id` + structured fields on the
+ * backend). The legacy `Citation` names (`article_id`/`source`/
+ * `relevance_score`) were a frontend-only contract that forced a lossy
+ * mapping; V2 mirrors the server payload 1:1 so no information is dropped.
+ *
+ * DATA SOURCE: S8 rag-chat `Citation` Pydantic model, proxied verbatim by S9.
+ * The chat surface's normalizers emit objects satisfying BOTH `Citation` and
+ * `CitationV2` during the staged migration — components should type against
+ * this interface and ignore the legacy fields.
+ */
+export interface CitationV2 {
+  /** Stable citation id (UUIDv7) — dedup key is (message_id, citation.id). */
+  id: string;
+  /** Human-readable source, e.g. "Reuters" — replaces legacy `source`. */
+  source_name: string;
+  /** Retrieval confidence 0.0–1.0 — replaces legacy `relevance_score`. */
+  confidence: number;
+  /**
+   * What kind of KG/RAG item backs the citation (e.g. "article", "entity",
+   * "relation") — drives per-type rendering in CitationStrip/ToolTraceDrawer.
+   */
+  item_type: string;
+  /**
+   * Primary entity the citation is about, when the backing item is
+   * entity-scoped. Null for entity-less items (e.g. macro articles) —
+   * render a fallback, never `undefined`-keyed lookups (the "NaN%" bug
+   * class Wave K fixed).
+   */
+  entity_name: string | null;
+  /** Document/item title. Empty string when the source has no title. */
+  title: string;
+  /** Canonical source URL. Empty string when not resolvable (internal KG items). */
+  url: string;
 }
 
 export interface Thread {
@@ -1333,6 +1539,10 @@ export interface EconomicEvent {
 
 export interface EconomicCalendarResponse {
   events: EconomicEvent[];
+  // WHY total?: backend (S7) returns the total count of matching events for the
+  // window; the frontend uses this to drive a "Load more" button when more events
+  // exist beyond the currently-fetched page. Optional for backward compatibility.
+  total?: number;
 }
 
 // ── Earnings Calendar ──────────────────────────────────────────────────────
@@ -1475,6 +1685,12 @@ export interface BriefingResponse {
   // The MorningBriefCard falls back to clamp-3 of the narrative when null —
   // never break rendering when summary is missing.
   summary?: string | null;
+  // WHY summary_paragraph (PLAN-0103 W3 / BP-624 recovery): the v4.2 backend
+  // emits a landscape paragraph in `summary_paragraph` that is preferred over
+  // `summary` for the collapsed dashboard view. Optional + nullable for
+  // legacy cached briefs and instrument briefs. Frontend uses a 3-tier
+  // fallback: summary_paragraph → summary → narrative.
+  summary_paragraph?: string | null;
   risk_summary: {
     concentration_score: number;
     top_risk_signals: Array<{ signal_id: string; description: string }>;
@@ -2100,6 +2316,86 @@ export interface HoldingLotsResponse {
 export interface TopPositionItem {
   instrument_id: string;
   weight_pct: number;
+}
+
+/**
+ * SectorBreakdownSegment — single row from the fast sector-breakdown endpoint.
+ *
+ * WHY market_value as a number (not string): the sector-breakdown endpoint
+ * returns float JSON (not Decimal-as-string), so no parseFloat() is needed.
+ * `weight` is a 0-1 fraction (e.g. 0.42 = 42% of portfolio).
+ */
+export interface SectorBreakdownSegment {
+  /** GICS sector name (e.g. "Technology", "Healthcare"). */
+  sector: string;
+  /** Fraction of portfolio market value in this sector [0, 1]. */
+  weight: number;
+  /** Number of holdings in this sector. */
+  count: number;
+  /** Total market value in portfolio currency. */
+  market_value: number;
+  /**
+   * 2026-06-10 sprint gap #2: instrument UUIDs that make up this segment
+   * (VERIFIED LIVE 2026-06-11). Lets the frontend join sector filters to
+   * holdings rows by exact ID instead of the EODHD↔GICS name-alias table.
+   * Optional so older S9 builds keep parsing; absent → alias fallback.
+   */
+  instrument_ids?: string[];
+}
+
+/**
+ * SectorBreakdownResponse — payload of GET /v1/portfolios/{id}/sector-breakdown.
+ *
+ * Returned in 31–86ms with a 60s Valkey cache (vs 640ms for sector-attribution).
+ * `covered_pct` is the fraction of holdings that had price data when computed;
+ * `as_of` is the ISO-8601 date of the snapshot ("YYYY-MM-DD").
+ */
+export interface SectorBreakdownResponse {
+  portfolio_id: string;
+  segments: SectorBreakdownSegment[];
+  /** Fraction of holdings with price coverage [0, 1]. */
+  covered_pct: number;
+  /** ISO date of the snapshot (YYYY-MM-DD). */
+  as_of: string;
+}
+
+// ── Flow-adjusted TWR (2026-06-10 sprint gap #3) ──────────────────────────
+
+/**
+ * One point on the flow-adjusted time-weighted-return series.
+ *
+ * `twr_cum_pct` is in PERCENT units on the wire (e.g. 4.21 = +4.21%) —
+ * VERIFIED LIVE 2026-06-11. The gateway client converts it to the
+ * codebase-wide FRACTION convention (0.0421) before handing it to
+ * consumers, so chart/format helpers (`fmtPct`, `formatPercent`) work
+ * unmodified. `nav` arrives as an 8-dp Decimal string and is parsed to a
+ * number at the same boundary.
+ */
+export interface TwrPoint {
+  /** ISO date "YYYY-MM-DD". */
+  date: string;
+  /** Cumulative flow-adjusted TWR since window start, as a FRACTION (0.05 = +5%). */
+  twr_cum: number;
+  /** End-of-day NAV in portfolio currency. */
+  nav: number;
+}
+
+/**
+ * GET /v1/portfolios/{id}/twr response (S9 → S1 proxy).
+ *
+ * True time-weighted return: sub-period returns between external cash
+ * flows, geometrically linked — replaces the NAV-relative approximation
+ * the Analytics chart used before this endpoint existed. `flow_days` is
+ * the number of days inside the window that had external cash flows
+ * (deposits/withdrawals) — surfaced so the UI can explain why TWR and
+ * raw NAV return diverge.
+ */
+export interface TwrResponse {
+  portfolio_id: string;
+  from_date: string;
+  to_date: string;
+  points: TwrPoint[];
+  flow_days: number;
 }
 
 /**

@@ -102,12 +102,39 @@ class ScreenFilterRequest(BaseModel):
     return_1y_max: float | None = None
     return_3y_min: float | None = None
     return_3y_max: float | None = None
+    # ── L-3 ops follow-up: realised volatility + adjusted-close quality ───────
+    # ``volatility_30d`` = annualised stddev of daily returns over the last 30
+    # trading days (a fraction, e.g. 0.35 = 35% annualised vol). Range filter so
+    # callers can screen "low-vol quality" or "high-vol momentum".
+    volatility_30d_min: float | None = None
+    volatility_30d_max: float | None = None
+    # ``returns_adjustment_quality`` = 1.0 when the instrument's returns are
+    # computed on real split/dividend-adjusted close, 0.0 when they fell back to
+    # raw close (and so may be wrong across corporate actions). Filter
+    # ``returns_adjustment_quality_min=1.0`` to screen to instruments with
+    # trustworthy (adjusted) returns only.
+    returns_adjustment_quality_min: float | None = None
+    returns_adjustment_quality_max: float | None = None
     # ── Wave L-4b: insider 90d rollup range filter ──────────────────────────
     # Inclusive min/max on ``instrument_fundamentals_snapshot.insider_net_buy_90d``.
     # Negative values are valid (net selling); the column is signed.
     # Defaults to None for R11 forward-compat — existing callers unaffected.
     insider_net_buy_90d_min: float | None = None
     insider_net_buy_90d_max: float | None = None
+    # ── Wave L-5b: intelligence rollup column filters (PLAN-0089) ────────────
+    # Numeric min/max pairs for the 4 quantitative intelligence fields; boolean
+    # equality for the 2 flag fields. All default to None for R11 forward-compat.
+    # Populated by the nightly ``SyncIntelligenceRollupUseCase`` (04:00 UTC).
+    news_count_7d_min: int | None = None
+    news_count_7d_max: int | None = None
+    llm_relevance_7d_max_min: float | None = None
+    llm_relevance_7d_max_max: float | None = None
+    display_relevance_7d_weighted_min: float | None = None
+    display_relevance_7d_weighted_max: float | None = None
+    recent_contradiction_count_min: int | None = None
+    recent_contradiction_count_max: int | None = None
+    has_active_alert: bool | None = None
+    has_ai_brief: bool | None = None
 
 
 class ScreenRequest(BaseModel):

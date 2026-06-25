@@ -43,6 +43,20 @@ def entity_summary_from_row(row: dict[str, Any]) -> EntitySummary:
     # routes.py and this helper at import time).
     from knowledge_graph.api.schemas import EntitySummary
 
+    # PLAN-0099: industry / market_cap come either from dedicated SELECT
+    # aliases (canonical_entity.get / get_batch) or, as a fallback, from the
+    # metadata JSONB when the row variant only carries `metadata`.
+    metadata = row.get("metadata")
+    meta: dict[str, Any] = metadata if isinstance(metadata, dict) else {}
+    industry = row.get("industry") or meta.get("industry")
+    market_cap_raw = row.get("market_cap") if row.get("market_cap") is not None else meta.get("market_cap")
+    try:
+        market_cap = float(market_cap_raw) if market_cap_raw is not None else None
+    except (TypeError, ValueError):
+        # Defensive: metadata JSONB is free-form; a non-numeric market_cap
+        # must never 500 the graph endpoint.
+        market_cap = None
+
     return EntitySummary(
         entity_id=row["entity_id"],
         canonical_name=str(row["canonical_name"]),
@@ -52,4 +66,6 @@ def entity_summary_from_row(row: dict[str, Any]) -> EntitySummary:
         exchange=str(row["exchange"]) if row.get("exchange") else None,
         description=str(row["description"]) if row.get("description") else None,
         sector=str(row["sector"]) if row.get("sector") else None,
+        industry=str(industry) if industry else None,
+        market_cap=market_cap,
     )

@@ -1,0 +1,467 @@
+{
+  "baseline": {
+    "model": "Qwen/Qwen3.5-9B",
+    "reasoning": "none",
+    "n": 28,
+    "empties": 0,
+    "accuracy_vs_weaklabel": 100.0,
+    "tp": 16,
+    "fp": 0,
+    "tn": 12,
+    "fn": 0,
+    "lat_p50": 0.92,
+    "lat_mean": 0.93,
+    "rows": [
+      {
+        "surface": "Globale Aktier",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Badami",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "business inventories",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "steel",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "brokerage firms",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "OUT shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Flower Mound, Texas",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "sentiment",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "settlor",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Stock",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Park Meadows",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "NASDAQ",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "BYD",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Booking Holdings",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Freedom Holding",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Synopsys",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Culper Research",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Samsung",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "OpenAI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Matador Resources",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Intel",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "SMCI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Paycom",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "AXON",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Deb Cupp",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Wall Street",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Kay Jewelers",
+        "gold": true,
+        "pred": true
+      }
+    ]
+  },
+  "20b@low": {
+    "model": "openai/gpt-oss-20b",
+    "reasoning": "low",
+    "n": 28,
+    "empties": 0,
+    "accuracy_vs_weaklabel": 89.3,
+    "tp": 15,
+    "fp": 2,
+    "tn": 10,
+    "fn": 1,
+    "lat_p50": 0.93,
+    "lat_mean": 0.9,
+    "rows": [
+      {
+        "surface": "Globale Aktier",
+        "gold": false,
+        "pred": true
+      },
+      {
+        "surface": "Badami",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "business inventories",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "steel",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "brokerage firms",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "OUT shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Flower Mound, Texas",
+        "gold": false,
+        "pred": true
+      },
+      {
+        "surface": "sentiment",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "settlor",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Stock",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Park Meadows",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "NASDAQ",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "BYD",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Booking Holdings",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Freedom Holding",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Synopsys",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Culper Research",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Samsung",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "OpenAI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Matador Resources",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Intel",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "SMCI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Paycom",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "AXON",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Deb Cupp",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Wall Street",
+        "gold": true,
+        "pred": false
+      },
+      {
+        "surface": "Kay Jewelers",
+        "gold": true,
+        "pred": true
+      }
+    ]
+  },
+  "120b@low": {
+    "model": "openai/gpt-oss-120b",
+    "reasoning": "low",
+    "n": 28,
+    "empties": 0,
+    "accuracy_vs_weaklabel": 100.0,
+    "tp": 16,
+    "fp": 0,
+    "tn": 12,
+    "fn": 0,
+    "lat_p50": 2.17,
+    "lat_mean": 2.3,
+    "rows": [
+      {
+        "surface": "Globale Aktier",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Badami",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "business inventories",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "steel",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "brokerage firms",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "OUT shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "shares",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Flower Mound, Texas",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "sentiment",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "settlor",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Stock",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "Park Meadows",
+        "gold": false,
+        "pred": false
+      },
+      {
+        "surface": "NASDAQ",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "BYD",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Booking Holdings",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Freedom Holding",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Synopsys",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Culper Research",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Samsung",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "OpenAI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Matador Resources",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Intel",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "SMCI",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Paycom",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "AXON",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Deb Cupp",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Wall Street",
+        "gold": true,
+        "pred": true
+      },
+      {
+        "surface": "Kay Jewelers",
+        "gold": true,
+        "pred": true
+      }
+    ]
+  }
+}

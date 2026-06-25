@@ -14,6 +14,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
 from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import select
 
@@ -53,7 +54,7 @@ async def _make_use_case(session, minio_storage, lsh_client, bronze_bucket: str,
         dedup_repo=DedupHashRepository(session),
         minhash_repo=MinHashRepository(session),
         outbox_repo=OutboxRepository(session),
-        object_store=minio_storage,
+        bronze_store=BronzeStorageAdapter(minio_storage, bronze_bucket),
         bronze_bucket=bronze_bucket,
         silver_storage=SilverStorageAdapter(minio_storage, silver_bucket),
         lsh_client=lsh_client,

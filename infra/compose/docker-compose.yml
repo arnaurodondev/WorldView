@@ -42,6 +42,19 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - minio_data:/data
+    # ── Memory governance (D1 prevention — 2026-06-21 OOM RCA) ────────────────
+    # MinIO was the ONLY stateful infra service with no reservation/limit, so
+    # under a VM-wide memory squeeze (rebuild waves) it was the deterministic
+    # OOM victim (Exit 137, F-001). It backs the whole pipeline (OHLCV + silver
+    # buckets), so guarantee it a baseline and cap its page-cache/buffer growth.
+    #   reservation 1G  — observed idle RSS ~0.6G; floor that survives squeezes.
+    #   limit 4G        — generous headroom for IO buffers during rebuild waves.
+    deploy:
+      resources:
+        reservations:
+          memory: 1G
+        limits:
+          memory: 4G
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -71,10 +84,16 @@ services:
   # Credentials: postgres:postgres — matches all services' docker.env files.
   # Init script creates one database per service (portfolio_db, ingestion_db, …).
   postgres:
+    restart: unless-stopped
     build:
       context: ../postgres
       dockerfile: Dockerfile
     profiles: [infra, all]
+    # Docker defaults /dev/shm to 64MB; parallel VACUUM/maintenance on large
+    # tables (e.g. fundamental_metrics ANALYZE in market-data migration 037)
+    # allocates >64MB of shared memory and fails with DiskFullError on the shm
+    # segment. 256MB gives comfortable headroom. (Applies on next postgres recreate.)
+    shm_size: 256mb
     ports:
       # SEC-007: bind to localhost only — prevent external DB access
       - "127.0.0.1:5432:5432"
@@ -84,6 +103,16 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    command: ["postgres", "-c", "max_connections=500", "-c", "shared_buffers=256MB"]
+    # ── Memory/CPU governance (D1 prevention) ─────────────────────────────────
+    # Primary datastore for every service — guarantee it baseline capacity so a
+    # memory-heavy rebuild wave (or uncapped ML inference) cannot starve it.
+    #   reservation 1G / 1 cpu — observed idle RSS ~0.6G; floors the datastore.
+    deploy:
+      resources:
+        reservations:
+          cpus: "1.0"
+          memory: 1G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -96,8 +125,50 @@ services:
         aliases:
           - timescaledb
 
+  # ── PostgreSQL (intelligence / OLAP) ─────────────────────────────────────────
+  # WORKLOAD SPLIT (2026-06-08): dedicated instance for the heavy KG/NLP analytical
+  # workload (intelligence_db, nlp_db, kg_db). Splitting these off the main `postgres`
+  # instance stops multi-hour AGE relation scans + multi-minute FTS from starving the
+  # latency-sensitive OLTP queries (portfolio, market-data, gateway, alert).
+  # See docs/audits/2026-06-08-postgres-workload-split.md.
+  #
+  # Same image as `postgres` (timescaledb-pg16 + pgvector + Apache AGE) — AGE +
+  # pgvector are required for intelligence_db/nlp_db. Own volume + own init dir that
+  # creates ONLY the OLAP databases.
+  postgres-intelligence:
+    build:
+      context: ../postgres
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    ports:
+      # SEC-007: bind to localhost only — prevent external DB access.
+      # 5433 on the host avoids clashing with the OLTP instance's 5432.
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_intelligence_data:/var/lib/postgresql/data
+      - ../postgres/init-intelligence:/docker-entrypoint-initdb.d:ro
+    # OLAP tuning: larger work_mem for AGE/FTS sorts; shared_buffers sized for the
+    # 25% rule against this instance's allotted RAM. Adjust mem_limit/cpus per host.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "work_mem=128MB"
+      - "-c"
+      - "max_connections=120"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Kafka (KRaft mode) ──────────────────────────────────────────────────────
   kafka:
+    restart: unless-stopped
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
     ports:
@@ -126,8 +197,66 @@ services:
       KAFKA_CONTROLLER_QUORUM_ELECTION_TIMEOUT_MS: 30000
       KAFKA_BROKER_HEARTBEAT_INTERVAL_MS: 5000
       KAFKA_BROKER_SESSION_TIMEOUT_MS: 30000
+      # ── Connection-churn / GC-pause hardening (broker scope) ─────────────────
+      # ROOT CAUSE (diagnosed 2026-06-20 from live broker logs): under a ~24k-event
+      # backlog drain + 48 consumers (each holding producer+consumer+admin TCP
+      # connections to this single broker), the broker JVM stalls. Evidence:
+      #   * default heap is -Xms1G -Xmx1G (confirmed via `ps` in-container) — far
+      #     too small for the drain working set → stop-the-world GC pauses freeze
+      #     the network acceptor + the in-process controller event loop.
+      #   * broker logs show its OWN in-process heartbeat to its in-process
+      #     QuorumController timing out for 15s / 27s / 47s / 70s / 111s (one at
+      #     23min): "processExpiredBrokerHeartbeat: controller event queue
+      #     overloaded" + "Disconnecting from node 1 due to request timeout".
+      #   * "Attempting to send response via channel for which there is no open
+      #     connection" — clients already gave up (rdkafka 31s CONNECT timeout).
+      # When the single JVM freezes it serves NEITHER the in-process controller
+      # channel NOR external connection handshakes → producers + consumers all
+      # time out in state CONNECT at the same instants. Same stall, two symptoms.
+      #
+      # Heap 1G→4G: kill the GC pauses (host has 48GB / 14 CPU; 4G is generous and
+      # leaves ample room for 48 consumers + ML containers). This is the dominant
+      # fix — a non-pausing JVM keeps the event loop + acceptor responsive.
+      KAFKA_HEAP_OPTS: "-Xms4G -Xmx4G"
+      # G1GC with a low pause target so the larger heap still collects in short,
+      # predictable pauses instead of long full GCs that re-trigger the stall.
+      KAFKA_JVM_PERFORMANCE_OPTS: "-XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35"
+      # Network/IO threads: defaults are 3/8. With ~48 consumers churning
+      # connections against ONE broker, 3 acceptor/network threads is the
+      # secondary bottleneck once GC is out of the way — raise to absorb the
+      # connection + request fan-in. Host has 14 CPU, so 6/12 is well within budget.
+      KAFKA_NUM_NETWORK_THREADS: 6
+      KAFKA_NUM_IO_THREADS: 12
+      KAFKA_BACKGROUND_THREADS: 12
+      # Socket buffers + accept backlog: cushion bursty connection storms during
+      # backlog drain so SYNs queue instead of being dropped (a dropped SYN is
+      # exactly what surfaces client-side as a CONNECT timeout). Defaults are
+      # 102400 send/recv and listen backlog 50.
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 1048576
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 1048576
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 209715200
+      KAFKA_QUEUED_MAX_REQUESTS: 1000
+      KAFKA_SOCKET_LISTEN_BACKLOG_SIZE: 256
+      # Connection limits: dev single broker serving 48 consumers + producers +
+      # admin + kafka-ui. Default max.connections is unbounded but per-listener
+      # acceptor pressure benefits from an explicit, generous ceiling rather than
+      # a per-IP throttle (all clients share the docker bridge / few source IPs,
+      # so a tight per-IP cap would self-DoS). Keep per-IP high.
+      KAFKA_MAX_CONNECTIONS: 2000
+      KAFKA_MAX_CONNECTIONS_PER_IP: 2000
     volumes:
       - kafka_data:/var/lib/kafka/data
+    # PRD-0113 FR-10 intent (broker scope): guarantee the event backbone CPU+mem
+    # so ML inference (gliner/ollama) cannot starve it. ML-container CPU *caps*
+    # are owned by PLAN-0113 W1 (the commented deploy blocks on gliner/ollama);
+    # this reservation is the kafka half and is additive to that work.
+    deploy:
+      resources:
+        reservations:
+          cpus: "2.0"
+          memory: 5G
+        limits:
+          memory: 6G
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
@@ -139,6 +268,7 @@ services:
       start_period: 300s
 
   schema-registry:
+    restart: unless-stopped
     image: confluentinc/cp-schema-registry:7.6.0
     profiles: [infra, all]
     ports:
@@ -208,6 +338,7 @@ services:
 
   # ── Valkey (Redis-compatible cache) ─────────────────────────────────────────
   valkey:
+    restart: unless-stopped
     image: valkey/valkey:7.2-alpine
     profiles: [infra, all]
     ports:
@@ -229,10 +360,11 @@ services:
       dockerfile: Dockerfile
     profiles: [infra, all]
     depends_on:
-      postgres:
+      # Workload split (2026-06-08): intelligence_db now lives on postgres-intelligence.
+      postgres-intelligence:
         condition: service_healthy
     environment:
-      INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres:5432/intelligence_db"
+      INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres-intelligence:5432/intelligence_db"
       EMBEDDING_BASE_URL: "http://ollama:11434"
       EMBEDDING_MODEL: "bge-large:latest"
     restart: "no"
@@ -288,7 +420,7 @@ services:
     profiles: [infra, all]
     depends_on:
       portfolio:
-        condition: service_healthy
+        condition: service_started
       kafka:
         condition: service_healthy
       schema-registry-init:
@@ -299,9 +431,9 @@ services:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -314,7 +446,7 @@ services:
     profiles: [infra, all]
     depends_on:
       portfolio:
-        condition: service_healthy
+        condition: service_started
       kafka:
         condition: service_healthy
       schema-registry-init:
@@ -324,9 +456,66 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.instrument_consumer_main"]
-    restart: on-failure
+    expose: ["9100"]
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Portfolio manual holdings recompute consumer ────────────────────────────
+  # PLAN-0114 W1 / T-W1-07.
+  # Consumes portfolio.holding.recompute_requested.v1 and calls
+  # ComputeManualHoldingsUseCase (FIFO/AVCO replay).
+  portfolio-manual-holdings-consumer:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.manual_holdings_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Portfolio manual holdings nightly worker ─────────────────────────────────
+  # PLAN-0114 W1 / T-W1-08.
+  # Fallback sweep: recomputes MANUAL portfolio holdings at 22:00 UTC daily.
+  portfolio-manual-holdings-worker:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.workers.manual_holdings_worker"]
+    expose: ["9100"]
+    restart: unless-stopped
+    # QA fix 2026-06-22: this worker binds metrics+/healthz on 9100 but the block
+    # was missing the override, so it inherited the Dockerfile's API probe
+    # (:8000/readyz) and reported false-unhealthy. Mirror portfolio-snapshot-worker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -351,9 +540,9 @@ services:
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.portfolio_snapshot_worker"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -378,9 +567,9 @@ services:
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.brokerage_sync_worker"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -441,14 +630,14 @@ services:
     profiles: [infra, all]
     depends_on:
       market-ingestion:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.scheduler.scheduler_main"]
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -462,7 +651,7 @@ services:
     profiles: [infra, all]
     depends_on:
       market-ingestion:
-        condition: service_healthy
+        condition: service_started
       minio:
         condition: service_healthy
     env_file:
@@ -471,7 +660,7 @@ services:
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -485,7 +674,7 @@ services:
     profiles: [infra, all]
     depends_on:
       market-ingestion:
-        condition: service_healthy
+        condition: service_started
       kafka:
         condition: service_healthy
       schema-registry-init:
@@ -496,9 +685,9 @@ services:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -721,14 +910,15 @@ services:
       dockerfile: services/content-ingestion/Dockerfile
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
+    expose: ["9100"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
       content-ingestion:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -745,7 +935,7 @@ services:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
       content-ingestion:
-        condition: service_healthy
+        condition: service_started
       minio:
         condition: service_healthy
     restart: unless-stopped
@@ -757,7 +947,7 @@ services:
       - "9100"
     # Scale: docker compose up --scale content-ingestion-worker=3
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -782,9 +972,9 @@ services:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -851,9 +1041,10 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.outbox.dispatcher_main"]
-    restart: on-failure
+    expose: ["9100"]
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -874,9 +1065,10 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.ohlcv_consumer_main"]
-    restart: on-failure
+    expose: ["9100"]
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -898,9 +1090,9 @@ services:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.quotes_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -922,9 +1114,40 @@ services:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.fundamentals_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # 2026-06-11 (backend-gaps wave 3): the insider-transactions consumer existed
+  # in code since PLAN-0089 Wave L-4b (insider_transactions_consumer_main) but
+  # was NEVER deployed — only the S7 knowledge-graph twin was. Result: the S3
+  # ``insider_transactions`` table stayed empty, the 6-hourly rollup had no
+  # input, and the screener's ``insider_net_buy_90d`` column was NULL for all
+  # instruments despite being filterable. Mirrors the fundamentals-consumer
+  # definition exactly (same image, env, healthcheck).
+  market-data-insider-transactions-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.insider_transactions_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -946,9 +1169,9 @@ services:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -970,9 +1193,9 @@ services:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1038,9 +1261,9 @@ services:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.outbox.dispatcher_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1066,9 +1289,9 @@ services:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.consumers.article_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1095,9 +1318,9 @@ services:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1120,6 +1343,7 @@ services:
   #   Ollama is healthy. No manual `docker exec ollama ollama pull ...` needed.
   #   Models are cached in the ollama_data volume and persist across container restarts.
   ollama:
+    restart: unless-stopped
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
     ports:
@@ -1132,9 +1356,20 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps, finally applied) ────
+    # Ollama can balloon: idle RSS is tiny but loaded models (qwen3:0.6b +
+    # bge-large ≈ 1.7G resident, qwen2.5:7b adds 4G for the DEEP tier) plus the
+    # KV cache grow fast. Cap it so CPU inference cannot pin the host or push the
+    # VM into the reclaim/OOM that killed MinIO (F-001).
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 6G
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
     # Requires: nvidia-docker2, NVIDIA drivers ≥ 525, and
     #   DOCKER_DEFAULT_RUNTIME=nvidia in /etc/docker/daemon.json
+    # Merge the device reservation INTO the deploy.resources block above.
     # deploy:
     #   resources:
     #     reservations:
@@ -1195,6 +1430,24 @@ services:
       GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
       HF_HUB_ENABLE_HF_TRANSFER: "0"  # disable hf_transfer native lib
       HF_HUB_DISABLE_XET: "1"        # use standard HTTPS; xet throttles to ~63 KB/s on some hosts
+      # Server-side micro-batching (dual-trigger). The article-consumer fleet
+      # (3 replicas x 16 = ~48 concurrent single-text /ner calls) is coalesced
+      # into one batch_predict_entities forward pass per (labels, threshold)
+      # group. Throughput peaks at batch=16 (13.7x vs batch-1) and degrades
+      # beyond, so MAX_BATCH caps there. WAIT_MS bounds the fill window.
+      GLINER_MAX_BATCH: "16"
+      GLINER_BATCH_WAIT_MS: "25"
+      # CPU-bottleneck fix (2026-06-21 cpu-bottleneck investigation): PyTorch defaults
+      # to one OpenMP thread per HOST core (14 here) but the container is capped at 4
+      # CPUs (deploy.limits below) — 14 threads on a 4-core CFS quota thrash/throttle,
+      # so inference drew only ~12% CPU and a single article took >300s. Pin the thread
+      # pools to MATCH the CPU cap so the 4 cores are used efficiently (server.py also
+      # calls torch.set_num_threads). Align all the BLAS/OpenMP knobs.
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "4"
+      NUMEXPR_NUM_THREADS: "4"
+      TORCH_NUM_THREADS: "4"
     volumes:
       - gliner_model_cache:/home/appuser/.cache/huggingface  # persist model across restarts
     healthcheck:
@@ -1203,7 +1456,19 @@ services:
       timeout: 10s
       retries: 5
       start_period: 600s  # allow 10 min for first-boot model download on slow connections
+    # ── Memory/CPU cap (D1 prevention — PLAN-0113 W1 caps) ─────────────────────
+    # GLiNER (DeBERTa-large) holds the model + micro-batch forward-pass tensors.
+    # 2026-06-21: the 4G cap was the exit-137 OOM cause — live RSS sat at 3.99/4.0
+    # GiB (99.8%) and any batch's activation tensors tipped it over → kernel kill
+    # (38h outage). Raised to 8G so the ~2.6-4G model + batch tensors have real
+    # headroom. cpus stays 4 and is now matched by the pinned thread count above.
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
+    # Merge the device reservation INTO the deploy.resources block above.
     # deploy:
     #   resources:
     #     reservations:
@@ -1220,7 +1485,8 @@ services:
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
     depends_on:
-      postgres:
+      # Workload split (2026-06-08): nlp_db now lives on postgres-intelligence.
+      postgres-intelligence:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
@@ -1275,15 +1541,25 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.outbox.dispatcher_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
 
-  nlp-pipeline-article-consumer:
+  # ── Article-consumer fleet (PLAN-0113 Wave 3, AD-2 / KIP-345 static membership) ──
+  # The article topic has 3 dev partitions but a single serial consumer
+  # (~120 docs/h) cannot keep up with ingest (250-480 docs/h), so we run TWO
+  # members of the same consumer group. We model them as explicit *numbered*
+  # services (NOT `deploy.replicas: 2`) because each member needs a distinct,
+  # restart-stable `group.instance.id` (Kafka static membership): anonymous
+  # replicas share one rendered config and cannot carry distinct ids, and two
+  # members sharing one id triggers FencedInstanceIdException (a silent stall).
+  # The id is supplied via the NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID override
+  # on top of the shared env_file (whose default is empty).
+  nlp-pipeline-article-consumer-0:
     build:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
@@ -1307,11 +1583,51 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
+    # Distinct static-membership id for member 0 (overrides the empty env_file default).
+    environment:
+      NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID: nlp-pipeline-article-consumer-0
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nlp-pipeline-article-consumer-1:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      gliner-server:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    # Distinct static-membership id for member 1 (overrides the empty env_file default).
+    environment:
+      NLP_PIPELINE_KAFKA_CONSUMER_INSTANCE_ID: nlp-pipeline-article-consumer-1
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
+    expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1331,9 +1647,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1355,9 +1671,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1383,9 +1699,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1405,9 +1721,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1427,9 +1743,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.article_relevance_scoring_worker"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1451,7 +1767,7 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.unresolved_resolution_worker_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s
@@ -1480,9 +1796,9 @@ services:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1536,9 +1852,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.outbox.dispatcher_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1553,13 +1869,17 @@ services:
       intelligence-migrations:
         condition: service_completed_successfully
       knowledge-graph:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
+    # QA fix 2026-06-22: the scheduler binds metrics+/healthz on 9108 (scheduler_main.py;
+    # Prometheus scrapes :9108) — the probe was hitting :9100 → false-unhealthy. 9108 is
+    # load-bearing (Prometheus), so fix the probe, don't move the bind.
+    expose: ["9108"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9108/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1583,9 +1903,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1614,9 +1934,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1640,9 +1960,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.entity_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1666,9 +1986,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1692,9 +2012,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1727,9 +2047,10 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer_main"]
-    restart: on-failure
+    expose: ["9100"]
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1753,9 +2074,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1779,9 +2100,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1805,9 +2126,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1831,9 +2152,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1858,9 +2179,9 @@ services:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1879,14 +2200,14 @@ services:
       intelligence-migrations:
         condition: service_completed_successfully
       knowledge-graph:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.workers.path_insight_worker_main"]
     expose: ["9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1927,9 +2248,12 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz')"]
+      # /readyz makes a 3s Kafka AdminClient metadata call plus DB/Valkey/S1
+      # checks; give the probe a 10s budget so a transiently slow check reports
+      # "degraded" (503) rather than the Docker probe itself timing out (BP-350).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz', timeout=9)"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       start_period: 30s
       retries: 3
     restart: unless-stopped
@@ -1949,9 +2273,10 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.outbox.dispatcher_main"]
-    restart: on-failure
+    expose: ["9100"]
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1975,13 +2300,23 @@ services:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
+    # Fix A, gap D (issue 4 / audit 2026-06-16): a real progress/liveness probe
+    # instead of `os.kill(1, 0)` (which only proved PID 1 existed and let a
+    # wedged poll loop report `healthy` for 43h). The consumer touches a
+    # heartbeat file on every processed message; this check fails if that file
+    # is missing or older than 300s, so a stalled consumer reports `unhealthy`.
+    # `start_period` (90s) covers cold start + first-message latency.
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import os,time,sys; p=os.environ.get('ALERT_CONSUMER_HEARTBEAT_PATH','/tmp/alert_intelligence_consumer.heartbeat'); sys.exit(0 if os.path.exists(p) and (time.time()-os.path.getmtime(p))<300 else 1)"
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   alert-watchlist-consumer:
     build:
@@ -1997,9 +2332,9 @@ services:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.watchlist_consumer_main"]
     expose: ["9100"]
-    restart: on-failure
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2019,6 +2354,33 @@ services:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.email.scheduler_main"]
     expose: ["9100"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # PLAN-0113: standing-rule poller (5th S10 process). Same image as S10, runs
+  # the APScheduler evaluation loop. Exposes Prometheus metrics on 9101
+  # (s10_rule_poller_*). Disable instantly with ALERT_RULE_POLLER_ENABLED=false.
+  alert-rule-poller:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    environment:
+      METRICS_PORT: "9101"
+    command: ["python", "-m", "alert.infrastructure.rules.poller_main"]
+    expose: ["9101"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -2095,7 +2457,7 @@ services:
     command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/healthz', timeout=4).status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2127,6 +2489,42 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ── Bundle pre-warmer (PLAN-0099 R3) ───────────────────────────────────────
+  # Periodically re-fetches /v1/entities/{id}/intelligence-bundle for a hot
+  # set of entity IDs (S&P 500 starter list) so the downstream S7 intel/paths
+  # caches stay populated. Default-OFF unless API_GATEWAY_PREWARM_ENABLED=true.
+  api-gateway-bundle-prewarmer:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    env_file:
+      - ../../services/api-gateway/configs/docker.env
+    environment:
+      # Opt-in toggle — override of docker.env so the worker actually runs.
+      API_GATEWAY_PREWARM_ENABLED: "true"
+      # Worker calls the sibling api-gateway via the docker service network.
+      API_GATEWAY_PREWARM_API_BASE_URL: "http://api-gateway:8000"
+      # Starter S&P 500 list — JSON array. Real entity IDs wired by deploy config.
+      # Seed value below is the Akamai entity from local dev seed data — replace
+      # for prod. Pydantic-settings rejects "" for list[str]; "[]" parses as empty.
+      API_GATEWAY_PREWARM_ENTITY_IDS: '["c72b76e9-62c9-421e-950e-6c210a5f662a"]'
+      API_GATEWAY_PREWARM_INTERVAL_SECONDS: "240"
+      API_GATEWAY_PREWARM_CONCURRENCY: "3"
+    command: ["python", "-m", "api_gateway.workers.bundle_prewarmer_main"]
+    expose: ["9100"]
+    restart: on-failure
+    healthcheck:
+      # Process-alive check (no HTTP server beyond /metrics on 9100).
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
   # /api/* rewrites. See docs/apps/worldview-web.md for architecture.
@@ -2144,12 +2542,23 @@ services:
       API_GATEWAY_URL: http://api-gateway:8000
       NEXT_PUBLIC_ZITADEL_URL: ${ZITADEL_URL:-http://localhost:8088}
       NEXT_PUBLIC_ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID:-worldview-web}
+    # WHY /api/version (not the bare root "/"): the root path is the heavy SSR
+    # dashboard/landing route — it data-fetches on the server and can take
+    # >5s to render under load, so the old `wget http://127.0.0.1:3001` probe
+    # timed out and falsely marked the container "unhealthy" whenever the host
+    # was busy. /api/version is a pure route handler that returns a tiny JSON
+    # `{ buildId }` with no SSR, no backend calls, and no auth — it responds in
+    # milliseconds whenever the Node process has CPU, so it tracks true liveness.
+    # WHY start_period 60s: the Next.js standalone server can take ~50s to reach
+    # "Ready" on a loaded host; a 20s grace window flapped to unhealthy during
+    # normal startup. WHY timeout 10s + retries 5: absorb transient CPU
+    # starvation without a false negative.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001/api/version"]
       interval: 15s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
+      timeout: 10s
+      start_period: 60s
+      retries: 5
     restart: unless-stopped
 
   # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
@@ -2187,6 +2596,8 @@ services:
 volumes:
   minio_data:
   postgres_data:
+  # Dedicated OLAP instance volume (workload split 2026-06-08).
+  postgres_intelligence_data:
   kafka_data:
   valkey_data:
   prometheus_data:

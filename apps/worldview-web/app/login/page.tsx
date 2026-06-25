@@ -149,18 +149,27 @@ function LoginContent() {
     // build slips out without the env var but with a healthy Zitadel
     // (rare but possible), we still don't show the dev shortcut.
     async function probeOidc() {
+      // WHY AbortController: without a timeout this fetch hangs until the
+      // browser's internal limit (~25 s) when the gateway is cold or slow.
+      // 5 s matches the dev-login handler's hard timeout; on abort we treat
+      // it the same as a network error and show the dev-login button.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       try {
         const resp = await fetch("/api/v1/auth/login", {
           method: "GET",
           redirect: "manual", // Don't follow the 302 redirect to Zitadel
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
         // 302 = OIDC is working (Zitadel redirect); 502 = OIDC unavailable.
         // Only flip dev-login on when the gateway agrees with the env var.
         if (resp.status === 502) {
           setDevLoginAvailable(true);
         }
       } catch {
-        // Network error (gateway not running) — env var is also missing,
+        clearTimeout(timeoutId);
+        // Network error or AbortError (timeout) — env var is also missing,
         // so this is almost certainly a local dev environment.
         setDevLoginAvailable(true);
       }

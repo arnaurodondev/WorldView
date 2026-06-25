@@ -1,8 +1,8 @@
 # Investigation Report: Provider Coverage, Deduplication & Batch Efficiency
 
-**Date**: 2026-04-27  
-**Investigator**: Claude (investigation skill)  
-**Severity**: MEDIUM (suboptimal — data missing due to EODHD key, but fixable)  
+**Date**: 2026-04-27
+**Investigator**: Claude (investigation skill)
+**Severity**: MEDIUM (suboptimal — data missing due to EODHD key, but fixable)
 **Status**: Root causes identified; 3 fixes applied
 
 ---
@@ -88,7 +88,7 @@ The system has **3 independent deduplication layers** that handle data from mult
 
 `_try_batch_execute()` groups all claimed tasks by `(resolved_provider, timeframe)`. For OHLCV intraday, it calls `adapter.fetch_ohlcv_batch(symbols=[...])` with all symbols in that group in a single HTTP request. Alpaca's `/v2/stocks/bars` and `/v1beta3/crypto/us/bars` endpoints accept up to 1000 comma-separated symbols per request.
 
-With batch_size=10: 64 symbols → 7 Alpaca API calls (rounds of 10).  
+With batch_size=10: 64 symbols → 7 Alpaca API calls (rounds of 10).
 With batch_size=100: 64 symbols → 2 Alpaca API calls (equity batch + crypto batch).
 
 ### Fix Applied

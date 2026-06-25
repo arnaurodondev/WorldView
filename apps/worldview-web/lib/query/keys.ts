@@ -94,6 +94,23 @@ export const qk = {
       ["holdings-overviews", [...ids].sort()] as const,
     watchlistQuotes: (ids: readonly string[]) =>
       ["watchlist-quotes", [...ids].sort()] as const,
+    // PLAN-0099 W4: fast sector-breakdown endpoint (31–86ms + 60s Valkey cache).
+    // WHY a dedicated key (not nested under detail(id)): the sector-breakdown
+    // cache is invalidated separately from the holdings/transactions cascade —
+    // it is a server-side computed snapshot, not derived from the raw holdings
+    // the client holds. A flat key matches the pattern of `performance` and
+    // `holdingsByPortfolio` above.
+    sectorBreakdown: (portfolioId: string) =>
+      ["portfolio-sector-breakdown", portfolioId] as const,
+    // 2026-06-10 sprint gap #3: flow-adjusted TWR series. WHY days in the
+    // key: each lookback window is a distinct server computation (the series
+    // is rebased to 0 at window start) — caching by (id, days) means period
+    // pills hit warm cache entries instead of refetching on every toggle.
+    // WHY "ALL" sentinel for undefined: TanStack drops undefined segments
+    // from the key hash, which would collide "full history" with whatever
+    // window was fetched first.
+    twr: (portfolioId: string, days?: number) =>
+      ["portfolio-twr", portfolioId, days ?? "ALL"] as const,
   },
 
   // ── Watchlists ───────────────────────────────────────────────────────────
@@ -167,10 +184,56 @@ export const qk = {
     // stay correct.
     pageBundle: (entityId: string) =>
       ["instrument-page-bundle", entityId] as const,
+    // FIX F-1 (2026-06-05): batched company-overview lookup used by dashboard
+    // widgets to collapse N parallel useQueries calls into one round-trip.
+    // WHY sorted ids: stable cache key — same set, any order ⇒ same key.
+    overviewsBatch: (instrumentIds: readonly string[]) =>
+      ["instruments", "overviews-batch", [...instrumentIds].sort()] as const,
     // WHY browse: the /instruments list page runs the screener with a simple
     // name_ticker filter. Keeping it under instruments.* lets
     // `qc.invalidateQueries({ queryKey: qk.instruments.all })` cascade.
     browse: (query: string) => ["instruments-browse", query] as const,
+    // PLAN-0099 W4: Quote tab Wave D — new sub-resource keys for pending
+    // backend endpoints. Each nests under ["instruments","detail",id,...] so
+    // qk.instruments.detail(id) invalidation cascades to all of them.
+    // WHY separate keys (not merged into existing fundamentals/technicals):
+    //   peers, intradayStats, multiPeriodReturns, priceLevels are distinct
+    //   endpoints that will be added in separate backend waves. Naming them
+    //   separately prevents cache collisions with the existing endpoints.
+    peers: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "peers"] as const,
+    intradayStats: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "intraday-stats"] as const,
+    multiPeriodReturns: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "multi-period-returns"] as const,
+    priceLevels: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "price-levels"] as const,
+    // T-03 W3: institutional + fund holders for Financials tab tables.
+    // WHY nested under "instruments","detail",id: the standard cascade lets
+    // qk.instruments.detail(id) invalidation clear these together with the
+    // main fundamentals when a background refresh runs.
+    // WHY NOT `insiderTxns`: Δ21 — reuse qk.instruments.ownership(id) which
+    // is already seeded by the page bundle (no new key = no cache split).
+    institutionalHolders: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "institutional-holders"] as const,
+    fundHolders: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "fund-holders"] as const,
+  },
+
+  // ── Knowledge Graph domain ────────────────────────────────────────────────
+  // WHY a separate top-level `kg` namespace (not nested under instruments.*):
+  // KG queries use entity_id (not instrument_id) as the key dimension.
+  // A financial_instrument entity in the KG has a different UUID than its
+  // S3 instrument_id. Keeping KG keys in their own namespace prevents
+  // confusion between the two ID spaces and allows targeted invalidation
+  // (e.g. after a KG enrichment job) without touching instrument-level caches.
+  kg: {
+    all: ["kg"] as const,
+    entityDetail: (id: string) => ["kg", "entity", id, "detail"] as const,
+    intelligence: (id: string) => ["kg", "entity", id, "intelligence"] as const,
+    paths: (id: string) => ["kg", "entity", id, "paths"] as const,
+    contradictions: (id: string) => ["kg", "entity", id, "contradictions"] as const,
+    narratives: (id: string) => ["kg", "entity", id, "narratives"] as const,
   },
 
   // ── Quotes (live prices) ─────────────────────────────────────────────────
@@ -236,7 +299,16 @@ export const qk = {
       params
         ? (["alerts", "history", params] as const)
         : (["alerts", "history"] as const),
+    // PLAN-0113 W4: standing alert RULES (distinct from fired alerts above).
+    // `rules()` lists; `rulesList(params)` carries filters as cache identity;
+    // `rule(id)` is the per-rule detail key. All nest under ["alerts","rules"]
+    // so invalidating that prefix cascades to every rules query after a write.
     rules: () => ["alerts", "rules"] as const,
+    rulesList: (params?: Readonly<Record<string, unknown>>) =>
+      params
+        ? (["alerts", "rules", "list", params] as const)
+        : (["alerts", "rules", "list"] as const),
+    rule: (ruleId: string) => ["alerts", "rules", "detail", ruleId] as const,
     // WHY pendingCount: layout.tsx polls a lightweight pending-count query every
     // 60s independently of the AlarmsPanel's full alert list. A dedicated key
     // avoids cache collisions with qk.alerts.list() which carries filters.
@@ -253,6 +325,14 @@ export const qk = {
     // `qc.invalidateQueries({ queryKey: qk.chat.all })` cascade to it on logout.
     entityResolve: (entityId: string) =>
       ["chat", "entity-resolve", entityId] as const,
+    // WHY tickerMini: the context rail resolves bare ticker symbols (extracted
+    // from $TICKER and **BOLD** patterns) to instrument_id via searchInstruments,
+    // then fetches a compact overview for the EntityMiniCard.  Keeping it under
+    // chat.* means logout invalidation cascades here too.  The key uses the
+    // uppercase ticker string as the identifier so two cards for the same ticker
+    // (across tabs / threads) share the same cache entry.
+    tickerMini: (ticker: string) =>
+      ["chat", "ticker-mini", ticker.toUpperCase()] as const,
   },
 
   // ── Dashboard widgets ────────────────────────────────────────────────────
@@ -278,6 +358,11 @@ export const qk = {
     // limits (news:8, markets:5, earnings:7d, alerts:10). No pagination or
     // filter variation — a single stable key covers all callers.
     snapshot: () => ["dashboard", "snapshot"] as const,
+    // F-2: single composite bundle endpoint used by the dashboard page.
+    // The page hydrates per-widget caches from the bundle legs via
+    // queryClient.setQueryData, so this key is ONLY for the bundle fetch
+    // itself — widget hooks keep their own keys for refresh/invalidation.
+    bundle: () => ["dashboard", "bundle"] as const,
   },
 
   // ── Workspace widgets ────────────────────────────────────────────────────
@@ -360,6 +445,19 @@ export const qk = {
     all: ["user"] as const,
     profile: () => ["user", "profile"] as const,
     notificationPrefs: () => ["user", "notification-prefs"] as const,
+  },
+
+  // ── Shell (TopBar IndexStrip) ─────────────────────────────────────────────
+  // WHY a dedicated shell.* namespace (not nested under instruments.*):
+  // The IndexStrip fetches a fixed 10-ticker manifest — the cache should be
+  // invalidated independently of per-instrument instrument-detail queries.
+  // Using a top-level namespace also makes it easy to pause/invalidate all
+  // shell data on idle-lock without touching the full instruments cache.
+  shell: {
+    // Resolved entity IDs for the 10 IndexStrip tickers (stable; 30min stale).
+    indexResolveIds: () => ["shell", "index", "resolve"] as const,
+    // Live batch quotes for the 10 IndexStrip tickers (0ms stale; 15s refetch).
+    indexQuotes: () => ["shell", "index", "quotes"] as const,
   },
 } as const;
 

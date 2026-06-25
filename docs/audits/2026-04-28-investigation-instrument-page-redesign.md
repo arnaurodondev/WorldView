@@ -1,8 +1,8 @@
 # Investigation Report: Instrument Page UI Issues
 
-**Date**: 2026-04-28  
-**Investigator**: Claude (investigate skill)  
-**Severity**: MEDIUM (UX, data readability, missing enrichment)  
+**Date**: 2026-04-28
+**Investigator**: Claude (investigate skill)
+**Severity**: MEDIUM (UX, data readability, missing enrichment)
 **Status**: Root causes identified — detailed fix plan included
 
 ---
@@ -171,7 +171,7 @@ The `display_relevance_score` badge is shown as a small number badge at top-righ
    - Row 1 (h-9): `AI BRIEF` label + chevron toggle button (NOT the full row as a button)
    - Row 2 (visible always, max 2 lines): stripped preview text (200 chars), smaller font (10px), muted style
    - "Read more →" button: inline at end of preview if `hasMore`
-   
+
    New layout for collapsed state:
    ```jsx
    <div className="border-b border-border border-l-2 border-l-primary bg-primary/10 shrink-0">
@@ -193,7 +193,7 @@ The `display_relevance_score` badge is shown as a small number badge at top-righ
          </span>
        )}
      </div>
-     
+
      {/* Expanded content with ReactMarkdown */}
      <div className="grid transition-[grid-template-rows] duration-150 ease-out"
           style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}>
@@ -240,7 +240,7 @@ This single change propagates to all 100+ usages of `text-muted-foreground` acro
 
 ### Fix 3: Key metrics — wire real data for EPS, BETA, AVG VOLUME
 
-**Files**: 
+**Files**:
 - `components/instrument/InstrumentKeyMetrics.tsx`
 - `components/instrument/OverviewLayout.tsx`
 - `app/(app)/instruments/[entityId]/page.tsx`
@@ -249,7 +249,7 @@ This single change propagates to all 100+ usages of `text-muted-foreground` acro
 
 #### 3a. EPS (TTM)
 The `Fundamentals` type at `types/api.ts:112` may not have `eps_ttm`. Check if the field exists. If it does, use it. If not:
-- The `TechnicalSnapshot` endpoint returns EPS from `getTechnicals()` 
+- The `TechnicalSnapshot` endpoint returns EPS from `getTechnicals()`
 - Alternatively, derive from earnings history first point
 - Quickest fix: check `fundamentals?.eps_ttm` and format with `formatPrice`
 - If field doesn't exist in type, add `eps_ttm?: number | null` to `Fundamentals` interface
@@ -327,7 +327,7 @@ async def query_timeseries(
     order: str = "asc",   # NEW parameter: "asc" | "desc"
 ) -> list[MetricDataPoint]:
     """Return timeseries ordered by as_of_date.
-    
+
     Use order='desc' with limit to get the most recent N points,
     then reverse the result for chronological display.
     """
@@ -426,7 +426,7 @@ Also increase `innerRadius` from 90 to 100 and `outerRadius` from 140 to 160 to 
 #### 5b. VOL/MA/Indicator sidebar redesign
 **Files**: `ChartToolbar.tsx`, `OHLCVChart.tsx`
 
-**Current**: Flat toolbar row with VOL/MA50/MA200 text buttons  
+**Current**: Flat toolbar row with VOL/MA50/MA200 text buttons
 **New**: A collapsible indicator sidebar panel that slides in from the right
 
 Design:
@@ -664,7 +664,7 @@ if (compact) {
           <span className="block w-7 h-3.5 bg-muted/30 rounded-[2px]" />
         )}
       </div>
-      
+
       {/* Content column */}
       <div className="flex-1 min-w-0">
         <p className="text-[11px] text-foreground leading-tight line-clamp-1 group-hover:text-primary">
@@ -689,7 +689,7 @@ if (compact) {
           )}
         </div>
       </div>
-      
+
       {/* Timestamp — right column */}
       <time className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
         {formatRelativeTime(article.published_at)}

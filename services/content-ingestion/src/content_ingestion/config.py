@@ -20,6 +20,41 @@ class EODHDProviderSettings(BaseModel):
     # ge=1 prevents a zero/negative value from silently truncating all ingestion.
     max_pages_per_cycle: int = Field(default=3, ge=1, le=50)
     rate_limit_per_second: float = 10.0
+    # OPT-5 (2026-06-15): per-ticker news polling is the dominant EODHD consumer.
+    # The TickerNewsSymbolSyncWorker auto-creates one `eodhd_ticker_news` Source
+    # per US equity (~600 enabled). EODHD charges /api/news at 5 credits/request,
+    # so polling ~600 tickers at the global 5-minute tick cadence burned ~94k of
+    # the 100k daily quota (≈94%) and starved fundamentals/OHLCV. Override the
+    # poll interval for EODHD_TICKER_NEWS to 1 hour: at ~600 tickers x ~24
+    # polls/day x 5 credits the consumption drops ~24x to a few thousand
+    # credits/day, leaving ample headroom for fundamentals and new policies.
+    # ge=60 prevents a misconfig from re-creating the 5-minute thrash.
+    # Configurable via CONTENT_INGESTION_EODHD__TICKER_NEWS_POLL_INTERVAL_SECONDS.
+    ticker_news_poll_interval_seconds: int = Field(default=3600, ge=60)
+    # ── News batch sweep (QUOTA-OPT, 2026-06-16) ────────────────────────────
+    # EODHD's /api/news bills a FLAT 5 credits + 5 credits/ticker PER REQUEST,
+    # irrespective of how many articles the request returns (1 or 1000). So the
+    # cheapest correct strategy is to pull the ENTIRE batch published since our
+    # last watermark in a single request at the maximum page size. We only
+    # paginate (a second request) when a sweep returns a FULL page — i.e. more
+    # than ``news_page_limit`` articles accrued since the last run, which is
+    # rare for an hourly incremental cadence. ``max=1000`` is the EODHD ceiling.
+    news_page_limit: int = Field(default=1000, ge=1, le=1000)
+    # Safety overlap subtracted from the watermark when building ``from`` so a
+    # boundary article published in the same minute as the previous sweep is
+    # not missed. EODHD's ``from`` is date-granular, so 1 day of overlap is the
+    # smallest unit that guarantees no gap; downstream url_hash dedup
+    # (FetchAndWriteUseCase) absorbs the resulting re-fetch at zero extra cost.
+    news_watermark_overlap_days: int = Field(default=1, ge=0, le=7)
+    # Hard cap on pages fetched per news sweep. The sweep normally exits when a
+    # page comes back partial (< news_page_limit) — one request for an hourly
+    # incremental run. This cap is a defensive backstop: if EODHD ever ignores
+    # ``offset`` and keeps returning full pages, the ``while`` loop would spin
+    # forever, burning 5 credits/iteration and hanging the worker (QA H1). At
+    # 1000 articles/page, 10 pages = 10k articles, far beyond any real
+    # since-watermark batch; hitting the cap is logged as a WARNING (never a
+    # silent truncation) so a genuinely huge backlog is visible, not swallowed.
+    news_max_pages: int = Field(default=10, ge=1, le=50)
 
 
 class FinnhubProviderSettings(BaseModel):
@@ -103,6 +138,9 @@ class Settings(BaseSettings):
     kafka_schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_outbox_topic: str = "content.article.raw.v1"
+    # PLAN-0113 FIX-2: opt-in static-membership instance id (KIP-345/BP-703).
+    # Empty default = dynamic membership (no-op); set per-replica to pin identity.
+    kafka_document_ready_consumer_instance_id: str = ""
 
     # ── MinIO (object storage) ────────────────────────────────────────────────
     minio_endpoint: str = "localhost:9000"
@@ -125,6 +163,13 @@ class Settings(BaseSettings):
     scheduler_tick_interval_seconds: float = 60.0
     scheduler_max_tasks_per_tick: int = 100
 
+    # ── Watchdog (3-pass stale-task recovery) ────────────────────────────────
+    # Pass 2: PENDING/RETRY orphans (no lease) stuck longer than this are
+    #   re-armed as PENDING so the scheduler can pick them up again.
+    # Pass 3: anything still stuck past dlq_max_age is moved to FAILED.
+    watchdog_pending_max_age_seconds: int = 3600  # 1 h
+    watchdog_dlq_max_age_seconds: int = 21600  # 6 h
+
     # ── Worker (process — R22) ─────────────────────────────────────────────
     worker_batch_size: int = 5
     worker_lease_seconds: int = 300
@@ -140,7 +185,10 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_poll_interval_seconds: float = 5.0
     outbox_lease_seconds: int = 30
-    outbox_max_attempts: int = 5
+    # Raised from 5->20: 5 attempts with 60 s max backoff exhausts in ~5 min,
+    # far shorter than a typical rolling restart or Kafka blip (30-90 min).
+    # 20 attempts gives ~20 min coverage before dead-lettering.
+    outbox_max_attempts: int = 20
     outbox_metrics_poll_seconds: int = 30
 
     # ── Rate limiting ─────────────────────────────────────────────────────────

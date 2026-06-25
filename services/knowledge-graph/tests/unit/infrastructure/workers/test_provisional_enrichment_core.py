@@ -36,6 +36,7 @@ Coverage:
 from __future__ import annotations
 
 from datetime import UTC
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -439,6 +440,14 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     # ``canonical_create`` retained for any tests that still want to assert on
     # the legacy direct-create path was NOT awaited.
     repos.canonical_create = AsyncMock(return_value=_ENTITY_ID)
+    # BP-459 ticker dedup (PLAN-0111): find_by_ticker pre-lookup; default None
+    # (no existing canonical owns the ticker) so existing tests fall through to
+    # create_or_get exactly as before.
+    repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+    # FR-11 token-superset fallback: get_by_id is consulted to confirm the
+    # superset alias match is the SAME entity_type before reuse; default None so
+    # the (default find_exact=None) path never reaches it.
+    repos.canonical_get_by_id = AsyncMock(return_value=None)
     repos.alias_insert = AsyncMock()
     repos.alias_find_exact = AsyncMock(return_value=None)  # default: no collision
     # BP-459: fuzzy_search pre-lookup; default returns empty list (no fuzzy match)
@@ -464,6 +473,10 @@ class _PersistRepoPatches:
         canonical_repo.create = repos.canonical_create
         # DEF-014 / Wave A-1: expose the new atomic dedup INSERT helper.
         canonical_repo.create_or_get = repos.canonical_create_or_get
+        # BP-459 ticker dedup (PLAN-0111): expose find_by_ticker pre-lookup.
+        canonical_repo.find_by_ticker = repos.canonical_find_by_ticker
+        # FR-11: expose get_by_id for the token-superset entity_type guard.
+        canonical_repo.get_by_id = repos.canonical_get_by_id
 
         alias_repo = MagicMock()
         alias_repo.insert = repos.alias_insert
@@ -710,6 +723,73 @@ class TestPersistEnrichment:
         repos.outbox_append.assert_not_awaited()
         repos.embedding_ensure.assert_not_awaited()
 
+    async def test_exchange_suffixed_ticker_dedups_via_bare_symbol(self) -> None:
+        """2026-06-15 entity-matching fix: ``AAPL.MX`` resolves to the ``AAPL`` canonical.
+
+        The exchange qualifier is stripped BEFORE the BP-459 ticker pre-lookup, so a
+        provider symbol like ``AAPL.MX`` finds the existing bare-``AAPL`` canonical
+        instead of minting a duplicate tickerless entity.  We assert both the dedup
+        result AND that ``find_by_ticker`` was queried with the bare ``AAPL``.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # An existing financial_instrument canonical already owns the bare ticker.
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={"entity_id": _EXISTING_OTHER_ID, "canonical_name": "Apple Inc."},
+        )
+        profile = {
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+            "ticker": "AAPL.MX",  # Mexican-listing suffix — must collapse to AAPL
+            "isin": None,
+            "aliases": ["Apple"],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple Inc.",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Reused the existing canonical — no duplicate minted.
+        assert result == _EXISTING_OTHER_ID
+        # The pre-lookup queried the STRIPPED bare ticker, not "AAPL.MX".
+        assert repos.canonical_find_by_ticker.await_args.args[0] == "AAPL"
+        # Dedup short-circuit: no create, no side effects.
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+
+    async def test_share_class_ticker_is_not_stripped_on_persist(self) -> None:
+        """``BRK.B`` is a distinct security — the pre-lookup must query it verbatim."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Berkshire Hathaway Inc. Class B",
+            "entity_type": "financial_instrument",
+            "ticker": "BRK.B",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Berkshire Hathaway Inc. Class B",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Queried as-is — never collapsed to "BRK".
+        assert repos.canonical_find_by_ticker.await_args.args[0] == "BRK.B"
+
     async def test_truncates_llm_aliases_to_first_five(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -770,10 +850,12 @@ class TestEntityTypeNormalisation:
         repos.canonical_create_or_get.assert_awaited_once()
 
     async def test_uppercase_entity_type_normalised(self) -> None:
-        """entity_type='ORGANIZATION' → alias-mapped to 'unknown' (BP-523).
+        """entity_type='ORGANIZATION' → alias-mapped to 'organization' (FR-12 / migration 0055).
 
-        Migration 0039 remaps 'organization' → 'unknown' in the DB.  The code
-        must apply the same mapping so no CheckViolationError occurs at insert time.
+        Migration 0055 added a dedicated ``organization`` canonical type for
+        tickerless private companies / agencies / non-profits.  The code lower-cases
+        + alias-maps so 'ORGANIZATION' resolves to 'organization' (no longer dumped
+        to 'unknown').  This is the case-normalisation + valid-type regression.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -783,24 +865,28 @@ class TestEntityTypeNormalisation:
         with _patch_persist_repos(repos):
             await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Fed", profile=profile)
 
-        # No warning logged — ORGANIZATION is in the alias map (→ 'unknown').
+        # No warning logged — 'organization' is now a valid canonical type.
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('unknown') was actually passed to
-        # entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
+        # Verify that the alias-mapped entity_type ('organization') was actually passed
+        # to entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"Expected alias-mapped entity_type='unknown' (BP-523), got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'unknown'."
+        assert call_kwargs["entity_type"] == "organization", (
+            f"Expected alias-mapped entity_type='organization' (FR-12), got {call_kwargs['entity_type']!r}. "
+            "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'organization'."
         )
 
-    async def test_alias_corp_normalised_to_financial_instrument(self) -> None:
-        """entity_type='corp' → alias-mapped to 'financial_instrument' (BP-523, no warning)."""
+    async def test_alias_corp_WITH_ticker_maps_to_financial_instrument(self) -> None:
+        """entity_type='corp' WITH a ticker → 'financial_instrument' (BP-523).
+
+        FR-12 only downgrades TICKERLESS company-class rows; a corp that carries
+        a ticker is a real tradable instrument and keeps the FI mapping.
+        """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
-        profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": None, "isin": None, "aliases": []}
+        profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": "ACME", "isin": None, "aliases": []}
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
@@ -813,14 +899,142 @@ class TestEntityTypeNormalisation:
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('financial_instrument') was used.
-        # 'corp' is in _ENTITY_TYPE_ALIASES → 'financial_instrument' (BP-523 update;
-        # previously mapped to 'company' which is no longer a canonical kind).
+        # 'corp' WITH ticker maps to 'financial_instrument' (BP-523 alias + ticker present).
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert call_kwargs["entity_type"] == "financial_instrument", (
             f"Expected alias-mapped entity_type='financial_instrument', got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'corp' → 'financial_instrument' (BP-523)."
+            "A ticker-bearing company-class row must keep the FI mapping (FR-12)."
         )
+
+    async def test_FR12_tickerless_company_class_downgraded_to_unknown(self) -> None:
+        """FR-12: a TICKERLESS company/corp/firm fallback must NOT become FI.
+
+        ROOT CAUSE (docs/audits/2026-06-13-fr12-hub-mistyping-investigation.md):
+        the no-enrich GLiNER fallback mapped company/corp/firm → financial_instrument
+        even with no ticker, minting NYSE/SpaceX/foundations/"X shares" as
+        instruments (74% of FI rows were tickerless mislabels).  Without a ticker
+        the row must default to 'unknown'.
+        """
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        for raw in ("company", "corp", "firm", "Corporation", "business"):
+            session, repos = _make_persist_session()
+            profile = {
+                "canonical_name": "NYSE",
+                "entity_type": raw,
+                "ticker": None,  # the decisive signal
+                "isin": None,
+                "aliases": [],
+            }
+
+            with structlog.testing.capture_logs() as captured, _patch_persist_repos(repos):
+                await core.persist_enrichment(
+                    session=session,
+                    queue_id=_QUEUE_ID,
+                    mention_text="NYSE",
+                    profile=profile,
+                )
+
+            call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+            assert (
+                call_kwargs["entity_type"] == "unknown"
+            ), f"FR-12: tickerless {raw!r} must downgrade to 'unknown', got {call_kwargs['entity_type']!r}"
+            downgrade_events = [
+                e for e in captured if e.get("event") == "provisional_enrichment_tickerless_company_downgraded"
+            ]
+            assert downgrade_events, f"expected downgrade log for {raw!r}; captured {captured}"
+
+    async def test_FR12_non_company_class_unaffected_by_downgrade(self) -> None:
+        """FR-12 downgrade is scoped to company-class aliases only.
+
+        An LLM that directly types 'index' (or any non-company value) without a
+        ticker must be left untouched — the downgrade only targets the coarse
+        company/corp/firm fallback that the alias map turns into FI.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "S&P 500", "entity_type": "index", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="S&P 500",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert (
+            call_kwargs["entity_type"] == "index"
+        ), f"a directly-typed 'index' must be unaffected by the FR-12 downgrade; got {call_kwargs['entity_type']!r}"
+
+    async def test_exchange_entity_type_is_valid(self) -> None:
+        """FR-12: 'exchange' is now a valid entity_type (no warning, passes through)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "NASDAQ", "entity_type": "exchange", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="NASDAQ",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "exchange"
+
+    async def test_organization_entity_type_is_valid(self) -> None:
+        """FR-12 / migration 0055: 'organization' is a valid entity_type (passes through)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "SpaceX",
+            "entity_type": "organization",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "organization"
+
+    async def test_foundation_alias_maps_to_organization(self) -> None:
+        """FR-12: a 'foundation'-class tickerless mention maps to 'organization'."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "Duke Energy Foundation",
+            "entity_type": "foundation",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Duke Energy Foundation",
+                profile=profile,
+            )
+
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
+        assert call_kwargs["entity_type"] == "organization"
 
     async def test_unknown_entity_type_defaults_to_unknown(self) -> None:
         """entity_type='conglomerate' → invalid; stored as 'unknown' with warning (BP-523).
@@ -864,11 +1078,12 @@ class TestEntityTypeNormalisation:
             "Ensure the fallback block sets entity_type = 'unknown', not 'other'."
         )
 
-    async def test_organization_mention_class_resolves_to_unknown(self) -> None:
-        """BP-523: 'organization' mention class must produce entity_type='unknown'.
+    async def test_organization_mention_class_resolves_to_organization(self) -> None:
+        """FR-12 / migration 0055: 'organization' mention class → entity_type='organization'.
 
-        Migration 0039 maps 'organization' → 'unknown' in the DB CHECK constraint.
-        The code must do the same so no CheckViolationError fires at insert time.
+        Supersedes BP-523 (which mapped 'organization' → 'unknown' because no
+        dedicated type existed).  Migration 0055 added the ``organization`` value to
+        the DB CHECK constraint, so the alias map now routes to it directly.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -886,14 +1101,15 @@ class TestEntityTypeNormalisation:
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organization' must map to 'unknown'; got {call_kwargs['entity_type']!r}"
+            call_kwargs["entity_type"] == "organization"
+        ), f"FR-12: 'organization' must map to 'organization'; got {call_kwargs['entity_type']!r}"
 
-    async def test_british_spelling_organisation_resolves_to_unknown(self) -> None:
-        """BP-523: British-spelling 'organisation' alias must also resolve to 'unknown'.
+    async def test_british_spelling_organisation_resolves_to_organization(self) -> None:
+        """FR-12 / migration 0055: British-spelling 'organisation' → 'organization'.
 
         Some LLM variants return 'organisation' (British English); the alias map
-        must route this correctly so the DB CHECK constraint is never violated.
+        must normalise it to the canonical American-spelled ``organization`` value
+        so the DB CHECK constraint is never violated.
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -916,8 +1132,8 @@ class TestEntityTypeNormalisation:
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organisation' (British spelling) must map to 'unknown'; got {call_kwargs['entity_type']!r}"
+            call_kwargs["entity_type"] == "organization"
+        ), f"FR-12: 'organisation' (British spelling) must map to 'organization'; got {call_kwargs['entity_type']!r}"
 
     async def test_fully_invalid_type_fallback_is_unknown_not_other(self) -> None:
         """BP-523: the invalid-type fallback must be 'unknown', not 'other'.
@@ -1397,3 +1613,342 @@ class TestPersistEnrichmentFuzzyDedup:
         # No fuzzy match → create_or_get must have been called for the new entity.
         canonical_repo_mock.create_or_get.assert_awaited_once()
         assert result == _ENTITY_ID
+
+
+_TICKER_MATCHED_ID = UUID("01234567-89ab-7def-8012-bbbbbbbbbbbb")
+
+
+class TestPersistEnrichmentTickerDedup:
+    """BP-459 root-cause fix (PLAN-0111): ticker is a HARD dedup key.
+
+    The historical SHEL/PG/SNDK duplicates were created because the news/
+    provisional promotion path minted a fresh ticker-bearing canonical without
+    ever consulting an existing financial_instrument that already owned that
+    ticker — NONE of the prior guards keyed on the ticker (create_or_get's
+    ON CONFLICT is lower(canonical_name) and excludes financial_instrument; the
+    fuzzy pre-lookup is name-based). These tests pin the new behaviour: for a
+    tradable instrument WITH a ticker, an existing same-ticker canonical is
+    reused instead of minting a duplicate.
+    """
+
+    async def test_reuses_existing_canonical_when_ticker_matches(self) -> None:
+        """A financial_instrument profile whose ticker already exists is deduped."""
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # An existing canonical already owns ticker SHEL (the SHEL exemplar).
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _TICKER_MATCHED_ID,
+                "canonical_name": "Shell PLC ADR",
+                "entity_type": "financial_instrument",
+                "ticker": "SHEL",
+                "exchange": "US",
+            },
+        )
+        profile = {
+            # News-extracted variant name that would NOT trigram-match the
+            # instrument's canonical_name — only the ticker links them.
+            "canonical_name": "Shell Plc",
+            "entity_type": "financial_instrument",
+            "ticker": "SHEL",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos), structlog.testing.capture_logs() as captured:
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Shell Plc",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Reused the existing same-ticker canonical — no new row, no side effects.
+        assert result == _TICKER_MATCHED_ID
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        # find_by_ticker was consulted before any name-based work.
+        repos.canonical_find_by_ticker.assert_awaited_once_with("SHEL")
+        events = [e for e in captured if e.get("event") == "provisional_entity_deduplicated_by_ticker"]
+        assert events, f"Expected ticker-dedup log; captured: {captured}"
+        assert events[0]["matched_entity_id"] == str(_TICKER_MATCHED_ID)
+
+    async def test_no_ticker_match_falls_through_to_name_dedup(self) -> None:
+        """When no canonical owns the ticker, the normal create path runs."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Brand New Instrument",
+            "entity_type": "financial_instrument",
+            "ticker": "BNI",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Brand New Instrument",
+                profile=profile,
+                embedding=None,
+            )
+
+        repos.canonical_find_by_ticker.assert_awaited_once_with("BNI")
+        repos.canonical_create_or_get.assert_awaited_once()
+        assert result == _ENTITY_ID
+
+    async def test_non_instrument_with_ticker_skips_ticker_lookup(self) -> None:
+        """Ticker dedup is scoped to financial_instrument; persons/events skip it."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Some Person",
+            "entity_type": "person",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Some Person",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Non-instrument (and no ticker) → find_by_ticker never consulted.
+        repos.canonical_find_by_ticker.assert_not_awaited()
+
+    async def test_orcl_stock_news_entity_reuses_existing_oracle(self) -> None:
+        """Regression for the 2026-06-13 gap: "ORCL stock" must reuse Oracle Corp.
+
+        A news mention "ORCL stock" produced a profile with canonical_name
+        "ORCL stock", entity_type financial_instrument, ticker ORCL.  The
+        existing instrument canonical "Oracle Corporation" (ORCL, US) must be
+        reused — the names do NOT trigram-match, only the ticker links them, so
+        ONLY the ticker pre-lookup prevents the duplicate.  (The original gap was
+        a deployment miss — the running worker image lacked this code — but this
+        test pins the behaviour so a regression in the logic is caught.)
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        _oracle_id = UUID("d4adf407-2958-413f-8ba0-de333b731d2c")
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _oracle_id,
+                "canonical_name": "Oracle Corporation",
+                "entity_type": "financial_instrument",
+                "ticker": "ORCL",
+                "exchange": "US",
+            },
+        )
+        profile = {
+            "canonical_name": "ORCL stock",
+            "entity_type": "financial_instrument",
+            "ticker": "ORCL",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="ORCL stock",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _oracle_id
+        repos.canonical_find_by_ticker.assert_awaited_once_with("ORCL")
+        repos.canonical_create_or_get.assert_not_awaited()
+
+    async def test_organization_class_with_ticker_reuses_existing(self) -> None:
+        """Regression for "Corteva Agriscience": org mention_class → FI + ticker reuses.
+
+        GLiNER tagged "Corteva Agriscience" as mention_class='organization'; the
+        LLM profile normalises entity_type to financial_instrument and carries
+        ticker CTVA.  The ticker pre-lookup runs on the NORMALISED entity_type,
+        so an existing "Corteva Inc" (CTVA, US) canonical is reused.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        _corteva_id = UUID("a264f003-926a-4975-95ca-ac631b7f38cc")
+        session, repos = _make_persist_session()
+        repos.canonical_find_by_ticker = AsyncMock(
+            return_value={
+                "entity_id": _corteva_id,
+                "canonical_name": "Corteva Inc",
+                "entity_type": "financial_instrument",
+                "ticker": "CTVA",
+                "exchange": "US",
+            },
+        )
+        # entity_type "corp" normalises to financial_instrument (see
+        # _ENTITY_TYPE_ALIASES) — exercises the normalised-type guard path.
+        profile = {
+            "canonical_name": "Corteva Agriscience",
+            "entity_type": "corp",
+            "ticker": "CTVA",
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Corteva Agriscience",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _corteva_id
+        repos.canonical_find_by_ticker.assert_awaited_once_with("CTVA")
+        repos.canonical_create_or_get.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FR-11 token-superset name dedup (prevention for the SpaceX-class miss)
+# ---------------------------------------------------------------------------
+
+_SPACEX_ID = UUID("9ecb9bad-c820-4159-889b-ffba2d137f1b")
+
+
+def _fake_canonical(entity_id: UUID, canonical_name: str, entity_type: str) -> SimpleNamespace:
+    """Minimal stand-in for the CanonicalEntity domain object get_by_id returns."""
+    return SimpleNamespace(entity_id=entity_id, canonical_name=canonical_name, entity_type=entity_type)
+
+
+class TestPersistEnrichmentNameSupersetDedup:
+    async def test_spacex_shares_reuses_existing_spacex(self) -> None:
+        """A ticker-less "SpaceX shares" mention reuses the existing "SpaceX".
+
+        The 0.75 trigram pre-lookup misses (sim ~0.54), so without the FR-11
+        token-superset fallback this would mint a fresh duplicate.  Stripping the
+        "shares" suffix yields "spacex", which the EXACT alias lookup resolves to
+        the existing SpaceX canonical (same entity_type) — and we reuse it.
+        """
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # Ticker pre-lookup + fuzzy both miss (ticker-less, low trigram).
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        # The suffix-stripped name "spacex" resolves to the existing canonical.
+        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _SPACEX_ID})
+        repos.canonical_get_by_id = AsyncMock(
+            return_value=_fake_canonical(_SPACEX_ID, "SpaceX", "financial_instrument"),
+        )
+        profile = {
+            "canonical_name": "SpaceX shares",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos), structlog.testing.capture_logs() as captured:
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX shares",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _SPACEX_ID
+        # EXACT lookup was on the stripped stem, not the raw name.
+        repos.alias_find_exact.assert_awaited_once_with("spacex")
+        # No new canonical / aliases / outbox — the existing entity is reused.
+        repos.canonical_create_or_get.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        events = [e for e in captured if e.get("event") == "provisional_entity_deduplicated_by_name_superset"]
+        assert events, f"expected name-superset dedup log; got {captured}"
+        assert events[0]["matched_entity_id"] == str(_SPACEX_ID)
+        assert events[0]["stripped_name"] == "spacex"
+
+    async def test_cross_type_superset_match_is_not_reused(self) -> None:
+        """If the stripped-name match is a DIFFERENT entity_type, do NOT reuse it.
+
+        "SpaceX shares" (financial_instrument) must NOT fold into a "SpaceX"
+        canonical that happens to be typed as a product — the cross-type guard
+        forces the normal create path instead.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _SPACEX_ID})
+        repos.canonical_get_by_id = AsyncMock(
+            return_value=_fake_canonical(_SPACEX_ID, "SpaceX", "product"),  # WRONG type
+        )
+        profile = {
+            "canonical_name": "SpaceX shares",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="SpaceX shares",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Cross-type → NOT reused; falls through to create_or_get (fresh insert).
+        assert result == _ENTITY_ID
+        repos.canonical_create_or_get.assert_awaited_once()
+
+    async def test_no_generic_suffix_skips_superset_lookup(self) -> None:
+        """A name with no generic suffix never triggers the extra EXACT lookup.
+
+        "Acme Robotics" strips to itself, so the fallback is a no-op and the
+        normal create path runs — the superset EXACT lookup must not fire.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.alias_fuzzy_search = AsyncMock(return_value=[])
+        # find_exact would only be consulted by the LLM-alias loop (no aliases
+        # here) — assert it is NEVER awaited for the superset stem.
+        repos.alias_find_exact = AsyncMock(return_value=None)
+        profile = {
+            "canonical_name": "Acme Robotics",
+            "entity_type": "financial_instrument",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Acme Robotics",
+                profile=profile,
+                embedding=None,
+            )
+
+        assert result == _ENTITY_ID
+        # Stripped name == original (no suffix) → superset lookup skipped, so
+        # get_by_id is never consulted.
+        repos.canonical_get_by_id.assert_not_awaited()
+        repos.canonical_create_or_get.assert_awaited_once()

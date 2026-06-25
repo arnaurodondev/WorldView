@@ -180,3 +180,57 @@ async def test_get_entity_intelligence_handles_missing_narrative_block(
     assert result is not None
     assert result.narrative is None
     assert result.health_score == pytest.approx(0.7291120333665124)
+
+
+# ── PLAN-0112 W4: get_path_between (S9-proxied /v1/paths/between) ─────────────
+
+_SRC_ID = UUID("01900000-0000-7000-8000-0000000000a1")
+_TGT_ID = UUID("01900000-0000-7000-8000-0000000000a2")
+
+
+@pytest.mark.asyncio
+async def test_get_path_between_parses_connected_response(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """get_path_between parses the S9 pairwise response shape into PathBetweenResult."""
+    httpx_mock.add_response(
+        url=re.compile(rf"{_BASE}/v1/paths/between.*"),
+        json={
+            "source_entity_id": str(_SRC_ID),
+            "target_entity_id": str(_TGT_ID),
+            "connected": True,
+            "shortest_hops": 2,
+            "paths": [{"hop_count": 2, "weirdness": 0.42}],
+            "computed_at": "2026-06-13T12:00:00+00:00",
+        },
+    )
+    client = S7IntelligenceClient(base_url=_BASE)
+
+    result = await client.get_path_between(_SRC_ID, _TGT_ID, max_hops=2)
+
+    assert result.connected is True
+    assert result.shortest_hops == 2
+    assert len(result.paths) == 1
+    # The request forwarded source/target/max_hops as query params.
+    request = httpx_mock.get_requests()[0]
+    assert request.url.params["source"] == str(_SRC_ID)
+    assert request.url.params["target"] == str(_TGT_ID)
+    assert request.url.params["max_hops"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_get_path_between_4xx_degrades_to_disconnected(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """A 4xx (e.g. 404 missing entity) → disconnected result, never a crash (R9)."""
+    httpx_mock.add_response(
+        url=re.compile(rf"{_BASE}/v1/paths/between.*"),
+        status_code=404,
+        json={"detail": "Entity not found"},
+    )
+    client = S7IntelligenceClient(base_url=_BASE)
+
+    result = await client.get_path_between(_SRC_ID, _TGT_ID)
+
+    assert result.connected is False
+    assert result.paths == []

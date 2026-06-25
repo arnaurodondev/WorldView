@@ -69,6 +69,9 @@ vi.mock("lightweight-charts", () => ({
       timeToCoordinate: vi.fn(() => null),
       coordinateToTime: vi.fn(() => null),
       setVisibleLogicalRange: vi.fn(),
+      // Round-1 period selector: OHLCVChart windows the visible range per
+      // period via setVisibleRange — the mock must mirror the real API.
+      setVisibleRange: vi.fn(),
     })),
     subscribeCrosshairMove: vi.fn(),
     unsubscribeCrosshairMove: vi.fn(),

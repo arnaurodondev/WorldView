@@ -2,8 +2,8 @@
 
 > **Package**: `contracts` · **Path**: `libs/contracts/` · **Version**: 2025.6.0
 > **Purpose**: Canonical data models and schema versions. Single source of truth for
-> the shape of data flowing between services. Zero runtime external dependencies
-> (only `structlog` and optional `pyarrow`).
+> the shape of data flowing between services. Minimal runtime dependencies:
+> `structlog` and `pydantic` (hard), `pyarrow` (optional, `[parquet]` extra).
 
 ---
 
@@ -50,7 +50,7 @@ from contracts import ContentSourceType, IngestionTaskStatus
 
 | Enum | Values | Used by |
 |------|--------|---------|
-| `ContentSourceType` | `eodhd`, `sec_edgar`, `finnhub`, `newsapi`, `manual` | S4 (producer), S5 (consumer) |
+| `ContentSourceType` | `eodhd`, `eodhd_ticker_news`, `sec_edgar`, `finnhub`, `newsapi`, `manual`, `polymarket`, `tenant_upload` | S4 (producer), S5 (consumer) |
 | `IngestionTaskStatus` | `pending`, `claimed`, `running`, `succeeded`, `retry`, `failed` | S2, S4 scheduler-worker lifecycle |
 
 ### Canonical Market Data Models (`contracts.canonical`)
@@ -69,14 +69,11 @@ All models are frozen dataclasses with `from_dict(cls, d)` and `to_dict(self)`.
 
 | Class | Purpose |
 |-------|---------|
-| `CanonicalEarningsEvent` | Earnings announcement with date, EPS, revenue |
-| `CanonicalEconomicEvent` | Economic calendar event (CPI, GDP, NFP, …) |
-| `CanonicalMacroIndicator` | Macro indicator snapshot (GDP growth rate, inflation, unemployment) |
-| `CanonicalNewsSentiment` | News article with provider-computed sentiment |
-| `CanonicalInsiderTransaction` | Insider trading transaction (form type, shares, price) |
-| `CanonicalYieldPoint` | Yield curve point (maturity, rate) |
-| `CanonicalMarketCapPoint` | Historical market cap data point |
-| `CanonicalInstrumentDiscovered` | Trigger event when S3 first observes a new instrument. Fields: `event_id`, `occurred_at`, `instrument_id`, `symbol`, `exchange`, `entity_id`, `correlation_id`. |
+| `CanonicalEarningsEvent` | Earnings calendar entry (`contracts.canonical.earnings_calendar`) with report date, EPS estimate/actual, revenue |
+| `CanonicalInsiderTransaction` | Insider trading transaction (`contracts.canonical.insider_transactions`) — form type, shares, price |
+| `CanonicalYieldPoint` | Yield curve point (`contracts.canonical.yield_curve`) — maturity, rate |
+| `CanonicalMarketCapPoint` | Historical market cap data point (`contracts.canonical.market_cap`) |
+| `CanonicalInstrumentDiscovered` | Trigger event when S3 first observes a new instrument (topic `market.instrument.discovered`). Fields: `event_id`, `occurred_at`, `instrument_id`, `symbol`, `exchange` (`str \| None`), `entity_id` (`str \| None`), `correlation_id`, `causation_id`. |
 
 **NLP / intelligence pipeline:**
 
@@ -114,31 +111,44 @@ Typed mirrors of Avro schemas for events that are purely cross-service triggers
 
 | Class | Topic | `dirty_reason` / notes |
 |-------|-------|------------------------|
-| `CanonicalEntityCanonicalCreated` | `entity.canonical.created.v1` | Fields: `entity_id`, `canonical_name`, `entity_type`, `provisional_queue_id`, `alias_texts` |
+| `CanonicalEntityCanonicalCreated` | `entity.canonical.created.v1` | Fields: `entity_id`, `canonical_name`, `entity_type`, `provisional_queue_id`, `alias_texts` (`tuple[str, ...]`) |
 | `CanonicalEntityDirtied` | `entity.dirtied.v1` | `dirty_reason`: `new_evidence`, `new_relation`, `alias_added`, `profile_updated` |
-| `CanonicalGraphStateChanged` | `graph.state.changed.v1` | Topology change; consumers use for cache invalidation |
-| `CanonicalEntityNarrativeGenerated` | `entity.narrative.generated.v1` | Triggers immediate narrative embedding refresh |
-| `CanonicalProvisionalQueued` | `entity.provisional.queued.v1` | New provisional entity discovered by S6 |
-| `CanonicalRelationTypeProposed` | `intelligence.temporal_event.v1` | Relation type proposed by extraction |
+| `CanonicalGraphStateChanged` | `graph.state.changed.v1` | Topology change; consumers use for cache invalidation. Fields: `primary_entity_id`, `affected_entity_ids`, `change_type`, `relation_ids`, `canonical_types` |
+| `EntityNarrativeGeneratedEvent` | `entity.narrative.generated.v1` | Triggers immediate narrative embedding refresh. Note: `schema_version` is a semver `str` (default `"1.0.0"`), not an `int`. Fields: `entity_id`, `version_id`, `generation_reason`, `model_id`, `narrative_text_length` |
+| `CanonicalEntityProvisionalQueued` | `entity.provisional.queued.v1` | New provisional entity discovered by S6. Fields: `queue_id`, `normalized_surface`, `mention_class` |
+| `CanonicalRelationTypeProposed` | `relation.type.proposed.v1` | Raw relation type that failed canonicalization (S7 Block 11); feeds human-in-the-loop registry curation. Fields: `proposed_type`, `semantic_mode`, `suggested_decay_class` |
 
 **NLP events (`contracts.events.nlp`):**
 
 | Class | Topic | Notes |
 |-------|-------|-------|
 | `CanonicalNlpArticleEnriched` | `nlp.article.enriched.v1` | Full enrichment trigger. Carries `raw_relations_json`, `raw_events_json`, `raw_claims_json` as JSON-encoded strings. Use `encode_raw_array()` / `decode_raw_array()` helpers. |
-| `CanonicalDocumentReady` | `content.article.stored.v1` (subset) | Document ready for NLP |
+| `CanonicalNlpSignalDetected` | `nlp.signal.detected.v1` | Claim/signal detected during enrichment. Fields: `doc_id`, `claim_id`, `claim_type`, `polarity`, `extraction_confidence`, `market_impact_score`, optional `claimer_entity_id`/`subject_entity_id` |
+| `NlpDocumentReady` | (document-ready trigger) | Document parsed and ready for NLP. Fields: `doc_id`, `tenant_id`, `chunk_count`, `word_count` |
 
 **Content events (`contracts.events.content`):**
 
 | Class | Topic | Notes |
 |-------|-------|-------|
-| `CanonicalDocumentDeleted` | — | Content deletion notification |
+| `ContentDocumentDeleted` | — | Content deletion notification. Fields: `event_id`, `event_type`, `schema_version`, `occurred_at`, `doc_id`, `tenant_id`. |
 
 **Alert events (`contracts.events.alert`):**
 
 | Class | Topic | Notes |
 |-------|-------|-------|
-| `CanonicalAlertCreated` | `alert.created.v1` | User-initiated alert rule persisted. Fields: `alert_id`, `user_id`, `tenant_id`, `entity_id`, `condition`, `threshold`, `severity`, `source`. |
+| `CanonicalAlertCreated` | `alert.created.v1` | User-initiated alert rule persisted. Fields: `alert_id`, `user_id`, `tenant_id`, `entity_id`, `condition`, `threshold`, `severity` (default `"low"`), `source` (default `"llm_tool"`). |
+
+**Intelligence events (`contracts.events.intelligence`):**
+
+| Class | Topic | Notes |
+|-------|-------|-------|
+| `CanonicalIntelligenceContradiction` | `intelligence.contradiction.v1` | A new claim contradicts an existing claim about an entity. Fields: `subject_entity_id`, `claim_type`, `new_claim_id`, `contradicting_claim_id`, `contradiction_strength`, `affected_relation_ids`, `is_backfill`. |
+
+**Portfolio events (`contracts.events.portfolio`):**
+
+| Class | Topic | Notes |
+|-------|-------|-------|
+| `PortfolioHoldingRecomputeRequested` | `portfolio.holding.recompute_requested.v1` | Pydantic `BaseModel` (not a frozen dataclass). Requests recomputation of a portfolio's holdings. Fields: `aggregate_id`/`portfolio_id`, `tenant_id`, `owner_id`, plus standard envelope fields (`event_id`, `event_type`, `occurred_at`, `correlation_id`, `causation_id`). |
 
 ### Trust Authority (`contracts.trust`)
 
@@ -149,6 +159,46 @@ from contracts.trust import SOURCE_AUTHORITY
 
 Maps source type strings to authority scores (0.0–1.0) used for retrieval ranking.
 Examples: `sec_10k → 1.00`, `eodhd_news → 0.65`, `social → 0.30`, `default → 0.50`.
+
+### Pagination Models (`contracts.pagination`)
+
+```python
+from contracts import PaginationParams, PaginatedResponse
+```
+
+Opt-in pydantic models (`BaseModel`) for converging per-service limit/offset
+pagination onto one canonical shape. Existing per-service schemas keep working.
+
+| Class | Fields | Notes |
+|-------|--------|-------|
+| `PaginationParams` | `limit: int = 20` (1–200), `offset: int = 0` (≥0) | Query-param input; use as a FastAPI `Depends()`. |
+| `PaginatedResponse[T]` | `items: list[T]`, `total: int`, `limit: int`, `offset: int`, `has_more: bool` | Generic response wrapper; `has_more` is set by the caller, not derived. |
+
+```python
+@router.get("/items")
+async def list_items(p: PaginationParams = Depends()) -> PaginatedResponse[ItemOut]:
+    rows, total = await repo.list(limit=p.limit, offset=p.offset)
+    return PaginatedResponse[ItemOut](
+        items=rows, total=total, limit=p.limit, offset=p.offset,
+        has_more=(p.offset + len(rows)) < total,
+    )
+```
+
+### Numeric Grounding (`contracts.numeric_grounding`)
+
+Shared classification vocabulary + default tolerances for numeric-grounding
+validation (PLAN-0093). The validation logic itself lives in rag-chat; this
+module exposes only the contract types so consumers depend on `contracts`,
+not on the rag-chat service package.
+
+```python
+from contracts.numeric_grounding import FieldKind, DEFAULT_TOLERANCES
+```
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `FieldKind` | `str` `Enum` | Financial field families that share rounding behaviour: `price`, `return_pct`, `year`, `quarter`, `eps`, `ratio`, `revenue`, `market_cap`, `shares`, `headcount`, `prose`, `unknown`. |
+| `DEFAULT_TOLERANCES` | `dict[FieldKind, float]` | Per-kind relative-diff tolerance (e.g. `PRICE → 0.001`, `YEAR → 0.0`, `EPS → 0.02`). Mutable module-level dict so deployments can patch tolerances at startup. |
 
 ### Schema Version Constants (`contracts.versions`)
 
@@ -190,10 +240,14 @@ from contracts.versions import (
 
 ## Model Anatomy
 
-All canonical models follow this pattern:
+Most canonical/event models are **frozen dataclasses** with `from_dict(cls, d)` /
+`to_dict(self)`. The exceptions are the pydantic models in
+`contracts.pagination` (`PaginationParams`, `PaginatedResponse`) and
+`contracts.events.portfolio` (`PortfolioHoldingRecomputeRequested`).
 
 ```python
 from dataclasses import dataclass, field
+from contracts.versions import OHLCV_SCHEMA_VERSION
 
 @dataclass(frozen=True)
 class CanonicalOHLCVBar:
@@ -207,9 +261,10 @@ class CanonicalOHLCVBar:
     volume: int
     adjusted_close: float | None = None
     source: str = ""
+    provider: str = ""
     timeframe: str = "1d"
     fetched_at: datetime | None = None
-    schema_version: int = field(default=1, init=False)
+    schema_version: int = field(default=OHLCV_SCHEMA_VERSION, init=False)
 
     @classmethod
     def from_dict(cls, d: dict) -> "CanonicalOHLCVBar":
@@ -265,13 +320,18 @@ weight = SOURCE_AUTHORITY.get(source_type, SOURCE_AUTHORITY["default"])  # 0.50 
 
 ## Architecture Notes
 
-### Why frozen dataclasses, not Pydantic?
+### Why frozen dataclasses for wire models?
 
-Frozen dataclasses have zero runtime overhead for field access, no validation
-cost, and no dependency on pydantic. `contracts` is imported by every service
-including minimal workers — pulling in pydantic here would add it to every service
-context even when it is not otherwise needed. Pydantic lives in service-level
-`pyproject.toml` only.
+Avro-backed wire models (everything in `contracts.canonical` and most of
+`contracts.events`) are frozen dataclasses: zero runtime overhead for field
+access, no validation cost on the hot deserialization path, and `frozen=True`
+guards against accidental mutation while a payload flows through a pipeline.
+`from_dict`/`to_dict` make the serialization boundary explicit.
+
+Pydantic **is** a hard dependency of `contracts` (see `pyproject.toml`) and is
+used for the validation-bearing models that are not raw Avro wire payloads:
+`PaginationParams` / `PaginatedResponse` (HTTP request/response shaping with
+bounds) and `PortfolioHoldingRecomputeRequested` (R28 canonical topic model).
 
 ### `article_id` vs `doc_id`
 

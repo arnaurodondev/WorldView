@@ -6,7 +6,11 @@ import httpx
 import pytest
 from content_ingestion.config import NewsAPIProviderSettings
 from content_ingestion.domain.exceptions import AdapterError
-from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
+from content_ingestion.infrastructure.adapters.newsapi.client import (
+    NewsAPIClient,
+    NewsAPIServerError,
+    NewsAPIUpgradeRequiredError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -129,6 +133,131 @@ class TestNewsAPIClient:
             await client.fetch_articles(query="test")
 
         assert recorded_ttl == 3600
+
+
+class TestNewsAPIServerErrorDetection:
+    """PLAN-0109 / T-C-1-01 / BP-658 — NewsAPI returns HTTP 200 with
+    ``{"status":"error",...}`` on quota and parameter failures; the client
+    must raise ``NewsAPIServerError`` rather than letting the caller mistake
+    it for a legitimate empty 200 response (and silently advance the
+    watermark).
+    """
+
+    async def test_client_raises_on_status_error_rate_limited(self) -> None:
+        """status=error + code=rateLimited → NewsAPIServerError with code/message."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "code": "rateLimited",
+                    "message": "You have made too many requests recently.",
+                },
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIServerError) as exc_info:
+                await client.fetch_articles(query="AI")
+
+        assert exc_info.value.code == "rateLimited"
+        assert exc_info.value.message is not None
+        assert "too many requests" in exc_info.value.message
+
+    async def test_client_raises_on_status_error_parameter_invalid(self) -> None:
+        """status=error + code=parameterInvalid → NewsAPIServerError."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "code": "parameterInvalid",
+                    "message": "The 'from' parameter is invalid.",
+                },
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIServerError) as exc_info:
+                await client.fetch_articles(query="AI", from_date="1900-01-01")
+
+        assert exc_info.value.code == "parameterInvalid"
+
+    async def test_client_succeeds_on_status_ok_empty_articles(self) -> None:
+        """A legitimate "no news today" 200 response (status=ok, articles=[])
+        must NOT raise — only ``status=error`` triggers the new typed error."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"status": "ok", "totalResults": 0, "articles": []},
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            # No exception — returns the parsed dict with empty articles.
+            result = await client.fetch_articles(query="AI")
+            assert result["status"] == "ok"
+            assert result["articles"] == []
+
+
+class TestNewsAPIFreeTierPageCap:
+    """NewsAPI free tier caps results at 100 (page 1 only); page >= 2 returns
+    HTTP 426 "Upgrade Required". The pagination loop must treat that as
+    end-of-pages and keep the page-1 results instead of discarding the whole
+    batch by raising a retryable error.
+    """
+
+    async def test_fetch_all_pages_426_on_page_2_returns_page_1_articles(self) -> None:
+        """Page 1 → 200 with 100 articles (total 250); page 2 → 426.
+        fetch_all_pages must return the 100 page-1 articles, no exception."""
+        call_count = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(200, json=_articles_response(n=100, total=250))
+            return httpx.Response(426)
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            result = await client.fetch_all_pages(query="test")
+
+        assert call_count == 2
+        assert len(result) == 100
+
+    async def test_fetch_all_pages_426_on_page_1_raises(self) -> None:
+        """A 426 on page 1 means the whole request was rejected (e.g. stale
+        from_date) — it must still propagate as an AdapterError subtype."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(426)
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIUpgradeRequiredError) as exc_info:
+                await client.fetch_all_pages(query="test")
+
+        assert exc_info.value.page == 1
+
+    async def test_fetch_articles_426_raises_typed_error_with_page(self) -> None:
+        """fetch_articles always raises the typed 426 error (the page-cap
+        tolerance lives only in fetch_all_pages)."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(426)
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIUpgradeRequiredError) as exc_info:
+                await client.fetch_articles(query="test", page=2)
+
+        assert exc_info.value.page == 2
+        # Remains an AdapterError so existing generic handlers still catch it.
+        assert isinstance(exc_info.value, AdapterError)
 
 
 class _FakeValkey:

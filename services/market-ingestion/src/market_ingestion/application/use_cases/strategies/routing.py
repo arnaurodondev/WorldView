@@ -21,7 +21,10 @@ if TYPE_CHECKING:
 # Dataset-type groupings used in routing and zero-bar tracking
 # ---------------------------------------------------------------------------
 
-_YAHOO_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
+# End-of-day OHLCV timeframes (daily + the weekly/monthly aliases). Daily is
+# polled from Alpaca; 1w/1mo are derived-on-read in market-data but the strings
+# are kept here so any stray EOD task still routes to the EOD provider chain.
+_EOD_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
 _FINNHUB_TYPES: frozenset[DatasetType] = frozenset(
     {
         DatasetType.NEWS_SENTIMENT,
@@ -46,15 +49,23 @@ def _preferred_provider(
 ) -> Provider:
     """Return the cheapest registered provider for this dataset/timeframe.
 
+    This is the STATIC fallback used only when the dynamic ``routing_cache`` is
+    absent or its primary is unregistered (``execute_task._select_provider``).
+    The dynamic cache (``routing_ohlcv_eod = alpaca:100,eodhd:80``) is the source
+    of truth in practice.
+
     Priority order:
-      OHLCV + (1d | 1w | 1mo | 1M) → Yahoo Finance if registered (0 credits)
+      OHLCV + (1d | 1w | 1mo | 1M) → Alpaca if registered (free, deep daily)
       NEWS_SENTIMENT | EARNINGS_CALENDAR | INSIDER_TRANSACTIONS → Finnhub if registered (free)
       All other combinations → EODHD (default, always registered)
+
+    Yahoo Finance is NO LONGER preferred for OHLCV (PLAN-0036 final topology):
+    Alpaca 1Day replaced it as the free deep-daily source.
     """
-    if dataset_type == DatasetType.OHLCV and timeframe in _YAHOO_TIMEFRAMES:
+    if dataset_type == DatasetType.OHLCV and timeframe in _EOD_TIMEFRAMES:
         try:
-            registry.get(Provider.YAHOO_FINANCE)
-            return Provider.YAHOO_FINANCE
+            registry.get(Provider.ALPACA)
+            return Provider.ALPACA
         except ProviderUnavailable:
             pass
     if dataset_type in _FINNHUB_TYPES:
@@ -80,7 +91,7 @@ def _fallback_provider(
     This handles Alpaca → Polygon → EODHD chains for intraday OHLCV.
 
     Falls back to static chain when cache is None:
-      OHLCV daily/weekly/monthly: Yahoo Finance → EODHD → None
+      OHLCV daily/weekly/monthly: Alpaca → EODHD → None
       NEWS_SENTIMENT / EARNINGS_CALENDAR / INSIDER_TRANSACTIONS: Finnhub → EODHD → None
       OHLCV intraday / all others: EODHD → None
 
@@ -113,11 +124,8 @@ def _fallback_provider(
         return None
 
     # Static routing fallback (backward-compatible with PLAN-0038 A-4).
-    if (
-        dataset_type == DatasetType.OHLCV
-        and timeframe in _YAHOO_TIMEFRAMES
-        and current_provider == Provider.YAHOO_FINANCE
-    ):
+    # EOD OHLCV failover: Alpaca (primary) → EODHD.
+    if dataset_type == DatasetType.OHLCV and timeframe in _EOD_TIMEFRAMES and current_provider == Provider.ALPACA:
         return Provider.EODHD
     if dataset_type in _FINNHUB_TYPES and current_provider == Provider.FINNHUB:
         return Provider.EODHD

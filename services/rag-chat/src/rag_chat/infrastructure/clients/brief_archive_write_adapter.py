@@ -119,3 +119,35 @@ class BriefArchiveWriteAdapter:
             reason="read path should use BriefArchiveReadAdapter",
         )
         return None
+
+    async def get_latest_entity_brief(
+        self,
+        entity_id: UUID,
+        limit: int = 1,
+    ) -> list[UserBriefRecord]:
+        """Read the latest entity-scoped brief for the freshness/idempotency check.
+
+        WHY implemented here (not a no-op like the other reads): the entity-brief
+        producers (on-demand route + pre-gen worker) wire this WRITE adapter, not
+        the read adapter. They MUST be able to ask "is there already a fresh
+        entity brief for this instrument?" before paying for an LLM call. Reusing
+        the write factory's session keeps the producer path single-adapter; the
+        query itself is read-only (no commit).
+
+        Returns [] on any error (R9 safe degradation) so a transient DB blip
+        degrades to "no fresh brief → regenerate" rather than crashing the
+        producer.
+        """
+        from rag_chat.infrastructure.db.repositories.brief_archive_repository import BriefArchiveRepository
+
+        try:
+            async with self._write_factory() as session:
+                repo = BriefArchiveRepository(session)
+                return await repo.get_latest_entity_brief(entity_id=entity_id, limit=limit)
+        except Exception as exc:
+            log.warning(  # type: ignore[no-any-return]
+                "brief_archive_write_adapter_get_latest_entity_brief_failed",
+                entity_id=str(entity_id),
+                error=str(exc),
+            )
+            return []

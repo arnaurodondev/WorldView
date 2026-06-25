@@ -631,13 +631,22 @@ def _events_to_result(
             # PLAN-0102 W5 T-W5-02: ``{type, tool, status, item_count}``.
             # Capture the four fields the honest-refusal grader policy
             # consumes; ignore anything else to keep the artefact slim.
-            tool_results.append(
-                {
-                    "tool": str(data.get("tool", "")),
-                    "status": str(data.get("status", "")),
-                    "item_count": int(data.get("item_count", 0) or 0),
-                }
-            )
+            _tool_result_entry: dict[str, Any] = {
+                "tool": str(data.get("tool", "")),
+                "status": str(data.get("status", "")),
+                "item_count": int(data.get("item_count", 0) or 0),
+            }
+            # PLAN-0110 W2 (PRD-0091 FR-5): the backend now OPTIONALLY attaches a
+            # bounded, redacted ``grounding_sample`` ({fields, sampled_rows,
+            # total_rows, truncated}) when CHAT_EVAL_GROUNDING_SAMPLES=true and
+            # status=ok. Capture it verbatim so the W3 judge can later
+            # cross-check numeric claims against the values the tool returned.
+            # Forward-compatible: absent on older runs / when the flag is off, in
+            # which case we add nothing and the entry keeps its legacy 3 keys.
+            _grounding = data.get("grounding_sample")
+            if isinstance(_grounding, dict) and _grounding:
+                _tool_result_entry["grounding_sample"] = _grounding
+            tool_results.append(_tool_result_entry)
         elif kind == "citations" and isinstance(data, list):
             citations = data
         elif kind == "contradictions" and isinstance(data, list):
@@ -937,22 +946,61 @@ def save_result(result: ChatRunResult, *, slot: str, run_ts: str | None = None) 
 # ---------------------------------------------------------------------------
 
 
+# PLAN-0110 W5 (F9/OQ-1): the SINGLE canonical question catalogue now lives in
+# the benchmark's structured pack layout. chat_eval no longer owns a divergent
+# ``questions.yaml`` — it READS the benchmark packs and projects the entries that
+# carry a ``chat_eval_id`` (the q1..q8 / a10 acceptance questions) back into the
+# {id, prompt, ground_truth_assertions} shape the grader + aggregate gate expect.
+_BENCHMARK_QUESTIONS_DIR = (Path(__file__).resolve().parent / ".." / "chat_quality_benchmark" / "questions").resolve()
+
+
 def load_questions(path: Path | None = None) -> list[dict[str, Any]]:
-    """Load the 8 audit questions + ground-truth from ``questions.yaml``.
+    """Load the chat_eval acceptance questions from the CANONICAL catalogue.
 
-    Returns the raw decoded YAML structure: a list of dicts each with
-    ``id``, ``prompt``, optional ``entity_ids``, and ``ground_truth_assertions``.
+    Returns a list of dicts each with ``id`` (the legacy chat_eval slug —
+    ``q1``..``q8`` / ``a10``), ``prompt``, and ``ground_truth_assertions``.
 
-    We import PyYAML lazily — the rest of the harness works without it,
-    and the per-question test files have their prompts hard-coded so
-    they don't depend on this loader.
+    Source of truth (post-W5): the benchmark packs at
+    ``tests/validation/chat_quality_benchmark/questions/*.yaml``. We select the
+    entries that declare a ``chat_eval_id`` (the consolidated acceptance set) and
+    project them to the chat_eval shape — so there is exactly ONE catalogue and
+    chat_eval's gate + the benchmark runner read the same file (F9 resolved).
+
+    ``path`` may point at a single legacy ``questions.yaml`` (back-compat for
+    ad-hoc replays / tests that pass an explicit file); when given we decode it
+    verbatim as before. We import PyYAML lazily — the per-question test files
+    hard-code their prompts so they don't depend on this loader.
     """
-    src = path or (Path(__file__).parent / "questions.yaml")
     try:
         import yaml  # type: ignore[import-untyped]
     except ImportError:  # pragma: no cover — PyYAML is a dev dep
-        pytest.skip("PyYAML not installed — questions.yaml loader requires it")
-    return list(yaml.safe_load(src.read_text()))
+        pytest.skip("PyYAML not installed — the questions loader requires it")
+
+    # Explicit legacy single-file path → decode verbatim (back-compat).
+    if path is not None:
+        return list(yaml.safe_load(path.read_text()))
+
+    # Canonical: read every benchmark pack, keep entries with a chat_eval_id,
+    # and project to {id: <chat_eval_id>, prompt, ground_truth_assertions}.
+    projected: list[dict[str, Any]] = []
+    for pack in sorted(_BENCHMARK_QUESTIONS_DIR.glob("*.yaml")):
+        raw = yaml.safe_load(pack.read_text())
+        if not isinstance(raw, list):
+            continue
+        for q in raw:
+            if not isinstance(q, dict):
+                continue
+            ce_id = q.get("chat_eval_id")
+            if not ce_id:
+                continue
+            projected.append(
+                {
+                    "id": str(ce_id),
+                    "prompt": q.get("prompt"),
+                    "ground_truth_assertions": dict(q.get("ground_truth_assertions") or {}),
+                }
+            )
+    return projected
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,11 @@
 """Unit tests for migration 0008 — seed default sources (PLAN-0106 Wave B-1).
 
 Tests verify:
-  1. The 5 default source rows have distinct deterministic IDs.
+  1. The 4 default source rows have distinct deterministic IDs.
+     NOTE: the ``finnhub-news`` row (config={}) was removed from 0008 because
+     Finnhub's company-news endpoint requires a per-ticker symbol — there is no
+     global-feed on the free tier.  Migration 0009 also cleans up any existing
+     bad rows that may have been inserted by earlier deployments.
   2. Each source row has the expected name, source_type, config, and enabled flag.
   3. The config guard (_warn_on_missing_api_keys) emits a structlog WARNING for
      each API key that is missing/empty, and does NOT raise.
@@ -44,12 +48,13 @@ class TestDefaultSourceRows:
     def setup_method(self) -> None:
         self.m = _load_migration()
 
-    def test_exactly_five_sources(self) -> None:
-        assert len(self.m._DEFAULT_SOURCES) == 5
+    def test_exactly_four_sources(self) -> None:
+        # finnhub-news (config={}) was removed; Finnhub requires a per-ticker symbol.
+        assert len(self.m._DEFAULT_SOURCES) == 4
 
     def test_source_ids_are_unique(self) -> None:
         ids = [src["id"] for src in self.m._DEFAULT_SOURCES]
-        assert len(set(ids)) == 5, "All 5 source IDs must be unique"
+        assert len(set(ids)) == 4, "All 4 source IDs must be unique"
 
     def test_source_ids_are_deterministic(self) -> None:
         # Calling _ulid_from_seed twice with the same seed must produce the
@@ -65,18 +70,24 @@ class TestDefaultSourceRows:
             assert len(src["id"]) == 36
 
     def test_expected_source_types(self) -> None:
+        # finnhub removed from seed — per-ticker sources are seeded separately.
         types = {src["source_type"] for src in self.m._DEFAULT_SOURCES}
-        assert types == {"eodhd", "finnhub", "newsapi", "sec_edgar", "polymarket"}
+        assert types == {"eodhd", "newsapi", "sec_edgar", "polymarket"}
 
     def test_expected_source_names(self) -> None:
+        # finnhub-news removed from seed (no symbol → HTTP 422 on every tick).
         names = {src["name"] for src in self.m._DEFAULT_SOURCES}
         assert names == {
             "eodhd-news",
-            "finnhub-news",
             "newsapi-news",
             "sec-edgar-filings",
             "polymarket-predictions",
         }
+
+    def test_finnhub_not_in_seed(self) -> None:
+        """Finnhub must NOT be in the default seed (requires per-ticker symbol)."""
+        types = [src["source_type"] for src in self.m._DEFAULT_SOURCES]
+        assert "finnhub" not in types, "finnhub global seed removed — use per-ticker sources instead"
 
     def test_all_sources_enabled(self) -> None:
         for src in self.m._DEFAULT_SOURCES:

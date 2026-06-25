@@ -28,6 +28,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+// PRD-0114 W5-T08: ROOT portfolio onboarding popover — renders an ℹ icon next
+// to the "All Accounts" label in the selector and header, explaining what the
+// aggregate view is and why it's read-only.
+import { RootPortfolioPopover } from "@/components/portfolio/RootPortfolioPopover";
 import type { Portfolio } from "@/types/api";
 
 interface PortfolioPageHeaderProps {
@@ -107,6 +111,17 @@ export function PortfolioPageHeader({
                 )}
                 {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
                 <ChevronDown className="h-3 w-3 opacity-60" strokeWidth={1.5} />
+                {/* PRD-0114 W5-T08: ℹ popover shown inline in the trigger when
+                    active portfolio is root. Stop propagation so clicking ℹ
+                    opens the Popover without also toggling the dropdown. */}
+                {activeIsRoot && (
+                  <span
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex"
+                  >
+                    <RootPortfolioPopover portfolioKind="root" />
+                  </span>
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
@@ -126,12 +141,21 @@ export function PortfolioPageHeader({
                   {/* Per-row ALL badge: keeps the root recognisable inside the
                       menu even when another portfolio is currently active. */}
                   {p.kind === "root" && (
-                    <span
-                      className="rounded-[2px] border border-primary/60 bg-primary/10 px-1 py-px text-[9px] font-mono uppercase tracking-[0.06em] text-primary"
-                      aria-label="Aggregate portfolio — All Accounts"
-                    >
-                      ALL
-                    </span>
+                    <>
+                      <span
+                        className="rounded-[2px] border border-primary/60 bg-primary/10 px-1 py-px text-[9px] font-mono uppercase tracking-[0.06em] text-primary"
+                        aria-label="Aggregate portfolio — All Accounts"
+                      >
+                        ALL
+                      </span>
+                      {/* PRD-0114 W5-T08: ℹ per-row in dropdown for root entries */}
+                      <span
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex"
+                      >
+                        <RootPortfolioPopover portfolioKind="root" />
+                      </span>
+                    </>
                   )}
                 </DropdownMenuItem>
               ))}
@@ -173,7 +197,7 @@ export function PortfolioPageHeader({
                 "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
                 activeIsRoot
                   ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
-                  : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary",
+                  : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary hover:bg-primary/5",
               )}
             >
               {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
@@ -228,6 +252,17 @@ export function PortfolioPageHeader({
           )}
         </div>
       </div>
+
+      {/* ── ROOT read-only hint ─────────────────────────────────────────── */}
+      {/* WHY: the Add Position button is silently disabled for root portfolios.
+          Without explanation, users may think it's a bug. This one-liner makes
+          the constraint explicit (T-5-01 / PLAN-0108 W5). Only shown when the
+          active portfolio is the aggregate root. */}
+      {activeIsRoot && (
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+          Select a portfolio to add positions. ALL is read-only.
+        </p>
+      )}
 
       {/* ── F-021: scope hint sub-line ──────────────────────────────────── */}
       {/* WHY h-6 (24px): a thin secondary row below the main header keeps

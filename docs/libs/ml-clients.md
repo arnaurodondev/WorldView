@@ -63,9 +63,16 @@ All service code should depend on these interfaces — never on concrete adapter
 | `EmbeddingClient` | `from ml_clients import EmbeddingClient` | `embed(inputs: list[EmbeddingInput]) → list[EmbeddingOutput]` | S6 NLP Pipeline |
 | `NERClient` | `from ml_clients import NERClient` | `extract_entities(inp: NERInput) → NEROutput`; `batch_extract_entities(inputs) → list[NEROutput]` | S6 NLP Pipeline |
 | `ExtractionClient` | `from ml_clients import ExtractionClient` | `extract(inp: ExtractionInput) → ExtractionOutput` | S6, S7 |
-| `EntityDescriptionClient` | `from ml_clients.description_client import EntityDescriptionClient` | `generate_description(entity_id, canonical_name, entity_type, context_hints) → str | None` | S7 `DefinitionRefreshWorker` |
+| `EntityDescriptionClient` | `from ml_clients.description_client import EntityDescriptionClient` | `generate_description(entity_id, canonical_name, entity_type, context_hints, news_context=None) → str | None` | S7 `DefinitionRefreshWorker` |
 
 All protocols are `@runtime_checkable`: `isinstance(adapter, EmbeddingClient)` works.
+
+> **`generate_description` news-grounding**: the optional `news_context: list[str] | None`
+> parameter carries recent-news snippets the adapter must ground the description in. When
+> `None`/empty, description adapters inject a *no-news guard* so the model stays at the
+> entity's general category/type level instead of fabricating specifics (description audit
+> 2026-06-17). Snippets are treated as untrusted input — sanitized (control chars + angle
+> brackets stripped), length-capped, and count-capped before prompt insertion.
 
 > **Note**: `runtime_checkable` only verifies method *presence*, not async vs sync.
 > Type errors from sync implementations are caught by mypy, not at runtime.
@@ -84,7 +91,14 @@ All are `@dataclass(frozen=True)` — immutable.
 | `EntityMention` | `text: str`, `label: str`, `start: int`, `end: int`, `score: float` |
 | `NEROutput` | `mentions: list[EntityMention]` |
 | `ExtractionInput` | `prompt: str`, `context: str`, `output_schema: dict`, `model_id: str`, `template_id: str | None = None` |
-| `ExtractionOutput` | `result: dict`, `raw_response: str`, `model_id: str`, `extraction_confidence: float | None = None` |
+| `ExtractionOutput` | `result: dict`, `raw_response: str`, `model_id: str`, `extraction_confidence: float | None = None`, `model_used: str | None = None`, `fallback_reason: str = "none"`, `attempts: int = 1` |
+
+> **`ExtractionOutput` resilience-audit fields** (Task #36 — extraction 429 fallback, all
+> backward-compatible defaults): `model_used` is the model that *actually* produced the
+> result (the secondary slug when a 429/timeout forced a fallback hop; `None` ⇒ use
+> `model_id`); `fallback_reason` ∈ `"none" | "rate_limit" | "timeout" | "server_error"`
+> (`"none"` ⇒ primary served directly); `attempts` is the total provider HTTP attempts
+> across primary + fallback (≥1).
 
 ---
 
@@ -105,7 +119,9 @@ All are `@dataclass(frozen=True)` — immutable.
 | `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compat) | DeepSeek R1 Distill 32B | `[openai]` |
 | `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `[gemini]` |
 | `DeepInfraDescriptionAdapter` | `EntityDescriptionClient` | DeepInfra (OpenAI-compat) | `Qwen/Qwen3-235B-A22B-Instruct-2507` (primary), `Qwen/Qwen3-32B` (fallback) | `[openai]` |
+| `ChainedDescriptionAdapter` | `EntityDescriptionClient` | Composes N `EntityDescriptionClient`s; tries in order, first non-`None` wins | — (delegates to wrapped adapters) | — |
 | `CohereRerankAdapter` | (custom) | Cohere Rerank API v2 | `rerank-english-v3.0` | — |
+| `EmbeddingGemmaRouterAdapter` | (custom — *not* `EmbeddingClient`) | DeepInfra OpenAI-compat `/embeddings` | `google/embeddinggemma-300m` (768-dim, MRL→512/256/128) | — |
 | `NullDescriptionAdapter` | `EntityDescriptionClient` | No-op (always returns None) | — | — |
 
 **Error mapping contract** (all adapters):
@@ -115,6 +131,15 @@ All are `@dataclass(frozen=True)` — immutable.
 | Timeout / network error / 5xx / 429 | `RetryableError` |
 | 4xx / malformed JSON / bad input / wrong dimension | `FatalError` |
 | Missing optional package | `FatalError` |
+
+> **`RateLimitError` (HTTP 429)** — `ml_clients.errors.RateLimitError` is a *subclass* of
+> `RetryableError` (full chain: `Exception → ConsumerError → RetryableError →
+> RateLimitedError → RateLimitError`), so `except RetryableError:` retry loops in Kafka
+> consumers automatically pick up 429s. It carries a parsed `retry_after: int | None`
+> (seconds) for callers that want to honour the provider's `Retry-After` header. The
+> helper `ml_clients.errors.parse_retry_after(headers) → int | None` parses both the
+> integer-seconds and HTTP-date forms (RFC 9110 §10.2.3). `FatalError`, `RetryableError`,
+> and `RateLimitError` are all importable from `ml_clients` / `ml_clients.errors`.
 
 ---
 
@@ -231,6 +256,48 @@ tokens = estimate_tokens_from_text(long_text)   # word-count heuristic, min 1
 | `gemini` | `gemini-3.1-flash-lite` | $0.075 | $0.30 |
 | `ollama` | `*` (all models) | $0.00 | $0.00 |
 
+### `compute_cost(model_id, tokens_in, tokens_out) → Decimal` (`ml_clients.pricing`)
+
+`ml_clients.pricing` is the **newer canonical** cost calculator — prefer it over
+`ml_clients.cost.estimate_cost` for any path that persists totals to a
+`Numeric(12, 6)` column. Two deliberate differences from `cost.py`:
+
+- It keys **solely on `model_id`** (the provider is purely transport), and
+- It uses `decimal.Decimal` end-to-end so accumulated per-thread totals never
+  drift from float rounding.
+
+Unknown / unpriced models return `Decimal("0")` and emit a single
+`model_pricing_unknown` structured warning (never raises — a pricing gap must not
+break the request path). `MODEL_PRICING` also carries explicit `ModelPricing.UNKNOWN(...)`
+sentinels (e.g. `gpt-4o-mini`, `claude-3-5-sonnet`) so the matrix is *honest* about
+coverage rather than silently returning 0 for a missing key.
+
+```python
+from decimal import Decimal
+from ml_clients import MODEL_PRICING, ModelPricing, compute_cost
+
+cost = compute_cost("Qwen/Qwen3-235B-A22B-Instruct-2507", tokens_in=500, tokens_out=100)
+# → Decimal — (500/1e6)*0.071 + (100/1e6)*0.10
+
+# Per-call (flat) billing: Cohere Rerank is billed per search, not per token.
+flat = compute_cost("rerank-english-v3.0", tokens_in=1, tokens_out=0)  # → Decimal("0.002")
+```
+
+`ModelPricing` is a frozen dataclass: `model_id`, `input_per_million: Decimal`,
+`output_per_million: Decimal`, `currency="USD"`, `notes=""`, and
+`per_call_usd: Decimal | None = None`. When `per_call_usd` is set, `compute_cost`
+ignores token counts and returns that flat amount (token counts of `0/0` still
+return `Decimal("0")`, modelling a failed call). `MODEL_PRICING` entries today:
+`deepseek-ai/DeepSeek-V4-Flash`, `meta-llama/Meta-Llama-3.1-8B-Instruct(-Turbo)`,
+`Qwen/Qwen3-235B-A22B-Instruct-2507`, `Qwen/Qwen3-32B`, `deepseek-r1-distill-qwen-32b`,
+`BAAI/bge-large-en-v1.5`, `deepseek/deepseek-r1-distill-qwen-32b` (OpenRouter),
+`rerank-english-v3.0` (per-call), `gemini-3.1-flash-lite`, plus `UNKNOWN` sentinels.
+
+> **Two cost modules, by design**: `ml_clients.cost` (float, keyed by `provider` +
+> `model_id`) backs legacy admin dashboards; `ml_clients.pricing` (Decimal, keyed by
+> `model_id`) is the canonical single-source-of-truth consumed by `rag-chat`. Both are
+> re-exported from the package root.
+
 ### `LlmUsageLogProtocol` (structural protocol)
 
 Service-side cost-log repositories implement this protocol. Adapters accept it
@@ -281,9 +348,19 @@ All settings read from environment variables. Consumed via `MLClientsSettings`
 | `EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Extraction model in Ollama |
 | `NER_MODEL_PATH` | `urchade/gliner_large-v2.1` | HuggingFace path for local GLiNER |
 | `MAX_OLLAMA_CONCURRENT` | `4` | Semaphore value for Ollama concurrency |
+| `EXTRACTION_FALLBACK_MODEL_ID` | `""` (disabled) | Task #36 secondary deep-extraction model used when the primary returns HTTP 429 / persistently fails. Empty ⇒ fallback disabled (exhaust primary retries then raise). Verified slug: `deepseek-ai/DeepSeek-V4-Flash`. |
+| `ROUTER_EMBEDDING_MODEL_ID` | `google/embeddinggemma-300m` | News-routing cascade-router classifier embedding (PLAN-0111 Sub-Plan C) — its **own** vector space, never ANN-compared against BGE. |
+| `ROUTER_EMBEDDING_BASE_URL` | `https://api.deepinfra.com/v1/openai` | DeepInfra OpenAI-compatible base URL for the router embedding. |
+| `ROUTER_EMBEDDING_DIMENSIONS` | `768` | MRL cut point (768/512/256/128). |
+| `ROUTER_EMBEDDING_API_KEY` | `""` | Injected from env (e.g. `*_DEEPINFRA_API_KEY`); never hardcoded. |
 
-Cloud adapter API keys are not part of `MLClientsSettings` — they are passed as
-constructor arguments from each service's own settings class.
+> `MLClientsSettings` uses `env_prefix=""` (no prefix) — it is shared across services, so
+> field names map directly to the upper-cased ENV vars above.
+
+Cloud **adapter** API keys (DeepInfra/Gemini/Cohere/Anthropic/OpenAI for the
+extraction/description/embedding adapters) are NOT part of `MLClientsSettings` —
+they are passed as constructor arguments from each service's own settings class.
+The router-embedding key is the one exception (`ROUTER_EMBEDDING_API_KEY` above).
 
 ---
 
@@ -365,8 +442,13 @@ description = await adapter.generate_description(
     canonical_name="Apple Inc.",
     entity_type="company",
     context_hints={"ticker": "AAPL", "exchange": "NASDAQ"},
+    news_context=[                      # optional: ground the description in recent news
+        "Apple reported record Q3 services revenue...",
+    ],
 )
-# Returns None if monthly cost cap exceeded
+# Returns None if monthly cost cap exceeded.
+# news_context=None/empty → the adapter injects a no-news guard so the model
+# stays at the entity's general category level rather than fabricating specifics.
 ```
 
 ### Cross-Encoder Reranking
@@ -408,12 +490,61 @@ shared across all adapters that call the same backend.
 `loop.run_in_executor(None, ...)`. Without this, GLiNER's CPU inference would block
 the event loop, stalling all concurrent requests in the service.
 
-### `DeepInfraEmbeddingAdapter` — 1500-char truncation
+### `DeepInfraEmbeddingAdapter` — token-budget truncation (`text_budget.py`)
 
-BGE-large has a 512-token BERT context window. Texts exceeding ~512 tokens cause
-the GGML runner to abort (BP-121). Both `DeepInfraEmbeddingAdapter` and
-`OllamaEmbeddingAdapter` apply a 1500-character truncation limit so that ingestion
-embeddings and query embeddings remain in the same semantic space.
+BGE-large has a HARD 512-token BERT context window. The old flat **1500-char**
+truncation assumed ~3 chars/token, which is wrong for dense financial/JSON text
+(chunk-0 envelopes pack >512 tokens into <1500 chars) → DeepInfra returns a *fatal*
+HTTP 400 `invalid_request_error` ("513 input tokens > 512") that the retry worker
+can never drain (task #4 / 2026-06-16 embedding-backlog audit; ~1,625 rows
+abandoned).
+
+Truncation is now driven by **estimated token count** via the shared
+`ml_clients.text_budget.truncate_for_bge` (default budget `MAX_TOKENS=480`, hard
+backstop `MAX_CHARS=2000`). `estimate_bert_tokens` is a conservative pure-Python
+WordPiece *upper-bound* (no tokenizer dependency): it over-counts vs the real BGE
+tokenizer, so a prefix kept under 480 estimated tokens is comfortably under 512
+real tokens. `DeepInfraEmbeddingAdapter`, `OllamaEmbeddingAdapter`, and the
+nlp-pipeline query endpoint `POST /api/v1/embed` all call the SAME helper, so
+ingestion and query embeddings stay in one semantic space. Dense JSON is cut more
+aggressively than prose (the win over a flat char cap).
+
+Both helpers are part of the public API (re-exported from the package root):
+
+```python
+from ml_clients import truncate_for_bge, estimate_bert_tokens
+
+safe = truncate_for_bge(dense_json_chunk)          # ≤480 est. tokens AND ≤2000 chars
+n = estimate_bert_tokens(safe)                     # conservative WordPiece upper bound
+```
+
+### `EmbeddingGemmaRouterAdapter` — news-routing classifier (PLAN-0111 C-1)
+
+`google/embeddinggemma-300m` (DeepInfra, 768-dim) produces the **classifier input
+vector** for the news-routing cascade router: a short headline (`title + subtitle`)
+is embedded once, then a small calibrated head decides the routing tier.
+
+Key design points:
+
+- **Separate vector space.** This embedding is **never** ANN-compared against the
+  BGE retrieval vectors (`DeepInfraEmbeddingAdapter`, 1024-dim). To make that
+  invariant structural, the adapter is deliberately **not** an `EmbeddingClient`
+  and returns raw `list[list[float]]` rather than `EmbeddingOutput` — so it can't
+  be accidentally wired into the retrieval path.
+- **Task-specific prompts.** EmbeddingGemma is prompt-conditioned.
+  `embed_for_classification(texts)` prepends `task: classification | query: ` (the
+  router default, since the downstream use is a classifier). `embed_documents(
+  (title, content))` uses the retrieval form `title: {title} | text: {content}`.
+- **Matryoshka (MRL) truncation.** Native 768d; pass `dimensions=512|256|128` to
+  truncate **client-side** then **L2-renormalize** to unit norm (per the model
+  card). DeepInfra also accepts a server-side `dimensions` param, but we truncate
+  client-side so the renormalization is explicit and deterministic.
+- `encoding_format=float` (the model is float32/bfloat16, **not** float16); timeout
+  is wrapped in `httpx.Timeout` (BP-235). Verified live 2026-06-12: 200 OK, 768d,
+  ~0.32s; finance/finance cosine 0.76 > finance/sports 0.58.
+
+Config lives on `MLClientsSettings` (`router_embedding_*`); the API key is read
+from the environment (`*_DEEPINFRA_API_KEY`), never hardcoded.
 
 ---
 
@@ -428,7 +559,10 @@ To add a new adapter:
 4. Add to `libs/ml-clients/src/ml_clients/adapters/__init__.py`.
 5. Add tests in `libs/ml-clients/tests/` (mock all HTTP calls).
 6. Add to the adapter table in this doc.
-7. If the adapter uses a new provider, add pricing to `cost.py`'s `PRICING` table.
+7. If the adapter uses a new provider/model, add pricing to **both** `cost.py`'s
+   `PRICING` table (legacy float dashboards) and `pricing.py`'s `MODEL_PRICING`
+   (canonical Decimal matrix) — otherwise `compute_cost` logs `model_pricing_unknown`
+   and returns `Decimal("0")`.
 
 ---
 

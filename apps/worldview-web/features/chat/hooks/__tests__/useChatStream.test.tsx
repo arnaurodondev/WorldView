@@ -260,6 +260,166 @@ describe("useChatStream", () => {
     expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
   });
 
+  // ── Regression: entity-context wire format (intelligence-tab chat fix) ────
+  //
+  // BUG (2026-06-15): when `entityId` is set (the intelligence-tab chat panel),
+  // the hook previously posted `{ message }` to the SYNC `/api/v1/chat/
+  // entity-context` endpoint. Both were wrong and the panel hard-failed with
+  // a 400 "question cannot be empty" for EVERY entity (NVDA/TSLA included — it
+  // was NOT the known AAPL data gap):
+  //   - the entity-context schema requires `question`, NOT `message`;
+  //   - the SSE-parsing hook must target the `/stream` sibling endpoint, not
+  //     the sync JSON one.
+  // This test locks the corrected wire contract so a future refactor of the
+  // shared body-building block cannot silently re-break the entity panel
+  // while leaving the (separately tested) main-chat path green.
+  it("entity-context wire format: streams /entity-context/stream with `question` + entity_id", async () => {
+    const frames = [
+      'event: token\r\ndata: {"text": "NVDA "}\r\n\r\n',
+      'event: token\r\ndata: {"text": "news"}\r\n\r\n',
+      'event: done\r\ndata: {"type": "done"}\r\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    // Set entityId → activates the entity-context branch of the hook.
+    const entityId = "01900000-0000-7000-8000-000000001006"; // NVDA
+    const { result } = renderHook(() => useChatStream({ ...args, entityId }));
+
+    await act(async () => {
+      await result.current.send("What's the latest news?");
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    // MUST hit the SSE streaming endpoint (not the sync JSON one).
+    expect(url).toBe("/api/v1/chat/entity-context/stream");
+    expect(init.method).toBe("POST");
+    // MUST send `question` (entity-context schema), NOT `message`, plus the
+    // entity_id so S8 can scope retrieval.
+    const parsedBody = JSON.parse(init.body as string);
+    expect(parsedBody).toEqual({
+      question: "What's the latest news?",
+      thread_id: "thread-abc",
+      entity_id: entityId,
+    });
+    expect(parsedBody.message).toBeUndefined();
+    // Stream finalizes into an assistant message just like the main path.
+    expect(result.current.streaming).toBeNull();
+    const assistant = (result.current.localMessages as Array<{ role: string; content: string }>).find(
+      (m) => m.role === "assistant",
+    );
+    expect(assistant?.content).toBe("NVDA news");
+  });
+
+  // ── Regression: CRLF wire format (QA Wave-3 closeout, 2026-06-11) ─────────
+  //
+  // sse-starlette (S8) terminates every SSE line with \r\n. The hook splits
+  // the byte stream on "\n" only, so each parsed line carried a trailing
+  // "\r" — `pendingEventName` became "token\r", NO event matched (done
+  // included), zero tokens painted, and the reader-exhausted detector fired
+  // the false "Response interrupted before any content arrived" banner under
+  // a fully-delivered answer (observed live on the prod container). The fix
+  // strips one trailing CR inside parseSSELine. This test replays the EXACT
+  // live wire shape (named events + CRLF + trailing done frame).
+  it("CRLF wire format: named events parse, answer finalizes, no false interrupt", async () => {
+    const frames = [
+      'event: status\r\ndata: {"step": "loading_context"}\r\n\r\n',
+      'event: token\r\ndata: {"text": "BTC is "}\r\n\r\n',
+      'event: token\r\ndata: {"text": "$62,778"}\r\n\r\n',
+      'event: final_answer\r\ndata: {"text": "BTC is $62,778"}\r\n\r\n',
+      'event: suggestions\r\ndata: ["More about BTC?"]\r\n\r\n',
+      'event: metadata\r\ndata: {"intent": "GENERAL", "provider": "deepinfra", "latency_ms": 11536}\r\n\r\n',
+      'event: done\r\ndata: {"type": "done"}\r\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What is BTC-USD trading at right now?");
+    });
+
+    // The done frame finalized the stream cleanly: tokens accumulated into
+    // the assistant message, NO error banner, suggestions captured.
+    expect(result.current.chatError).toBeNull();
+    expect(result.current.streaming).toBeNull();
+    const assistant = result.current.localMessages.find(
+      (m) => "role" in m && m.role === "assistant",
+    ) as { content: string } | undefined;
+    expect(assistant?.content).toBe("BTC is $62,778");
+    expect(result.current.serverSuggestions).toEqual(["More about BTC?"]);
+  });
+
+  // ── Regression: streamed citations are normalized (QA Wave-3, 2026-06-11) ──
+  //
+  // The SSE `citations` wire shape is the canonical rag-chat citation
+  // ({ref, id, source_name, confidence, …} — verified live). CitationList
+  // calls `cite.source.toLowerCase()`, so an un-normalized streamed citation
+  // crashed the ENTIRE chat page behind the error boundary the moment the
+  // CRLF fix made this event parse at all. The hook must apply the same
+  // normalizeCitation mapping getThread() applies to persisted messages.
+  it("normalizes streamed citations (source_name → source) before attaching them", async () => {
+    const wireCitation = {
+      ref: 1,
+      item_type: "chunk",
+      id: "tool:entity_news:abc",
+      title: "Apple Unveils AI Reset",
+      url: "https://example.com/apple",
+      source_name: "news",
+      published_at: "2026-06-10T16:44:13+00:00",
+      entity_name: "AAPL",
+      confidence: 0.68,
+    };
+    const frames = [
+      'event: token\ndata: {"text": "Headlines [1]"}\n\n',
+      `event: citations\ndata: ${JSON.stringify([wireCitation])}\n\n`,
+      'event: done\ndata: {"type": "done"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("What's the latest news on Apple Inc.?");
+    });
+
+    const assistant = result.current.localMessages.find(
+      (m) => "role" in m && m.role === "assistant",
+    ) as { citations?: Array<Record<string, unknown>> } | undefined;
+    expect(assistant?.citations).toHaveLength(1);
+    const cite = assistant!.citations![0];
+    // Legacy contract fields are present (what CitationList consumes) …
+    expect(cite.source).toBe("news");
+    expect(cite.article_id).toBe("tool:entity_news:abc");
+    expect(cite.relevance_score).toBe(0.68);
+    // … and the canonical fields are preserved (CitationV2 migration).
+    expect(cite.source_name).toBe("news");
+    expect(cite.url).toBe("https://example.com/apple");
+  });
+
   it("cancel() mid-stream: aborts fetch, clears streaming, surfaces no error", async () => {
     const ar = makeAbortableReader();
     // The fetch mock honours the signal: when the test calls cancel(), the
@@ -911,5 +1071,888 @@ describe("useChatStream", () => {
     // streaming bubble still completed successfully — assistant message exists.
     expect(result.current.iterationEvent).toBeNull();
     expect(result.current.localMessages).toHaveLength(2);
+  });
+});
+
+// ── Round 1 Foundation — tool trace, orphaned-tool clearing, retry ───────────
+
+describe("useChatStream — toolTrace (debug drawer data)", () => {
+  it("captures args, result payload, status and a latency for each tool call", async () => {
+    const frames = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{"query":"NVDA margin"},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":4}\n',
+      'data: {"text":"answer"}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What's NVDA's margin?");
+    });
+
+    // The trace SURVIVES stream completion (unlike activeTools) — that is the
+    // entire point: the ?debug=1 drawer is opened after the answer settles.
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.toolTrace).toHaveLength(1);
+    const entry = result.current.toolTrace[0];
+    expect(entry.tool).toBe("search_documents");
+    expect(entry.label).toBe("Searching documents...");
+    expect(entry.args).toEqual({ query: "NVDA margin" });
+    expect(entry.status).toBe("ok");
+    // Result payload keeps everything except the demux keys (type/tool/status).
+    expect(entry.result).toEqual({ item_count: 4 });
+    // Client-measured latency: a number ≥ 0 (jsdom performance.now monotonic).
+    expect(typeof entry.latencyMs).toBe("number");
+    expect(entry.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("clears the previous turn's trace and stale activeTools at the start of a new send", async () => {
+    // Turn 1: stream ends via READER EXHAUSTION (no done event) — the path
+    // that previously leaked activeTools into the next turn (orphaned-spinner
+    // bug): the server closed early so the tool_result/done cleanup never ran.
+    const frames1 = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_quote","label":"Fetching quote...","input":{},"status":"running"}\n',
+      'data: {"text":"partial"}\n',
+      // NO [DONE] — reader exhausts.
+    ];
+    const r1 = makeReader(frames1);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r1.reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("first question");
+    });
+
+    // Turn 1 left a running entry in the trace (no tool_result ever arrived).
+    expect(result.current.toolTrace).toHaveLength(1);
+    expect(result.current.toolTrace[0].status).toBe("running");
+
+    // Turn 2: a plain no-tool stream. Before its first event arrives the
+    // stale tool state from turn 1 must already be gone.
+    const r2 = makeReader(['data: {"text":"clean"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+
+    await act(async () => {
+      await result.current.send("second question");
+    });
+
+    // No tools ran in turn 2 → both views are empty; nothing leaked.
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.toolTrace).toEqual([]);
+  });
+
+  it("resetForThread clears the trace (no cross-thread leakage)", async () => {
+    const frames = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":1}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("q");
+    });
+    expect(result.current.toolTrace).toHaveLength(1);
+
+    act(() => {
+      result.current.resetForThread();
+    });
+    expect(result.current.toolTrace).toEqual([]);
+  });
+});
+
+describe("useChatStream — retry()", () => {
+  it("resubmits the failed question without duplicating the user bubble", async () => {
+    // First attempt: network-level failure (fetch rejects).
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("flaky question");
+    });
+
+    // Failure state: user bubble in the log + error banner armed.
+    expect(result.current.chatError).not.toBeNull();
+    expect(result.current.localMessages).toHaveLength(1);
+
+    // Second attempt succeeds.
+    const { reader } = makeReader(['data: {"text":"recovered"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    // Same question went over the wire again…
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(secondBody.message).toBe("flaky question");
+
+    // …but the user bubble was NOT echoed twice: exactly one user message
+    // followed by the recovered assistant message. Error banner cleared.
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("is a no-op when nothing failed (no accidental resubmits)", async () => {
+    // Successful turn first — finalize() must clear the retry context.
+    const { reader } = makeReader(['data: {"text":"ok"}\n', "data: [DONE]\n"]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("fine question");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // retry() after success: no second request, no state churn.
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.localMessages).toHaveLength(2);
+  });
+
+  it("arms retry on a server-emitted error event too", async () => {
+    const frames = [
+      'event: error\ndata: {"message":"model overloaded"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("doomed question");
+    });
+    expect(result.current.chatError).toBe("model overloaded");
+
+    // Retry goes over the wire with the same question.
+    const r2 = makeReader(['data: {"text":"better"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(fetchMock.mock.calls[1][1].body as string).message,
+    ).toBe("doomed question");
+  });
+});
+
+// ── Round 4 Hardening — interrupted streams + pre-stream failures ────────────
+//
+// A mid-response network blip surfaces as READER EXHAUSTION WITHOUT a `done`
+// event. Round 1 made sure that path cleared the spinners; Round 4 makes the
+// interruption VISIBLE: partial content is preserved verbatim, chatError
+// carries an explicit "interrupted" notice (rendered as the inline banner
+// with Retry), and retry() is armed. Pre-Round-4 the stream silently
+// completed as if the truncated text were the whole answer.
+
+describe("useChatStream — interrupted stream (Round 4)", () => {
+  it("reader exhaustion mid-answer: preserves partial content verbatim, surfaces an interruption notice, arms retry", async () => {
+    // Two token frames, then the connection dies — NO done/[DONE].
+    const frames = [
+      'data: {"text":"NVDA margins are"}\n',
+      'data: {"text":" expanding"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What about NVDA margins?");
+    });
+
+    // Partial content preserved as its own assistant message — VERBATIM:
+    // no synthetic "[Response interrupted]" text spliced into model output.
+    expect(result.current.localMessages).toHaveLength(2);
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("NVDA margins are expanding");
+
+    // The interruption is VISIBLE — never silently truncate-as-complete.
+    expect(result.current.chatError).toMatch(/interrupted/i);
+
+    // Streaming chrome fully reset (no orphaned bubble/spinners/strip).
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.iterationEvent).toBeNull();
+
+    // The sidebar still refreshes — the server may have persisted the user
+    // message before the stream died.
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+
+    // Retry is armed: it resends the SAME question WITHOUT re-echoing the
+    // user bubble, even though the partial assistant message now sits
+    // between the user bubble and the end of the log (the backward-scan
+    // skipUserEcho contract).
+    const r2 = makeReader(['data: {"text":"full answer"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(fetchMock.mock.calls[1][1].body as string).message,
+    ).toBe("What about NVDA margins?");
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    // user question (once!), interrupted partial, recovered full answer.
+    expect(roles).toEqual(["user", "assistant", "assistant"]);
+  });
+
+  it("reader exhaustion with ZERO content: visible error + retry armed, no empty assistant message", async () => {
+    // The server accepted the request, then closed without emitting anything
+    // — previously this path ended completely silently (spinner cleared,
+    // nothing else): the worst "did it even work?" UX.
+    const { reader } = makeReader([]); // immediate EOF, no frames
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("hello?");
+    });
+
+    // Only the user bubble — no phantom empty assistant message.
+    expect(result.current.localMessages).toHaveLength(1);
+    expect(result.current.chatError).toMatch(/interrupted/i);
+
+    // Retry resubmits without a duplicate echo (user bubble is the last entry).
+    const r2 = makeReader(['data: {"text":"hi"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("a CLEAN done event still completes without any interruption notice (no false positives)", async () => {
+    // Guard: the interruption path must trigger ONLY on reader exhaustion —
+    // a normal done-terminated stream must stay error-free.
+    const frames = ['data: {"text":"complete"}\n', "data: [DONE]\n"];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("complete");
+  });
+});
+
+describe("useChatStream — pre-stream failure (Round 4)", () => {
+  it("fetch rejecting BEFORE any stream starts surfaces an immediate error with retry armed", async () => {
+    // Network fully down: fetch() rejects with a TypeError before any byte
+    // of the response exists — the pre-stream path, distinct from mid-stream
+    // reader exhaustion.
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("offline question");
+    });
+
+    // Immediate, visible failure: error banner copy set, bubble cleared,
+    // no orphaned tool/iteration chrome.
+    expect(result.current.chatError).toBe(
+      "Chat request failed. Please try again.",
+    );
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.iterationEvent).toBeNull();
+
+    // The optimistic user bubble is preserved (the user must not lose their
+    // typed question to a network blip).
+    expect(result.current.localMessages).toHaveLength(1);
+    const user = result.current.localMessages[0] as {
+      role: string;
+      content: string;
+    };
+    expect(user.role).toBe("user");
+    expect(user.content).toBe("offline question");
+
+    // Retry is armed and resends the same question once the network is back.
+    const { reader } = makeReader(['data: {"text":"back online"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+});
+
+// ── Wave 2 (frontend-rework sprint) — suggestions, server latency, metadata,
+// conversation-level tool usage ───────────────────────────────────────────────
+
+describe("useChatStream — Wave 2 stream additions", () => {
+  /** Standard ok-response fetch stub around a frame list. */
+  function stubFetch(frames: string[]): ReturnType<typeof vi.fn> {
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("suggestions SSE event (bare string array) populates serverSuggestions", async () => {
+    // Live wire shape (verified 2026-06-11 against the running gateway):
+    //   event: suggestions
+    //   data: ["What's the latest news on Apple Inc.?", …]
+    stubFetch([
+      'data: {"text":"answer"}\n',
+      'event: suggestions\ndata: ["What moved AAPL today?","Compare AAPL and MSFT","Show AAPL fundamentals"]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("In one short sentence, what is AAPL?");
+    });
+
+    expect(result.current.serverSuggestions).toEqual([
+      "What moved AAPL today?",
+      "Compare AAPL and MSFT",
+      "Show AAPL fundamentals",
+    ]);
+  });
+
+  it("malformed suggestion entries are filtered, not crashed on", async () => {
+    stubFetch([
+      'data: {"text":"answer"}\n',
+      // One real string, one empty, one non-string — only the real one lands.
+      'event: suggestions\ndata: ["Real question?","",42]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("q");
+    });
+    expect(result.current.serverSuggestions).toEqual(["Real question?"]);
+  });
+
+  it("a new send clears the previous turn's serverSuggestions", async () => {
+    const fetchMock = stubFetch([
+      'data: {"text":"a1"}\n',
+      'event: suggestions\ndata: ["Old suggestion"]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    expect(result.current.serverSuggestions).toEqual(["Old suggestion"]);
+
+    // Turn 2 emits NO suggestions event — the old ones must not survive.
+    const r2 = makeReader(['data: {"text":"a2"}\n', 'event: done\ndata: {"type":"done"}\n']);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.send("second");
+    });
+    expect(result.current.serverSuggestions).toEqual([]);
+  });
+
+  it("tool_result duration_ms is preferred as latency and marked server-sourced; result_preview flows into the trace", async () => {
+    stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_entity_narrative","label":"Loading narrative...","input":{"entity_id":"AAPL"},"status":"running"}\n',
+      // Live wire shape: duration_ms + result_preview [{id,title}].
+      'event: tool_result\ndata: {"type":"tool_result","tool":"get_entity_narrative","status":"ok","item_count":1,"duration_ms":146,"result_preview":[{"id":"tool:narrative:x","title":"Narrative: Apple Inc."}]}\n',
+      'data: {"text":"answer"}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("what is AAPL?");
+    });
+
+    const entry = result.current.toolTrace[0];
+    // EXACT server value — not a client wall-clock approximation.
+    expect(entry.latencyMs).toBe(146);
+    expect(entry.latencySource).toBe("server");
+    // result_preview survives in the raw result payload for the drawer.
+    expect(entry.result?.result_preview).toEqual([
+      { id: "tool:narrative:x", title: "Narrative: Apple Inc." },
+    ]);
+  });
+
+  it("falls back to client wall-clock latency (marked client-sourced) when duration_ms is absent", async () => {
+    stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_quote","label":"Fetching quote...","input":{},"status":"running"}\n',
+      // Legacy backend shape — no duration_ms.
+      'event: tool_result\ndata: {"type":"tool_result","tool":"get_quote","status":"ok","item_count":1}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("quote NVDA");
+    });
+
+    const entry = result.current.toolTrace[0];
+    expect(typeof entry.latencyMs).toBe("number");
+    expect(entry.latencySource).toBe("client");
+  });
+
+  it("toolUsage accumulates ACROSS sends and resets only on resetForThread", async () => {
+    const fetchMock = stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":2,"duration_ms":100}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    expect(result.current.toolUsage).toEqual([
+      { tool: "search_documents", latencyMs: 100 },
+    ]);
+
+    // Turn 2 uses the same tool again — the sample APPENDS (unlike toolTrace,
+    // which is per-turn and was reset at the start of this send).
+    const r2 = makeReader([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":1,"duration_ms":300}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.send("second");
+    });
+    expect(result.current.toolUsage).toEqual([
+      { tool: "search_documents", latencyMs: 100 },
+      { tool: "search_documents", latencyMs: 300 },
+    ]);
+
+    // Thread switch — the conversation-scoped accumulator resets.
+    act(() => {
+      result.current.resetForThread();
+    });
+    expect(result.current.toolUsage).toEqual([]);
+  });
+
+  it("metadata SSE event fields land on the finalized assistant message", async () => {
+    stubFetch([
+      'data: {"text":"Apple Inc. is a technology company."}\n',
+      'event: metadata\ndata: {"thread_id":"thread-abc","message_id":"m-1","intent":"RELATIONSHIP","provider":"deepinfra","latency_ms":9526}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("what is AAPL?");
+    });
+
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      intent?: string | null;
+      provider?: string | null;
+      latency_ms?: number | null;
+    };
+    expect(assistant.role).toBe("assistant");
+    // The meta strip reads these straight off the optimistic message —
+    // no thread refetch needed to show intent/provider/latency.
+    expect(assistant.intent).toBe("RELATIONSHIP");
+    expect(assistant.provider).toBe("deepinfra");
+    expect(assistant.latency_ms).toBe(9526);
+  });
+});
+
+// ── Wave 3 — false-interrupt regression (live SSE event order) ───────────────
+//
+// USER-REPORTED BUG (2026-06-11 screenshot): a fully delivered answer —
+// complete text, meta strip, citations, suggestions — rendered with a
+// "Response interrupted before any content arrived" banner underneath it.
+// Live traces pinned the REAL event order the backend emits:
+//
+//   tool_call → tool_result → agent_iteration → token… → final_answer →
+//   citations → contradictions → suggestions → metadata → done
+//
+// The Round-4 detector fired whenever the reader exhausted without having
+// PROCESSED a done frame — but the done frame can be (a) sitting in the
+// undelivered tail buffer when the final chunk has no trailing newline, or
+// (b) genuinely lost when a proxy closes the connection right after
+// metadata. These tests pin the Wave-3 contract: the banner NEVER fires when
+// the answer completed.
+
+describe("useChatStream — Wave 3 false-interrupt hardening", () => {
+  /** The full event order observed live (2026-06-11 SSE traces). */
+  const LIVE_ORDER_FRAMES = [
+    "event: tool_call\n" +
+      'data: {"type":"tool_call","tool":"get_entity_news","label":"get_entity_news...","input":{"ticker":"AAPL"},"status":"running"}\n\n',
+    "event: tool_result\n" +
+      'data: {"type":"tool_result","tool":"get_entity_news","status":"ok","item_count":10,"duration_ms":310}\n\n',
+    'event: token\ndata: {"text":"Apple is "}\n\n',
+    'event: token\ndata: {"text":"doing fine."}\n\n',
+    "event: final_answer\n" + 'data: {"text":"Apple is doing fine."}\n\n',
+    "event: citations\n" +
+      'data: [{"article_id":"a1","title":"Apple news","url":"https://example.com/a1","source":"news","relevance_score":0.9}]\n\n',
+    "event: contradictions\ndata: []\n\n",
+    'event: suggestions\ndata: ["What about TSMC?"]\n\n',
+    "event: metadata\n" +
+      'data: {"intent":"GENERAL","provider":"deepinfra","model":"r1","latency_ms":1234}\n\n',
+  ];
+
+  function mockFetchWithFrames(frames: string[]) {
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("real observed event order ending in done → finalized, NO banner, meta+citations attached", async () => {
+    mockFetchWithFrames([
+      ...LIVE_ORDER_FRAMES,
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Latest on Apple?");
+    });
+
+    // The core regression assertion: a complete answer NEVER shows the banner.
+    expect(result.current.chatError).toBeNull();
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+      citations: Array<{ article_id: string }>;
+      intent?: string | null;
+      latency_ms?: number | null;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("Apple is doing fine.");
+    expect(assistant.citations).toHaveLength(1);
+    // metadata event fields land on the optimistic message (meta strip).
+    expect(assistant.intent).toBe("GENERAL");
+    expect(assistant.latency_ms).toBe(1234);
+    // suggestions event populated the chips source.
+    expect(result.current.serverSuggestions).toEqual(["What about TSMC?"]);
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("reader exhaustion right AFTER metadata (done frame lost) → clean finalize, NO banner", async () => {
+    // Same live order but the stream dies before the done frame — the shape
+    // a proxy produces when it closes the upstream connection eagerly.
+    mockFetchWithFrames(LIVE_ORDER_FRAMES);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Latest on Apple?");
+    });
+
+    // NEVER the banner when terminal events (suggestions/metadata) arrived.
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as {
+      content: string;
+      intent?: string | null;
+    };
+    expect(assistant.content).toBe("Apple is doing fine.");
+    expect(assistant.intent).toBe("GENERAL");
+    // Stream chrome fully reset — no orphaned spinners next to the answer.
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("done frame in the FINAL chunk without a trailing newline → finalized, NO banner", async () => {
+    // Chunk boundaries are arbitrary: the closing frames can arrive in one
+    // last chunk that ends mid-line (no trailing \n). Pre-Wave-3, the done
+    // data line stayed in `buffer` unprocessed and the banner fired under a
+    // complete answer.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Full answer."}\n\n',
+      // Final chunk: done event line + data line, NO trailing newline.
+      'event: done\ndata: {"type":"done"}',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Full answer.");
+  });
+
+  it("zero-token stream: final_answer text becomes the assistant message (cache-hit shape)", async () => {
+    // Some backend paths (cache hits, guardrails) emit NO token frames —
+    // only final_answer. Pre-Wave-3 the optimistic message settled EMPTY and
+    // the text only appeared after a thread refetch.
+    mockFetchWithFrames([
+      "event: final_answer\n" +
+        'data: {"text":"Cached: Apple reported record revenue."}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Cached: Apple reported record revenue.");
+  });
+
+  it("tokens still WIN over final_answer when both are present (refusal-text divergence)", async () => {
+    // Live trace 2026-06-11: the token stream carried the real answer while
+    // final_answer carried an unrelated refusal string. The fallback must
+    // never override genuinely streamed text.
+    mockFetchWithFrames([
+      'event: token\ndata: {"text":"Real streamed answer."}\n\n',
+      "event: final_answer\n" +
+        'data: {"text":"I cannot find information about the entities."}\n\n',
+      'event: done\ndata: {"type":"done"}\n\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Real streamed answer.");
+  });
+
+  it("a GENUINE early interruption (no terminal events) still surfaces the banner", async () => {
+    // Guard the guard: Wave 3 must not have neutered the detector. Tokens
+    // flow, then the stream dies with no citations/suggestions/metadata/done
+    // — that IS an interruption and the user must see it.
+    mockFetchWithFrames(['event: token\ndata: {"text":"Partial ans"}\n\n']);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("Q?");
+    });
+
+    expect(result.current.chatError).toMatch(/interrupted/i);
+    // Partial content preserved verbatim as its own message.
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("Partial ans");
+  });
+
+  it("tool_call events stamp startedAt onto activeTools (elapsed-chip data source)", async () => {
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("Q?");
+    });
+
+    const before = Date.now();
+    await act(async () => {
+      ar.pushChunk(
+        "event: tool_call\n" +
+          'data: {"type":"tool_call","tool":"search_documents","label":"Searching...","status":"running"}\n\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+    });
+    const tool = result.current.activeTools[0];
+    // startedAt is a wall-clock stamp taken at event receipt — bounded by
+    // the test's own before/after reads.
+    expect(tool.startedAt).toBeGreaterThanOrEqual(before);
+    expect(tool.startedAt).toBeLessThanOrEqual(Date.now());
+
+    await act(async () => {
+      ar.finish();
+      await sendPromise;
+    });
   });
 });

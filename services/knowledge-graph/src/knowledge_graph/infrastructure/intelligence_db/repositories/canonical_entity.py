@@ -25,10 +25,19 @@ class CanonicalEntityRepository(CanonicalEntityRepositoryPort):
         self._session = session
 
     async def get(self, entity_id: UUID) -> dict[str, object] | None:
-        """Fetch a canonical entity by ID."""
+        """Fetch a canonical entity by ID.
+
+        PLAN-0099 (Intelligence tab detail): description + sector/industry are
+        included so the graph endpoint's *center* EntitySummary carries the
+        same rich fields as the neighbours fetched via ``get_batch`` — the
+        center node previously rendered with ``description=null`` even though
+        the column was populated (silent drop at the repo layer).
+        """
         result = await self._session.execute(
             text("""
-SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange,
+       metadata, description, metadata->>'sector' AS sector,
+       metadata->>'industry' AS industry
 FROM canonical_entities
 WHERE entity_id = :entity_id
 """),
@@ -45,6 +54,9 @@ WHERE entity_id = :entity_id
             "ticker": row[4],
             "exchange": row[5],
             "metadata": row[6],
+            "description": row[7],
+            "sector": row[8],
+            "industry": row[9],
         }
 
     async def exists(self, entity_id: UUID) -> bool:
@@ -65,10 +77,14 @@ WHERE entity_id = :entity_id
         # F-101: include description + metadata->>'sector' so EntitySummary
         # carries the rich fields and the internal sectors endpoint can
         # resolve sector without a second round-trip.
+        # PLAN-0099: industry surfaced alongside sector so EntitySummary can
+        # carry it (PLAN-0091 T-A-1-03 contract — previously the S9 gateway
+        # read `industry` from graph nodes but S7 never sent it).
         result = await self._session.execute(
             text("""
 SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange,
-       metadata, description, metadata->>'sector' AS sector
+       metadata, description, metadata->>'sector' AS sector,
+       metadata->>'industry' AS industry
 FROM canonical_entities
 WHERE entity_id = ANY(:ids)
 """),
@@ -85,6 +101,7 @@ WHERE entity_id = ANY(:ids)
                 "metadata": row[6],
                 "description": row[7],
                 "sector": row[8],
+                "industry": row[9],
             }
             for row in result.fetchall()
         ]
@@ -140,6 +157,35 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         )
         row = result.fetchone()
         return UUID(str(row[0])) if row else None
+
+    async def patch_metadata(self, entity_id: UUID, patch: dict[str, object]) -> None:
+        """Shallow-merge ``patch`` into ``canonical_entities.metadata`` (JSONB).
+
+        Existing keys are overwritten by ``patch`` keys; all other keys are
+        preserved. No-op when ``patch`` is empty. Does NOT commit — the caller
+        owns the surrounding transaction (the fundamentals-refresh worker writes
+        the metadata patch and the sector relation in the same unit of work).
+
+        PLAN-0103 W19 / BP-637: FundamentalsRefreshWorker mirrors the EODHD GICS
+        sector + industry into ``metadata`` so the rag-chat risk aggregator and
+        the ``/internal/v1/sectors`` endpoint (which read ``metadata->>'sector'``)
+        resolve the value. The call site shipped but this method was missing from
+        the repository, so the worker crashed every cycle with ``AttributeError``
+        and the ``fundamentals_ohlcv`` embedding view stayed empty. Mirrors
+        ``EntityRepository.update_metadata``.
+        """
+        if not patch:
+            return
+        import json
+
+        await self._session.execute(
+            text("""
+UPDATE canonical_entities
+SET metadata = COALESCE(metadata, '{}'::jsonb) || cast(:patch AS jsonb)
+WHERE entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id), "patch": json.dumps(patch)},
+        )
 
     async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
         """Find entity by ticker symbol (case-insensitive exact match).

@@ -39,7 +39,7 @@ from market_data.application.use_cases.get_fundamentals_history import GetFundam
 from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
 from market_data.application.use_cases.query_fundamentals import GetFundamentalsSectionUseCase
 from market_data.domain.entities import FundamentalsRecord
-from market_data.domain.enums import FundamentalsSection
+from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.errors import InstrumentNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -454,33 +454,56 @@ async def get_fundamentals(
     return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
 
 
+# 2026-06-11 (backend-gaps wave 3): optional periodicity selector shared by
+# the three statement endpoints. WHY a query param and not a separate route:
+# the same section table stores QUARTERLY + ANNUAL rows; the repo's BP-546
+# defensive default pins balance_sheet/cash_flow to QUARTERLY when no filter
+# is given, which made the ANNUAL rows (17k+ in the dev DB) unreachable via
+# the section API. ``None`` (param omitted) preserves the existing behaviour
+# exactly (income: all periodicities mixed; balance/cash-flow: QUARTERLY).
+# NOTE: no ``default=`` inside Annotated Query — FastAPI asserts the default
+# comes from the ``= None`` on the parameter itself when Annotated is used.
+_PERIOD_TYPE_QUERY = Query(
+    pattern=r"^(quarterly|annual|QUARTERLY|ANNUAL)$",
+    description="Optional periodicity filter: 'quarterly' or 'annual'.",
+)
+
+
+def _parse_period_type(raw: str | None) -> PeriodType | None:
+    """Map the lowercase/uppercase query value onto the PeriodType enum."""
+    return PeriodType(raw.upper()) if raw else None
+
+
 @router.get("/fundamentals/{instrument_id}/income-statement", response_model=FundamentalsResponse)
 async def get_income_statement(
     instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    period_type: Annotated[str | None, _PERIOD_TYPE_QUERY] = None,
     uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
 ) -> FundamentalsResponse:
     """Return income statement records for the given instrument."""
-    records = await uc.execute(instrument_id, FundamentalsSection.INCOME_STATEMENT)
+    records = await uc.execute(instrument_id, FundamentalsSection.INCOME_STATEMENT, _parse_period_type(period_type))
     return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
 
 
 @router.get("/fundamentals/{instrument_id}/balance-sheet", response_model=FundamentalsResponse)
 async def get_balance_sheet(
     instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    period_type: Annotated[str | None, _PERIOD_TYPE_QUERY] = None,
     uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
 ) -> FundamentalsResponse:
     """Return balance sheet records for the given instrument."""
-    records = await uc.execute(instrument_id, FundamentalsSection.BALANCE_SHEET)
+    records = await uc.execute(instrument_id, FundamentalsSection.BALANCE_SHEET, _parse_period_type(period_type))
     return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
 
 
 @router.get("/fundamentals/{instrument_id}/cash-flow", response_model=FundamentalsResponse)
 async def get_cash_flow(
     instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    period_type: Annotated[str | None, _PERIOD_TYPE_QUERY] = None,
     uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
 ) -> FundamentalsResponse:
     """Return cash flow statement records for the given instrument."""
-    records = await uc.execute(instrument_id, FundamentalsSection.CASH_FLOW)
+    records = await uc.execute(instrument_id, FundamentalsSection.CASH_FLOW, _parse_period_type(period_type))
     return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
 
 

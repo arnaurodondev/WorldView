@@ -5,6 +5,8 @@
  *  1. Defaults: all fields start with their default values (type="All", others "").
  *  2. setFilters: batch-updates all 8 fields.
  *  3. resetFilters: restores all 8 fields to their defaults.
+ *  4. toBackendParams: derives correct S9 API params from filter state (PRD-0114 W5).
+ *  5. hasActiveFilters: correctly reports when filters diverge from defaults (W5).
  *
  * WHY NuqsTestingAdapter: nuqs reads/writes the URL via Next.js router APIs.
  * In Vitest/jsdom there is no App Router. NuqsTestingAdapter provides a
@@ -168,5 +170,268 @@ describe("useTransactionsFilterState", () => {
     expect(filters.maxAmount).toBe("");
     expect(filters.currency).toBe("");
     expect(filters.search).toBe("");
+  });
+
+  // ── W5 toBackendParams tests ────────────────────────────────────────────────
+
+  it("toBackendParams returns empty object when all filters are at defaults", () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // WHY empty object: no active filter means no query params should be sent
+    // to the backend (omitting them avoids unnecessary filtering overhead on S9).
+    const params = result.current.toBackendParams();
+    expect(params).toEqual({});
+  });
+
+  it("toBackendParams maps type='BUY' → transaction_type=['BUY']", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "BUY",
+        dateFrom: "",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    const params = result.current.toBackendParams();
+    expect(params.transaction_type).toEqual(["BUY"]);
+  });
+
+  it("toBackendParams maps type='DIV' → transaction_type=['DIVIDEND']", async () => {
+    // WHY this specific mapping: "DIV" is the UI pill label; "DIVIDEND" is the
+    // S1 TransactionType enum value. PILL_TO_BACKEND is the single source of truth.
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "DIV",
+        dateFrom: "",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    const params = result.current.toBackendParams();
+    expect(params.transaction_type).toEqual(["DIVIDEND"]);
+  });
+
+  it("toBackendParams forwards from_date and to_date when set", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-06-30",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    const params = result.current.toBackendParams();
+    expect(params.from_date).toBe("2026-01-01");
+    expect(params.to_date).toBe("2026-06-30");
+    // type is "All" → transaction_type should be undefined
+    expect(params.transaction_type).toBeUndefined();
+  });
+
+  it("toBackendParams forwards ticker when set", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "",
+        dateTo: "",
+        ticker: "NVDA",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    const params = result.current.toBackendParams();
+    expect(params.ticker).toBe("NVDA");
+  });
+
+  it("toBackendParams combines all active params correctly", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "SELL",
+        dateFrom: "2026-03-01",
+        dateTo: "2026-03-31",
+        ticker: "AAPL",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    const params = result.current.toBackendParams();
+    expect(params.transaction_type).toEqual(["SELL"]);
+    expect(params.from_date).toBe("2026-03-01");
+    expect(params.to_date).toBe("2026-03-31");
+    expect(params.ticker).toBe("AAPL");
+  });
+
+  // ── W5 hasActiveFilters tests ───────────────────────────────────────────────
+
+  it("hasActiveFilters is false when all filters are at defaults", () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // No filters active = no visual indicator needed, no API filter params sent.
+    expect(result.current.hasActiveFilters).toBe(false);
+  });
+
+  it("hasActiveFilters is true when type is set to anything other than 'All'", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "BUY",
+        dateFrom: "",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    // A non-"All" type means a filter is active.
+    expect(result.current.hasActiveFilters).toBe(true);
+  });
+
+  it("hasActiveFilters is true when dateFrom is set", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-01-01",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    expect(result.current.hasActiveFilters).toBe(true);
+  });
+
+  // ── FE-005: date range validation tests ─────────────────────────────────────
+
+  it("FE-005: dateRangeError is null when range is valid (from <= to)", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-12-31",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    expect(result.current.dateRangeError).toBeNull();
+    // Both dates should be forwarded since range is valid.
+    const params = result.current.toBackendParams();
+    expect(params.from_date).toBe("2026-01-01");
+    expect(params.to_date).toBe("2026-12-31");
+  });
+
+  it("FE-005: dateRangeError is non-null when from_date > to_date", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // Inverted range: to_date is before from_date.
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-12-31",
+        dateTo: "2026-01-01",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    // dateRangeError must be a non-null string for the UI to show the error.
+    expect(result.current.dateRangeError).toBeTruthy();
+    expect(typeof result.current.dateRangeError).toBe("string");
+
+    // toBackendParams MUST omit to_date for inverted ranges (not send it to backend).
+    const params = result.current.toBackendParams();
+    expect(params.from_date).toBe("2026-12-31"); // from_date always forwarded
+    expect(params.to_date).toBeUndefined();       // to_date silently dropped
+  });
+
+  it("FE-005: dateRangeError is null when only one bound is set", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // Only from_date set — no comparison possible, no error.
+    await act(async () => {
+      result.current.setFilters({
+        type: "All",
+        dateFrom: "2026-06-01",
+        dateTo: "",
+        ticker: "",
+        minAmount: "",
+        maxAmount: "",
+        currency: "",
+        search: "",
+      });
+    });
+
+    expect(result.current.dateRangeError).toBeNull();
   });
 });

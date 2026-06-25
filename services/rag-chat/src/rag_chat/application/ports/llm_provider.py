@@ -66,8 +66,16 @@ class LlmChatProvider(Protocol):
         *,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        seed: int | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """Streaming chat for the final LLM turn after tools have been executed.
+
+        RC-1 (2026-06-18): ``model`` optionally overrides the provider's
+        configured model for THIS call only (used by the combined
+        grounding-repair rewrite to A/B a cheaper/faster repair model). ``None``
+        — the default — keeps the provider's configured model so existing
+        callers are unaffected.
 
         WHY separate from stream(): stream() takes a raw prompt string; stream_chat()
         takes an OpenAI-format messages list, allowing the caller to inject tool

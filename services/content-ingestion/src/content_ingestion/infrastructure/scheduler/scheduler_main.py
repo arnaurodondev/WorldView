@@ -11,6 +11,8 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 from contextlib import suppress
 
@@ -19,6 +21,7 @@ from content_ingestion.application.use_cases.schedule_sources import ScheduleDue
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from observability import log_runtime_banner, start_metrics_server  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -132,20 +135,37 @@ class SchedulerProcess:
         """
         now = common.time.utc_now()
 
-        # 1. Recover tasks whose worker lease has expired (crashed/killed workers).
+        # 1. Three-pass watchdog: recover expired leases, unblock orphan pending
+        #    rows, and hard-DLQ anything stuck past the configured hard cap.
+        #    Replaces the single-pass ``recover_expired_leases`` call (which
+        #    completely missed the 626 orphan PENDING rows with no lease).
         try:
             uow_recover = SqlaUnitOfWork(self._write_factory, self._read_factory)
             async with uow_recover:
-                recovered = await uow_recover.tasks.recover_expired_leases(
+                sweep = await uow_recover.tasks.recover_stale_tasks(
                     now,
                     lease_timeout_seconds=self._settings.worker_lease_seconds,
+                    pending_max_age_seconds=self._settings.watchdog_pending_max_age_seconds,
+                    dlq_max_age_seconds=self._settings.watchdog_dlq_max_age_seconds,
                 )
                 await uow_recover.commit()
-            if recovered:
+            if sweep["leases_recovered"]:
                 logger.warning(
                     "scheduler_leases_recovered",
-                    count=recovered,
+                    count=sweep["leases_recovered"],
                     lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+            if sweep["orphans_reset"]:
+                logger.warning(
+                    "scheduler_orphans_reset",
+                    count=sweep["orphans_reset"],
+                    pending_max_age_seconds=self._settings.watchdog_pending_max_age_seconds,
+                )
+            if sweep["dlq_moved"]:
+                logger.warning(
+                    "scheduler_watchdog_dlq",
+                    count=sweep["dlq_moved"],
+                    dlq_max_age_seconds=self._settings.watchdog_dlq_max_age_seconds,
                 )
         except Exception as exc:
             logger.error("scheduler_lease_recovery_error", error=str(exc))
@@ -160,6 +180,11 @@ class SchedulerProcess:
 
         source_type_intervals: dict[SourceType, float] = {
             SourceType.NEWSAPI: float(self._settings.newsapi.poll_interval_seconds),
+            # OPT-5 (2026-06-15): EODHD per-ticker news (5 credits/request, ~600
+            # enabled sources) was ~94% of the EODHD daily quota at the global
+            # tick cadence. Poll it hourly instead so fundamentals/OHLCV/new
+            # policies have headroom. See EODHDProviderSettings.
+            SourceType.EODHD_TICKER_NEWS: float(self._settings.eodhd.ticker_news_poll_interval_seconds),
         }
 
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
@@ -242,11 +267,29 @@ async def _run_scheduler() -> None:
     settings = Settings()  # type: ignore[call-arg]
     scheduler = SchedulerProcess(settings=settings)
 
+    # PLAN-0107 B-3: expose Prometheus /metrics so this scheduler is scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="content-ingestion-scheduler",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, scheduler.stop)
 
-    await scheduler.run()
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "content-ingestion-scheduler",
+        dependencies={
+            "postgres_dsn": str(settings.db_url),
+        },
+    )
+
+    try:
+        await scheduler.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 def main() -> None:

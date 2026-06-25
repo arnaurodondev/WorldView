@@ -30,29 +30,37 @@ echo "=== Creating Kafka topics ==="
 
 # ── Time-retention topics ─────────────────────────────────────────────────────
 # Format: "topic:partitions:replication-factor"
-# Partition counts match PRD §7. Do NOT change replication-factor.
+# PLAN-0113 FR-1 (dev partition reduction): the single-node KRaft dev broker does
+# not benefit from PRD §7's multi-broker production sizing. Dev declares 3
+# partitions for the genuinely-parallel pipeline topics (content.article.raw.v1,
+# content.article.stored.v1, nlp.article.enriched.v1, nlp.signal.detected.v1) and
+# 1 partition for every other app topic (incl. all DLQs and the compacted
+# entity.dirtied.v1 created below). This keeps total dev app partitions <= 40.
+# The topic NAME set here MUST match the prod provisioning set in
+# worldview-gitops apps/infra-kafka.yaml (FR-3 parity). Do NOT change RF.
 TOPICS=(
-    "portfolio.events.v1:3:1"
-    "portfolio.watchlist.updated.v1:12:1"
-    "market.dataset.fetched:6:1"
-    "market.instrument.created:3:1"
-    "market.instrument.updated:3:1"
-    "market.instrument.discovered.v1:3:1"
-    "content.article.raw.v1:12:1"
-    "content.article.stored.v1:12:1"
-    "nlp.article.enriched.v1:12:1"
-    "nlp.signal.detected.v1:24:1"
-    "graph.state.changed.v1:12:1"
-    "intelligence.contradiction.v1:12:1"
-    "relation.type.proposed.v1:4:1"
-    "entity.canonical.created.v1:12:1"
-    "alert.delivered.v1:12:1"
-    "market.prediction.v1:8:1"
-    "kg.dead-letter.v1:12:1"
-    "alert.dead-letter.v1:12:1"
-    "nlp.dead-letter.v1:12:1"
-    "content.dead-letter.v1:12:1"
-    "market.dead-letter.v1:8:1"
+    "portfolio.events.v1:1:1"
+    "portfolio.watchlist.updated.v1:1:1"
+    "market.dataset.fetched:1:1"
+    "market.instrument.created:1:1"
+    "market.instrument.updated:1:1"
+    "market.instrument.discovered.v1:1:1"
+    "content.article.raw.v1:3:1"
+    "content.article.stored.v1:3:1"
+    "nlp.article.enriched.v1:3:1"
+    "nlp.signal.detected.v1:3:1"
+    "graph.state.changed.v1:1:1"
+    "intelligence.contradiction.v1:1:1"
+    "relation.type.proposed.v1:1:1"
+    "entity.canonical.created.v1:1:1"
+    "entity.refresh.v1:1:1"
+    "alert.delivered.v1:1:1"
+    "market.prediction.v1:1:1"
+    "kg.dead-letter.v1:1:1"
+    "alert.dead-letter.v1:1:1"
+    "nlp.dead-letter.v1:1:1"
+    "content.dead-letter.v1:1:1"
+    "market.dead-letter.v1:1:1"
 )
 
 for TOPIC_SPEC in "${TOPICS[@]}"; do
@@ -78,7 +86,7 @@ echo "Creating compacted topic: entity.dirtied.v1"
     --create \
     --if-not-exists \
     --topic entity.dirtied.v1 \
-    --partitions 24 \
+    --partitions 1 \
     --replication-factor 1 \
     --config cleanup.policy=compact \
     --config min.cleanable.dirty.ratio=0.01 \

@@ -635,7 +635,7 @@ INSERT INTO sources (id, name, source_type, config, enabled)
 VALUES (...)
 ON CONFLICT ON CONSTRAINT uq_sources_dedup
 DO UPDATE SET enabled = EXCLUDED.enabled  -- harmless touch to make RETURNING return the existing id
-RETURNING id, ... 
+RETURNING id, ...
 ```
 Returning `(source, was_created: bool)` — caller handles the no-op-create case.
 
@@ -857,7 +857,7 @@ Note: the new columns on `article_impact_windows` are **nullable** so existing r
 **Type**: impl
 **depends_on**: T-C-1-02
 **blocks**: T-C-2-02
-**Target files**: 
+**Target files**:
 - `services/nlp-pipeline/src/nlp_pipeline/application/ports/llm_score_repository.py` (new port)
 - `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/llm_score_repository.py` (new impl)
 
@@ -1060,7 +1060,7 @@ def compute_display_relevance_score(
 **Type**: impl
 **depends_on**: T-C-3-03
 **blocks**: T-C-3-05
-**Target files**: 
+**Target files**:
 - `services/nlp-pipeline/src/nlp_pipeline/api/routes/news.py` (or wherever `/news/top` lives)
 - Any other consumer of `document_source_metadata.llm_relevance_score`
 
@@ -1150,7 +1150,7 @@ llm_replay_jobs(
 **Type**: impl
 **depends_on**: T-C-4-01, T-C-2-01
 **blocks**: T-C-4-03
-**Target files**: 
+**Target files**:
 - `services/nlp-pipeline/src/nlp_pipeline/application/use_cases/run_llm_replay.py` (new)
 - `services/nlp-pipeline/src/nlp_pipeline/api/routes/admin.py` (new or extended)
 

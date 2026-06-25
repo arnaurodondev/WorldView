@@ -67,8 +67,9 @@ async def test_get_holdings_empty(
 ) -> None:
     """GetHoldingsUseCase returns empty list when no holdings exist."""
     uc = GetHoldingsUseCase()
-    holdings = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
-    assert holdings == []
+    # W3: execute() now returns HoldingsResponse; .holdings is the list.
+    result = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
+    assert result.holdings == []
 
 
 @pytest.mark.asyncio
@@ -111,14 +112,15 @@ async def test_get_holdings_returns_correct_data(
     await uow.holdings.save(holding)
 
     uc = GetHoldingsUseCase()
-    results = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
-    assert len(results) == 1
-    # GetHoldingsUseCase now returns EnrichedHolding DTOs — access via .holding
-    assert results[0].holding.quantity == Decimal(10)
-    assert results[0].holding.average_cost == Decimal(150)
+    # W3: execute() now returns HoldingsResponse; .holdings is the items list.
+    result = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
+    assert len(result.holdings) == 1
+    # GetHoldingsUseCase returns EnrichedHolding DTOs -- access via .holding
+    assert result.holdings[0].holding.quantity == Decimal(10)
+    assert result.holdings[0].holding.average_cost == Decimal(150)
     # Fake repo returns None for ticker/name/entity_id (no instruments table in fakes)
-    assert results[0].ticker is None
-    assert results[0].name is None
+    assert result.holdings[0].ticker is None
+    assert result.holdings[0].name is None
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────

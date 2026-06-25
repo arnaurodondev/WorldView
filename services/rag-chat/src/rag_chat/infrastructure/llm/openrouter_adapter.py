@@ -256,10 +256,18 @@ class OpenRouterCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        tools: list[dict] | None = None,
+        seed: int | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
-        """Stream the final answer turn from an OpenAI-format messages list."""
+        """Stream the final answer turn from an OpenAI-format messages list.
+
+        RC-1 (2026-06-18): ``model`` overrides ``self._model`` for THIS call
+        only (combined grounding-repair rewrite A/B). ``None`` preserves the
+        prior behaviour.
+        """
         payload: dict[str, object] = {
-            "model": self._model,
+            "model": model or self._model,
             "messages": messages,
             "stream": True,
             "max_tokens": max_tokens,
@@ -269,6 +277,19 @@ class OpenRouterCompletionAdapter:
         # OpenAI / DeepInfra contract for ``stream_options.include_usage``).
         if self._cost_recorder is not None:
             payload["stream_options"] = {"include_usage": True}
+        # PLAN-0107 follow-up Fix #2: mirror the deepinfra contract — when the
+        # caller passes an explicit empty tools list (synthesis turn), set
+        # tool_choice="none" so the provider unambiguously forbids tool calls
+        # in the response. tools=[] alone is ambiguous on some backends.
+        if tools is not None:
+            payload["tools"] = tools
+            if not tools:
+                payload["tool_choice"] = "none"
+        # PLAN-0107 follow-up (eval framework v2 2026-06-06): forward an optional
+        # ``seed`` to OpenRouter's OpenAI-compatible endpoint. Omit when None so
+        # provider schema validators don't reject ``"seed": null``.
+        if seed is not None:
+            payload["seed"] = seed
         usage_capture: dict = {}
         async with self._client.stream(
             "POST",

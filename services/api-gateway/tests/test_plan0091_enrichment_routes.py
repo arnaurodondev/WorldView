@@ -202,9 +202,14 @@ async def test_sector_attribution_groups_by_sector(authed_app, authed_mock_clien
     ).encode()
     authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, price_payload))
 
-    # Fundamentals returns "Technology" sector for both
-    tech_fundamentals = json.dumps({"General": {"Sector": "Technology"}}).encode()
-    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, tech_fundamentals))
+    # instruments/lookup returns "Technology" sector for both.
+    # WHY new shape: sector-attribution now reads instruments.sector via
+    # GET /api/v1/instruments/lookup?id={iid}&extra_info=true (InstrumentLookupDetailResponse)
+    # instead of the old GET /api/v1/fundamentals/{iid} (EODHD JSONB General.Sector).
+    # The instruments table is faster (indexed PK vs heavy JSONB) and is the
+    # canonical source (populated by the same fundamentals consumer).
+    tech_lookup = json.dumps({"id": iid_1, "symbol": "AAPL", "sector": "Technology"}).encode()
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, tech_lookup))
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -237,6 +242,326 @@ async def test_sector_attribution_passes_portfolio_404(authed_app, authed_mock_c
         )
 
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_sector_attribution_uses_instruments_lookup_not_fundamentals(authed_app, authed_mock_clients) -> None:
+    """PLAN-0099 W4: sector-attribution must call instruments/lookup, NOT fundamentals/{id}.
+
+    Verifies that the performance fix (replacing N slow fundamentals calls with N fast
+    indexed instrument lookups) is wired correctly.
+    """
+    iid = str(uuid.uuid4())
+    holdings_payload = json.dumps(
+        {"items": [{"instrument_id": iid, "quantity": "5", "average_cost": "50.00"}]}
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, holdings_payload))
+    authed_mock_clients.market_data.post = AsyncMock(
+        return_value=_mock_response(
+            200, json.dumps([{"instrument_id": iid, "price": 100.0, "day_change_pct": 1.5}]).encode()
+        )
+    )
+    # Return sector via the new instruments/lookup response shape.
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"id": iid, "sector": "Financials"}).encode())
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-attribution",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["covered_pct"] == pytest.approx(1.0)
+    assert body["buckets"][0]["sector"] == "Financials"
+    # Verify the GET call used instruments/lookup, NOT fundamentals/
+    get_call_url = authed_mock_clients.market_data.get.call_args[0][0]
+    assert "instruments/lookup" in get_call_url
+    assert "fundamentals" not in get_call_url
+
+
+# ── Sector breakdown (PLAN-0099 W4 — new optimised endpoint) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_requires_auth(app, mock_clients) -> None:
+    """Unauthenticated request to /sector-breakdown -> 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/portfolios/p-1/sector-breakdown")
+    assert resp.status_code == 401
+    mock_clients.portfolio.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_empty_portfolio(authed_app, authed_mock_clients) -> None:
+    """Empty holdings -> empty segments, covered_pct=0, as_of present."""
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, b'{"items": []}'))
+    authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, b"[]"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["portfolio_id"] == "p-1"
+    assert body["segments"] == []
+    assert body["covered_pct"] == 0.0
+    assert body["as_of"] is not None  # server date always present
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_groups_by_sector_and_computes_weight(authed_app, authed_mock_clients) -> None:
+    """Two holdings in same sector -> single segment with weight=1.0."""
+    iid_1 = str(uuid.uuid4())
+    iid_2 = str(uuid.uuid4())
+    holdings_payload = json.dumps(
+        {
+            "items": [
+                {"instrument_id": iid_1, "quantity": "10", "average_cost": "100.00"},
+                {"instrument_id": iid_2, "quantity": "5", "average_cost": "200.00"},
+            ]
+        }
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, holdings_payload))
+
+    # iid_1 @ 100/share = 1000 MV; iid_2 @ 200/share = 1000 MV; total = 2000
+    price_payload = json.dumps(
+        [
+            {"instrument_id": iid_1, "price": 100.0, "day_change_pct": 0.0},
+            {"instrument_id": iid_2, "price": 200.0, "day_change_pct": 0.0},
+        ]
+    ).encode()
+    authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, price_payload))
+
+    # Both instruments in "Technology"
+    tech_lookup = json.dumps({"sector": "Technology"}).encode()
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, tech_lookup))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["portfolio_id"] == "p-1"
+    assert len(body["segments"]) == 1
+    seg = body["segments"][0]
+    assert seg["sector"] == "Technology"
+    assert seg["count"] == 2
+    assert seg["weight"] == pytest.approx(1.0)
+    assert seg["market_value"] == pytest.approx(2000.0)
+    # 2026-06-10 gap #2: each segment lists its member instrument UUIDs so the
+    # frontend can join segments back to holdings rows by id (not by name).
+    assert sorted(seg["instrument_ids"]) == sorted([iid_1, iid_2])
+    assert body["covered_pct"] == pytest.approx(1.0)
+    assert body["as_of"] is not None
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_unknown_sector_reduces_covered_pct(authed_app, authed_mock_clients) -> None:
+    """Holding with no sector -> 'Unknown' bucket; covered_pct excludes it."""
+    iid_known = str(uuid.uuid4())
+    iid_unknown = str(uuid.uuid4())
+    holdings_payload = json.dumps(
+        {
+            "items": [
+                {"instrument_id": iid_known, "quantity": "10", "average_cost": "100.00"},
+                {"instrument_id": iid_unknown, "quantity": "10", "average_cost": "100.00"},
+            ]
+        }
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, holdings_payload))
+
+    price_payload = json.dumps(
+        [
+            {"instrument_id": iid_known, "price": 100.0, "day_change_pct": 0.0},
+            {"instrument_id": iid_unknown, "price": 100.0, "day_change_pct": 0.0},
+        ]
+    ).encode()
+    authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, price_payload))
+
+    # Return sector only for iid_known; iid_unknown gets null sector
+    def _side_effect(*args: object, **kwargs: object) -> object:
+        params = kwargs.get("params", {})
+        iid = params.get("id", "")
+        if str(iid) == iid_known:
+            return _mock_response(200, json.dumps({"sector": "Healthcare"}).encode())
+        # No sector data for unknown instrument
+        return _mock_response(200, json.dumps({"sector": None}).encode())
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_side_effect)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    sectors = {s["sector"]: s for s in body["segments"]}
+    assert "Healthcare" in sectors
+    assert "Unknown" in sectors
+    # Only 50% of MV has a known sector
+    assert body["covered_pct"] == pytest.approx(0.5)
+    # 2026-06-10 gap #2: instrument_ids land in the right segment.
+    assert sectors["Healthcare"]["instrument_ids"] == [iid_known]
+    assert sectors["Unknown"]["instrument_ids"] == [iid_unknown]
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_passes_portfolio_404(authed_app, authed_mock_clients) -> None:
+    """S1 404 is forwarded to the caller unchanged."""
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(404, b'{"detail": "not found"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/missing/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 404
+
+
+# ── Sector-breakdown Valkey cache (PLAN-0099 W4 perf fix) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_cache_hit_skips_downstream(authed_app, authed_mock_clients) -> None:
+    """Warm cache -> response returned without calling S1 or S3."""
+    # Pre-populate the mock Valkey get() to simulate a cache hit.
+    # The fixture's mock_valkey.get is already an AsyncMock; override its return_value
+    # to return valid JSON so the route short-circuits before any downstream calls.
+    cached_body = '{"portfolio_id":"p-1","segments":[],"covered_pct":0.0,"as_of":"2026-06-07"}'
+    authed_app.state.valkey.get = AsyncMock(return_value=cached_body)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # No downstream calls on a cache hit
+    authed_mock_clients.portfolio.get.assert_not_called()
+    authed_mock_clients.market_data.post.assert_not_called()
+    authed_mock_clients.market_data.get.assert_not_called()
+    # The Valkey get was called with the expected cache key
+    authed_app.state.valkey.get.assert_called_once_with("portfolio:sector-breakdown:p-1")
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_cache_miss_populates_cache(authed_app, authed_mock_clients) -> None:
+    """Cache miss -> downstream called, result written to Valkey with 60s TTL.
+
+    WHY non-empty holdings: the empty-holdings path returns early before reaching
+    the cache-write code (the write only happens when segments were actually
+    computed), so this test uses a single holding with a known sector.
+    """
+    # Cache miss: get returns None (default in conftest)
+    authed_app.state.valkey.get = AsyncMock(return_value=None)
+
+    iid = str(uuid.uuid4())
+    holdings_payload = json.dumps(
+        {"items": [{"instrument_id": iid, "quantity": "10", "average_cost": "100.00"}]}
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, holdings_payload))
+    price_payload = json.dumps([{"instrument_id": iid, "price": 100.0}]).encode()
+    authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, price_payload))
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"sector": "Technology"}).encode())
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Cache was populated after a miss
+    authed_app.state.valkey.set.assert_called_once()
+    call_args, call_kwargs = authed_app.state.valkey.set.call_args
+    assert call_args[0] == "portfolio:sector-breakdown:p-1"
+    assert call_kwargs.get("ex") == 60
+
+
+@pytest.mark.asyncio
+async def test_exposure_cache_hit_skips_downstream(authed_app, authed_mock_clients) -> None:
+    """Warm exposure cache -> response returned without calling S1."""
+    cached_body = '{"holdings": [], "total_market_value": 0.0}'
+    authed_app.state.valkey.get = AsyncMock(return_value=cached_body)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_not_called()
+    authed_app.state.valkey.get.assert_called_once_with("portfolio:exposure:p-1")
+
+
+@pytest.mark.asyncio
+async def test_exposure_cache_miss_populates_cache(authed_app, authed_mock_clients) -> None:
+    """Cache miss -> S1 called, result written to Valkey with 60s TTL."""
+    authed_app.state.valkey.get = AsyncMock(return_value=None)
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, b'{"holdings": [], "total_market_value": 0.0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_called_once()
+    authed_app.state.valkey.set.assert_called_once()
+    call_args, call_kwargs = authed_app.state.valkey.set.call_args
+    assert call_args[0] == "portfolio:exposure:p-1"
+    assert call_kwargs.get("ex") == 60
+
+
+@pytest.mark.asyncio
+async def test_exposure_valkey_failure_falls_through(authed_app, authed_mock_clients) -> None:
+    """Valkey error during cache check -> fail-open, S1 called normally."""
+    authed_app.state.valkey.get = AsyncMock(side_effect=ConnectionError("valkey down"))
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, b'{"holdings": [], "total_market_value": 0.0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Fail-open: returns 200 despite Valkey being down
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_called_once()
 
 
 # ── T-A-2-04: yield curve ─────────────────────────────────────────────────────

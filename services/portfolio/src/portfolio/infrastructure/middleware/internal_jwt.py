@@ -71,7 +71,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(
-        self, app: Any, jwks_url: str, issuer: str = "worldview-gateway", *, skip_verification: bool = False
+        self,
+        app: Any,
+        jwks_url: str,
+        issuer: str = "worldview-gateway",
+        *,
+        skip_verification: bool = False,
     ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url

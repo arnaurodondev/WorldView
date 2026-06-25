@@ -19,6 +19,8 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
+    make_liveness_probe,
     start_metrics_server,
 )
 
@@ -27,6 +29,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.kafka.consumer.supervisor import (  # type: ignore[import-untyped]
+        ConsumerExited,
+        run_consumer_supervised,
+    )
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer import (
@@ -46,9 +52,14 @@ async def main() -> None:
 
     # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
     # dedicated port so the worker's counters/gauges become scrape-able.
+    # BP-704 FAILURE MODE 2: bind a liveness probe so /healthz turns 503 when
+    # the poll loop wedges or the run() task dies — without it a wedged consumer
+    # keeps a GREEN healthcheck and is never restarted.
+    liveness_probe = make_liveness_probe()
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-watchlist-consumer",
         port=int(os.environ.get("METRICS_PORT", "9100")),
+        liveness_probe=liveness_probe,
     )
 
     stop_event = asyncio.Event()
@@ -73,33 +84,45 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_watchlist_consumer_group,
         topics=[settings.topic_watchlist_updated],
+        # PLAN-0113 FIX-2: opt-in static membership id (empty = dynamic, no-op).
+        group_instance_id=settings.kafka_watchlist_consumer_instance_id,
     )
     consumer = WatchlistEventConsumer(
         config=watchlist_config,
         watchlist_cache=watchlist_cache,
     )
+    # Bind the probe so /healthz reflects this consumer's poll-loop progress.
+    liveness_probe.bind(consumer)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-watchlist-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "topics_subscribed": [settings.topic_watchlist_updated],
+        },
+    )
 
     try:
-        consumer_task = asyncio.create_task(consumer.run())
-        await stop_event.wait()
-        consumer.stop()  # type: ignore[attr-defined]
-        try:
-            await asyncio.wait_for(consumer_task, timeout=30.0)
-        except TimeoutError:
-            consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+        # BP-704 supervision: race run() against the stop event so a crashed
+        # run() can no longer leave an un-awaited dead task while main() hangs
+        # on stop_event.wait(). A terminal run() exit raises ConsumerExited →
+        # exit non-zero so Docker restarts the container cleanly.
+        await run_consumer_supervised(consumer, stop_event, liveness_probe=liveness_probe)
+    except ConsumerExited as exc:
+        log.error("watchlist_consumer_fatal_error", error=str(exc))
+        sys.exit(1)
     except Exception as exc:
         log.error("watchlist_consumer_fatal_error", error=str(exc))
         sys.exit(1)
-    else:
-        log.info("watchlist_consumer_stopped")
     finally:
         await valkey.close()
 
         # Stop the Prometheus metrics HTTP server cleanly.
         with contextlib.suppress(Exception):
             await metrics_handle.aclose()
+        log.info("watchlist_consumer_stopped")
 
 
 if __name__ == "__main__":

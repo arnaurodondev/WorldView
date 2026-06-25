@@ -57,8 +57,13 @@ def test_static_screen_fields_contains_insider_net_buy_90d() -> None:
     assert row.description == "Trailing 90-day net dollar value of insider transactions"
 
 
-def test_static_field_count_is_38() -> None:
-    """L-1 (12 base + 4 attr) + L-2 (7) + L-4a (4) + L-5c (2) + L-3 (8) + L-4b (1) = 38 total."""
+def test_static_field_count_is_at_least_38() -> None:
+    """L-1 (12 base + 4 attr) + L-2 (7) + L-4a (4) + L-5c (2) + L-3 (8) + L-4b (1) = 38.
+
+    After L-5b (+6) = 44. Test accepts >= 38 so that new waves can extend the
+    list without breaking this guard — the L-5b lockstep test enforces the
+    exact count at 44.
+    """
     from market_data.app import _get_static_screen_fields
 
-    assert len(_get_static_screen_fields()) == 38
+    assert len(_get_static_screen_fields()) >= 38

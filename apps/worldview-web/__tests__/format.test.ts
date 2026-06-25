@@ -17,6 +17,7 @@ import {
   formatPercent,
   formatPercentUnsigned,
   formatRatio,
+  formatChangePct,
 } from "@/lib/format";
 
 describe("formatCompact (default — fixed 2 decimals, K is integer)", () => {
@@ -76,6 +77,17 @@ describe("formatCompactCurrency — multi-currency", () => {
   it("handles negative billions with sign before symbol", () => {
     expect(formatCompactCurrency(-2_450_000_000)).toBe("-$2.45B");
   });
+
+  it("keeps the legacy $1M boundary by default (sub-million → full price)", () => {
+    expect(formatCompactCurrency(100_000)).toBe("$100,000.00");
+  });
+
+  it("compacts from $1K when compactThreshold is lowered (tight-space callers)", () => {
+    expect(formatCompactCurrency(100_000, "USD", { compactThreshold: 1_000, maxDecimals: 1 })).toBe("$100.0K");
+    expect(formatCompactCurrency(50_000, "USD", { compactThreshold: 1_000, maxDecimals: 1 })).toBe("$50.0K");
+    // Below the lowered threshold still renders as a full grouped price.
+    expect(formatCompactCurrency(842, "USD", { compactThreshold: 1_000 })).toBe("$842.00");
+  });
 });
 
 describe("formatPrice — locale grouping", () => {
@@ -129,5 +141,67 @@ describe("formatPercent / formatPercentUnsigned / formatRatio", () => {
 
   it("formatRatio adds x suffix", () => {
     expect(formatRatio(24.567)).toBe("24.57x");
+  });
+});
+
+describe("formatChangePct — bounded % for fixed-width row slots (2026-06-19 wrap fix)", () => {
+  // Below the 100% threshold → full 2-decimal precision.
+  it("renders 2 decimals with + sign below 100%", () => {
+    expect(formatChangePct(2.34)).toBe("+2.34%");
+  });
+
+  it("renders 2 decimals with - sign for negatives below 100%", () => {
+    expect(formatChangePct(-12.5)).toBe("-12.50%");
+  });
+
+  // Boundary: 99.9 is still < 100 → 2 decimals.
+  it("keeps 2 decimals just under the 100% boundary", () => {
+    expect(formatChangePct(99.9)).toBe("+99.90%");
+  });
+
+  // Boundary: exactly 100 → 1 decimal (the |pct| >= 100 branch).
+  it("switches to 1 decimal at exactly 100%", () => {
+    expect(formatChangePct(100)).toBe("+100.0%");
+  });
+
+  it("uses 1 decimal for a short-squeeze move (135.43 → +135.4%)", () => {
+    expect(formatChangePct(135.43)).toBe("+135.4%");
+  });
+
+  // Boundary: 999 is still < 1000 → 1 decimal, no K suffix.
+  it("keeps 1 decimal just under the 1000% boundary", () => {
+    expect(formatChangePct(999)).toBe("+999.0%");
+  });
+
+  // Boundary: exactly 1000 → K suffix (the |pct| >= 1000 branch).
+  it("switches to K suffix at exactly 1000%", () => {
+    expect(formatChangePct(1000)).toBe("+1.0K%");
+  });
+
+  it("collapses an extreme move to K% (1543.21 → +1.5K%)", () => {
+    expect(formatChangePct(1543.21)).toBe("+1.5K%");
+  });
+
+  it("preserves the sign for an extreme negative move (-1543.21 → -1.5K%)", () => {
+    expect(formatChangePct(-1543.21)).toBe("-1.5K%");
+  });
+
+  // Null / undefined / NaN / Infinity → em-dash, never "NaN%".
+  it("returns em-dash for null", () => {
+    expect(formatChangePct(null)).toBe("—");
+  });
+
+  it("returns em-dash for undefined", () => {
+    expect(formatChangePct(undefined)).toBe("—");
+  });
+
+  it("returns em-dash for NaN and Infinity", () => {
+    expect(formatChangePct(Number.NaN)).toBe("—");
+    expect(formatChangePct(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+
+  // Zero is flat: no "+" prefix (value > 0 is the sign gate).
+  it("renders zero without a + prefix", () => {
+    expect(formatChangePct(0)).toBe("0.00%");
   });
 });

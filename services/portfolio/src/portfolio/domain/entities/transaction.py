@@ -9,7 +9,7 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-from portfolio.domain.enums import TransactionDirection, TransactionType
+from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
 
 
 @dataclass
@@ -38,8 +38,20 @@ class Transaction:
     # P2-E: the date on which the trade settles (T+1 for equities, T+2 legacy).
     # Distinct from ``executed_at`` (trade date). None when SnapTrade omits it.
     settlement_date: date | None = None
+    # PLAN-0108: BUY or SELL side for TRADE-type transactions. The frontend
+    # "Add Position" dialog sends transaction_type=TRADE + trade_side=BUY|SELL
+    # so it doesn't have to know the INFLOW/OUTFLOW direction convention.
+    # NULL for all non-TRADE types — enforced by __post_init__ invariant below.
+    trade_side: TradeSide | None = None
     id: UUID = field(default_factory=new_uuid)
     created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        # Invariant: trade_side is required for TRADE, forbidden for all others.
+        if self.transaction_type == TransactionType.TRADE and self.trade_side is None:
+            raise ValueError("trade_side must be set for TRADE transactions")
+        if self.transaction_type != TransactionType.TRADE and self.trade_side is not None:
+            raise ValueError("trade_side must be None for non-TRADE transactions")
 
     def gross_amount(self) -> Decimal:
         """Quantity * price, before fees."""

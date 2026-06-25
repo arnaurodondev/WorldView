@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from common.ids import new_uuid7_str  # type: ignore[import-untyped]
@@ -168,8 +168,88 @@ class PgOutboxEventRepository(OutboxEventRepository):
             .values(attempts=OutboxEventModel.attempts + 1)
         )
 
-    async def move_to_dead_letter(self, record_id: str) -> None:
-        """Move *record_id* to the dead-letter state (status=DEAD_LETTER)."""
+    async def move_to_dead_letter(self, record_id: str, error_detail: str = "") -> None:
+        """Move *record_id* to the dead-letter state (status=DEAD_LETTER).
+
+        ``error_detail`` is accepted for ``OutboxRepositoryProtocol`` parity
+        (BUG-1) but not persisted: this outbox table has no error column, so the
+        failure cause lives only in the dispatcher logs.
+        """
         await self._session.execute(
             update(OutboxEventModel).where(OutboxEventModel.id == record_id).values(status="dead_letter")
         )
+
+    # ── Operator requeue (BUG-5) ────────────────────────────────────────────────
+
+    async def count_dead(self, *, topic: str | None = None, older_than: datetime | None = None) -> int:
+        """Count ``dead_letter`` rows, optionally scoped by *topic* / *older_than*.
+
+        Used by the requeue operator script's ``--dry-run`` mode so an operator
+        can see exactly how many rows a requeue would touch before mutating
+        anything. ``older_than`` filters on ``created_at`` (the row's age).
+        """
+        stmt = select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "dead_letter")
+        if topic is not None:
+            stmt = stmt.where(OutboxEventModel.topic == topic)
+        if older_than is not None:
+            stmt = stmt.where(OutboxEventModel.created_at <= older_than)
+        result = await self._session.execute(stmt)
+        return int(result.scalar() or 0)
+
+    async def requeue_dead_to_pending(
+        self,
+        *,
+        ids: list[str] | None = None,
+        topic: str | None = None,
+        older_than: datetime | None = None,
+        reset_attempts: bool = True,
+    ) -> int:
+        """Move ``dead_letter`` rows back to ``pending`` so the dispatcher re-claims them.
+
+        BUG-5: market-data had no path to recover dead-lettered rows — once a row
+        hit ``status='dead_letter'`` (``fetch_pending`` only selects ``pending``),
+        nothing could ever re-dispatch it, so the 44 lost instrument events were
+        stranded forever. This method is the *safe, operator-invokable* recovery
+        path used by ``scripts/requeue_dead_outbox.py``.
+
+        Idempotency / safety:
+        * Only rows currently in ``dead_letter`` are touched — re-running is a
+          no-op once they have moved to ``pending``/``delivered``.
+        * The lease (``claimed_by``/``claimed_at``/``lease_expires_at``) is cleared
+          so the row is immediately claimable.
+        * ``reset_attempts`` zeroes the attempt counter so the row gets a full
+          retry budget again (the whole point of a requeue).
+
+        Bounding: pass an explicit ``ids`` allow-list, **or** a ``topic`` and/or
+        ``older_than`` predicate. At least one bound MUST be supplied — an
+        unbounded requeue is rejected to avoid accidentally re-dispatching the
+        entire dead pool.
+
+        Returns the number of rows transitioned.
+        """
+        if ids is None and topic is None and older_than is None:
+            raise ValueError(
+                "requeue_dead_to_pending requires a bound: pass ids=, topic=, or older_than=. "
+                "An unbounded requeue is refused for safety."
+            )
+
+        values: dict[str, Any] = {
+            "status": "pending",
+            "claimed_by": None,
+            "claimed_at": None,
+            "lease_expires_at": None,
+        }
+        if reset_attempts:
+            values["attempts"] = 0
+
+        stmt = update(OutboxEventModel).where(OutboxEventModel.status == "dead_letter")
+        if ids is not None:
+            stmt = stmt.where(OutboxEventModel.id.in_(ids))
+        if topic is not None:
+            stmt = stmt.where(OutboxEventModel.topic == topic)
+        if older_than is not None:
+            stmt = stmt.where(OutboxEventModel.created_at <= older_than)
+        stmt = stmt.values(**values)
+
+        cursor: CursorResult = await self._session.execute(stmt)  # type: ignore[assignment]
+        return int(cast("Any", cursor.rowcount))

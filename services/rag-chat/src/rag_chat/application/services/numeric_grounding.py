@@ -42,6 +42,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from contracts.numeric_grounding import DEFAULT_TOLERANCES, FieldKind  # type: ignore[import-untyped]
@@ -87,6 +88,131 @@ _SUFFIX_MULT: dict[str, float] = {
 
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
+
+# ── BP-670 — non-claim number shapes (live Apple-news false positives) ───────
+#
+# The validator flagged 9 "unsupported numbers" in a correctly-cited news
+# summary, triggering a 16.5s LLM rewrite that REPLACED a good answer with a
+# hallucinated one. Every flagged value was prose structure, not a financial
+# claim:
+#
+#   * markdown list ordinals       — "1. **Apple Will Run...**"  → 1, 2, ... 5
+#   * month-day date fragments     — "*(Jun 9)*", "(Jun 10)"     → 9, 10
+#   * relative time windows        — "(Last 14 Days)"            → 14
+#
+# The three skip-shapes below remove these from extraction entirely. Each is
+# deliberately narrow: only BARE integers (no "$", "%", magnitude suffix or
+# thousands separator) qualify, so "$14B", "9%" and "1,400" still validate.
+
+# Month token immediately BEFORE the number ("Jun 9", "June 10", "Sept. 5"),
+# optionally with a day-range head in between ("June 9-10", en-dash too —
+# the second day is the range tail; live BP-670 follow-up: "Top Stories
+# (June 9-10, 2026)" flagged the bare "10").
+_MONTH_BEFORE_RE = re.compile(
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s*"
+    r"(?:\d{1,2}\s*[-–—]\s*)?$",  # noqa: RUF001 — en/em dash range joiners
+    re.IGNORECASE,
+)
+
+# Time-unit word immediately AFTER the number ("14 days", "30-day", "2 weeks",
+# "5 trading days"). Hyphen and en-dash joiners both appear in LLM output.
+_TIME_UNIT_AFTER_RE = re.compile(
+    r"^\s*[-–]?\s*(?:trading\s+|calendar\s+)?(?:day|week|month|year|hour|minute|quarter|session)s?\b",  # noqa: RUF001
+    re.IGNORECASE,
+)
+
+# Markdown ordinal: number begins a line (only whitespace before it on the
+# line) and is immediately followed by ". " or ") ".
+_ORDINAL_AFTER_RE = re.compile(r"^[.)]\s")
+
+
+def _is_non_claim_number(cleaned: str, m: re.Match[str]) -> bool:
+    """True when the matched number is prose structure, not a financial claim.
+
+    See the BP-670 block comment above for the three shapes. Only bare
+    integers are eligible — currency, percent, magnitude suffix or
+    thousands separators mark a genuine numeric claim.
+    """
+    full = m.group("full")
+    # The digits group greedily captures a TRAILING comma ("(June 9–10,"  # noqa: RUF003
+    # yields digits "10,") — strip it so list/date integers followed by
+    # punctuation still qualify as bare.
+    digits = (m.group("digits") or "").rstrip(",")
+    if "$" in full or "%" in full or m.group("suffix") or "," in digits or "." in digits:
+        return False
+    before = cleaned[max(0, m.start() - 12) : m.start()]
+    after = cleaned[m.end() : m.end() + 24]
+    # Shape 1: markdown list ordinal at line start ("1. " / "2) ").
+    line_start = cleaned.rfind("\n", 0, m.start()) + 1
+    if cleaned[line_start : m.start()].strip() == "" and _ORDINAL_AFTER_RE.match(after):
+        return True
+    # Shape 2: month-day date fragment ("Jun 9", "June 10"). Day range only.
+    try:
+        int_value = int(digits)
+    except ValueError:
+        return False
+    if 1 <= int_value <= 31 and _MONTH_BEFORE_RE.search(before):
+        return True
+    # Shape 3: relative time window ("14 days", "30-day", "2 weeks").
+    return bool(_TIME_UNIT_AFTER_RE.match(after))
+
+
+# ── PLAN-0107 v2.0 — prose citation patterns (banner-suppression helper) ─────
+#
+# The numeric-grounding validator and the orchestrator banner-suppression
+# helper share a notion of "is this answer prose-cited?". The v2.0 fix
+# initially only recognised bracketed forms (``[tool_name row N]``) and the
+# parenthesised ``(source: ...)``. Smoke benchmarks (PLAN-0107) revealed the
+# DeepSeek/Qwen models actually favour **italic markdown Source: markers**
+# in their generated prose (e.g. ``*Source: get_fundamentals_history for
+# NVDA, rows 0-3 (most recent quarters)*`` or ``_source: tool_name row N_``)
+# — so the banner kept firing on answers whose numbers were, in fact,
+# attributable to a retrieved tool result.
+#
+# This regex is the canonical citation-shape detector used by the
+# orchestrator (see ``_W50_CITATION_RE`` in ``chat_orchestrator``, which
+# mirrors this alternation list) and is exported here so application-layer
+# code can share a single definition.
+#
+# Alternations (each is independently anchored):
+#   1. ``[tool_name]`` or ``[tool_name row N]`` — bare-bracket form
+#   2. ``(source: tool_name [row N])`` — parenthesised form
+#   3. ``per|from|according to tool_name [row N]`` — preposition form
+#   4. ``*Source: tool_name [for ENTITY] [, rows 0-3 (...)]*`` — italic form
+#   5. ``_source: tool_name [for ENTITY] [, rows 0-3]_`` — underscore-italic
+#   6. ``Source: tool_name [for ENTITY] [, rows 0-3]`` — bare prose form
+#      (must not be flanked by ``*``/``_`` to avoid double-matching #4/#5)
+#
+# Dashes inside the row-range char class: the LLM emits ASCII hyphen,
+# EN DASH (U+2013), and EM DASH (U+2014). We accept all three; the
+# literal unicode characters live inside the regex string itself. Per-line
+# suppresses RUF001/RUF003 (intentional unicode dashes, not typos).
+_PROSE_CITATION_RE = re.compile(
+    r"""
+    (?:
+        \[\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\)
+      | (?:per|from|according\s+to)\s+[a-z_][a-z0-9_]*\s*\[\s*row\s+\d+\s*\]
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \*\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*\*
+      | _\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*_
+      | (?<![\w*])source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*)?
+        (?![\w*])
+    )
+    """,  # noqa: RUF001
+    re.IGNORECASE | re.VERBOSE,
+)
 
 # Year token recognition — used by the classifier ONLY (the number
 # extractor already captured the digits; this is a CONTEXT check).
@@ -346,13 +472,295 @@ def _decode_token(raw_full: str, digits: str, suffix: str | None) -> float:
     return base
 
 
+# ── Bug 3 fix (PLAN-0099 W4) — Decimal-based unit normalisation ────────────
+#
+# Although ``_decode_token`` above already converts ``$24.7B`` into
+# ``2.47e10`` for float-based comparison, the user-facing fix in this
+# wave needed an explicit ``_normalize_numeric`` helper that:
+#
+#   * uses :class:`decimal.Decimal` so exact equality holds for round
+#     financial figures (no binary-float drift on ``$4.97T``),
+#   * recognises parenthesised negatives (``(45.2)`` → ``-45.2``)
+#     which appear in EODHD / GAAP-formatted statements,
+#   * recognises the ratio multiplier suffix ``x`` (``31.5x`` → ``31.5``)
+#     used by valuation multiples (P/E, EV/EBITDA) — magnitude unchanged,
+#   * returns ``None`` for strings that look numeric-ish but aren't
+#     (``"hello"`` → ``None``, used by callers that probe a whole word).
+#
+# Kept module-level (not a Validator method) so the orchestrator and
+# tests can use it directly to compare answer tokens against raw tool
+# values without reaching into the validator's internals.
+_SUFFIX_MULTIPLIERS: dict[str, Decimal] = {
+    "K": Decimal("1000"),
+    "M": Decimal("1000000"),
+    "B": Decimal("1000000000"),
+    "T": Decimal("1000000000000"),
+}
+
+# Pattern that strips trailing magnitude / ratio suffix. We accept both
+# upper- and lower-case (LLMs are inconsistent). The trailing ``x`` is a
+# ratio marker — kept separate from K/M/B/T because it does NOT scale
+# the value, it only annotates "this is a multiplier".
+_NORMALIZE_RE = re.compile(
+    r"""
+    ^\s*
+    (?P<paren_open>\()?            # optional opening paren → negative
+    \s*
+    (?P<sign>[-+])?                # optional explicit sign
+    \s*
+    \$?                            # optional currency symbol
+    \s*
+    (?P<digits>\d[\d,]*(?:\.\d+)?) # mantissa with optional decimals/commas
+    \s*
+    (?P<suffix>[KMBTkmbtxX%])?     # optional magnitude / ratio / percent
+    \s*
+    (?P<paren_close>\))?           # optional closing paren
+    \s*$
+    """,
+    re.VERBOSE,
+)
+
+
+def _normalize_numeric(s: str) -> Decimal | None:
+    """Parse a financial number token into a :class:`Decimal` in base units.
+
+    Examples handled (see tests for the canonical list):
+
+      * ``"$24.7B"``            → ``Decimal("24700000000")``
+      * ``"$4.97T"``            → ``Decimal("4970000000000")``
+      * ``"24,700,000,000"``    → ``Decimal("24700000000")``
+      * ``"31.5x"``             → ``Decimal("31.5")``   (ratio, no scale)
+      * ``"(45.2)"``            → ``Decimal("-45.2")``  (parens = neg)
+      * ``"50%"``               → ``Decimal("50")``     (kept as-is; see WHY)
+      * ``"hello"`` / ``""``    → ``None``
+
+    WHY percent values are returned as-is (not divided by 100):
+    callers compare a percentage answer token against a percentage tool
+    value — both will arrive as the same representation. Mixing
+    fraction-vs-percent here would cause double-conversion bugs because
+    the existing :func:`_decode_token` already divides by 100. The two
+    helpers stay independent so each call site picks the contract it
+    needs.
+
+    Returns ``None`` on any parse failure so call sites can treat the
+    token as "not a number" without exception handling.
+    """
+    if not s or not isinstance(s, str):
+        return None
+    stripped = s.strip()
+    if not stripped:
+        return None
+    m = _NORMALIZE_RE.match(stripped)
+    if m is None:
+        return None
+    digits = m.group("digits")
+    if digits is None or not any(ch.isdigit() for ch in digits):
+        return None
+    cleaned = digits.replace(",", "")
+    try:
+        value = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return None
+    suffix = m.group("suffix") or ""
+    # Magnitude suffixes (K/M/B/T) scale the value.
+    if suffix and suffix.upper() in _SUFFIX_MULTIPLIERS:
+        value = value * _SUFFIX_MULTIPLIERS[suffix.upper()]
+    # 'x' (ratio) and '%' do not change magnitude here — see docstring.
+    # Apply parenthesis-negative convention (GAAP statements). We accept
+    # parens even when only one side is present (LLMs often omit one).
+    paren_neg = bool(m.group("paren_open") or m.group("paren_close"))
+    sign = m.group("sign")
+    if sign == "-":
+        value = -value
+    if paren_neg:
+        value = -abs(value)
+    return value
+
+
+# ── Bug 3 fix — prose-citation recognition (banner suppression) ────────────
+#
+# The orchestrator's :func:`_answer_has_full_citation_coverage` already
+# recognises bracket citations like ``[query_fundamentals row 0]``. The
+# validator needs the same recognition so that an "unsupported" number
+# whose token has a prose / bracket citation nearby is NOT flagged when
+# the cited tool was actually invoked. We keep the regex permissive on
+# purpose: false negatives (banner on a good answer) erode trust far
+# more than false positives (no banner on a borderline answer).
+#
+# Patterns accepted (case-insensitive):
+#   * ``[tool_name]`` / ``[tool_name row 3]``    — canonical bracket form
+#   * ``(source: tool_name row 0)``              — natural-language source
+#   * ``per tool_name row 2``                    — prose attribution
+#   * ``from tool_name``                         — prose attribution
+#   * ``according to tool_name``                 — prose attribution
+# Tool names embedded inside a prose citation. Used to confirm that the
+# cited tool was actually called (defence against the LLM inventing a
+# tool name to fake a citation).
+_CITED_TOOL_RE = re.compile(
+    r"(?:\[|\(\s*source\s*:\s*|\bper\s+|\bfrom\s+|\baccording\s+to\s+)" r"([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+# Distance (in chars) within which a citation counts as supporting a
+# numeric token. 50 chars matches the user's spec; this is tighter than
+# the orchestrator's 200-char banner-suppression window because the
+# validator runs per-number and we want stronger evidence that THIS
+# specific number is grounded.
+_VALIDATOR_CITATION_WINDOW = 50
+
+
+def _cited_tool_names(text: str) -> set[str]:
+    """Return the lower-cased tool names referenced anywhere in *text*.
+
+    Used to confirm that a prose citation refers to a tool that was
+    actually called — see :func:`_has_grounding_citation`.
+    """
+    return {m.group(1).lower() for m in _CITED_TOOL_RE.finditer(text)}
+
+
+def _has_grounding_citation(
+    response: str,
+    token_start: int,
+    token_end: int,
+    called_tool_names: frozenset[str] | set[str],
+) -> bool:
+    """Return ``True`` if a citation within ±window chars references a real tool.
+
+    A citation is "grounding" iff:
+      1. The match falls within ±_VALIDATOR_CITATION_WINDOW chars of the
+         number, AND
+      2. (when ``called_tool_names`` is non-empty) the cited tool name
+         appears in the set of tools that were actually invoked for this
+         request.
+
+    Passing an empty ``called_tool_names`` set disables the tool-name
+    cross-check (used by tests that only care about the pattern match).
+    """
+    lo = max(0, token_start - _VALIDATOR_CITATION_WINDOW)
+    hi = min(len(response), token_end + _VALIDATOR_CITATION_WINDOW)
+    window = response[lo:hi]
+    for m in _PROSE_CITATION_RE.finditer(window):
+        matched_text = m.group(0)
+        is_bracket = matched_text.startswith("[")
+        tool_match = _CITED_TOOL_RE.search(matched_text)
+        if not tool_match:
+            # Couldn't pull a tool name out — only honour permissive
+            # match when this is a bracket form AND no called-tool
+            # constraint was provided.
+            if is_bracket and not called_tool_names:
+                return True
+            continue
+        cited = tool_match.group(1).lower()
+        # When the caller supplied a list of tools that actually ran,
+        # require the cited name to be in that list — defence against
+        # both LLM-invented tool names (e.g. ``[made_up_tool]``) and
+        # genuinely-hallucinated prose ("according to filings"). When
+        # no called-tools set is supplied, only the bracket form is
+        # honoured (it's a structured marker from the tool layer).
+        if called_tool_names:
+            if cited in called_tool_names:
+                return True
+        elif is_bracket:
+            return True
+    return False
+
+
+# ── Phantom-citation gate (2026-06-12 root-cause audit, Theme A) ──────────────
+#
+# WHY: the dominant fabrication mechanism is the LLM emitting a number (or a
+# prose fact) and attaching an INVENTED ``[tool_name row N]`` provenance tag for
+# a tool it NEVER called. The validator's ``_has_grounding_citation`` bracket
+# fast-path then accepts the number because a bracket citation sits within
+# ±50 chars — i.e. the LLM's own fake tag satisfies the grounding check.
+#
+# Verified disjoint-set cases (run_20260612T183758Z):
+#   * tc_portfolio_dividend_yielders — cites ``[query_fundamentals row N]`` but
+#     only ``get_portfolio_context`` ran.
+#   * agg_q5_tsla_macro — cites ``[query_macro row N]`` but only
+#     ``get_economic_calendar`` / ``search_documents`` / ``get_entity_news`` ran.
+#   * iter3_apple_suppliers_compound — cites ``[supplier_list row 0]`` /
+#     ``[tsmc_business row 0]`` — both invented.
+#
+# DETECTION: the ``[name row N]`` form (a STRUCTURED tool-row provenance tag) is
+# unambiguous — it is the exact shape the tool layer emits and the LLM mimics to
+# fake grounding. We deliberately ONLY flag the ``row N`` form: bare ``[name]``
+# tags collide with legitimate non-tool markers (``[unverified]``, ``[redacted]``,
+# relation types like ``[partner_of]``, ``[N1]`` citation markers, ``[entity:UUID]``
+# refs). A ``[name row N]`` whose ``name`` is NOT in the called-tools set is a
+# fabrication marker, full stop.
+_TOOL_ROW_CITATION_RE = re.compile(
+    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+\d+\s*\]",
+    re.IGNORECASE,
+)
+
+
+def find_phantom_tool_citations(
+    response: str,
+    called_tool_names: Iterable[str],
+) -> set[str]:
+    """Return the lower-cased tool names cited as ``[name row N]`` that were NEVER called.
+
+    A non-empty result means the answer fabricated a tool-row provenance tag —
+    the single cheapest deterministic fabrication signal (see module comment).
+    Only the structured ``[name row N]`` form is considered so legitimate
+    non-tool bracket markers (``[unverified]``, ``[entity:UUID]``, ``[N1]``) are
+    never misread as phantom tool citations.
+
+    ``called_tool_names`` is the set of tools actually invoked this turn. When
+    it is empty EVERY ``[name row N]`` tag is phantom (no tool ran, so any
+    tool-row citation is invented) — which is exactly the empty-tool
+    fabrication shape we want to reject.
+    """
+    called = {str(t).strip().lower() for t in called_tool_names if t}
+    cited = {m.group("tool").lower() for m in _TOOL_ROW_CITATION_RE.finditer(response)}
+    return cited - called
+
+
+def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:
+    """Return the number of structured numeric values flattened from *tool_results*.
+
+    Public, deterministic wrapper around :func:`_flatten_tool_values` so the
+    orchestrator can detect the EMPTY-POOL case (tools returned nothing / were
+    not called → no values to ground against) without re-implementing the
+    flatten logic. ``0`` means the grounding candidate pool is empty.
+    """
+    return len(_flatten_tool_values(tool_results))
+
+
+def response_has_numeric_claims(response: str) -> bool:
+    """Return ``True`` when *response* contains at least one extractable number.
+
+    Used by the empty-pool refusal gate: an answer that makes specific numeric
+    claims with an EMPTY grounding pool is fabricating (nothing can corroborate
+    those numbers). Citation markers (``[N7]``) are stripped first by the
+    extractor so they do not count as numbers.
+    """
+    return bool(_extract_numbers(response))
+
+
 def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
     """Yield (value, raw_token, surrounding_context) for every number in *text*.
 
     Citation markers are stripped first so [N7] does not surface as 7.
     """
+    # Delegate to the position-aware extractor and discard the spans —
+    # legacy callers only need the (value, token, context) triplet.
+    return [(v, tok, ctx) for v, tok, ctx, _s, _e in _extract_numbers_with_spans(text)]
+
+
+def _extract_numbers_with_spans(
+    text: str,
+) -> list[tuple[float, str, str, int, int]]:
+    """Like :func:`_extract_numbers` but also returns char spans of each match.
+
+    Spans are reported against the CLEANED text (citation markers
+    stripped). The validator uses them to test whether a prose-citation
+    is within :data:`_VALIDATOR_CITATION_WINDOW` of the token. We do the
+    citation-window check against the same cleaned text so window
+    offsets stay aligned.
+    """
     cleaned = _CITATION_RE.sub("", text)
-    out: list[tuple[float, str, str]] = []
+    out: list[tuple[float, str, str, int, int]] = []
     for m in _NUM_RE.finditer(cleaned):
         digits = m.group("digits") or ""
         if not digits or digits == ".":
@@ -361,12 +769,16 @@ def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
         # Skip 1-character matches like a bare "$" that captured nothing.
         if not any(ch.isdigit() for ch in digits):
             continue
+        # BP-670: list ordinals, month-day dates and relative time windows
+        # are prose structure, not financial claims — never extract them.
+        if _is_non_claim_number(cleaned, m):
+            continue
         try:
             value = _decode_token(m.group("full"), digits, suffix)
         except ValueError:
             continue
         ctx = _context_around(cleaned, m.start(), m.end())
-        out.append((value, m.group("full").strip(), ctx))
+        out.append((value, m.group("full").strip(), ctx, m.start(), m.end()))
     return out
 
 
@@ -417,19 +829,32 @@ def _entity_tag_for(raw: Any) -> str:
     Resolution order (each step is wrapped in ``getattr`` so duck-typed
     mocks and dicts both work):
 
-      1. ``raw.entity_id`` — first 8 chars of UUID string.
+      1. ``raw.citation_meta.entity_name`` — lower-cased (usually a ticker).
       2. ``raw.item_id`` — strip a leading ``<TICKER>_`` if present.
-      3. ``raw.citation_meta.entity_name`` — lower-cased.
+      3. ``raw.entity_id`` — first 8 chars of UUID string.
       4. ``""`` when nothing matches.
+
+    BP-670 (2026-06-11): the order used to prefer ``entity_id``, but the
+    response-side scope extractor (:func:`_nearest_entity_tag`) only yields
+    TICKER-shaped tokens — a UUID-prefix tag can NEVER match it, so any
+    item carrying both ``entity_id`` and a ticker ``entity_name`` had its
+    candidate pool permanently empty (live failure: "2026" failed YEAR
+    validation against Apple-tagged news items because the items' tag was
+    "01900000", not "aapl"). Ticker-style sources now win.
 
     Returns a lower-cased string so comparisons are case-insensitive.
     """
-    # 1. entity_id (UUID) — preferred when present.
-    entity_id = getattr(raw, "entity_id", None)
-    if entity_id is None and isinstance(raw, dict):
-        entity_id = raw.get("entity_id")
-    if entity_id:
-        return str(entity_id)[:8].lower()
+    # 1. citation_meta.entity_name — ticker-style, matches the response-side
+    #    scope extractor; preferred when present (BP-670).
+    citation_meta = getattr(raw, "citation_meta", None)
+    if citation_meta is None and isinstance(raw, dict):
+        citation_meta = raw.get("citation_meta")
+    if citation_meta is not None:
+        ent_name = getattr(citation_meta, "entity_name", None)
+        if ent_name is None and isinstance(citation_meta, dict):
+            ent_name = citation_meta.get("entity_name")
+        if isinstance(ent_name, str) and ent_name:
+            return ent_name.lower()
     # 2. item_id (often "<TICKER>_<period>").
     item_id = getattr(raw, "item_id", None)
     if item_id is None and isinstance(raw, dict):
@@ -444,16 +869,14 @@ def _entity_tag_for(raw: Any) -> str:
         m = _ITEM_ID_TICKER_RE.match(item_id)
         if m:
             return m.group(1).lower()
-    # 3. citation_meta.entity_name.
-    citation_meta = getattr(raw, "citation_meta", None)
-    if citation_meta is None and isinstance(raw, dict):
-        citation_meta = raw.get("citation_meta")
-    if citation_meta is not None:
-        ent_name = getattr(citation_meta, "entity_name", None)
-        if ent_name is None and isinstance(citation_meta, dict):
-            ent_name = citation_meta.get("entity_name")
-        if isinstance(ent_name, str) and ent_name:
-            return ent_name.lower()
+    # 3. entity_id (UUID) — last resort; UUID tags only help when the
+    #    response side also derives a UUID scope (it currently never does,
+    #    but cross-checking against question ids may use this later).
+    entity_id = getattr(raw, "entity_id", None)
+    if entity_id is None and isinstance(raw, dict):
+        entity_id = raw.get("entity_id")
+    if entity_id:
+        return str(entity_id)[:8].lower()
     return ""
 
 
@@ -586,6 +1009,32 @@ _NON_TICKER_TOKENS = frozenset(
         "API",
         "CAGR",
         "VAR",
+        # ── BP-670: prose acronyms misread as entity scopes (2026-06-11) ──
+        # "(likely WWDC or AI-related developments)" preceded "35% Return"
+        # in a live Apple-news answer; _nearest_entity_tag picked "AI" as
+        # the ticker scope → empty candidate pool → guaranteed validation
+        # failure → 13s fabricating rewrite of a correct answer. These are
+        # everyday tech/finance acronyms, not entity scopes. (Accepted
+        # trade-off: C3.ai's literal ticker "AI" loses entity scoping.)
+        "AI",
+        "ML",
+        "AR",
+        "VR",
+        "EU",
+        "US",
+        "UK",
+        "UN",
+        "WWDC",
+        "GPU",
+        "GPUS",
+        "CPU",
+        "CPUS",
+        "LLM",
+        "LLMS",
+        "IOS",
+        "APP",
+        "DMA",
+        "ESG",
     }
 )
 
@@ -657,6 +1106,7 @@ class NumericGroundingValidator:
         self,
         response: str,
         tool_results: Iterable[Any],
+        called_tool_names: Iterable[str] | None = None,
     ) -> GroundingResult:
         """Return a ``GroundingResult`` for *response* against *tool_results*.
 
@@ -673,7 +1123,21 @@ class NumericGroundingValidator:
         """
         tool_results_list = list(tool_results)
         rag_pipeline_stage_input_size.labels(stage="numeric_grounding").observe(len(tool_results_list))
-        response_numbers = _extract_numbers(response)
+        # Bug 3 fix: capture char spans alongside (value, token, ctx) so
+        # the per-number loop below can ask whether a prose / bracket
+        # citation sits within ±_VALIDATOR_CITATION_WINDOW chars of THIS
+        # token. The legacy ``_extract_numbers`` is still used by other
+        # call sites (orphan checks etc.) — see the helper docstring.
+        response_numbers_with_spans = _extract_numbers_with_spans(response)
+        response_numbers = [(v, tok, ctx) for v, tok, ctx, _s, _e in response_numbers_with_spans]
+        # Pre-compute the cleaned response text (citation markers
+        # stripped) so window arithmetic matches the spans returned
+        # above. Frozen set of called tool names enables the prose
+        # citation check to validate the cited tool was actually called.
+        cleaned_response = _CITATION_RE.sub("", response)
+        called_tools_frozen: frozenset[str] = (
+            frozenset(t.lower() for t in called_tool_names) if called_tool_names else frozenset()
+        )
         tool_values = _flatten_tool_values(tool_results_list)
         # Materialise the source tool texts for quarter-label matching.
         # We coerce the .text attribute to str defensively — production
@@ -783,7 +1247,7 @@ class NumericGroundingValidator:
         # any-kind pool — but the legacy fall-back is exact-match only
         # (tol=0) so we don't silently accept cross-entity collisions.
         total_numbers = len(response_numbers)
-        for value, raw_tok, ctx in response_numbers:
+        for value, raw_tok, ctx, span_start, span_end in response_numbers_with_spans:
             kind = classify_number(value, raw_tok, ctx)
             if kind in self._skip_kinds:
                 continue
@@ -818,6 +1282,24 @@ class NumericGroundingValidator:
             if matched:
                 per_kind_passed[kind] += 1
             else:
+                # Bug 3 fix (PLAN-0099 W4): before flagging this number
+                # as unsupported, check whether a prose / bracket
+                # citation sits within ±50 chars and references a tool
+                # that was actually called. If so, treat the number as
+                # grounded — false positives here cause the dreaded
+                # "⚠ Some numbers could not be verified" banner on
+                # answers whose cited tool DID return the value (the
+                # validator just couldn't match across formats such as
+                # ``$24.7B`` vs raw ``24700000000``). Permissive on
+                # purpose: see _has_grounding_citation docstring.
+                if _has_grounding_citation(
+                    cleaned_response,
+                    span_start,
+                    span_end,
+                    called_tools_frozen,
+                ):
+                    per_kind_passed[kind] += 1
+                    continue
                 per_kind_failed[kind] += 1
                 unsupported.append(
                     UnsupportedNumber(
@@ -906,4 +1388,13 @@ __all__ = [
     "ToolValue",
     "UnsupportedNumber",
     "classify_number",
+    "find_phantom_tool_citations",
+    "flatten_tool_values_count",
+    "response_has_numeric_claims",
 ]
+
+
+# Re-exported by name only (kept out of __all__ so they're private API
+# but discoverable from tests + the orchestrator):
+#   _normalize_numeric        — Decimal-based token normaliser (Bug 3)
+#   _has_grounding_citation   — prose-citation window check (Bug 3)

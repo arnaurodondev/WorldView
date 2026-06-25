@@ -228,6 +228,10 @@ LIMIT :lim
                     PathEdge(
                         relation_type=str(item["relation_type"]),
                         confidence=float(item["confidence"]),
+                        # Pre-fix rows lack ``forward`` → default True (R11
+                        # forward-compat read); the explanation prompt then renders
+                        # true subject→object via PathExplanationService._build_prompt.
+                        forward=bool(item.get("forward", True)),
                     )
                     for item in edges_data
                 ]

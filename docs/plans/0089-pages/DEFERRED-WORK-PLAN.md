@@ -15,6 +15,29 @@ estimated_total_effort: ~5 engineer-days (excluding L-4b universe budget approva
 
 # PRD-0089 Deferred Work — Detailed Plan
 
+> **⚠️ STALE — RECONCILED 2026-06-16. READ THIS BANNER FIRST.**
+>
+> This document was written 2026-05-28 against `feat/plan-0099-w4 @ 77d3d720`.
+> The branch has since advanced **436 commits** (current `feat/md-reliability-followups @ 2e447e8be`)
+> and the history was rebuilt (the SHAs referenced below — `c60c7810`, `8906009f`,
+> `77d3d720` — no longer exist on the live branch). The authoritative current-state
+> map is **`docs/audits/2026-06-16-prd0089-state-reconciliation.md`**, with five
+> sibling deep-dives (`docs/audits/2026-06-16-prd0089-*.md`). Per-section status
+> notes are inlined below. **Summary of what changed since 2026-05-28:**
+>
+> | § | Item | 2026-05-28 verdict | Reality 2026-06-16 |
+> |---|------|--------------------|--------------------|
+> | §1 | L-5b intelligence sync worker | deferred (~3 d) | **SHIPPED** — commit `f63d19e2e`, migration `035` (model cols + clients + `_intelligence_rollup_loop` @04:00 UTC + filter schema + 6 static fields) |
+> | §2 | IB-L3 / IB-L4 / IB-L5 frontend | deferred (~3 d); IB-L5 gated | IB-L3 **DONE**, IB-L4 **DONE**, IB-L5 **5/7 rows live** (2 calendar rows still pending). New bug surfaced: column-catalogue desync (**BP-702**) |
+> | §3 | L-4b insider universe activation | "3 tickers; activate loader" | Premise STALE — top-100 already enabled via migration `0017` (2026-06-06). Loader is **buggy** (wrong table `sched_policies`, **BP-704**) + writes `enabled=FALSE`; being fixed + gated-scheduled |
+> | §4 | Migration-031 deploy-window runbook note | trivial (~10 min) | **DONE** — note added to `docs/runbooks/market-data-operations.md` (Phase 2) |
+> | §5 | L-3 smoke + runbook + Prometheus alert | post-staging | Worker runs (5.4 s, 4344 metrics) but has **no alerting** (**BP-705**, being added) + a `adjusted_close` NULL→unadjusted-returns correctness bug (**BP-703**, being fixed) |
+> | §6 | Cross-session contamination commit `c60c7810` | file audit note (Option C) | **MOOT** — commit was rewritten away; no confusing attribution remains. Do not write the note |
+>
+> The historical content below is **preserved intentionally** (it explains why each
+> item was deferred and what the work looked like). Each section carries an inline
+> `> STATUS 2026-06-16:` note. Do not treat the un-annotated body as current.
+
 > **Purpose**: this is a planning + understanding document, not an implementation
 > brief. It explains every item that is NOT in the `feat/plan-0099-w4` integration
 > branch but is part of the PRD-0089 scope, why each one was deferred, what shape
@@ -63,6 +86,17 @@ The rest of this document is one chapter per item.
 ---
 
 ## §1. L-5b — S3-side intelligence rollup sync worker
+
+> **STATUS 2026-06-16: SHIPPED.** Backend is fully built — commit `f63d19e2e`
+> ("PLAN-0089 L-5b — intelligence rollup sync worker (T-WL5B-01..06)"), migration
+> `035` (the 6 columns + `intelligence_rollup_synced_at`),
+> `infrastructure/clients/intelligence_clients.py`, `application/use_cases/sync_intelligence_rollup.py`,
+> `_intelligence_rollup_loop` @04:00 UTC (`app.py`, env `MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC`),
+> the `ScreenFilterRequest` intelligence filter fields, and the 6 static fields in
+> `_get_static_screen_fields()`. The migration chain head advanced `031 → 039`.
+> The whole T-WL5B-01..06 task list below is DONE. The remaining caveat is
+> operational, not implementation: this is a presence/wiring fact — the §5
+> observability gap (no liveness alert, BP-705) applies to this loop too.
 
 ### §1.1 What it is
 
@@ -308,6 +342,25 @@ L-5b implements option 2.
 
 ## §2. IB-L3 / IB-L4 / IB-L5 frontend waves
 
+> **STATUS 2026-06-16: LARGELY SHIPPED.** IB-L3 (8 returns + 52W distance) and
+> IB-L4 (analyst/insider/ownership, incl. the client-derived ANALYST UPSIDE) are
+> **DONE** — columns, filters, `FilterState`, `build-filters` mapping, sorting, and
+> active-counts are all wired. IB-L5 is **DONE on the frontend** with 5 of 7 rows
+> live (`IB_L5_DEFAULTS`: newsCount7d/aiBrief/activeAlert/contradictions/llmRelevance
+> = true); only the two calendar-window rows (`upcomingEarnings`, `upcomingDividend`)
+> still carry a `BackendPendingBadge`. The stale-rollup UX (T-IB5-04, reading
+> `intelligence_rollup_synced_at`) is **not** implemented yet.
+>
+> **NEW BUG surfaced (not in the original plan): column-catalogue desync (BP-702).**
+> The IB-L3/L4/L5 columns exist as AG-Grid `ColDef`s but are **absent from
+> `DEFAULT_COLUMNS` / the `ColumnSettingsPopover` catalogue**, so they are rendered
+> but **unreachable** — the user can never unhide them. Conversely 8 popover keys
+> (`avgVol`, `epsTtm`, `fcf`, `fcfMargin`, `interestCoverage`, `netDebtToEbitda`,
+> `creditRating`, `evEbitda`) have no matching ColDef, so toggling them is a no-op.
+> This is the highest-leverage §2 fix and needs an architecture test asserting the
+> two sets are equal. Note: `BACKEND_PENDING_KEYS` (referenced in §2.7) was never
+> created — that paragraph is stale.
+
 ### §2.1 What they are
 
 Three frontend waves that wire the 17 backend fields shipped in this session
@@ -482,6 +535,24 @@ Every IB-L3/L4/L5 wave should look exactly like IB-L2's diff structure:
 
 ## §3. L-4b insider universe activation
 
+> **STATUS 2026-06-16: PREMISE STALE + LOADER BUGGY.** The "only 3 tickers
+> (AAPL/TSLA/AMZN)" premise is no longer true: migration
+> `0017_top100_insider_market_cap.py` (PLAN-0106 Wave E-1, 2026-06-06) already
+> expanded the insider polling universe to the **top-100 S&P 500** at weekly
+> cadence. Live coverage today: 100 enabled policies → 95 instruments with raw
+> `insider_transactions` → 39 with a non-null `insider_net_buy_90d` (the 95→39
+> rollup gap is the real remaining lever, not re-running the loader).
+>
+> Two things to fix before any "activate the loader" recommendation:
+> (1) **`InsiderUniverseLoader` is buggy (BP-704)** — it `INSERT`s into a
+> non-existent table `sched_policies` (the real table is `polling_policies`), so it
+> has **never run successfully** against this schema; it is also unscheduled and
+> inserts policies `enabled=FALSE` (a second enable step is required). Both are
+> being fixed and the loader gated-scheduled. (2) Re-scope the budget figures to the
+> actual ~654 OHLCV-covered universe (~2.8k EODHD credits/month weekly), not the
+> stale ~3000 / 13k headline. Process flag: migration 0017 spent EODHD credits as a
+> side effect without going through §3.5's budget-approval gate.
+
 ### §3.1 What it is
 
 The L-4b backend shipped two universe-management pieces:
@@ -586,6 +657,13 @@ either:
 
 ## §4. Migration 031 deploy-window sequencing
 
+> **STATUS 2026-06-16: DONE.** The §4.3 constraint-window note has been added to
+> `docs/runbooks/market-data-operations.md` (Phase 2 — Database migration), with the
+> additional recommendation that future constraint-widening migrations use
+> `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT` to avoid the DROP→ADD gap
+> entirely. Migration 031 is no longer HEAD (chain advanced to `039`) but the
+> widened CHECK and the `date` re-typing it introduced remain live.
+
 ### §4.1 What it is
 
 Migration `031_extend_field_type_check.py` (shipped in
@@ -635,6 +713,25 @@ section lives) a one-line entry:
 ---
 
 ## §5. L-3 production smoke test + runbook fill-in
+
+> **STATUS 2026-06-16: PARTIAL — worker runs, but NO alerting + a correctness bug.**
+> The `ComputedMetricsBackfillWorker` runs cleanly nightly (measured: **5.4 s**,
+> 654 instruments, **4344 metrics written** — the plan's "5–15 min" estimate is
+> ~100× off at current scale) and the BP-180 cast fix is effective. Two genuine
+> gaps remain:
+> - **No Prometheus liveness/staleness alert (BP-705, being added).** The loop logs
+>   INFO/ERROR only; the proposed `computed_metrics_worker_runs_total` /
+>   `..._last_success_timestamp` metrics do not exist, the 20h skip-guard uses an
+>   in-process `last_success_at` that is wiped on restart, and there is no
+>   `asyncio.wait_for` timeout — so a hung run silently serves stale screener data
+>   (same family as BP-699 lag-stall).
+> - **`adjusted_close` NULL → unadjusted returns (BP-703, being fixed).** ~92% of
+>   OHLCV bars have `adjusted_close IS NULL` (601/654 instruments fall back to raw
+>   `close`), so every derived return is computed on unadjusted prices — wrong
+>   across splits/dividends. A live data-correctness defect feeding the screener.
+> - Note: the worker emits **7** metric names (5 returns + 2 distance), not the "8"
+>   the plan/runbook claim — `volatility_30d` is not implemented and the runbook
+>   metric table uses wrong names.
 
 ### §5.1 What it is
 
@@ -712,6 +809,15 @@ Three small follow-ups, all post-staging-deploy:
 ---
 
 ## §6. Cross-session contamination commit (`c60c7810`)
+
+> **STATUS 2026-06-16: MOOT — do NOT write the audit note.** Both `c60c7810` and
+> `8906009f` are **no longer in the branch history** (the 436-commit advance + branch
+> rebuild rewrote them away). `git log -p` on the rag-chat test
+> (`services/rag-chat/tests/unit/test_app_deploy_token_cache_flush.py`, which
+> survived and is current) will not surface the contamination commit, so there is no
+> longer a confusing attribution to document. Writing the Option-C note now would
+> document a commit that does not exist in the branch a future archaeologist would
+> inspect. Drop §6 entirely.
 
 ### §6.1 What it is
 

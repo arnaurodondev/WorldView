@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date
+from datetime import UTC, date
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -33,6 +33,41 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # WHY: OHLCV data for 252 trading days at ~50 chars/row ≈ 12,600 chars — well
 # beyond most context windows. Cap at 4000 to stay within budget.
 _TOOL_RESULT_MAX_CHARS = 4000
+
+# Interval -> seconds-per-bar lookup. Used by _handle_get_price_history's
+# last_n_bars/lookback_days computation to size the backward window. Values
+# match the canonical intervals exposed by the market-data /ohlcv/bars
+# endpoint; unknown intervals fall through to "day" (86400).
+# Minimum backward-window span (seconds) for any computed last_n_bars /
+# default price-history fetch. 86400 (1 day) is NOT enough: the newest bars
+# are the last *trading* session, so a request made on a weekend or holiday
+# (or before the first prints of the current session, e.g. Monday pre-market)
+# anchored on now() with a 1-day window reaches back only to "yesterday",
+# which may be Sunday/Saturday — yielding ZERO bars even though the symbol
+# has plenty of Friday data. This is the AAPL "couldn't find a match" bug
+# (investigation 2026-06-15): `last_n_bars=1, interval=1m` computed
+# max(1*60*2, 86400) = 1 day, returning empty on Mon/weekend while a 3-day
+# window returned 252 Friday bars. 4 calendar days clears a normal Fri→Mon
+# weekend PLUS one adjacent market holiday so the last session is always in
+# range. Daily/weekly intervals already imply much larger windows, so this
+# floor only bites the intraday + tiny-N cases that were broken.
+_MIN_LOOKBACK_SECONDS = 4 * 86400  # 4 calendar days — clears a weekend + holiday
+
+_INTERVAL_SECONDS_MAP: dict[str, int] = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "hour": 3600,
+    "1h": 3600,
+    "4h": 14400,
+    "day": 86400,
+    "1d": 86400,
+    "week": 604800,
+    "1w": 604800,
+    "month": 2_592_000,
+    "1M": 2_592_000,
+}
 
 
 # FIX-LIVE-DD (2026-05-25): Q6 ("AI semiconductors above $50B") graded USELESS
@@ -84,6 +119,53 @@ def _format_market_cap_value(value: Any) -> str | None:
     if abs_n >= 1e6:
         return f"{sign}${abs_n / 1e6:.2f}M"
     return f"{sign}${abs_n:,.0f}"
+
+
+# ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
+# Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
+# ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
+# the screener may return for that metric (synonyms tolerated so a backend rename
+# does not silently drop the column). The render order is: filtered metrics first
+# (most relevant to the question), then this CORE set, de-duplicated.
+_SCREEN_METRIC_RENDER: dict[str, tuple[str, tuple[str, ...]]] = {
+    "market_capitalization": ("MCap", ("market_cap", "market_capitalization", "market_cap_usd")),
+    "pe_ratio": ("P/E", ("pe_ratio", "pe", "trailing_pe")),
+    "forward_pe": ("Fwd P/E", ("forward_pe",)),
+    "quarterly_revenue_growth_yoy": ("Rev growth YoY", ("revenue_growth_yoy", "quarterly_revenue_growth_yoy")),
+    "revenue_growth_yoy": ("Rev growth YoY", ("revenue_growth_yoy", "quarterly_revenue_growth_yoy")),
+    "revenue": ("Revenue", ("revenue", "revenue_ttm")),
+    "gross_margin": ("Gross margin", ("gross_margin",)),
+    "operating_margin": ("Op margin", ("operating_margin",)),
+    "roe": ("ROE", ("roe",)),
+    "dividend_yield": ("Div yield", ("dividend_yield",)),
+    "eps_ttm": ("EPS (TTM)", ("eps_ttm", "eps")),
+}
+
+# Always-rendered core columns (in addition to any filtered metric). These are
+# the high-signal fundamentals an analyst expects in a screen result table.
+_SCREEN_CORE_METRICS: tuple[str, ...] = ("market_capitalization", "pe_ratio", "quarterly_revenue_growth_yoy", "revenue")
+
+
+def _screen_metric_columns(filter_metric_names: list[str]) -> list[tuple[str, tuple[str, ...]]]:
+    """Return ``[(label, row_keys), …]`` columns to render for a screener result.
+
+    Filtered metrics come first (the columns the user actually keyed the screen
+    on), then the core set — de-duplicated by display label so a metric that is
+    both filtered AND core appears once. Unknown filter metric names are skipped
+    (no render mapping) rather than guessed.
+    """
+    columns: list[tuple[str, tuple[str, ...]]] = []
+    seen_labels: set[str] = set()
+    for metric in (*filter_metric_names, *_SCREEN_CORE_METRICS):
+        spec = _SCREEN_METRIC_RENDER.get(metric)
+        if spec is None:
+            continue
+        label, row_keys = spec
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        columns.append((label, row_keys))
+    return columns
 
 
 # ── compare_entities period selection helpers (FQA-04 carry / PLAN-0103 W14) ──
@@ -254,25 +336,87 @@ class MarketHandler(ToolHandler):
     async def _handle_get_price_history(
         self,
         ticker: str,
-        from_date: str,
-        to_date: str,
-        interval: str = "week",
+        from_date: str | None = None,
+        to_date: str | None = None,
+        # Chat-eval #5 root cause A (2026-06-12): default to "day" (was "week").
+        # The backend /ohlcv/bars endpoint does not support week/month
+        # aggregation, and those values were removed from the tool enum.
+        interval: str = "day",
+        last_n_bars: int | None = None,
+        lookback_days: int | None = None,
     ) -> RetrievedItem | None:
-        """Fetch OHLCV bars and format as a markdown table RetrievedItem."""
-        # Parse and validate date strings before hitting S3
-        try:
-            _from = date.fromisoformat(from_date)
-            _to = date.fromisoformat(to_date)
-        except ValueError:
-            log.warning(
-                "tool_invalid_dates",
-                tool="get_price_history",
-                from_date=from_date,
-                to_date=to_date,
-            )
-            return None
+        """Fetch OHLCV bars and format as a markdown table RetrievedItem.
 
-        # BP-025: wrap S3 call with timeout to prevent long tail latency
+        Parameter resolution (B-3, 2026-06-10):
+          1. If ``from_date`` AND ``to_date`` are both provided, use them
+             verbatim (explicit-window mode, the original behavior).
+          2. Else if ``last_n_bars`` is provided, request the most recent N
+             bars of the given ``interval`` by computing a backward window
+             of ``N x interval_seconds + buffer``, then slicing to the last
+             N rows post-fetch.
+          3. Else if ``lookback_days`` is provided, fetch
+             ``today - lookback_days`` -> ``today`` at the given interval.
+          4. Else default to ``last_n_bars=20`` (one screen of bars).
+
+        Replaces the implicit 7-day 1m fallback shipped in 9a8bb6244:
+        the LLM now expresses "what is X trading at?" explicitly as
+        ``last_n_bars=1, interval="1m"`` — single retrieved bar, no
+        guessing on the handler side. Quotes are intentionally disabled
+        to cap third-party costs; the most-recent 1m bar fills the gap.
+        """
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        # ── Step 1: resolve the date window from inputs ──────────────────
+        explicit_window = bool(from_date and to_date)
+        n: int | None = None
+
+        if explicit_window:
+            try:
+                _from = date.fromisoformat(from_date)  # type: ignore[arg-type]
+                _to = date.fromisoformat(to_date)  # type: ignore[arg-type]
+            except ValueError:
+                log.warning(
+                    "tool_invalid_dates",
+                    tool="get_price_history",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                return None
+        elif last_n_bars is not None and last_n_bars > 0:
+            # Compute a backward window with enough headroom for weekends /
+            # off-hours / non-trading days. Buffer = 2x the implied span,
+            # bounded to a sane ceiling so 1m x 60 doesn't pull years.
+            n = int(last_n_bars)
+            interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
+            implied_seconds = n * interval_seconds
+            # Floor at _MIN_LOOKBACK_SECONDS (4d) so a weekend/holiday between
+            # now() and the last trading session never produces an empty fetch
+            # (the AAPL "couldn't find a match" bug). Was max(..., 86400).
+            buffer_seconds = max(implied_seconds * 2, _MIN_LOOKBACK_SECONDS)
+            buffer_seconds = min(buffer_seconds, 365 * 86400)  # cap at 1y
+            _to = _dt.now(tz=UTC).date()
+            _from = _to - _td(seconds=buffer_seconds)
+        elif lookback_days is not None and lookback_days > 0:
+            _to = _dt.now(tz=UTC).date()
+            # Honour the caller's window but never look back less than the
+            # weekend/holiday-clearing floor — a literal lookback_days=1 on a
+            # Monday/weekend would otherwise miss Friday's session entirely.
+            _lookback = max(int(lookback_days) * 86400, _MIN_LOOKBACK_SECONDS)
+            _from = _to - _td(seconds=_lookback)
+        else:
+            # Default: most recent 20 bars at requested interval.
+            n = 20
+            interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
+            # Same weekend/holiday-clearing floor as the explicit last_n_bars
+            # branch (was 86400) so an interval="1m" default fetch on a
+            # weekend still reaches the last trading session.
+            buffer_seconds = max(n * interval_seconds * 2, _MIN_LOOKBACK_SECONDS)
+            _to = _dt.now(tz=UTC).date()
+            _from = _to - _td(seconds=buffer_seconds)
+
+        # ── Step 2: fetch ────────────────────────────────────────────────
+        # BP-025: wrap S3 call with timeout to prevent long tail latency.
         bars = await asyncio.wait_for(
             self._s3.get_ohlcv_range(
                 ticker=ticker,
@@ -283,18 +427,56 @@ class MarketHandler(ToolHandler):
             timeout=self._timeout,
         )
         if not bars:
-            log.warning("tool_no_data", tool="get_price_history", ticker=ticker)
+            log.warning(
+                "tool_no_data",
+                tool="get_price_history",
+                ticker=ticker,
+                interval=interval,
+                last_n_bars=last_n_bars,
+                lookback_days=lookback_days,
+            )
             return None
 
-        table = self._format_price_table(ticker, from_date, to_date, interval, bars)
-        # CRITICAL: field is `text` NOT `content` (N-7); use .create() factory
-        # (never direct construction — fusion_score invariant enforced in __post_init__)
+        # ── Step 3: slice when last_n_bars mode ──────────────────────────
+        if n is not None and len(bars) > n:
+            # /ohlcv/bars returns ascending; take the trailing N (the most
+            # recent bars of the last trading session). The live market-data
+            # payload keys each bar as "date" (e.g. "2026-06-12 18:48"); older
+            # callers used "ts"/"bar_date". Include all three so the sort is a
+            # real chronological sort regardless of upstream shape — the
+            # previous key (ts|bar_date) was always "" for the live "date"
+            # payload, silently degrading to a no-op that only worked because
+            # the upstream order is already ascending.
+            bars = sorted(
+                bars,
+                key=lambda b: b.get("ts") or b.get("bar_date") or b.get("date") or "",
+            )[-n:]
+
+        # ── Step 4: format ──────────────────────────────────────────────
+        table = self._format_price_table(ticker, str(_from), str(_to), interval, bars)
+        # Distinguish "single most-recent bar" responses in the citation
+        # so the LLM/UI can present them as "last known price" rather
+        # than full history. Only n==1 paths get the latest_1m suffix.
+        item_id = (
+            f"tool:price_history:{ticker}:latest_1m" if n == 1 and interval == "1m" else f"tool:price_history:{ticker}"
+        )
         return RetrievedItem.create(
-            item_id=f"tool:price_history:{ticker}",
+            item_id=item_id,
             item_type=ItemType.financial,
             text=table[:_TOOL_RESULT_MAX_CHARS],
-            score=0.88,
+            score=0.88 if explicit_window else 0.84,
             trust_weight=0.90,
+            # BP-670: bind the requested symbol so the BP-605 grounding gate
+            # and the entity-name validator see WHICH entity this price data
+            # belongs to (the live BTC-USD refusal had entity_name=None and
+            # the symbol appeared only inside the item_id).
+            citation_meta=CitationMeta(
+                title=f"{ticker.upper()} price history ({interval})",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name=ticker.upper(),
+            ),
         )
 
     async def _handle_get_fundamentals_history(
@@ -673,8 +855,17 @@ class MarketHandler(ToolHandler):
                 out.append("")
                 out.append(header)
                 out.append(divider)
-                for row in rows:
-                    period = row.get("period_label") or row.get("period_end") or "?"
+                for idx, row in enumerate(rows):
+                    # PLAN-0107 follow-up Bug 2 — defensive fallback for the
+                    # "Period → Period" missing-number rendering. When both
+                    # ``period_label`` and ``period_end`` are null (a
+                    # market-data upstream gap; tracked separately by the
+                    # BugFix B agent) we used to render the literal "?",
+                    # which then encouraged the LLM to write "Period → Period"
+                    # with no number. Emit a synthetic, ordinal-indexed label
+                    # so the row is still identifiable in the table and the
+                    # downstream prose has a concrete identifier to cite.
+                    period = row.get("period_label") or row.get("period_end") or f"Period {idx}"
                     ptype = row.get("period_type") or "QUARTERLY"
                     cells = []
                     for m in displayed:
@@ -713,8 +904,13 @@ class MarketHandler(ToolHandler):
                 # missing.
                 out.append("")
                 out.append(f"### {ticker} — Per-period metric listing")
-                for row in rows:
-                    period = row.get("period_label") or row.get("period_end") or "?"
+                for idx, row in enumerate(rows):
+                    # PLAN-0107 follow-up Bug 2 — see matching fallback in the
+                    # period table above. The Per-period metric listing is the
+                    # explicit "<metric>: <value>" block the grounding-rewrite
+                    # path keys on; emitting "Period {idx}" instead of "?" keeps
+                    # each bullet uniquely addressable when upstream label is null.
+                    period = row.get("period_label") or row.get("period_end") or f"Period {idx}"
                     out.append(f"- {period}:")
                     for m in displayed:
                         v = row.get(m)
@@ -1109,7 +1305,30 @@ class MarketHandler(ToolHandler):
         if region:
             log.info("tool_arg_dropped", tool="screen_universe", arg="region", value=region)
 
-        payload: dict[str, Any] = {"filters": filter_list, "limit": clamped_limit}
+        # Chat-eval #4 / #5 (2026-06-12): pass an explicit ``sort_by``/``sort_dir``
+        # so the rendered top-N is the TRUE top-N. The screener used to return
+        # rows in arbitrary order and truncate at ``limit`` — so "top 5 tech by
+        # market cap" got whatever 5 rows came back first (CRM/IBM instead of
+        # GOOGL/AVGO/META). We default the sort to the PRIMARY filter metric
+        # descending (the column the question actually filtered on). A separate
+        # market-data agent is adding backend ``sort_by`` support; until then the
+        # field is forward-compatible (ignored if unsupported upstream).
+        #
+        # ``_PRIMARY_SORT_METRIC`` is the first filter's metric — that is the
+        # metric the user keyed the screen on (market_capitalization, pe_ratio,
+        # quarterly_revenue_growth_yoy, …). "max-only" filters (e.g. pe_ratio_max
+        # for "cheapest") sort ascending; "min-only"/range filters sort
+        # descending (largest/highest first), which matches "top N by X" intent.
+        sort_by = filter_list[0]["metric"] if filter_list else "market_capitalization"
+        _first = filter_list[0] if filter_list else {}
+        sort_dir = "asc" if (_first.get("max_value") is not None and _first.get("min_value") is None) else "desc"
+
+        payload: dict[str, Any] = {
+            "filters": filter_list,
+            "limit": clamped_limit,
+            "sort_by": sort_by,
+            "sort_dir": sort_dir,
+        }
 
         t0 = time.monotonic()
         try:
@@ -1129,30 +1348,43 @@ class MarketHandler(ToolHandler):
         if not instruments:
             text = "No instruments matched the screening criteria."
         else:
-            lines = [f"## Screener Results ({len(instruments)} instruments)\n"]
+            # Chat-eval #4 (2026-06-12): render the metric columns the user
+            # FILTERED on (plus a small core set), not just ticker/name/MCap/PE.
+            # Previously the formatter dropped ``revenue_growth_yoy`` / ``revenue``
+            # / ``roe`` etc., so the LLM could not ground "YoY revenue growth",
+            # re-fetched fundamentals, hand-computed ratios, and those LLM-derived
+            # numbers failed NumericGroundingValidator (unsupported_count=39 on
+            # ``ru_ai_semi_screener``). We surface the raw values directly so the
+            # answer can cite them with no extra tool round-trip.
+            #
+            # ``_screen_metric_columns`` maps the DB metric names used in the
+            # filter list to the response-row keys the screener returns. The
+            # filtered metrics come first (most relevant to the question), then a
+            # core set, de-duplicated and order-preserving.
+            _filter_metric_names = [f["metric"] for f in filter_list]
+            metric_cols = _screen_metric_columns(_filter_metric_names)
+
+            lines = [f"## Screener Results ({len(instruments)} instruments, sorted by {sort_by} {sort_dir})\n"]
             for inst in instruments[:50]:
                 ticker = inst.get("ticker") or inst.get("symbol") or "?"
                 name = inst.get("name") or ""
-                mc = inst.get("market_cap")
-                pe = inst.get("pe_ratio")
                 row = f"  {ticker}"
                 if name:
                     row += f" — {name}"
-                if mc is not None and mc != "":
-                    # FIX-LIVE-DD: render BOTH raw and formatted. The raw
-                    # integer is kept for the numeric-grounding validator
-                    # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
-                    # the ``MCap`` (formatted) label is what the LLM
-                    # actually copies into its answer.
-                    formatted = _format_market_cap_value(mc)
-                    if formatted is not None:
-                        row += f" | MCap: {formatted} (raw: {mc})"
+                for col_label, row_keys in metric_cols:
+                    val = next((inst.get(k) for k in row_keys if inst.get(k) not in (None, "")), None)
+                    if val is None:
+                        continue
+                    if col_label == "MCap":
+                        # FIX-LIVE-DD: render BOTH raw and formatted. The raw
+                        # integer is kept for the numeric-grounding validator
+                        # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
+                        # the formatted label is what the LLM copies into its
+                        # answer.
+                        formatted = _format_market_cap_value(val)
+                        row += f" | MCap: {formatted} (raw: {val})" if formatted is not None else f" | MCap: {val}"
                     else:
-                        # Legacy/string path: upstream already gave a
-                        # display-ready label like ``"3T"`` — keep it.
-                        row += f" | MCap: {mc}"
-                if pe:
-                    row += f" | P/E: {pe}"
+                        row += f" | {col_label}: {val}"
                 lines.append(row)
             text = "\n".join(lines)
 

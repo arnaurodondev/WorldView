@@ -22,10 +22,13 @@ rather than in the block sub-modules for the same reason.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import json
+import sys
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -33,25 +36,28 @@ import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from common.ids import PUBLIC_TENANT_ID, uuid5_from_parts  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
+    _ASYNCPG_CONN_ERRORS,
     BaseKafkaConsumer,
     ConsumerConfig,
     FailureInfo,
     UnitOfWorkProtocol,
 )
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
+from messaging.kafka.consumer.errors import ConsumerError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.embeddings import run_embeddings_block
 from nlp_pipeline.application.blocks.ner import run_ner_block
-from nlp_pipeline.application.blocks.routing import compute_routing_score
+from nlp_pipeline.application.blocks.routing import _AUTHORITATIVE_FILING_SOURCES, compute_routing_score
 from nlp_pipeline.application.blocks.sectioning import section_document
 from nlp_pipeline.application.blocks.suppression import (
     apply_suppression_gate,
     should_generate_chunk_embeddings,
+    should_generate_section_embeddings,
     should_run_deep_extraction,
 )
-from nlp_pipeline.domain.enums import ProcessingPath
+from nlp_pipeline.domain.enums import ProcessingPath, RoutingTier
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
@@ -81,6 +87,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.provisional import (
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.signal_events import _enqueue_signal_events
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.storage import (
     download_article,
+    extract_title_from_silver,
     extract_url_from_silver,
 )
 from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events import (
@@ -91,6 +98,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events impo
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_article_processed,
+    record_learned_router_shadow,
     record_pre_persist_tenant_substituted,
     s6_embeddings_created_total,
     s6_intel_commit_failures_total,
@@ -125,9 +133,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+    from nlp_pipeline.application.blocks.learned_routing import LearnedRouter
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
-    from nlp_pipeline.domain.models import EntityMention
+    from nlp_pipeline.domain.models import EntityMention, RoutingDecision
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository as OutboxRepositoryT
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
@@ -140,6 +149,7 @@ _DEFAULT_SOURCE_TRUST = 0.5
 
 # Re-export block helpers so existing imports from this module remain valid.
 __all__ = [
+    "_SCHEMA_DIR",
     "ArticleProcessingConsumer",
     "MLPhaseResult",
     "_build_chunk_entity_mentions",
@@ -155,7 +165,6 @@ __all__ = [
     "_infer_temporal_scope",
     "_normalize_ref_variants",
     "_normalize_temporal_events_for_emit",
-    "_SCHEMA_DIR",
     "synthesize_provisional_refs",
 ]
 
@@ -393,6 +402,22 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     _dedup_prefix: str = "nlp:dedup:article_consumer"
     _dedup_ttl_seconds: ClassVar[int] = 86400
 
+    # ------------------------------------------------------------------
+    # Persistent-retry attempt counter (transient-failure resilience).
+    #
+    # With ``enable_persistent_retry=True`` the base retry path needs a DURABLE
+    # attempt count keyed by (group_id, event_id).  We reuse the Valkey dedup
+    # client (``_dedup_client``) as the durable store: an INCR per failure plus a
+    # TTL so the key self-expires once the doc recovers or dead-letters.  Without
+    # this, the count resets to 0 on every redelivery and a transiently-failing
+    # doc loops until ``dead_letter_cap`` crashes the consumer instead of
+    # dead-lettering cleanly at ``max_retries``.
+    # ------------------------------------------------------------------
+    _RETRY_ATTEMPT_PREFIX: ClassVar[str] = "nlp:retry:article_consumer"
+    # TTL long enough to outlive a redelivery backoff cycle but short enough that
+    # the counter does not linger forever after the doc succeeds / dead-letters.
+    _RETRY_ATTEMPT_TTL_SECONDS: ClassVar[int] = 86400
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -408,9 +433,17 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         chunk_text_store: ChunkTextStorePort | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
         valkey_client: ValkeyClient | None = None,
+        learned_router: LearnedRouter | None = None,
+        entailment_client: ExtractionClient | None = None,
+        entailment_config: Any = None,
     ) -> None:
         super().__init__(config)
         self._dedup_client = valkey_client
+        # PLAN-0111 C-6: optional learned router. None when mode == "off" (the
+        # main entry point only constructs it for shadow/live). The consumer
+        # treats None as "no shadow proposal", so behaviour is identical to the
+        # pre-PLAN-0111 pipeline when the feature is off.
+        self._learned_router = learned_router
         self._settings = settings
         self._nlp_sf = nlp_session_factory
         self._intel_sf = intelligence_session_factory
@@ -419,12 +452,287 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._ner = ner_client
         self._emb = embedding_client
         self._ext = extraction_client
+        # ENHANCEMENT #6: cheap co-mention entailment client (Qwen3-235B) + config.
+        # None when the feature is off → run_ml_phase forwards None and the check no-ops.
+        self._entailment_client = entailment_client
+        self._entailment_config = entailment_config
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
         self._usage_logger = usage_logger
 
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         return _NoOpUnitOfWork()  # type: ignore[return-value]
+
+    def _retry_attempt_key(self, event_id: str) -> str:
+        """Build the Valkey key for *event_id*'s persistent attempt counter.
+
+        Namespaced by the consumer group so two consumer groups replaying the
+        same event id never share (and corrupt) each other's count.
+        """
+        return f"{self._RETRY_ATTEMPT_PREFIX}:{self._config.group_id}:{event_id}"
+
+    async def _get_attempt_count(self, event_id: str) -> int:
+        """Return the number of FAILED attempts already recorded for *event_id*.
+
+        Reads the durable count from Valkey.  ``0`` means no prior failure.
+
+        Fail-closed semantics: if there is NO Valkey client, or the read raises
+        (Valkey down), we cannot trust the in-memory count — which would reset to
+        0 on every redelivery and loop the doc forever.  Returning
+        ``max_retries`` instead forces the base retry path to treat the doc as
+        exhausted and route it to the DLQ rather than retry indefinitely.
+        """
+        if self._dedup_client is None:
+            return self._config.max_retries
+        key = self._retry_attempt_key(event_id)
+        try:
+            raw = await self._dedup_client.get(key)
+        except Exception:
+            # Valkey unreachable: fail closed toward the DLQ (see docstring).
+            logger.warning(
+                "article_consumer.retry_count_read_failed",
+                event_id=event_id,
+                key=key,
+                exc_info=True,
+            )
+            return self._config.max_retries
+        if raw is None:
+            return 0
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            # Corrupt value — treat as exhausted rather than risk an infinite loop.
+            logger.warning(
+                "article_consumer.retry_count_corrupt",
+                event_id=event_id,
+                key=key,
+                raw=raw,
+            )
+            return self._config.max_retries
+
+    async def _record_attempt(self, event_id: str, attempt: int, error: BaseException) -> None:
+        """Persist the incremented attempt count for *event_id* (best-effort).
+
+        Uses an atomic INCR plus a refreshed TTL so the counter survives
+        redelivery but self-expires after recovery / DLQ.  Write failures are
+        swallowed (logged only): a crash here would take down the consumer, and
+        the base retry path already records the in-memory attempt number.
+        """
+        if self._dedup_client is None:
+            return
+        key = self._retry_attempt_key(event_id)
+        try:
+            await self._dedup_client.incr(key)
+            await self._dedup_client.expire(key, self._RETRY_ATTEMPT_TTL_SECONDS)
+        except Exception:
+            logger.warning(
+                "article_consumer.retry_count_write_failed",
+                event_id=event_id,
+                attempt=attempt,
+                key=key,
+                exc_info=True,
+            )
+
+    # ── Task #14: bounded-concurrency poll loop ─────────────────────────────────
+    #
+    # WHY OVERRIDE ``run`` HERE (not in libs/messaging.BaseKafkaConsumer):
+    # The base loop is strictly serial — poll one message, ``await`` the full
+    # pipeline (which includes a 12-22s DeepInfra deep-extraction round-trip),
+    # commit that single offset, then poll the next.  A replica therefore spends
+    # ~20s idle on network wait per article, so 3 replicas process only ~3
+    # articles at a time (~500/hr).  Deep extraction is I/O-bound, not CPU-bound,
+    # so a single replica can overlap many DeepInfra waits.  The base loop is
+    # shared by ~30 consumers across the platform, so we do NOT touch it; instead
+    # the article consumer overrides ``run`` to dispatch up to
+    # ``article_consumer_concurrency`` message handlers concurrently per poll
+    # batch.  K=16 x 3 replicas reaches ~48 articles in flight platform-wide.
+    #
+    # OFFSET-COMMIT CORRECTNESS (at-least-once + per-partition ordering):
+    # confluent-kafka's ``commit(message=msg)`` commits ``msg.offset()+1`` for
+    # that message's partition, which *implicitly* acks every lower offset on the
+    # partition.  Under concurrency a later offset may finish before an earlier
+    # one on the same partition, so committing it eagerly would skip the unfinished
+    # earlier message on a crash (data loss).  To preserve at-least-once we:
+    #   1. Group the poll batch by (topic, partition).
+    #   2. Dispatch every message as a task, bounded by a shared semaphore.
+    #   3. After the whole batch settles, for each partition commit ONLY the
+    #      highest *contiguous* successfully-handled offset starting from the
+    #      lowest offset in the batch.  A message that hit an un-handled exception
+    #      breaks the contiguous run, so its offset (and everything after it on
+    #      that partition) is re-polled on the next cycle / after rebalance.
+    # A message routed through ``_handle_failure`` (dead-letter / outbox retry) is
+    # considered "handled" for offset purposes — this matches the base loop, which
+    # commits after ``_handle_failure`` returns.  Idempotency (ValkeyDedupMixin +
+    # deterministic UUID5 IDs + idempotent upserts + the routing_decisions
+    # already-processed guard in ``process_message``) makes re-delivery safe.
+    #
+    # Messages are keyed by ``doc_id`` upstream (S5), so two events for the same
+    # document land on the same partition and are dispatched in offset order;
+    # concurrency across partitions never races two events for one document.
+    async def run(self) -> None:  # type: ignore[override]
+        """Bounded-concurrency poll loop (see class-level Task #14 docstring)."""
+        self._init_kafka()
+        retry_task = asyncio.create_task(self._retry_loop())
+        probe_task = asyncio.create_task(self._connectivity_probe_loop())
+
+        def _on_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.critical("article_consumer_bg_task_crashed", exc_info=exc)  # type: ignore[no-any-return]
+                sys.exit(1)
+
+        retry_task.add_done_callback(_on_task_done)
+        probe_task.add_done_callback(_on_task_done)
+
+        concurrency = max(1, int(getattr(self._settings, "article_consumer_concurrency", 16)))
+        sem = asyncio.Semaphore(concurrency)
+        logger.info(  # type: ignore[no-any-return]
+            "article_consumer_concurrency_enabled",
+            concurrency=concurrency,
+            group_id=self._config.group_id,
+        )
+
+        try:
+            loop = asyncio.get_event_loop()
+            while not self._stop_event.is_set():
+                # Honour the opt-in backpressure pause exactly like the base loop.
+                self._maybe_apply_backpressure()
+                batch = await self._poll_batch(loop, concurrency)
+                # BUG-1 (2026-06-22 e2e-coverage audit): the base poll loop calls
+                # ``_record_progress()`` on EVERY healthy poll cycle (idle OR
+                # message) so the BP-704 liveness probe sees a fresh heartbeat.
+                # This overridden ``run()`` previously never recorded progress,
+                # so ``seconds_since_progress()`` stayed ``None`` forever; once
+                # the 90s startup grace elapsed the probe logged
+                # ``consumer_liveness_unhealthy_no_progress`` and ``/healthz``
+                # returned 503 PERMANENTLY — even while articles were being
+                # processed successfully. We mirror the base loop here: a
+                # completed poll cycle (whether or not it yielded a batch) is
+                # real liveness, so heartbeat right after the poll returns.
+                self._record_progress()
+                if not batch:
+                    continue
+                await self._dispatch_batch(loop, batch, sem)
+        finally:
+            retry_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retry_task
+            probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await probe_task
+            self._shutdown_kafka()
+
+    async def _poll_batch(self, loop: Any, max_records: int) -> list[Any]:
+        """Drain up to ``max_records`` messages without blocking on an empty topic.
+
+        The first ``poll`` blocks up to ``poll_timeout_seconds`` so an idle
+        consumer does not busy-spin; subsequent polls use a 0s timeout to grab
+        whatever is already buffered, then stop.  This bounds a batch to roughly
+        one concurrency-window of in-flight work so memory stays predictable.
+        """
+        from confluent_kafka import KafkaError
+
+        batch: list[Any] = []
+        first = True
+        while len(batch) < max_records and not self._stop_event.is_set():
+            timeout = self._config.poll_timeout_seconds if first else 0.0
+            first = False
+            msg = await loop.run_in_executor(None, self._consumer.poll, timeout)
+            if msg is None:
+                break
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                logger.error("kafka_poll_error", error=str(msg.error()))  # type: ignore[no-any-return]
+                continue
+            batch.append(msg)
+        return batch
+
+    async def _dispatch_batch(self, loop: Any, batch: list[Any], sem: asyncio.Semaphore) -> None:
+        """Process a poll batch concurrently and commit contiguous offsets.
+
+        Returns once every message in the batch has settled.  See the class-level
+        Task #14 docstring for the at-least-once / ordering guarantees.
+        """
+        # outcomes[(topic, partition)] = {offset: handled_ok}
+        outcomes: dict[tuple[str, int], dict[int, bool]] = defaultdict(dict)
+
+        async def _process_one(msg: Any) -> None:
+            tp = (msg.topic(), msg.partition())
+            offset = msg.offset()
+            async with sem:
+                try:
+                    try:
+                        await self._handle_message(msg)
+                    except _ASYNCPG_CONN_ERRORS as conn_exc:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "consumer_db_connection_lost_retrying",
+                            error=str(conn_exc),
+                            topic=msg.topic(),
+                            partition=msg.partition(),
+                            offset=offset,
+                        )
+                        await asyncio.sleep(1.0)
+                        await self._handle_message(msg)
+                    outcomes[tp][offset] = True
+                except ConsumerError as exc:
+                    # Routed to dead-letter / outbox retry — treated as handled for
+                    # offset purposes (mirrors the base loop committing after
+                    # _handle_failure returns).
+                    await self._handle_failure(msg, exc)
+                    outcomes[tp][offset] = True
+                except Exception as exc:
+                    # Unexpected error: the base loop still commits after
+                    # _handle_failure, so we mirror that to avoid a poison message
+                    # permanently blocking its partition's contiguous offset run.
+                    logger.exception("kafka_unexpected_error", error=str(exc))  # type: ignore[no-any-return]
+                    await self._handle_failure(msg, exc)
+                    outcomes[tp][offset] = True
+
+        await asyncio.gather(*(_process_one(m) for m in batch))
+
+        # Commit the highest contiguous handled offset per partition.  We rebuild
+        # one synthetic commit message per partition at that offset so confluent's
+        # implicit "commit offset+1" semantics ack exactly the contiguous prefix.
+        # ``_commit_to_offset`` finds, among each partition's batch messages, the
+        # one whose offset equals the contiguous high-water mark and commits it.
+        commit_targets = self._contiguous_commit_targets(batch, outcomes)
+        for msg in commit_targets:
+            if not self._config.enable_auto_commit:
+                with contextlib.suppress(Exception):
+                    await loop.run_in_executor(None, self._consumer.commit, msg)
+        with contextlib.suppress(Exception):
+            await loop.run_in_executor(None, self._record_consumer_lag)
+
+    @staticmethod
+    def _contiguous_commit_targets(batch: list[Any], outcomes: dict[tuple[str, int], dict[int, bool]]) -> list[Any]:
+        """Return, per partition, the batch message at the highest contiguous handled offset.
+
+        Sorts each partition's messages by offset and walks forward while each
+        offset is present-and-handled, stopping at the first gap or failure.  The
+        message at that high-water mark is committed (confluent acks offset+1,
+        implicitly acking every lower offset).  If the *first* message of a
+        partition was not handled, nothing is committed for it.
+        """
+        by_partition: dict[tuple[str, int], list[Any]] = defaultdict(list)
+        for msg in batch:
+            by_partition[(msg.topic(), msg.partition())].append(msg)
+
+        targets: list[Any] = []
+        for tp, msgs in by_partition.items():
+            msgs.sort(key=lambda m: m.offset())
+            handled = outcomes.get(tp, {})
+            high_water: Any = None
+            for msg in msgs:
+                if handled.get(msg.offset()) is True:
+                    high_water = msg
+                else:
+                    break  # gap / failure → stop the contiguous run here
+            if high_water is not None:
+                targets.append(high_water)
+        return targets
 
     async def _download_article(self, minio_key: str) -> str:
         """Download and unpack article text from MinIO (Block 3 storage step).
@@ -520,6 +828,24 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         extracted_at: datetime = common.time.utc_now()
         doc_title: str | None = str(value["title"]) if value.get("title") is not None else None
 
+        # BUG #35: sec_edgar/newsapi events carry no ``title`` → NULL
+        # ``chunks.title_denorm`` → the learned router scores the doc near-floor
+        # and dumps it to LIGHT (no deep extraction).  When the event has no
+        # title, recover it from the silver envelope (NewsAPI's title lives in
+        # the inner raw-news JSON re-encoded into ``body``; see BUG #34).  This
+        # is best-effort — genuine title-less docs (most sec_edgar filings)
+        # still fall through to the C-8 degenerate-input fallback in
+        # ``_apply_live_learned_tier``.
+        if not (doc_title or "").strip():
+            recovered_title = await extract_title_from_silver(self._storage, self._settings.silver_bucket, minio_key)
+            if recovered_title:
+                doc_title = recovered_title
+                logger.info(  # type: ignore[no-any-return]
+                    "article_consumer.title_recovered_from_silver",
+                    doc_id=str(doc_id),
+                    source_type=source_type,
+                )
+
         # F-MAJOR-001: idempotency check BEFORE acquiring the backpressure semaphore.
         async with self._nlp_sf() as check_session:
             if await RoutingDecisionRepository(check_session).get_by_doc(doc_id) is not None:
@@ -543,12 +869,226 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         url = value.get("url") or await extract_url_from_silver(self._storage, self._settings.silver_bucket, minio_key)
         await self._write_source_metadata(
             doc_id=doc_id,
-            title=value.get("title"),
+            # BUG #35: persist the recovered title (not the bare event field) so
+            # document_source_metadata.title is populated for sec_edgar/newsapi too.
+            title=doc_title or value.get("title"),
             url=url,
             published_at=published_at,
             source_name=source_name,
             source_type=source_type,
             word_count=value.get("word_count"),
+        )
+
+    async def _run_learned_router_shadow(
+        self,
+        *,
+        routing_decision: RoutingDecision,
+        doc_title: str | None,
+        lede: str | None,
+        source_type: str | None = None,
+    ) -> None:
+        """Compute the learned-router proposal; in LIVE mode let it control routing.
+
+        PLAN-0111 C-6 (call site moved + lede wired in #33). This NEVER changes
+        the processing path: it only
+
+          1. calls ``LearnedRouter.propose`` (best-effort — returns None on
+             failure) to get a calibrated P(yield) + proposed tier,
+          2. stamps ``learned_tier`` / ``learned_p_yield`` / ``learned_router_mode``
+             onto ``routing_decision`` so persist_artifacts writes them to
+             routing_decisions,
+          3. emits a ``learned_router_shadow`` structlog line comparing the actual
+             (static) tier with the proposed tier, and
+          4. increments the {actual_tier, proposed_tier} Prometheus counter.
+
+        TRAIN/SERVE PARITY (PLAN-0111 #33 — fixes the skew diagnosed in
+        ``docs/audits/2026-06-13-learned-router-shadow-analysis.md``):
+        the model was trained on ``embed(title + "\\n" + subtitle)`` where
+        ``subtitle`` is the article LEDE (the doc's first chunk text, run through
+        ``subtitle_from_lede``). The original C-6 wiring ran this BEFORE chunking
+        and so had no lede available — it passed ``subtitle=None`` and embedded
+        the TITLE ALONE. That fed the model half its expected input and caused
+        systematic over-suppression (24h shadow: 0% DEEP proposed, 80% LIGHT,
+        5.3% agreement). We now run this AFTER ``run_embeddings_block`` produces
+        chunks and pass the real first-chunk ``lede`` as the subtitle.
+
+        WHY running post-chunking is safe: Sub-Plan B made chunk embedding
+        UNIVERSAL (every non-SUPPRESS tier is embedded regardless of routing
+        tier), so the routing gate no longer needs to run before embedding — it
+        only needs to precede EXTRACTION (Block 8). Moving the call after Block 7
+        is therefore behaviour-preserving for the static (deployed) router while
+        finally giving the shadow router the lede it was trained on.
+
+        ``lede`` is the RAW first-chunk text (caller picks chunk_index ascending,
+        first non-null) — deliberately NOT cleaned, see ``subtitle_from_lede``.
+
+        Everything is inside a broad try/except: the learned router is a passive
+        observer and a failure here must not fail the article. The mode is always
+        recorded (even on failure) so a NULL learned_tier with a non-NULL mode is
+        distinguishable from "router was off entirely".
+        """
+        from nlp_pipeline.application.blocks.learned_routing import subtitle_from_lede
+
+        mode = self._settings.learned_router_mode
+        if mode == "off" or self._learned_router is None:
+            return
+
+        # Record the mode regardless of outcome (so rows are attributable).
+        routing_decision.learned_router_mode = mode
+
+        # The actual (deployed) tier that CONTROLS processing — unchanged below.
+        actual_tier = routing_decision.routing_tier
+        actual_tier_value = actual_tier.value if hasattr(actual_tier, "value") else str(actual_tier)
+
+        try:
+            # The 3 structured features the model was trained on are exactly the
+            # values already computed by the static router (same source). We pass
+            # the whole feature_scores dict; LearnedRouter picks the trained
+            # subset (source_reliability, recency, document_type) in order.
+            #
+            # The subtitle is the article LEDE (first chunk text) put through the
+            # SAME transform the training dataset used (subtitle_from_lede). This
+            # closes the train/serve skew — see method docstring + the 2026-06-13
+            # audit. ``lede`` is None only when the doc produced no chunks (e.g.
+            # empty body); then subtitle_from_lede("") -> "" and propose falls
+            # back to title-only, matching training rows with an empty lede.
+            subtitle = subtitle_from_lede(lede)
+            result = await self._learned_router.propose(
+                title=doc_title,
+                subtitle=subtitle,
+                structured_features=routing_decision.feature_scores,
+            )
+            if result is None:
+                # Propose already logged the failure cause. Leave learned_tier
+                # NULL; mode is set so the row is still attributable to shadow.
+                return
+
+            routing_decision.learned_tier = result.proposed_tier
+            routing_decision.learned_p_yield = result.p_yield
+
+            proposed_tier_value = (
+                result.proposed_tier.value if hasattr(result.proposed_tier, "value") else str(result.proposed_tier)
+            )
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_shadow",
+                doc_id=str(routing_decision.doc_id),
+                actual_tier=actual_tier_value,
+                proposed_tier=proposed_tier_value,
+                p_yield=round(result.p_yield, 4),
+                agreement=(actual_tier_value == proposed_tier_value),
+                in_ambiguous_band=result.in_ambiguous_band,
+                cascade_used=result.cascade_used,
+                cascade_relevance=(
+                    round(result.cascade_relevance, 4) if result.cascade_relevance is not None else None
+                ),
+                mode=mode,
+            )
+            record_learned_router_shadow(actual_tier_value, proposed_tier_value)
+
+            # ── PLAN-0111 C-8: LIVE control ───────────────────────────────────
+            # In LIVE mode the (post-cascade) learned tier CONTROLS processing.
+            # We achieve this by writing the EFFECTIVE tier onto
+            # ``final_routing_tier`` — the field ``apply_suppression_gate`` and
+            # every downstream gate already read first (``final_routing_tier or
+            # routing_tier``). The STATIC tier stays in ``routing_tier`` so the
+            # two are persisted side-by-side for ongoing comparison.
+            #
+            # In SHADOW / off the learned tier is observational only — we never
+            # touch ``final_routing_tier`` (that is the shadow invariant).
+            if mode == "live":
+                self._apply_live_learned_tier(
+                    routing_decision=routing_decision,
+                    learned_tier=result.proposed_tier,
+                    doc_title=doc_title,
+                    source_type=source_type,
+                )
+        except Exception:  # — observer/live-control must never fail the article
+            logger.warning(  # type: ignore[no-any-return]
+                "learned_router_shadow_failed",
+                doc_id=str(routing_decision.doc_id),
+                exc_info=True,
+            )
+
+    def _apply_live_learned_tier(
+        self,
+        *,
+        routing_decision: RoutingDecision,
+        learned_tier: RoutingTier,
+        doc_title: str | None,
+        source_type: str | None,
+    ) -> None:
+        """LIVE mode (PLAN-0111 C-8): make the learned tier control processing.
+
+        Writes the EFFECTIVE tier onto ``routing_decision.final_routing_tier``
+        (the field every downstream gate reads first). The STATIC tier remains
+        in ``routing_tier`` for side-by-side comparison.
+
+        Three INVARIANTS are preserved — the learned gate must NOT silently
+        discard high-value documents:
+
+        1. DEGENERATE-INPUT FALLBACK (title-less docs). The learned classifier
+           reads ``title + lede`` and is effectively BLIND without a title:
+           title-less docs (NULL/empty ``title_denorm``) score a near-floor
+           ``p_yield`` (~0.18) and would be dumped to LIGHT. ~111 such docs
+           exist (86 sec_edgar + 25 newsapi); sec_edgar is the corpus's
+           highest-value source. So when the title is missing/blank we DO NOT
+           let the learned tier control — we keep the STATIC tier for that doc
+           (i.e. leave ``final_routing_tier`` unset) and log
+           ``learned_router_titleless_fallback`` so the rate is measurable.
+
+        2. SUPPRESS preservation. The learned classifier never PRODUCES SUPPRESS
+           (``map_p_yield_to_tier`` emits DEEP/MEDIUM/LIGHT only). If the STATIC
+           router suppressed a doc (``routing_tier == SUPPRESS``), live mode does
+           NOT resurrect it — SUPPRESS must still HALT. We leave the static
+           SUPPRESS in place rather than overriding with a learned LIGHT/MEDIUM.
+
+        3. REGULATORY-FILING / AUTHENTICATED-UPLOAD override. Authoritative
+           filings (sec_edgar, sec_8k/10k/10q/def14a, tenant_upload) are forced
+           to at least MEDIUM regardless of the learned score — their value is
+           not captured by the headline the classifier sees. Belt-and-suspenders
+           with #1 for the sec_edgar title-less case.
+        """
+        static_tier = routing_decision.routing_tier
+
+        # INVARIANT 2 — never resurrect a statically-SUPPRESSED doc.
+        if static_tier == RoutingTier.SUPPRESS:
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_live_suppress_preserved",
+                doc_id=str(routing_decision.doc_id),
+            )
+            return  # leave final_routing_tier unset → suppression gate HALTs
+
+        # INVARIANT 1 — title-less docs: the blind gate must NOT decide. Fall
+        # back to the static tier (leave final_routing_tier unset).
+        if not (doc_title or "").strip():
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_titleless_fallback",
+                doc_id=str(routing_decision.doc_id),
+                source_type=source_type,
+                static_tier=static_tier.value,
+                learned_tier=learned_tier.value,
+            )
+            return
+
+        effective_tier = learned_tier
+
+        # INVARIANT 3 — regulatory / authenticated-upload override forces >=MEDIUM.
+        if effective_tier == RoutingTier.LIGHT and source_type in _AUTHORITATIVE_FILING_SOURCES:
+            logger.info(  # type: ignore[no-any-return]
+                "learned_router_live_regulatory_override",
+                doc_id=str(routing_decision.doc_id),
+                source_type=source_type,
+                learned_tier=learned_tier.value,
+            )
+            effective_tier = RoutingTier.MEDIUM
+
+        # The learned tier (post-overrides) now CONTROLS processing.
+        routing_decision.final_routing_tier = effective_tier
+        logger.info(  # type: ignore[no-any-return]
+            "learned_router_live_control",
+            doc_id=str(routing_decision.doc_id),
+            static_tier=static_tier.value,
+            effective_tier=effective_tier.value,
         )
 
     async def _run_pipeline(
@@ -648,6 +1188,14 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             tier_medium=self._settings.routing_tier_medium,
             tier_light=self._settings.routing_tier_light,
         )
+
+        # NOTE (PLAN-0111 #33): the learned-router SHADOW comparison USED to run
+        # here (before chunking) but with no lede available, which fed the model
+        # title-only input and caused train/serve skew. It now runs AFTER
+        # run_embeddings_block so it can pass the real first-chunk lede as the
+        # subtitle the model was trained on. The static router below still
+        # controls processing; the shadow only needs to precede extraction.
+
         initial_path = apply_suppression_gate(routing_decision)
 
         # Block 7: Embeddings + denorm fields (PLAN-0063 W5-2)
@@ -657,6 +1205,9 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             model_id=self._settings.embedding_model_id,
             instruction_prefix=self._settings.embedding_instruction_prefix,
             generate_chunk_embeddings=should_generate_chunk_embeddings(initial_path),
+            # PLAN-0111 B-2: LIGHT no longer emits section embeddings (dead weight
+            # once its chunks are embedded; chat only queries chunk granularity).
+            generate_section_embeddings=should_generate_section_embeddings(initial_path),
             chunk_text_store=self._chunk_text_store,
         )
         if chunks:
@@ -668,6 +1219,35 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 for c in chunks
             ]
         s6_embeddings_created_total.inc(len(chunk_embs) + len(section_embs))
+
+        # ── PLAN-0111 C-6 / #33: learned-router SHADOW comparison ────────────
+        # MOVED here (post-chunking) so the shadow router can be fed the SAME
+        # lede the C-3 dataset trained on, closing the train/serve skew. The
+        # static weighted-sum tier (computed above) still CONTROLS processing;
+        # the shadow only attaches a *proposed* tier (+ p_yield + mode) onto the
+        # routing_decision for persist_artifacts to write. Strictly observational
+        # in shadow mode and wrapped so any failure is non-fatal to the article.
+        #
+        # LEDE SELECTION — must mirror the dataset SQL exactly:
+        #   SELECT chunk_text FROM chunks
+        #   WHERE doc_id=... AND chunk_text IS NOT NULL
+        #   ORDER BY chunk_index LIMIT 1
+        # The in-memory `chunks` returned by run_embeddings_block are domain
+        # `Chunk` objects whose `.text` maps to the persisted `chunk_text` column
+        # and whose `.chunk_index` maps to `chunk_index`. They are produced in
+        # section order, so the first chunk with the minimum chunk_index AND
+        # non-empty text is the same row the DB query would return (in the normal
+        # single-leading-chunk case this is simply chunks[0]). We pick it with a
+        # stable min() over (chunk_index) restricted to non-empty text so we
+        # never accidentally hand the model an empty lede.
+        _lede_chunks = [c for c in chunks if c.text and c.text.strip()]
+        _lede = min(_lede_chunks, key=lambda c: c.chunk_index).text if _lede_chunks else None
+        await self._run_learned_router_shadow(
+            routing_decision=routing_decision,
+            doc_title=doc_title,
+            lede=_lede,
+            source_type=source_type,
+        )
 
         # Blocks 8-10 + atomic DB write with D-004 dual-session ordering.
         # ALL repositories are constructed here (in article_consumer namespace)
@@ -703,6 +1283,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 ext=self._ext,
                 watchlist_client=self._watchlist._client,  # type: ignore[attr-defined]
                 usage_logger=self._usage_logger,
+                entailment_client=self._entailment_client,
+                entailment_config=self._entailment_config,
                 _deep_extraction_fn=run_deep_extraction_block,
                 _alias_repo=entity_alias_repo,
                 _profile_emb_repo=entity_profile_emb_repo,
@@ -810,6 +1392,16 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     extraction_model_id=(
                         self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
                     ),
+                    # BUG-3 / BP-698: wire the canonical-alias repo + open intel
+                    # session so _enqueue_enriched runs endpoint recovery (M1
+                    # canonical fall-back + M2 provisional mint) before the
+                    # _build_raw_* helpers drop non-mention endpoints. Both are
+                    # already constructed above for the ML phase; reusing the
+                    # SAME open intel_s keeps the provisional mints inside the
+                    # D-004 dual-DB transaction (they commit atomically with the
+                    # enriched event via the intel_s.commit() below).
+                    alias_repo=entity_alias_repo,
+                    intelligence_session=intel_s,
                 )
                 if ml.signals:
                     await _enqueue_signal_events(

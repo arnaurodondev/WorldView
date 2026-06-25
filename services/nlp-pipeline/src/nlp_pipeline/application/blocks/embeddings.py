@@ -296,6 +296,7 @@ async def run_embeddings_block(
     model_id: str,
     instruction_prefix: str,
     generate_chunk_embeddings: bool,
+    generate_section_embeddings: bool = True,
     max_tokens: int = CHUNK_MAX_TOKENS,
     overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
     chunk_text_store: ChunkTextStorePort | None = None,
@@ -307,9 +308,15 @@ async def run_embeddings_block(
 ]:
     """Run Block 7: chunk + section embedding generation.
 
-    Section embeddings are produced for ALL routing tiers.
-    Chunk embeddings are produced only when ``generate_chunk_embeddings=True``
-    (MEDIUM/DEEP tiers — determined by the caller via suppression gate).
+    Chunk embeddings are produced when ``generate_chunk_embeddings=True`` — now
+    every non-SUPPRESS tier including LIGHT (PLAN-0111 B-1), since chat retrieval
+    queries chunk granularity.
+
+    Section embeddings are produced when ``generate_section_embeddings=True``.
+    Post PLAN-0111 B-2 the caller passes False for LIGHT: chat never queries
+    section-granularity vectors, so a LIGHT section embedding is dead weight once
+    its chunks are embedded. MEDIUM/DEEP keep section embeddings (no behavior
+    change for those tiers).
 
     When ``chunk_text_store`` is provided, chunk text is uploaded to MinIO
     for ALL routing tiers (best-effort; failures do not raise).
@@ -354,20 +361,24 @@ async def run_embeddings_block(
         all_chunks.extend(section_chunks)
         section_chunks_map.append((section, section_chunks))
 
-        # ── Section embedding (ALL tiers) — Option C: use first chunk as
-        #    representative.  Consecutive chunks already carry CHUNK_OVERLAP_TOKENS
-        #    of context from the previous chunk, so embeddings preserve local
-        #    context across boundaries.  Fall back to section.text if no chunks.
-        sec_emb_text = section_chunks[0].text if section_chunks else section.text
-        embed_records.append(
-            _EmbedRecord(
-                kind="section",
-                target_id=section.section_id,
-                doc_id=section.doc_id,
-                section_id=section.section_id,
-                text=sec_emb_text,
+        # ── Section embedding — Option C: use first chunk as representative.
+        #    Consecutive chunks already carry CHUNK_OVERLAP_TOKENS of context from
+        #    the previous chunk, so embeddings preserve local context across
+        #    boundaries.  Fall back to section.text if no chunks.
+        #    PLAN-0111 B-2: skipped for LIGHT (generate_section_embeddings=False) —
+        #    chat only queries chunk granularity, so a LIGHT section vector is never
+        #    read. Avoids one embed call + one vector row per LIGHT section.
+        if generate_section_embeddings:
+            sec_emb_text = section_chunks[0].text if section_chunks else section.text
+            embed_records.append(
+                _EmbedRecord(
+                    kind="section",
+                    target_id=section.section_id,
+                    doc_id=section.doc_id,
+                    section_id=section.section_id,
+                    text=sec_emb_text,
+                )
             )
-        )
 
         if not generate_chunk_embeddings:
             continue

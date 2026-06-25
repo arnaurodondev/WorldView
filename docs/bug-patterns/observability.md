@@ -274,4 +274,18 @@ After editing, restart Grafana: `docker compose restart grafana`. Provisioning u
 
 ---
 
+## BP-705 — Nightly worker has no liveness alert + restart-wiped skip-guard + no timeout → silent stall serves stale data
+
+**Context**: The `_computed_metrics_refresh_loop` (market-data, 02:00 UTC) and its sibling `_intelligence_rollup_loop` (04:00 UTC) refresh the data that backs the screener. Each is a single `while True: await asyncio.sleep(...); await run_...()` coroutine.
+
+**Symptom**: If a run hangs (e.g. a wedged asyncpg connection), the loop never advances and nothing detects it — the screener keeps rendering the last-good `fundamental_metrics` rows with no "as-of" warning, so a multi-day stall looks live but isn't. A long run also can't be distinguished from a healthy one because there is no liveness signal.
+
+**Root cause**: Three compounding gaps. (1) **No Prometheus metric** — the loop emits only INFO/ERROR structlog; the proposed `computed_metrics_worker_runs_total{outcome}` counter and `..._last_success_timestamp_utc_seconds` gauge exist only in planning docs, so nothing can alert. (2) **In-process skip-guard** — the 20h guard reads `last_success_at`, a local variable inside the loop coroutine that is reset to `None` on every pod restart, so it cannot do its one job (suppress a double-run after a restart). (3) **No `asyncio.wait_for`** around the backfill call, so a hung run blocks the loop forever with no watchdog.
+
+**Fix**: Add a `last_success_timestamp` gauge + `runs_total{outcome}` counter; wire a `time() - last_success > 26*3600` staleness alert; wrap the run in `asyncio.wait_for(..., timeout=...)`; persist `last_success_at` (Valkey key or a small `worker_runs` table) so the guard + metric survive deploys.
+
+**Prevention**: A gauge — or an INFO log — with no alert is not monitoring (same lesson as BP-699, the Kafka lag gauge with no alert). Any nightly/critical worker needs a last-success metric + staleness alert + a hang timeout. Surface `as_of_date` in the UI so the data degrades visibly, not silently.
+
+**Reference**: `services/market-data/src/market_data/app.py` (`_computed_metrics_refresh_loop` in-process `last_success_at`, `_intelligence_rollup_loop`), `services/market-data/src/market_data/infrastructure/db/computed_metrics_worker.py`; `docs/audits/2026-06-16-prd0089-l3-computed-metrics-ops.md`.
+
 ---

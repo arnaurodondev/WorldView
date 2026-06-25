@@ -107,6 +107,7 @@ from messaging.valkey.client import (
 )
 
 __all__ = [
+    "DLQ_TOPIC_SUFFIX",
     "AvroDictable",
     "AvroSerializerConfig",
     "BaseKafkaConsumer",
@@ -114,7 +115,6 @@ __all__ = [
     "BusinessRuleViolationError",
     "ConsumerConfig",
     "ConsumerError",
-    "DLQ_TOPIC_SUFFIX",
     "DLQEmitterProtocol",
     "DatabaseConnectionError",
     "DeliveryResult",

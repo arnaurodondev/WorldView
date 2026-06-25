@@ -1,4 +1,10 @@
-"""Compute and upsert the 8 derived ``fundamental_metrics`` rows from OHLCV.
+"""Compute and upsert the derived ``fundamental_metrics`` rows from OHLCV.
+
+As of the L-3 ops follow-up the worker emits **10** metric names: 5 period
+returns (1M/3M/6M/1Y/3Y), YTD return, 2 distance-from-52W (high/low),
+``volatility_30d`` (annualised 30-trading-day realised vol), and
+``returns_adjustment_quality`` (per-instrument 1.0/0.0 flag marking whether
+returns were computed on real adjusted_close or fell back to raw close).
 
 PLAN-0089 Wave L-3 (T-WL3-01). Modelled on
 :mod:`market_data.infrastructure.db.backfill_fundamental_metrics` and on the
@@ -35,7 +41,7 @@ predicate matches the most recent bar at or before the lookback date. This
 gracefully degrades to the prior trading day for weekends/holidays without
 needing a calendar table (audit §7.2).
 
-WHY one SQL pass per metric (8 passes total): each metric has a different
+WHY one SQL pass per metric group: each metric has a different
 lookback / aggregation shape (point lookup vs window max/min vs YTD anchor),
 so a single CTE would be more complex than 8 focused statements and harder
 to read. Each statement is ~500 ms at current instrument volume.
@@ -86,6 +92,25 @@ _PERIOD_RETURN_LOOKBACKS: tuple[tuple[str, int], ...] = (
 
 # 52-week window length used for distance-from-high/low metrics.
 _WINDOW_52W_DAYS = 365
+
+# Number of most-recent trading-day bars used for the 30-day realised
+# volatility. We count BARS (not calendar days) so the window is ~30 trading
+# sessions regardless of weekends/holidays. 21 bars ≈ 1 calendar month; 30 bars
+# is the conventional "30-day vol" lookback most finance feeds use.
+_VOLATILITY_BARS = 30
+
+# Trading days per year for annualising daily-return stddev (sqrt(252)).
+_TRADING_DAYS_PER_YEAR = 252
+
+# Metric name for the per-instrument adjusted-close data-quality flag.
+# 1.0 = the latest bar carries a real split/dividend-adjusted close (returns are
+# correct across corporate actions); 0.0 = adjusted_close was NULL so returns
+# were computed on RAW close and may be wrong across splits/dividends. Surfaced
+# in the screener so unadjusted returns are flagged rather than shown as truth.
+_ADJUSTMENT_QUALITY_METRIC = "returns_adjustment_quality"
+
+# Metric name for trailing 30-trading-day annualised realised volatility.
+_VOLATILITY_METRIC = "volatility_30d"
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +271,88 @@ OFFSET :offset
 """
 
 
+# 30-trading-day realised volatility: stddev of consecutive daily simple
+# returns over the most recent :vol_bars bars, annualised by sqrt(252).
+#
+# WHY a windowed CTE (not a self-join): we take the last :vol_bars bars per
+# instrument (ROW_NUMBER), compute each bar's return vs the prior bar via LAG,
+# then STDDEV_SAMP the returns. ``stddev_samp`` (n-1 denominator) is the
+# conventional sample stddev for realised vol. NULL when fewer than 2 returns
+# exist (a single bar has no return) — the row is then skipped like any other
+# short-history metric.
+#
+# WHY adjusted_close fallback here too: consistent with the return metrics so a
+# split inside the 30-bar window does not inflate volatility on raw close.
+_VOLATILITY_30D_SQL = """
+WITH ranked AS (
+    SELECT
+        i.id AS instrument_id,
+        ob.bar_date,
+        COALESCE(ob.adjusted_close, ob.close) AS px,
+        ROW_NUMBER() OVER (PARTITION BY i.id ORDER BY ob.bar_date DESC) AS rn
+    FROM instruments i
+    JOIN ohlcv_bars ob
+      ON ob.instrument_id = i.id AND ob.timeframe = '1d'
+    WHERE i.has_ohlcv = true
+      AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
+),
+windowed AS (
+    SELECT instrument_id, bar_date, px
+    FROM ranked
+    WHERE rn <= :vol_bars
+),
+returns AS (
+    SELECT
+        instrument_id,
+        (px / NULLIF(LAG(px) OVER (PARTITION BY instrument_id ORDER BY bar_date), 0)) - 1.0 AS r
+    FROM windowed
+),
+latest AS (
+    SELECT i.id AS instrument_id, MAX(ob.bar_date) AS as_of_date
+    FROM instruments i
+    JOIN ohlcv_bars ob ON ob.instrument_id = i.id AND ob.timeframe = '1d'
+    WHERE i.has_ohlcv = true
+      AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
+    GROUP BY i.id
+)
+SELECT
+    l.instrument_id AS instrument_id,
+    l.as_of_date AS as_of_date,
+    STDDEV_SAMP(rt.r) * sqrt(:trading_days) AS value_numeric
+FROM latest l
+JOIN returns rt ON rt.instrument_id = l.instrument_id
+WHERE rt.r IS NOT NULL
+GROUP BY l.instrument_id, l.as_of_date
+ORDER BY l.instrument_id ASC
+LIMIT :batch_size
+OFFSET :offset
+"""
+
+
+# Per-instrument adjusted-close data-quality flag from the LATEST daily bar:
+# 1.0 when adjusted_close is present, 0.0 when it is NULL (returns fell back to
+# raw close for that instrument). One row per instrument with OHLCV.
+_ADJUSTMENT_QUALITY_SQL = """
+SELECT
+    i.id AS instrument_id,
+    latest.bar_date AS as_of_date,
+    CASE WHEN latest.adjusted_close IS NULL THEN 0.0 ELSE 1.0 END AS value_numeric
+FROM instruments i
+JOIN LATERAL (
+    SELECT adjusted_close, bar_date
+    FROM ohlcv_bars
+    WHERE instrument_id = i.id AND timeframe = '1d'
+    ORDER BY bar_date DESC
+    LIMIT 1
+) latest ON true
+WHERE i.has_ohlcv = true
+  AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
+ORDER BY i.id ASC
+LIMIT :batch_size
+OFFSET :offset
+"""
+
+
 async def _fetch_period_return_batch(
     session: AsyncSession,
     lookback_days: int,
@@ -299,6 +406,40 @@ async def _fetch_distance_52w_batch(
     return [dict(row) for row in result.mappings().all()]
 
 
+async def _fetch_volatility_30d_batch(
+    session: AsyncSession,
+    start_id: str | None,
+    offset: int,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    """Return one batch of 30-trading-day annualised volatility rows."""
+    result = await session.execute(
+        text(_VOLATILITY_30D_SQL),
+        {
+            "vol_bars": _VOLATILITY_BARS,
+            "trading_days": _TRADING_DAYS_PER_YEAR,
+            "start_id": start_id,
+            "batch_size": batch_size,
+            "offset": offset,
+        },
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def _fetch_adjustment_quality_batch(
+    session: AsyncSession,
+    start_id: str | None,
+    offset: int,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    """Return one batch of per-instrument adjusted-close quality flags (1.0/0.0)."""
+    result = await session.execute(
+        text(_ADJUSTMENT_QUALITY_SQL),
+        {"start_id": start_id, "batch_size": batch_size, "offset": offset},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 def _row_to_metric(
     instrument_id: str,
     as_of_date: date_type,
@@ -336,7 +477,7 @@ async def run_computed_metrics_backfill(
     session_factory: async_sessionmaker[AsyncSession],
     options: ComputedMetricsBackfillOptions | None = None,
 ) -> ComputedMetricsBackfillSummary:
-    """Compute and upsert the 8 derived metrics for every instrument with OHLCV.
+    """Compute and upsert the derived metrics for every instrument with OHLCV.
 
     Returns a :class:`ComputedMetricsBackfillSummary` with per-run telemetry.
     Logs at INFO on completion and WARNING when ``adjusted_close`` fallback
@@ -503,6 +644,100 @@ async def run_computed_metrics_backfill(
                     skipped_short_history += 1
                 else:
                     metric_batch.append(low_row)
+
+            if metric_batch:
+                await repo.upsert_metrics(metric_batch)
+                metrics_written += len(metric_batch)
+                await session.commit()
+
+            if len(rows) < opts.batch_size:
+                break
+            offset += opts.batch_size
+
+        # --- 4) 30-trading-day annualised realised volatility --------------
+        offset = 0
+        while True:
+            try:
+                rows = await _fetch_volatility_30d_batch(session, opts.start_instrument_id, offset, opts.batch_size)
+            except Exception as exc:
+                failed_instruments += 1
+                logger.error(
+                    "computed_metrics_backfill.batch_failed", metric=_VOLATILITY_METRIC, offset=offset, error=str(exc)
+                )
+                if not opts.continue_on_error:
+                    raise
+                break
+
+            if not rows:
+                break
+
+            metric_batch = []
+            for row in rows:
+                instrument_id = str(row["instrument_id"])
+                instruments_seen.add(instrument_id)
+                metric_row = _row_to_metric(
+                    instrument_id,
+                    row["as_of_date"].date() if hasattr(row["as_of_date"], "date") else row["as_of_date"],
+                    _VOLATILITY_METRIC,
+                    row["value_numeric"],
+                    ingested_at,
+                )
+                if metric_row is None:
+                    skipped_short_history += 1
+                    continue
+                metric_batch.append(metric_row)
+
+            if metric_batch:
+                await repo.upsert_metrics(metric_batch)
+                metrics_written += len(metric_batch)
+                await session.commit()
+
+            if len(rows) < opts.batch_size:
+                break
+            offset += opts.batch_size
+
+        # --- 5) Per-instrument adjusted-close data-quality flag ------------
+        # WHY a persisted metric (audit Task 1 option c): when adjusted_close is
+        # NULL the returns/52W metrics above silently used raw close, which is
+        # WRONG across splits/dividends. Rather than show those returns as truth,
+        # we persist a per-instrument quality flag (1.0=adjusted, 0.0=raw-close
+        # fallback) so the screener can badge "unadjusted" instead of lying.
+        # The run-level ``fallback_adjusted_close_count`` already tracks the
+        # aggregate; this exposes it per instrument for the UI + filtering.
+        offset = 0
+        while True:
+            try:
+                rows = await _fetch_adjustment_quality_batch(session, opts.start_instrument_id, offset, opts.batch_size)
+            except Exception as exc:
+                failed_instruments += 1
+                logger.error(
+                    "computed_metrics_backfill.batch_failed",
+                    metric=_ADJUSTMENT_QUALITY_METRIC,
+                    offset=offset,
+                    error=str(exc),
+                )
+                if not opts.continue_on_error:
+                    raise
+                break
+
+            if not rows:
+                break
+
+            metric_batch = []
+            for row in rows:
+                instrument_id = str(row["instrument_id"])
+                instruments_seen.add(instrument_id)
+                metric_row = _row_to_metric(
+                    instrument_id,
+                    row["as_of_date"].date() if hasattr(row["as_of_date"], "date") else row["as_of_date"],
+                    _ADJUSTMENT_QUALITY_METRIC,
+                    row["value_numeric"],
+                    ingested_at,
+                )
+                if metric_row is None:
+                    skipped_short_history += 1
+                    continue
+                metric_batch.append(metric_row)
 
             if metric_batch:
                 await repo.upsert_metrics(metric_batch)

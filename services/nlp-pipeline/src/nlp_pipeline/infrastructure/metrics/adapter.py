@@ -14,3 +14,8 @@ class PrometheusNlpMetrics:
         from nlp_pipeline.infrastructure.metrics.prometheus import nlp_sectioning_fallback_total
 
         nlp_sectioning_fallback_total.inc()
+
+    def record_deep_extraction_window_timeout(self) -> None:
+        from nlp_pipeline.infrastructure.metrics.prometheus import deep_extraction_window_timeout_total
+
+        deep_extraction_window_timeout_total.inc()

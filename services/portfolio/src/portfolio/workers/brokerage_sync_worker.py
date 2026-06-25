@@ -472,7 +472,13 @@ class BrokerageTransactionSyncWorker:
                 )
                 return
 
-            await UpsertHoldingsFromSnapshotUseCase().execute(
+            # PLAN-0109 Sub-Plan G — gate holding.changed emission behind
+            # ``PORTFOLIO_EMIT_HOLDING_CHANGED`` (default false). No consumer
+            # exists today; flip the env var when alert's position-closure
+            # rule lands.
+            await UpsertHoldingsFromSnapshotUseCase(
+                emit_holding_changed_events=self._settings.emit_holding_changed_events,
+            ).execute(
                 UpsertHoldingsFromSnapshotCommand(
                     tenant_id=connection.tenant_id,
                     portfolio_id=connection.portfolio_id,

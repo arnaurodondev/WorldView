@@ -65,6 +65,44 @@ class AlertOutboxDispatcher:
         """Signal the run-loop to exit after the current batch."""
         self._stop_event.set()
 
+    # ── Producer recovery (GAP-A / BP outbox-dispatcher-wedged-producer) ───────
+
+    @staticmethod
+    def _is_broken_producer_error(error: BaseException | None) -> bool:
+        """Return True when *error* signals the cached producer must be rebuilt.
+
+        Mirrors ``BaseOutboxDispatcher._is_broken_producer_error``. A delivery
+        ``TimeoutError`` (alias of ``asyncio.TimeoutError`` on 3.11+) means the
+        produce/flush/ack never completed — the signature of a wedged producer.
+        """
+        return isinstance(error, TimeoutError)
+
+    def _reset_producer(self) -> None:
+        """Discard the cached Confluent producer so the next dispatch rebuilds it.
+
+        ``AlertOutboxDispatcher`` does NOT extend ``BaseOutboxDispatcher`` (S10
+        uses a raw ``Producer`` over pre-serialized Avro bytes), so the recovery
+        helpers are reimplemented here against this class's own ``self._producer``
+        attribute. After a transient broker blip the cached producer can wedge so
+        every produce()/flush() times out forever; nulling the cache forces
+        ``_get_producer`` to rebuild + reconnect on the next attempt.
+        """
+        producer = self._producer
+        if producer is None:
+            return
+        import contextlib
+
+        # Best-effort non-blocking drain; never let teardown block or raise.
+        with contextlib.suppress(Exception):
+            flush = getattr(producer, "flush", None)
+            if callable(flush):
+                flush(0)
+        self._producer = None
+        logger.warning(  # type: ignore[no-any-return]
+            "alert_dispatcher.producer_reset",
+            reason="delivery_failure",
+        )
+
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -127,10 +165,18 @@ class AlertOutboxDispatcher:
             )
             return True
         except Exception as exc:
+            # GAP-A: a delivery TimeoutError is the signature of a wedged cached
+            # producer — discard it so the next dispatch rebuilds + reconnects.
+            # ``str(exc)`` is EMPTY for TimeoutError, so log type + repr too,
+            # otherwise the wedge stays invisible (the live ``error:""`` stream).
+            if self._is_broken_producer_error(exc):
+                self._reset_producer()
             logger.error(  # type: ignore[no-any-return]
                 "alert_dispatcher.dispatch_failed",
                 event_id=str(event.event_id),
                 topic=event.topic,
+                error_type=type(exc).__name__,
+                error_repr=repr(exc),
                 error=str(exc),
             )
             return False

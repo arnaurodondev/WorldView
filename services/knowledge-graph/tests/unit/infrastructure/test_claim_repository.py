@@ -133,6 +133,26 @@ class TestFetchContradictionsForEntity:
         params: dict = session.execute.call_args[0][1]
         assert params["top_k"] == 5
 
+    def test_join_resolves_subject_via_claims_not_relation_evidence_raw(self) -> None:
+        """Regression (2026-06-16 data-pipeline-gaps Gap 1): the contradiction
+        link's ``relation_evidence_id`` stores a ``claims.claim_id``, NOT a
+        ``relation_evidence_raw.raw_id``. Joining via ``relation_evidence_raw``
+        returned 0 rows universe-wide. Pin the correct join so it can't revert.
+        """
+        session = _make_session()
+        repo = _make_repo(session)
+
+        _run(repo.fetch_contradictions_for_entity(entity_id=uuid4()))
+
+        sql_text: str = str(session.execute.call_args[0][0].text).lower()
+        # MUST resolve the subject claim by joining claims on the stored value.
+        assert "claims ca on ca.claim_id = rcl.relation_evidence_id" in sql_text
+        # MUST filter on the subject claim's entity, not a relation_evidence_raw row.
+        assert "ca.subject_entity_id = :entity_id" in sql_text
+        # MUST NOT reintroduce the broken raw_id join that returned 0 rows.
+        assert "rer.raw_id = rcl.relation_evidence_id" not in sql_text
+        assert "relation_evidence_raw" not in sql_text
+
 
 class TestSearchClaimsBP180:
     """Regression tests for BP-180: asyncpg NULL type ambiguity in search_claims.

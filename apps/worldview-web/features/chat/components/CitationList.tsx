@@ -59,31 +59,81 @@ export function CitationList({ citations }: { citations: Citation[] }) {
 
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
-      {citations.map((cite, i) => (
-        <a
-          key={`${cite.article_id}-${i}`}
-          href={safeExternalUrl(cite.url)}
-          target="_blank"
-          rel="noopener noreferrer"
-          // WHY text-[10px]: citation chips are chrome metadata, not content —
-          // they use the 10px label size, not the 11px data row size.
-          className="inline-flex items-center gap-1 rounded-[2px] border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary hover:bg-primary/20"
-          title={`${cite.source} — relevance: ${(cite.relevance_score * 100).toFixed(0)}%`}
-        >
-          <sup className="font-mono text-[9px]">[{i + 1}]</sup>
-          <span className="font-mono text-[9px]" aria-hidden="true">
-            {getCitationIcon(cite)}
-          </span>
-          <span className="font-mono text-[9px] text-primary/70">{cite.source}</span>
-          {/* WHY text-[10px]: title snippet inside chip inherits the chip's 10px
-              chrome-label density — no explicit size would let it fall back to
-              the parent bubble's 11px, creating an internal size mismatch. */}
-          <span className="max-w-[140px] truncate text-[10px]">{cite.title}</span>
-          <span className="font-mono text-[9px] text-primary/60">
-            {(cite.relevance_score * 100).toFixed(0)}%
-          </span>
-        </a>
-      ))}
+      {citations.map((cite, i) => {
+        // Round 1 Foundation: knowledge-graph citations carry NO url (they
+        // reference in-platform graph data, not an external article). The old
+        // code always rendered an <a href="#"> for them — clicking scrolled
+        // the page to the top, a confusing dead link. This ALSO closes the
+        // contract gap documented in useChatStream's citations handler, which
+        // promised "CitationList renders KG citations as plain text when url
+        // is null/undefined" but the component never implemented it.
+        const hasUrl = !!cite.url && safeExternalUrl(cite.url) !== "#";
+
+        // Tooltip leads with the SOURCE TITLE (what the analyst hovers to
+        // learn: "which article is this?"), then source + relevance as
+        // secondary context. Falls back to the source name for title-less
+        // KG citations so the tooltip is never empty.
+        const tooltip = cite.title
+          ? `${cite.title} — ${cite.source} (${(cite.relevance_score * 100).toFixed(0)}% relevance)`
+          : `${cite.source} (${(cite.relevance_score * 100).toFixed(0)}% relevance)`;
+
+        // Shared badge chrome for both the <a> and the non-link <span> variant.
+        // WHY muted bg (was primary/10): citations are REFERENCE metadata, not
+        // calls-to-action — the primary (amber) tint made every assistant
+        // answer look like a row of action buttons. bg-muted + border-border
+        // recedes; the hover ring signals clickability on the linked variant.
+        // WHY rounded-[2px] (not rounded-full): terminal 2px-radius rule
+        // (DESIGN_SYSTEM.md) — fully-rounded pills are a consumer convention.
+        const badgeClass =
+          "inline-flex items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-0.5 text-[10px] text-foreground";
+
+        const inner = (
+          <>
+            <sup className="font-mono text-[9px]">[{i + 1}]</sup>
+            <span className="font-mono text-[9px] text-muted-foreground" aria-hidden="true">
+              {getCitationIcon(cite)}
+            </span>
+            <span className="font-mono text-[9px] text-muted-foreground">{cite.source}</span>
+            {/* WHY text-[10px]: title snippet inside chip inherits the chip's 10px
+                chrome-label density — no explicit size would let it fall back to
+                the parent bubble's 11px, creating an internal size mismatch. */}
+            <span className="max-w-[140px] truncate text-[10px]">{cite.title}</span>
+            <span className="font-mono text-[9px] text-muted-foreground">
+              {(cite.relevance_score * 100).toFixed(0)}%
+            </span>
+          </>
+        );
+
+        if (!hasUrl) {
+          // Plain badge — same look, no pointer affordance, no dead "#" link.
+          return (
+            <span
+              key={`${cite.article_id}-${i}`}
+              className={`${badgeClass} cursor-default`}
+              title={tooltip}
+            >
+              {inner}
+            </span>
+          );
+        }
+
+        return (
+          <a
+            key={`${cite.article_id}-${i}`}
+            href={safeExternalUrl(cite.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            // Round 3 focus polish: linked badges are tab stops — give them a
+            // visible :focus-visible ring (Tier-2 input ring weight) so
+            // keyboard users can tell WHICH citation Enter will open. Outline
+            // suppressed only for the focus-visible case we restyle.
+            className={`${badgeClass} hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary`}
+            title={tooltip}
+          >
+            {inner}
+          </a>
+        );
+      })}
     </div>
   );
 }

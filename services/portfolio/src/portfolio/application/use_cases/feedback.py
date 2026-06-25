@@ -195,7 +195,7 @@ class CreateFeedbackSubmissionUseCase:
                     from portfolio.domain.errors import IdempotencyConflictError
 
                     raise IdempotencyConflictError(
-                        f"Idempotency key {cmd.idempotency_key!r} already used " "with a different request body",
+                        f"Idempotency key {cmd.idempotency_key!r} already used with a different request body",
                     )
                 # Idempotent replay — return the original record verbatim.
                 return CreateFeedbackSubmissionResult(record=existing, created=False)

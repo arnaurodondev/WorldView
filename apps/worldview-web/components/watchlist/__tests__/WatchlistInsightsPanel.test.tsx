@@ -132,13 +132,17 @@ describe("WatchlistInsightsPanel", () => {
       { wrapper: makeWrapper() },
     );
 
-    // The loading skeleton div has the animate-pulse class and the fixed
-    // h-[66px] height. We verify presence by its unique class combination.
-    // WHY not a test id: the skeleton is a presentation primitive — adding a
-    // data-testid to it would couple the test to the implementation detail
-    // rather than the user-visible behaviour (a pulsing placeholder).
-    const skeleton = document.querySelector(".animate-pulse");
+    // The loading skeleton is a STATIC aria-busy container (no animate-pulse —
+    // banned by DESIGN_SYSTEM.md §6.2; Round-4 hardening swapped the pulsing
+    // blob for three static shape-matched bars). aria-busy="true" is the
+    // semantic loading marker, so it's the right selector: it asserts the
+    // accessible behaviour (screen readers announce "busy") rather than a
+    // presentation class.
+    const skeleton = document.querySelector('[aria-busy="true"]');
     expect(skeleton).toBeInTheDocument();
+    // Shape-matching (§6.2): the skeleton renders exactly 3 bars — one per
+    // insight row — so hydration causes zero layout shift.
+    expect(skeleton?.children).toHaveLength(3);
     // Data rows should not be visible during loading.
     expect(screen.queryByText("TOP MOVER")).not.toBeInTheDocument();
   });
@@ -210,7 +214,9 @@ describe("WatchlistInsightsPanel", () => {
     });
 
     // Neither data rows nor loading skeleton should be visible.
+    // (skeleton = the aria-busy container; see the loading-state test above —
+    // the static §6.2 skeleton no longer uses animate-pulse.)
     expect(screen.queryByText("TOP MOVER")).not.toBeInTheDocument();
-    expect(document.querySelector(".animate-pulse")).not.toBeInTheDocument();
+    expect(document.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
   });
 });

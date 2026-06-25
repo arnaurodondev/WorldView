@@ -94,7 +94,15 @@ class ContradictionBatchWorker:
                     strength = min(confidence, opp_confidence)
 
                     now = utc_now()  # type: ignore[no-any-return]
-                    # insert_link uses ON CONFLICT DO NOTHING — idempotent
+                    # insert_link uses ON CONFLICT DO NOTHING — idempotent.
+                    # COLUMN-NAMING DEBT (2026-06-16 data-pipeline-gaps Gap 1):
+                    # the ``relation_evidence_id`` column is named like a
+                    # ``relation_evidence_raw.raw_id`` FK, but we deliberately
+                    # store the SUBJECT claim's ``claims.claim_id`` here (there
+                    # is no FK constraint). Every read path resolves the subject
+                    # by joining ``claims`` on this value, so write & read stay
+                    # in sync. A rename/clarification migration is recommended
+                    # (see fix report) but out of scope for the read-side fix.
                     await contra_repo.insert_link(
                         relation_evidence_id=claim_id,  # type: ignore[arg-type]
                         claim_id=opp_claim_id,  # type: ignore[arg-type]

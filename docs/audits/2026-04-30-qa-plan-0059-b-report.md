@@ -389,7 +389,7 @@ Add to `GlobalHotkeyBindings.tsx` bindings list:
   label: "Open keyboard help",
   handler: () => { /* fire ? binding or open cheat sheet directly */ },
 },
-// mod+k → open command palette  
+// mod+k → open command palette
 {
   id: "shell.palette.open",
   chord: "mod+k",

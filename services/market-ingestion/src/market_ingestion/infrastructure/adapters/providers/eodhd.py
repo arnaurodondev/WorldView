@@ -733,7 +733,13 @@ class EODHDProviderAdapter(BaseProviderAdapter):
 
 
 def _build_ticker(symbol: str, exchange: str | None) -> str:
-    """Build EODHD ticker format: ``SYMBOL.EXCHANGE`` or just ``SYMBOL``."""
+    """Build EODHD ticker format: ``SYMBOL.EXCHANGE`` or just ``SYMBOL``.
+
+    EODHD encodes US share classes with a hyphen (BRK-B.US), not a second dot.
+    A stored dot-class symbol (BRK.B) would otherwise yield BRK.B.US -> HTTP 422.
+    Translate only the ticker portion; the exchange suffix is left untouched.
+    """
+    eodhd_symbol = symbol.replace(".", "-")
     if exchange:
-        return f"{symbol}.{exchange}"
-    return symbol
+        return f"{eodhd_symbol}.{exchange}"
+    return eodhd_symbol

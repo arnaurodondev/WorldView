@@ -20,6 +20,7 @@ Processing:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -50,6 +51,7 @@ def _utc_iso_now() -> str:
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
     from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
@@ -95,6 +97,29 @@ def _is_valid_llm_alias(alias: str) -> bool:
     return all(stop not in upper for stop in _LLM_ALIAS_STOPWORDS)
 
 
+def _ticker_notation_variant(ticker: str) -> str | None:
+    """Return the dot/dash notation variant of a share-class ticker, or None.
+
+    Share-class tickers are written inconsistently across data sources — dash
+    (``BRK-A``) vs dot (``BRK.A``).  market_data instruments + canonical_entities
+    were deduped to a single survivor whose *primary* ticker notation differs by
+    class (e.g. ``BRK-A`` for Class A, ``BRK.B`` for Class B — see FR-11 / the
+    instrument dedup), so we deliberately do NOT rewrite the primary ticker.
+    Instead we register the OTHER notation as a mechanical TICKER alias so a news
+    mention using either form resolves to the one canonical via the provisional
+    path's alias dedup — preventing a re-minted notation-twin canonical.
+
+    Returns the swapped form (``-``<->``.``) when exactly one separator is present
+    and the swap actually changes the string; otherwise None.
+    """
+    t = ticker.upper().strip()
+    if "-" in t and "." not in t:
+        return t.replace("-", ".")
+    if "." in t and "-" not in t:
+        return t.replace(".", "-")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Minimal no-op UoW (same pattern as existing consumers)
 # ---------------------------------------------------------------------------
@@ -128,6 +153,11 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         session_factory:  async_sessionmaker for intelligence_db.
         llm_client:       FallbackChainClient for alias generation + embedding.
         definition_worker: DefinitionRefreshWorker to trigger definition embed.
+        narrative_use_case: Optional GenerateNarrativeUseCase to kick off
+                            create-time narrative generation for newly-minted
+                            entities (2026-06-14 P2 — empty-entity-descriptions
+                            investigation).  When None the trigger is skipped and
+                            narratives rely solely on the periodic worker (13D-3).
         dedup_client:     Optional Valkey dedup client.
 
     """
@@ -138,6 +168,7 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         definition_worker: DefinitionRefreshWorker | None = None,
+        narrative_use_case: GenerateNarrativeUseCase | None = None,
         *,
         dedup_client: Any | None = None,
     ) -> None:
@@ -145,6 +176,15 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         self._sf = session_factory
         self._llm = llm_client
         self._def_worker = definition_worker
+        # 2026-06-14 P2: create-time narrative trigger.  Optional so existing
+        # callers / tests that don't wire it keep working unchanged.  Fired
+        # fire-and-forget (background task) for brand-new mints so the consumer
+        # critical path stays responsive — the use case is itself idempotent
+        # (snapshot-hash check) and BP-114-safe (template fallback, never empty).
+        self._narrative_use_case = narrative_use_case
+        # Track background narrative tasks so they aren't garbage-collected mid-flight
+        # (asyncio only holds a weak reference to a bare create_task() result).
+        self._narrative_tasks: set[asyncio.Task[Any]] = set()
         self._dedup_client = dedup_client
         self._dedup_prefix = f"kg:inst:{config.group_id}"
 
@@ -227,6 +267,12 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             # only (the BP-124 path).
             existing = await entity_repo.get(instrument_id)
             entity_id: UUID
+            # 2026-06-14 P2: only kick off the create-time narrative trigger on a
+            # FIRST-time canonical enrichment (brand-new mint OR upsert-after-
+            # discover).  Plain replays (entity exists and is already enriched)
+            # return early below and never reach the trigger.  The flag defaults
+            # to False and is flipped True on the two first-enrichment paths.
+            narrative_eligible = False
             if existing:
                 metadata_existing = existing.get("metadata") or {}
                 needs_enrichment = isinstance(metadata_existing, dict) and bool(
@@ -259,6 +305,10 @@ WHERE entity_id = :entity_id
                     )
                     # Continue to step 2 (alias enrichment) using existing entity_id
                     entity_id = instrument_id
+                    # Upsert-after-discover is a first-time enrichment of a
+                    # placeholder canonical → narrative is absent, so it is
+                    # eligible for the create-time trigger.
+                    narrative_eligible = True
                 else:
                     entity_id_existing: UUID = existing["entity_id"]  # type: ignore[assignment]
                     # Re-trigger embedding if entity exists but definition embedding
@@ -275,6 +325,31 @@ WHERE entity_id = :entity_id
                     )
                     return
             else:
+                # ── BP-459 ticker-dup detection (PLAN-0111) ──────────────────
+                # ROOT CAUSE symmetry: the news/provisional promotion path may
+                # have already minted a canonical for this ticker (with NULL
+                # exchange) BEFORE this instrument event arrived — exactly the
+                # historical SHEL case ("Shell Plc" minted 8h before "Shell PLC
+                # ADR").  We cannot reuse that row here because the instrument
+                # MUST own ``entity_id == instrument_id`` (M-017), so we still
+                # create the anchored canonical, but we log the collision so the
+                # standing same-ticker merge job (scripts/data/merge_ticker_duplicates.py)
+                # can consolidate the pre-existing dup into this authoritative
+                # instrument row.  Going forward the news path's own ticker
+                # pre-lookup (provisional_enrichment_core.persist_enrichment)
+                # reuses THIS instrument once it exists, so the race only ever
+                # produces a dup when news strictly precedes instrument seeding.
+                if ticker:
+                    _pre_existing = await entity_repo.find_by_ticker(str(ticker))
+                    if _pre_existing is not None and _pre_existing.get("entity_id") != instrument_id:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "instrument_consumer_ticker_dup_detected",
+                            ticker=str(ticker),
+                            instrument_id=str(instrument_id),
+                            pre_existing_entity_id=str(_pre_existing.get("entity_id")),
+                            pre_existing_name=_pre_existing.get("canonical_name"),
+                            merge_required=True,
+                        )
                 # Step 1: Create canonical entity (pristine path — no prior discovery).
                 # PLAN-0057 QA-iter1 F-DS-03 / F-DATA-04: pin entity_id to instrument_id
                 # so the M-017 stable cross-service identifier invariant holds even on
@@ -287,6 +362,9 @@ WHERE entity_id = :entity_id
                     isin=isin,
                     exchange=exchange,
                 )
+                # Brand-new canonical → narrative is absent, eligible for the
+                # create-time trigger (2026-06-14 P2).
+                narrative_eligible = True
 
             # Continue with steps 2..5 below for BOTH the brand-new path and the
             # UPSERT-after-discover path so that the rich alias suite is inserted
@@ -352,9 +430,21 @@ WHERE entity_id = :entity_id
             if ticker:
                 t = str(ticker).upper()
                 await _try_insert_alias(t, t, "TICKER")
+                # Register the dot/dash notation twin as a TICKER alias so a news
+                # mention in the OTHER notation resolves to this one canonical
+                # (prevents a re-minted notation-twin — the market-data instrument
+                # dedup + UNIQUE(isin,exchange) stops it on the instrument side; this
+                # closes the news/provisional re-mint path). Does NOT change the
+                # primary ticker (survivor notation differs by share class).
+                variant = _ticker_notation_variant(t)
+                if variant:
+                    await _try_insert_alias(variant, variant, "TICKER")
                 if exchange:
                     exc_ticker = f"{exchange}:{ticker}".upper()
                     await _try_insert_alias(exc_ticker, exc_ticker, "TICKER")
+                    if variant:
+                        exc_variant = f"{exchange}:{variant}".upper()
+                        await _try_insert_alias(exc_variant, exc_variant, "TICKER")
 
             if isin:
                 i = str(isin).upper()
@@ -407,12 +497,68 @@ WHERE entity_id = :entity_id
         if description and self._def_worker:
             await self._def_worker.refresh_for_entity(entity_id, description)
 
+        # Step 6 (2026-06-14 P2): create-time narrative trigger.  Mirrors the
+        # definition embed above (Step 5) so a newly-minted instrument gets its
+        # `narrative` source_text promptly instead of waiting up to a full
+        # periodic-worker cycle (Worker 13D-3).  Only fires on first-time
+        # enrichment paths (brand-new mint / upsert-after-discover) — see the
+        # `narrative_eligible` flag.  Fire-and-forget so the LLM call never
+        # blocks the consumer critical path; the use case is idempotent
+        # (snapshot-hash skip) and BP-114-safe (template fallback, never empty),
+        # so a replay that slips through or an LLM failure cannot corrupt state.
+        if narrative_eligible and self._narrative_use_case is not None:
+            self._kick_off_narrative(entity_id)
+
         logger.info(  # type: ignore[no-any-return]
             "instrument_entity_created",
             instrument_id=str(instrument_id),
             entity_id=str(entity_id),
             canonical_name=canonical_name,
         )
+
+    def _kick_off_narrative(self, entity_id: UUID) -> None:
+        """Schedule background create-time narrative generation for *entity_id*.
+
+        Runs the narrative use case as a detached asyncio task so the consumer's
+        critical path (commit + next poll) is never blocked by the LLM call.
+        The task result/exception is consumed in ``_run_narrative`` so failures
+        are logged and swallowed (BP-114) rather than crashing the consumer or
+        surfacing as an un-awaited-task warning.
+        """
+        task = asyncio.create_task(self._run_narrative(entity_id))
+        # Hold a strong reference until the task finishes; asyncio only keeps a
+        # weak ref, so without this the task could be GC'd before completion.
+        self._narrative_tasks.add(task)
+        task.add_done_callback(self._narrative_tasks.discard)
+
+    async def _run_narrative(self, entity_id: UUID) -> None:
+        """Execute the narrative use case for a new entity, swallowing failures.
+
+        Idempotency, retry, and template fallback all live inside
+        ``GenerateNarrativeUseCase.execute`` — this wrapper only guards against
+        the use case raising (network error, DB hiccup) so a single bad entity
+        never crashes the consumer process.  Uses the ``INITIAL`` reason to
+        distinguish create-time generation from the weekly PERIODIC_REFRESH.
+        """
+        if self._narrative_use_case is None:  # pragma: no cover — guarded by caller
+            return
+        try:
+            generated = await self._narrative_use_case.execute(
+                entity_id=entity_id,
+                tenant_id=None,
+                reason="INITIAL",
+            )
+            logger.info(  # type: ignore[no-any-return]
+                "instrument_consumer_narrative_triggered",
+                entity_id=str(entity_id),
+                generated=generated,
+            )
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "instrument_consumer_narrative_trigger_failed",
+                entity_id=str(entity_id),
+                error=str(exc),
+            )
 
     async def _create_new_canonical(
         self,

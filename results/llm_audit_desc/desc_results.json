@@ -1,0 +1,359 @@
+{
+  "235b-prod": {
+    "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "reasoning": null,
+    "n": 12,
+    "mean_hallucination": 0.17,
+    "severe_hallucinations": 1,
+    "mean_quality": 3.92,
+    "lat_p50": 2.42,
+    "rows": [
+      {
+        "name": "Qatar Investment Authority",
+        "desc": "The Qatar Investment Authority is the sovereign wealth fund of Qatar, established to manage the country's surplus revenues from oil and gas exports. It invests ",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, comprehensive, and well-structured description."
+        }
+      },
+      {
+        "name": "Megaspeed International",
+        "desc": "Megaspeed International is a financial services company that operates in the foreign exchange and online trading sector. It offers trading platforms for currenc",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Plausible description for a trading firm, no invented facts."
+        }
+      },
+      {
+        "name": "Jordan Klein",
+        "desc": "Jordan Klein is a financial executive known for his role as a managing director at a prominent investment bank. He has extensive experience in capital markets a",
+        "judge": {
+          "hallucination": 0,
+          "quality": 3,
+          "note": "Plausible but generic; lacks verifiable specifics."
+        }
+      },
+      {
+        "name": "Rafael Mattje",
+        "desc": "Rafael Mattje is a German football referee who officiates in the Bundesliga. He has been a FIFA-listed referee since 2023, overseeing matches in top-tier domest",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No known German referee named Rafael Mattje exists."
+        }
+      },
+      {
+        "name": "Derek Yan",
+        "desc": "Derek Yan is a professional investor and portfolio manager known for his work in the financial services industry. He has held senior positions at major asset ma",
+        "judge": {
+          "hallucination": 0,
+          "quality": 3,
+          "note": "Plausible but generic; lacks verifiable specifics."
+        }
+      },
+      {
+        "name": "Braidwell LP",
+        "desc": "Braidwell LP is a private investment firm focused on providing capital solutions to middle-market companies. The firm typically targets equity investments, stru",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a known private investment firm."
+        }
+      },
+      {
+        "name": "Andrew Spicehandler",
+        "desc": "Andrew Spicehandler is a financial executive known for his role in the asset management industry. He has held leadership positions at prominent investment firms",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Plausible but lacks verifiable public details."
+        }
+      },
+      {
+        "name": "Gurgaon",
+        "desc": "Gurgaon is a major city in the northern Indian state of Haryana, located southwest of New Delhi. It is a prominent financial and industrial hub, known for its r",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-sourced description of Gurgaon's role and location."
+        }
+      },
+      {
+        "name": "American Industry",
+        "desc": "American Industry refers broadly to the manufacturing and production sectors within the United States economy. It encompasses a wide range of industries includi",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate, general description of US manufacturing sectors."
+        }
+      },
+      {
+        "name": "Culper Research",
+        "desc": "Culper Research is a financial research firm known for its short-selling reports on publicly traded companies. It provides analysis that often highlights potent",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, concise, and well-sourced description."
+        }
+      },
+      {
+        "name": "EAA Partners",
+        "desc": "EAA Partners is an investment firm focused on providing capital and strategic support to growth-stage companies, particularly in the technology and healthcare s",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a growth-stage investment firm."
+        }
+      },
+      {
+        "name": "Lewis Howes",
+        "desc": "Lewis Howes is an American author, motivational speaker, and former professional athlete. He is best known for his personal development content and as the host ",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-sourced description of Lewis Howes."
+        }
+      }
+    ]
+  },
+  "20b@low": {
+    "model": "openai/gpt-oss-20b",
+    "reasoning": "low",
+    "n": 12,
+    "mean_hallucination": 0.67,
+    "severe_hallucinations": 4,
+    "mean_quality": 3.25,
+    "lat_p50": 2.15,
+    "rows": [
+      {
+        "name": "Qatar Investment Authority",
+        "desc": "The Qatar Investment Authority (QIA) is Qatar\u2019s sovereign wealth fund, established in 2005 to manage the country\u2019s surplus oil and gas revenues. It invests glob",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-structured, and factually correct description."
+        }
+      },
+      {
+        "name": "Megaspeed International",
+        "desc": "Megaspeed International is a technology company that designs and manufactures high\u2011speed data transmission solutions, including optical and electrical interconn",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No verifiable public info; invented company details."
+        }
+      },
+      {
+        "name": "Jordan Klein",
+        "desc": "Jordan Klein is a former American football defensive end who played in the National Football League (NFL) for the New York Jets and the Washington Redskins. He ",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No NFL player Jordan Klein exists; fabricated career."
+        }
+      },
+      {
+        "name": "Rafael Mattje",
+        "desc": "Rafael Mattje is a Dutch economist who has served as the chief economist at ING Group. He has been a prominent commentator on European monetary policy and finan",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No public record of this person; likely fabricated biography."
+        }
+      },
+      {
+        "name": "Derek Yan",
+        "desc": "Derek Yan is a Chinese\u2011born American entrepreneur. He has founded and led technology companies that focus on software and digital services. His work has been hi",
+        "judge": {
+          "hallucination": 0,
+          "quality": 3,
+          "note": "Generic but plausible; lacks verifiable specifics."
+        }
+      },
+      {
+        "name": "Braidwell LP",
+        "desc": "Braidwell LP is a private investment partnership that focuses on providing capital and strategic support to mid\u2011market companies. The firm typically engages in ",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate, general description of a private investment firm."
+        }
+      },
+      {
+        "name": "Andrew Spicehandler",
+        "desc": "Andrew Spicehandler is a private individual. No publicly available records indicate that he holds a notable public office, executive position, or has been the s",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurately states limited public info without fabrication."
+        }
+      },
+      {
+        "name": "Gurgaon",
+        "desc": "Gurgaon, officially known as Gurugram, is a city in the Indian state of Haryana located just south of New Delhi. It has evolved into a major financial, technolo",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, comprehensive, and well-structured description."
+        }
+      },
+      {
+        "name": "American Industry",
+        "desc": "American Industry refers broadly to the collective manufacturing, production, and service sectors that operate within the United States. It encompasses a wide r",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate, general description of U.S. industry sectors."
+        }
+      },
+      {
+        "name": "Culper Research",
+        "desc": "Culper Research is a private research and consulting firm that specializes in market intelligence, data analytics, and strategic advisory services for businesse",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "Culper Research is a short-selling firm, not a general consulting firm."
+        }
+      },
+      {
+        "name": "EAA Partners",
+        "desc": "EAA Partners is a private\u2011equity investment firm headquartered in New\u202fYork City. The firm specializes in acquiring and growing middle\u2011market companies across a ",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a private equity firm."
+        }
+      },
+      {
+        "name": "Lewis Howes",
+        "desc": "Lewis Howes is an American entrepreneur, author, and motivational speaker best known for hosting the popular podcast \u201cThe School of Greatness.\u201d  He previously p",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-sourced, no fabrication."
+        }
+      }
+    ]
+  },
+  "120b@medium": {
+    "model": "openai/gpt-oss-120b",
+    "reasoning": "medium",
+    "n": 12,
+    "mean_hallucination": 0.33,
+    "severe_hallucinations": 2,
+    "mean_quality": 3.67,
+    "lat_p50": 7.93,
+    "rows": [
+      {
+        "name": "Qatar Investment Authority",
+        "desc": "The Qatar Investment Authority (QIA) is the sovereign wealth fund of the State of Qatar, created in 2005 to manage and invest the country\u2019s surplus hydrocarbon ",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-structured, and factually correct description."
+        }
+      },
+      {
+        "name": "Megaspeed International",
+        "desc": "Megaspeed International is a privately held telecommunications firm that delivers high\u2011speed data, voice, and video services to enterprise and government custom",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No public record of this company; likely fabricated."
+        }
+      },
+      {
+        "name": "Jordan Klein",
+        "desc": "Jordan\u202fKlein is an American journalist who reports on technology, business and policy for Bloomberg News. He is known for covering topics such as artificial int",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, specific, and well-sourced description."
+        }
+      },
+      {
+        "name": "Rafael Mattje",
+        "desc": "",
+        "judge": {
+          "hallucination": 0,
+          "quality": 1,
+          "note": "No description provided; cannot evaluate."
+        }
+      },
+      {
+        "name": "Derek Yan",
+        "desc": "Derek Yan is a name shared by multiple professionals across various industries. Public records indicate individuals with this name have been active in fields su",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, cautious, avoids fabrication for ambiguous name."
+        }
+      },
+      {
+        "name": "Braidwell LP",
+        "desc": "Braidwell LP is a privately held limited partnership that operates as an investment management firm and is registered with the U.S. Securities and Exchange Comm",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a registered investment firm."
+        }
+      },
+      {
+        "name": "Andrew Spicehandler",
+        "desc": "",
+        "judge": {
+          "hallucination": 2,
+          "quality": 1,
+          "note": "No public figure found; likely fabricated identity."
+        }
+      },
+      {
+        "name": "Gurgaon",
+        "desc": "Gurgaon, officially known as Gurugram, is a city in the Indian state of Haryana located on the outskirts of New Delhi and forming part of the National Capital R",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, well-structured, and factually complete description."
+        }
+      },
+      {
+        "name": "American Industry",
+        "desc": "American industry refers to the collective manufacturing, production, and service sectors operating within the United States economy, encompassing a broad range",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate general description of US industry sectors."
+        }
+      },
+      {
+        "name": "Culper Research",
+        "desc": "",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a known research firm."
+        }
+      },
+      {
+        "name": "EAA Partners",
+        "desc": "EAA Partners is a London\u2011based private equity firm that provides growth capital to technology, media and telecommunications companies across Europe. The firm fo",
+        "judge": {
+          "hallucination": 0,
+          "quality": 4,
+          "note": "Accurate description of a known private equity firm."
+        }
+      },
+      {
+        "name": "Lewis Howes",
+        "desc": "Lewis Howes is an American entrepreneur, author, and former arena football player who founded the lifestyle brand and media company Howes Media. He is best know",
+        "judge": {
+          "hallucination": 0,
+          "quality": 5,
+          "note": "Accurate, detailed, and well-sourced description."
+        }
+      }
+    ]
+  }
+}

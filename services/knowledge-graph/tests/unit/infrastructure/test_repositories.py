@@ -232,16 +232,21 @@ class TestRelationEvidenceRepository:
         assert result == raw_id
 
     def test_insert_raw_rejects_missing_claim_id(self) -> None:
-        """PLAN-0093 B-3 T-B-3-02: omitting claim_id raises ValueError at the writer."""
+        """PLAN-0093 B-3 T-B-3-02 + P0 2026-06-11: omitting claim_id raises a
+        FatalError subclass so the consumer dead-letters instead of retrying
+        forever (a bare ValueError was classified as retryable and looped)."""
         import asyncio
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
             RelationEvidenceRepository,
         )
 
+        from messaging.kafka.consumer.errors import FatalError, MissingRequiredFieldError
+
+        assert issubclass(MissingRequiredFieldError, FatalError)
         session = _make_session(fetchone_return=(str(uuid4()),))
         repo = RelationEvidenceRepository(session)
-        with pytest.raises(ValueError, match="claim_id is NOT NULL"):
+        with pytest.raises(MissingRequiredFieldError, match="claim_id is NOT NULL"):
             asyncio.run(
                 repo.insert_raw(
                     subject_entity_id=uuid4(),
@@ -256,16 +261,19 @@ class TestRelationEvidenceRepository:
             )
 
     def test_insert_raw_rejects_missing_chunk_id(self) -> None:
-        """PLAN-0093 B-3 T-B-3-02: omitting chunk_id raises ValueError at the writer."""
+        """PLAN-0093 B-3 T-B-3-02 + P0 2026-06-11: omitting chunk_id raises a
+        FatalError subclass (dead-letter, not silent retry loop)."""
         import asyncio
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
             RelationEvidenceRepository,
         )
 
+        from messaging.kafka.consumer.errors import MissingRequiredFieldError
+
         session = _make_session(fetchone_return=(str(uuid4()),))
         repo = RelationEvidenceRepository(session)
-        with pytest.raises(ValueError, match="chunk_id is NOT NULL"):
+        with pytest.raises(MissingRequiredFieldError, match="chunk_id is NOT NULL"):
             asyncio.run(
                 repo.insert_raw(
                     subject_entity_id=uuid4(),
@@ -388,6 +396,31 @@ class TestContradictionRepository:
         )
         params = session.execute.call_args_list[0][0][1]
         assert params["opposite_polarity"] == "negative"
+
+    def test_fetch_active_for_subject_joins_claims_not_relation_evidence_raw(self) -> None:
+        """Regression (2026-06-16 data-pipeline-gaps Gap 1).
+
+        ``relation_contradiction_links.relation_evidence_id`` holds a
+        ``claims.claim_id``, so the confidence-formula lookup must resolve the
+        subject via ``claims`` (``c.claim_id = rcl.relation_evidence_id``), not
+        via ``relation_evidence_raw.raw_id`` (which matched 0/7180 rows). Pin
+        the correct join so it can't silently revert.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
+            ContradictionRepository,
+        )
+
+        session = _make_session(fetchall_return=[])
+        repo = ContradictionRepository(session)
+        asyncio.run(repo.fetch_active_for_subject(subject_entity_id=uuid4()))
+
+        sql = str(session.execute.call_args_list[0][0][0]).lower()
+        assert "join claims c on c.claim_id = rcl.relation_evidence_id" in sql
+        assert "c.subject_entity_id = :subject_entity_id" in sql
+        assert "relation_evidence_raw" not in sql
+        assert "rer.raw_id = rcl.relation_evidence_id" not in sql
 
 
 # ---------------------------------------------------------------------------
@@ -707,8 +740,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         eid = uuid4()
-        # F-101: row now has 9 columns (added description at [7] and sector at [8])
-        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None)
+        # F-101 + PLAN-0099: row now has 10 columns (description [7], sector [8], industry [9])
+        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None, None)
 
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
@@ -729,11 +762,11 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         ids = [uuid4(), uuid4(), uuid4()]
-        # F-101: each row has 9 columns — description at [7], sector at [8]
+        # F-101 + PLAN-0099: each row has 10 columns — description [7], sector [8], industry [9]
         rows = [
-            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None),
-            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None),
-            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None),
+            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None, None),
+            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None, None),
+            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None, None),
         ]
 
         session = _make_session(fetchall_return=rows)
@@ -756,8 +789,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         existing_id = uuid4()
         missing_id = uuid4()
 
-        # F-101: row has 9 columns — description at [7], sector at [8]
-        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None)
+        # F-101 + PLAN-0099: row has 10 columns — description [7], sector [8], industry [9]
+        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None, None)
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 

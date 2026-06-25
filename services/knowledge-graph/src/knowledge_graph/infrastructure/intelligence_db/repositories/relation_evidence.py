@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from knowledge_graph.application.ports.repositories import RelationEvidenceRepositoryPort
+from messaging.kafka.consumer.errors import MissingRequiredFieldError  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,14 +63,23 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         NULL when not provided.
 
         PLAN-0093 B-3 T-B-3-02: ``claim_id`` and ``chunk_id`` are NOT NULL in
-        the ``relation_evidence_raw`` schema (migration 0028). Surface the
-        constraint at the writer so callers get a fast ``ValueError`` instead
+        the ``relation_evidence_raw`` schema (migration 0047). Surface the
+        constraint at the writer so callers get a fast, terminal error instead
         of an opaque IntegrityError at commit time.
+
+        P0 fix (2026-06-11): raise :class:`MissingRequiredFieldError` (a
+        ``FatalError`` subclass) instead of a bare ``ValueError``. The base
+        consumer only dead-letters ``FatalError``; a ValueError here was
+        classified as retryable, so payloads missing these fields looped
+        silently and were then skipped when offsets advanced — the news-path
+        evidence flow was dead since 2026-05-23 with zero DLQ visibility.
+        Callers must now provide REAL claim/chunk references (the enriched
+        consumer auto-creates the backing claims row in materialize_graph).
         """
         if claim_id is None:
-            raise ValueError("claim_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
+            raise MissingRequiredFieldError("claim_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
         if chunk_id is None:
-            raise ValueError("chunk_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
+            raise MissingRequiredFieldError("chunk_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
         result = await self._session.execute(
             text("""
 INSERT INTO relation_evidence_raw (
@@ -208,10 +218,15 @@ FOR UPDATE SKIP LOCKED
         limit: int = 500,
     ) -> list[dict[str, object]]:
         """Fetch all (processed + unprocessed) raw evidence rows for a relation triple."""
+        # PLAN-0109 W1: source_type / source_name are now selected so the v2
+        # confidence backbone can (a) look up graded trust from source_trust_weights
+        # and (b) count distinct real sources for corroboration (the worker used to
+        # hardcode both to "unknown", collapsing the diversity bonus).
         result = await self._session.execute(
             text("""
 SELECT raw_id, extraction_confidence, source_trust_weight,
-       evidence_date, is_backfill, source_document_id, evidence_text
+       evidence_date, is_backfill, source_document_id, evidence_text,
+       source_type, source_name
 FROM relation_evidence_raw
 WHERE subject_entity_id = :subject
   AND object_entity_id  = :object
@@ -237,6 +252,8 @@ LIMIT :limit
                 "is_backfill": bool(r[4]),
                 "source_document_id": UUID(str(r[5])),
                 "evidence_text": r[6],
+                "source_type": r[7],
+                "source_name": r[8],
             }
             for r in rows
         ]
@@ -283,6 +300,63 @@ LIMIT :limit
                 "is_backfill": bool(r[4]),
                 "source_document_id": UUID(str(r[5])),
                 "evidence_text": r[6],
+            }
+            for r in rows
+        ]
+
+    async def get_detail_for_relation(
+        self,
+        relation_id: UUID,
+        limit: int = 25,
+    ) -> list[dict[str, object]]:
+        """Fetch rich evidence rows for the relation detail endpoint (PLAN-0099).
+
+        Reads from ``relation_evidence_raw`` (the hot-path staging table — the
+        immutable ``relation_evidence`` partitions may be empty if promotion has
+        not run) and resolves ``relation_id`` via the triple JOIN, since the raw
+        table stores (subject, object, canonical_type) — NOT relation_id.
+
+        Includes ``source_name`` / ``source_type`` provenance columns (migration
+        MIG-EVIDENCE-SOURCE) which the older ``get_raw_for_relation_id`` method
+        predates.  Article title/url/published_at are NOT available here —
+        intelligence_db has no article metadata table (that lives in S5/S6);
+        callers join on ``source_document_id`` client-side via the gateway's
+        document/news endpoints.
+
+        Ordered newest-first so the panel shows the most recent evidence on top.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT rer.raw_id, rer.evidence_text, rer.source_document_id,
+       rer.source_name, rer.source_type, rer.evidence_date,
+       rer.extraction_confidence, rer.source_trust_weight,
+       rer.is_backfill, rer.extracted_at, rer.polarity
+FROM relation_evidence_raw rer
+JOIN relations r
+  ON  r.subject_entity_id = rer.subject_entity_id
+  AND r.object_entity_id  = rer.object_entity_id
+  AND r.canonical_type    = rer.canonical_type
+WHERE r.relation_id          = :relation_id
+  AND rer.entity_provisional = false
+ORDER BY rer.evidence_date DESC, rer.source_trust_weight DESC
+LIMIT :limit
+"""),
+            {"relation_id": str(relation_id), "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "raw_id": UUID(str(r[0])),
+                "evidence_text": r[1],
+                "source_document_id": UUID(str(r[2])),
+                "source_name": r[3],
+                "source_type": r[4],
+                "evidence_date": r[5],
+                "extraction_confidence": float(r[6]),
+                "source_trust_weight": float(r[7]),
+                "is_backfill": bool(r[8]),
+                "extracted_at": r[9],
+                "polarity": r[10],
             }
             for r in rows
         ]

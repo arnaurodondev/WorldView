@@ -125,6 +125,123 @@ def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> tupl
     return f"{str(severity).upper()} signal", True
 
 
+# ── Graph-change humanisation (PLAN, Wave 4 alert-title clarity) ───────────────
+# WHY this table: graph.state.changed.v1 events carry NO claim_type/polarity, so
+# the signal-label path always degraded them to the bare "Graph pattern change".
+# But the payload is actually rich — `canonical_types` lists every relation that
+# changed (e.g. ["supplier_of", "supplier_of", "competes_with"]). Mapping each
+# canonical relation type to a short human noun lets us compose
+# "AAPL — 3 new graph links (2 supplier, 1 competitor)" instead of an opaque
+# "Graph pattern change". The mapping is deterministic (no LLM) because the KG
+# relation taxonomy is a fixed, small enum owned by S7.
+#
+# Keys are the lowercase canonical relation-type strings emitted by S7 in
+# `graph.state.changed.v1.canonical_types`. Unknown types fall back to the
+# generic word "link" so we never crash on an unmapped relation.
+_RELATION_TYPE_NOUN: dict[str, str] = {
+    "has_executive": "executive",
+    "appointed_as": "executive",
+    "board_member_of": "board",
+    "employs": "hiring",
+    "owns_stake_in": "ownership",
+    "investment_in": "investment",
+    "acquired_by": "acquisition",
+    "supplier_of": "supplier",
+    "competes_with": "competitor",
+    "partner_of": "partnership",
+    "produces": "product",
+    "listed_on": "listing",
+    "headquartered_in": "location",
+    "operates_in_country": "location",
+    "is_in_industry": "industry",
+    "regulates": "regulatory",
+    "analyst_rating": "analyst rating",
+    "sentiment_signal": "sentiment",
+}
+
+# WHY this table: the `change_type` field tells us WHAT happened to the graph
+# (new evidence arrived, a relation was created/removed, a contradiction surfaced).
+# We turn it into a short human verb-phrase so the title reads naturally. Unknown
+# change types fall back to the generic "graph update".
+_CHANGE_TYPE_PHRASE: dict[str, str] = {
+    "new_evidence": "graph update",
+    "new_relation": "new connections",
+    "relation_created": "new connections",
+    "relation_removed": "removed connections",
+    "relation_updated": "updated connections",
+    "node_created": "new entity links",
+    "contradiction": "conflicting evidence",
+}
+
+
+def _humanise_relation_counts(canonical_types: list[str]) -> str:
+    """Turn a list of canonical relation types into a compact human breakdown.
+
+    Example: ``["supplier_of", "supplier_of", "competes_with"]`` →
+    ``"2 supplier, 1 competitor"``. Returns ``""`` when the list is empty so
+    callers can decide whether to append a parenthetical breakdown at all.
+
+    Categories are ordered by descending count (most-changed relation first)
+    so the most salient change leads. Ties keep first-seen order for stability.
+    """
+    if not canonical_types:
+        return ""
+    # Count by humanised noun (collapses synonyms, e.g. has_executive +
+    # appointed_as both → "executive").
+    counts: dict[str, int] = {}
+    for raw in canonical_types:
+        noun = _RELATION_TYPE_NOUN.get(str(raw).lower(), "link")
+        counts[noun] = counts.get(noun, 0) + 1
+    # Sort by count desc, then by first-appearance order (dict preserves it).
+    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
+    # Cap at the top 3 categories so the title stays scannable; collapse the
+    # remainder into "+N more" if there are more than 3 distinct categories.
+    parts = [f"{n} {noun}" for noun, n in ordered[:3]]
+    if len(ordered) > 3:
+        remaining = sum(n for _, n in ordered[3:])
+        parts.append(f"+{remaining} more")
+    return ", ".join(parts)
+
+
+def _compose_graph_change_detail(event: dict[str, Any]) -> str:
+    """Compose the descriptive tail for a GRAPH_CHANGE alert from its payload.
+
+    Reads `change_type`, `canonical_types`, and `relation_ids` to produce text
+    like ``"3 new graph links (2 supplier, 1 competitor)"``. Falls back
+    gracefully as fields go missing:
+      - full:  "graph update: 3 new links (2 supplier, 1 competitor)"
+      - count only (no canonical_types): "graph update: 3 new links"
+      - nothing usable: "graph pattern change"
+
+    This is the single highest-leverage clarity fix: live data shows graph
+    events make up ~95% of alerts and ALWAYS carried the bare template, even
+    though every one of them ships a populated `canonical_types` list.
+    """
+    change_type = str(event.get("change_type") or "").lower()
+    phrase = _CHANGE_TYPE_PHRASE.get(change_type, "graph update")
+
+    canonical_types_raw = event.get("canonical_types")
+    canonical_types: list[str] = [str(t) for t in canonical_types_raw] if isinstance(canonical_types_raw, list) else []
+
+    # Prefer the count of changed relations; canonical_types length is the most
+    # reliable counter (relation_ids can be empty even when types are present —
+    # see live event 019eb7d5 with [] relation_ids but ["produces"] types).
+    relation_ids_raw = event.get("relation_ids")
+    relation_ids = relation_ids_raw if isinstance(relation_ids_raw, list) else []
+    link_count = len(canonical_types) or len(relation_ids)
+
+    if link_count == 0:
+        # No structural detail available — return the bare humanised phrase.
+        return phrase
+
+    noun = "link" if link_count == 1 else "links"
+    breakdown = _humanise_relation_counts(canonical_types)
+    head = f"{phrase}: {link_count} new {noun}"
+    if breakdown:
+        return f"{head} ({breakdown})"
+    return head
+
+
 def _compose_alert_title(
     *,
     signal_label: str,
@@ -132,6 +249,7 @@ def _compose_alert_title(
     ticker: str | None,
     alert_type: AlertType,
     is_signal_label_fallback: bool,
+    event: dict[str, Any] | None = None,
 ) -> str:
     """Compose a user-friendly alert subject.
 
@@ -155,27 +273,47 @@ def _compose_alert_title(
     titles. Those types lack ``claim_type``/``polarity`` payload (NLP-only fields)
     so the signal_label lookup always missed; the new templates ignore signal_label
     entirely for graph/contradiction events.
+
+    Wave-4 clarity upgrade: GRAPH_CHANGE titles now compose a descriptive tail
+    from the (always-populated) ``change_type`` + ``canonical_types`` payload —
+    e.g. ``"AAPL — 3 new graph links (2 supplier, 1 competitor)"`` — instead of
+    the opaque ``"Graph pattern change"``. ``event`` is the raw Kafka payload;
+    when it is ``None`` (legacy callers / minimal unit tests) we degrade to the
+    previous static templates so behaviour is unchanged for those call sites.
+
+    The separator is an em-dash (``—``) between subject and detail, matching the
+    target UX ("NVDA — unusual graph activity: ..."). Subject-less events keep a
+    leading-capital sentence so they still read as a headline.
     """
     subject = ticker or entity_name
 
     if alert_type == AlertType.SIGNAL:
         if not is_signal_label_fallback:
             if subject:
-                return f"{subject}: {signal_label}"
+                return f"{subject} — {signal_label}"
             return signal_label
-        # Severity-only fallback — keep it short and contextual.
-        return f"{subject}: Signal" if subject else "Signal detected"
+        # Severity-only fallback (no claim_type/polarity, e.g. neutral/OTHER).
+        # Still better than bare "Signal detected" when we know the subject.
+        if subject:
+            return f"{subject} — price signal detected"
+        return "Signal detected"
 
     if alert_type == AlertType.GRAPH_CHANGE:
-        template = "Graph pattern change"
-        return f"{subject}: {template}" if subject else template
+        # Compose rich detail from the payload when available.
+        detail = _compose_graph_change_detail(event) if event is not None else "graph pattern change"
+        if subject:
+            return f"{subject} — {detail}"
+        # No subject: capitalise the detail so it reads as a headline.
+        return detail[:1].upper() + detail[1:] if detail else "Graph pattern change"
 
     if alert_type == AlertType.CONTRADICTION:
-        template = "Conflicting signals"
-        return f"{subject}: {template}" if subject else template
+        detail = "conflicting signals"
+        if subject:
+            return f"{subject} — {detail}"
+        return detail[:1].upper() + detail[1:]
 
     # Defensive: enum extension safety net. Should be unreachable in current code.
-    return f"{subject}: Alert" if subject else "Alert"
+    return f"{subject} — alert" if subject else "Alert"
 
 
 def _find_schema_path(schema_name: str) -> Path:
@@ -479,6 +617,7 @@ class AlertFanoutUseCase:
                 ticker=ticker,
                 alert_type=alert_type,
                 is_signal_label_fallback=is_fallback,
+                event=event,
             )
 
             alert = Alert(

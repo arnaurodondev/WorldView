@@ -2,8 +2,15 @@
  * components/shell/GlobalSearch.tsx — Instrument search in TopBar
  *
  * WHY THIS EXISTS: Traders need to navigate to any instrument quickly.
- * The search box (⌘K shortcut) lets users type a ticker or company name
- * and jump directly to the Instrument Detail page.
+ * The search box lets users type a ticker or company name and jump directly
+ * to the Instrument Detail page.
+ *
+ * ⌘K OWNERSHIP MOVED (2026-06-10): the document-level ⌘K/Ctrl+K listener that
+ * used to toggle this dropdown now belongs to the global CommandPalette
+ * (components/shell/CommandPalette.tsx) — a centred modal covering routes,
+ * instruments AND conversations. Two listeners on one chord would open both
+ * surfaces simultaneously, so this component is now click/focus-driven only.
+ * The inline box remains valuable as a zero-modal, always-visible search.
  *
  * WHY debounce (not instant): Typing "AAPL" fires 4 keystrokes.
  * Without debounce, that's 4 S9 calls. Debouncing to 300ms means 1-2 calls.
@@ -158,19 +165,10 @@ export function GlobalSearch() {
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [open]);
 
-  // ── ⌘K shortcut ──────────────────────────────────────────────────────────
-  // WHY ⌘K handler: Bloomberg-like keyboard shortcut for search.
-  // Experienced traders use keyboard more than mouse.
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault(); // WHY: browser uses Ctrl+K for location bar on some browsers
-        setOpen((prev) => !prev);
-      }
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  // ── ⌘K shortcut: REMOVED (2026-06-10) ────────────────────────────────────
+  // The global CommandPalette (components/shell/CommandPalette.tsx) now owns
+  // the document-level ⌘K/Ctrl+K listener. Keeping a second listener here
+  // would toggle this dropdown underneath the palette dialog on every press.
 
   // ── Navigation handler (shared by onSelect and onClick) ──────────────────
   // WHY useCallback: stable reference so it can be used safely in both handlers
@@ -203,16 +201,23 @@ export function GlobalSearch() {
           WHY border-border/50 (was border-border): full-opacity border in a 36px
           nav bar creates a "box-inside-a-bar" effect. 50% opacity integrates the
           search box into the TopBar chrome without losing affordance. */}
-      {/* PLAN-0071 P3-5: aria-label="Command palette" for screen readers (P3-5).
+      {/* PLAN-0071 P3-5: aria-label for screen readers (P3-5). Renamed from
+          "Command palette" (2026-06-10) — that name now belongs to the ⌘K
+          CommandPalette dialog; two identically-named landmarks would be
+          ambiguous to screen-reader users.
           shouldFilter=false: we control filtering ourselves via the debounced query. */}
       <Command
-        aria-label="Command palette"
+        aria-label="Instrument search"
         className="rounded-[2px] border border-border/50 bg-muted/20 shadow-none"
         shouldFilter={false}
       >
         <CommandInput
           ref={inputRef}
-          placeholder="Search instruments… ⌘K"
+          // WHY no "⌘K" in the placeholder any more: ⌘K opens the global
+          // CommandPalette (which includes instrument search) — advertising it
+          // here would promise the wrong surface. The TopBar shows a dedicated
+          // ⌘K hint chip next to this box instead.
+          placeholder="Search instruments…"
           value={query}
           onValueChange={(val) => {
             setQuery(val);
@@ -287,7 +292,7 @@ export function GlobalSearch() {
                           {recent.name}
                         </span>
                         {/* WHY clock icon text: subtle "recent" signal without a bulky icon */}
-                        <span className="shrink-0 text-[10px] text-muted-foreground/60">↩</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground-dim">↩</span>
                       </div>
                     </CommandItem>
                   ))}
@@ -320,7 +325,7 @@ export function GlobalSearch() {
                     <div className="flex w-full items-center gap-2">
                       <span className="text-[11px] text-foreground">{page.label}</span>
                       {page.hotkey && (
-                        <span className="ml-auto text-[10px] text-muted-foreground/60">{page.hotkey}</span>
+                        <span className="ml-auto text-[10px] text-muted-foreground-dim">{page.hotkey}</span>
                       )}
                     </div>
                   </CommandItem>
@@ -354,7 +359,7 @@ export function GlobalSearch() {
                 >
                   <div className="flex w-full items-center gap-2">
                     <span className="text-[11px] text-foreground">New Alert</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">G A</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground-dim">G A</span>
                   </div>
                 </CommandItem>
                 <CommandItem
@@ -399,7 +404,7 @@ export function GlobalSearch() {
                 >
                   <div className="flex w-full items-center gap-2">
                     <span className="text-[11px] text-foreground">Send Feedback</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">⌘?</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground-dim">⌘?</span>
                   </div>
                 </CommandItem>
               </CommandGroup>
@@ -439,7 +444,7 @@ export function GlobalSearch() {
                             </span>
                             {/* P3-3: entity type badge — "Company" / "ETF" / "Index" / "Crypto" */}
                             {result.type && (
-                              <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-muted-foreground/60">
+                              <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-muted-foreground-dim">
                                 {ENTITY_TYPE_LABEL[result.type] ?? result.type}
                               </span>
                             )}
@@ -457,13 +462,13 @@ export function GlobalSearch() {
                 shortcuts in the dropdown footer. Traders use keyboard more than mouse;
                 showing ↑↓/↵/⎋ reduces learning curve for new users. */}
             <div className="flex items-center justify-end gap-3 border-t border-border/40 px-2 py-1">
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">↑↓</kbd> Navigate
               </span>
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">↵</kbd> Open
               </span>
-              <span className="text-[9px] text-muted-foreground/60">
+              <span className="text-[9px] text-muted-foreground-dim">
                 <kbd className="font-mono">⎋</kbd> Close
               </span>
             </div>

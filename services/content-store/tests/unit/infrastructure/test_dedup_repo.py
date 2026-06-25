@@ -231,3 +231,96 @@ class TestEstimateJaccard:
         )
 
         assert _estimate_jaccard([1, 2, 3], [1, 2]) == 0.0
+
+
+# ── get_cluster_sizes: regression for asyncpg "function min(uuid) does not exist" ──
+
+
+class TestGetClusterSizes:
+    """Regression tests for DuplicateClusterRepository.get_cluster_sizes.
+
+    BUG: Previously executed a bare ``union_all(...)`` selectable, which made
+    SQLAlchemy wrap the labeled UUID column with an implicit ``min(doc_id)``
+    aggregate. Postgres has no ``min(uuid)`` function → the endpoint
+    ``POST /api/v1/documents/cluster-sizes`` returned 500 every call with
+    ``asyncpg.exceptions.UndefinedFunctionError: function min(uuid) does not exist``.
+
+    Fix: wrap the union_all in an explicit ``.subquery()`` and aggregate with
+    ``func.count()`` + ``group_by(doc_id)`` in an outer SELECT.
+    """
+
+    async def test_get_cluster_sizes_returns_empty_for_no_doc_ids(self) -> None:
+        from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+
+        session = _mock_session()
+        repo = DuplicateClusterRepository(session)
+        assert await repo.get_cluster_sizes([]) == {}
+        # No DB roundtrip for empty input.
+        session.execute.assert_not_called()
+
+    async def test_get_cluster_sizes_emits_no_min_uuid_call(self) -> None:
+        """The compiled SQL MUST NOT contain ``min(...)`` (regression for min(uuid) error).
+
+        Compiling against the PostgreSQL dialect mimics what asyncpg would
+        receive at runtime.
+        """
+        from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+        from sqlalchemy.dialects import postgresql as pg_dialect
+
+        session = _mock_session()
+        # Empty result is fine — we only need to capture the compiled statement.
+        execute_result = MagicMock()
+        execute_result.__iter__ = MagicMock(return_value=iter([]))
+        session.execute = AsyncMock(return_value=execute_result)
+
+        repo = DuplicateClusterRepository(session)
+        doc_ids = [
+            UUID("00000000-0000-0000-0000-000000000001"),
+            UUID("00000000-0000-0000-0000-000000000002"),
+        ]
+        sizes = await repo.get_cluster_sizes(doc_ids)
+
+        # Default cluster_size for docs with no duplicates is 1 (just self).
+        assert sizes == {doc_ids[0]: 1, doc_ids[1]: 1}
+
+        session.execute.assert_called_once()
+        stmt = session.execute.call_args.args[0]
+        compiled = stmt.compile(
+            dialect=pg_dialect.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+        sql_text = str(compiled).lower()
+
+        # Regression assertions: no min(uuid) wrap; must use count + GROUP BY
+        # over a subquery of the union_all.
+        assert (
+            "min(" not in sql_text
+        ), f"SQL must not contain min() — would trigger min(uuid) error on Postgres.\nSQL:\n{sql_text}"
+        assert "count(" in sql_text
+        assert "union all" in sql_text
+        assert "group by" in sql_text
+
+    async def test_get_cluster_sizes_aggregates_counts_from_db(self) -> None:
+        """Sizes come from the DB row counts (cnt + 1 for self)."""
+        from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+
+        doc_a = UUID("00000000-0000-0000-0000-000000000001")
+        doc_b = UUID("00000000-0000-0000-0000-000000000002")
+        doc_c = UUID("00000000-0000-0000-0000-000000000003")
+
+        # Simulate the DB returning: doc_a appears in 2 pair-rows, doc_b in 1,
+        # doc_c not in the result set at all (so it stays at size 1).
+        rows = [
+            MagicMock(doc_id=doc_a, cnt=2),
+            MagicMock(doc_id=doc_b, cnt=1),
+        ]
+        execute_result = MagicMock()
+        execute_result.__iter__ = MagicMock(return_value=iter(rows))
+
+        session = _mock_session()
+        session.execute = AsyncMock(return_value=execute_result)
+
+        repo = DuplicateClusterRepository(session)
+        sizes = await repo.get_cluster_sizes([doc_a, doc_b, doc_c])
+
+        assert sizes == {doc_a: 3, doc_b: 2, doc_c: 1}

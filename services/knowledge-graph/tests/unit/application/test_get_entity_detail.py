@@ -72,10 +72,15 @@ class TestUseCaseWithMockedRepo:
         uc = GetEntityDetailUseCase(repo)
 
         result = await uc.execute(_ENTITY_ID)
-        assert result is expected
+        # PLAN-0099: execute() now returns the EntityDetailResult aggregate.
         assert result is not None
-        assert result.canonical_name == "Apple Inc."
-        assert result.description == "A consumer electronics maker."
+        assert result.entity is expected
+        assert result.entity.canonical_name == "Apple Inc."
+        assert result.entity.description == "A consumer electronics maker."
+        # No alias/relation repos wired -> empty collections, zero count.
+        assert result.aliases == []
+        assert result.top_relations == []
+        assert result.relation_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -138,14 +143,15 @@ class TestUseCaseEndToEndWithRealRepo:
         result = await uc.execute(_ENTITY_ID)
 
         assert result is not None
-        assert result.entity_id == _ENTITY_ID
-        assert result.canonical_name == "Apple Inc."
-        assert result.entity_type == "financial_instrument"
-        assert result.ticker == "AAPL"
-        assert result.exchange == "NASDAQ"
-        assert result.metadata == {"sector": "Technology"}
-        assert result.description == "A consumer electronics maker."
-        assert result.data_completeness == 0.85
+        entity = result.entity  # PLAN-0099: EntityDetailResult aggregate
+        assert entity.entity_id == _ENTITY_ID
+        assert entity.canonical_name == "Apple Inc."
+        assert entity.entity_type == "financial_instrument"
+        assert entity.ticker == "AAPL"
+        assert entity.exchange == "NASDAQ"
+        assert entity.metadata == {"sector": "Technology"}
+        assert entity.description == "A consumer electronics maker."
+        assert entity.data_completeness == 0.85
 
     def test_get_by_id_method_exists_on_repo(self) -> None:
         """Compile-time guard against accidental method removal (F-Q13)."""
@@ -154,3 +160,109 @@ class TestUseCaseEndToEndWithRealRepo:
         import inspect
 
         assert inspect.iscoroutinefunction(CanonicalEntityRepository.get_by_id)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0099: alias / top-relation aggregation
+# ---------------------------------------------------------------------------
+
+
+class TestEntityDetailAggregation:
+    """Aliases, top relations (authority-ranked) and relation_count (PLAN-0099)."""
+
+    @staticmethod
+    def _entity() -> CanonicalEntity:
+        return CanonicalEntity(
+            entity_id=_ENTITY_ID,
+            canonical_name="Apple Inc.",
+            entity_type="financial_instrument",
+            ticker="AAPL",
+        )
+
+    @staticmethod
+    def _relation_row(rel_id, other_id, *, subject_is_entity=True, confidence=0.5, evidence_count=1):
+        return {
+            "relation_id": rel_id,
+            "subject_entity_id": _ENTITY_ID if subject_is_entity else other_id,
+            "object_entity_id": other_id if subject_is_entity else _ENTITY_ID,
+            "canonical_type": "competes_with",
+            "semantic_mode": "RELATION_STATE",
+            "decay_class": "DURABLE",
+            "confidence": confidence,
+            "confidence_stale": False,
+            "evidence_count": evidence_count,
+        }
+
+    async def test_aliases_and_relation_count_populated(self) -> None:
+        repo = AsyncMock()
+        repo.get_by_id = AsyncMock(return_value=self._entity())
+        repo.get_batch = AsyncMock(return_value=[])
+        alias_repo = AsyncMock()
+        alias_repo.get_for_entity = AsyncMock(
+            return_value=[{"alias_text": "AAPL", "alias_type": "TICKER"}],
+        )
+        relation_repo = AsyncMock()
+        relation_repo.count_for_entity = AsyncMock(return_value=42)
+        relation_repo.list_for_entity = AsyncMock(return_value=[])
+        summary_repo = AsyncMock()
+        summary_repo.get_current_summaries_batch = AsyncMock(return_value={})
+
+        uc = GetEntityDetailUseCase(repo, alias_repo=alias_repo, relation_repo=relation_repo, summary_repo=summary_repo)
+        result = await uc.execute(_ENTITY_ID)
+
+        assert result is not None
+        assert result.aliases == [{"alias_text": "AAPL", "alias_type": "TICKER"}]
+        assert result.relation_count == 42
+        alias_repo.get_for_entity.assert_awaited_once_with(_ENTITY_ID)
+
+    async def test_top_relations_ranked_by_authority_with_direction(self) -> None:
+        """Relations are ranked by confidence*log1p(evidence_count); direction +
+        counterpart names are annotated; summaries merged via single batch."""
+        from uuid import uuid4
+
+        rel_weak = uuid4()
+        rel_strong = uuid4()
+        other_a = uuid4()
+        other_b = uuid4()
+
+        repo = AsyncMock()
+        repo.get_by_id = AsyncMock(return_value=self._entity())
+        repo.get_batch = AsyncMock(
+            return_value=[
+                {"entity_id": other_a, "canonical_name": "Microsoft", "entity_type": "financial_instrument"},
+                {"entity_id": other_b, "canonical_name": "Samsung", "entity_type": "financial_instrument"},
+            ]
+        )
+        alias_repo = AsyncMock()
+        alias_repo.get_for_entity = AsyncMock(return_value=[])
+        relation_repo = AsyncMock()
+        relation_repo.count_for_entity = AsyncMock(return_value=2)
+        relation_repo.list_for_entity = AsyncMock(
+            return_value=[
+                # Weak first in repo order (latest_evidence_at DESC) — ranking must reorder.
+                self._relation_row(rel_weak, other_a, subject_is_entity=True, confidence=0.3, evidence_count=1),
+                self._relation_row(rel_strong, other_b, subject_is_entity=False, confidence=0.9, evidence_count=50),
+            ]
+        )
+        summary_repo = AsyncMock()
+        summary_repo.get_current_summaries_batch = AsyncMock(
+            return_value={rel_strong: "Samsung competes with Apple in smartphones."},
+        )
+
+        uc = GetEntityDetailUseCase(repo, alias_repo=alias_repo, relation_repo=relation_repo, summary_repo=summary_repo)
+        result = await uc.execute(_ENTITY_ID)
+
+        assert result is not None
+        assert [r["relation_id"] for r in result.top_relations] == [rel_strong, rel_weak]
+        strong = result.top_relations[0]
+        # Entity is the OBJECT of the strong relation -> inbound; counterpart = subject.
+        assert strong["direction"] == "inbound"
+        assert strong["other_entity_id"] == other_b
+        assert strong["other_entity_name"] == "Samsung"
+        assert strong["relation_summary"] == "Samsung competes with Apple in smartphones."
+        weak = result.top_relations[1]
+        assert weak["direction"] == "outbound"
+        assert weak["other_entity_name"] == "Microsoft"
+        assert weak["relation_summary"] is None
+        # Counterparts resolved via a single batch call (no N+1).
+        repo.get_batch.assert_awaited_once()

@@ -43,6 +43,10 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /build/services/market-data/src /app/src
 COPY services/market-data/alembic /app/alembic
 COPY services/market-data/alembic.ini /app/alembic.ini
+# BUG-5: bake the operator one-shots (e.g. requeue_dead_outbox.py) into the image
+# so an operator can `docker exec` into a running container and recover
+# dead-lettered outbox rows without a repo checkout.
+COPY services/market-data/scripts /app/scripts
 COPY infra/kafka/schemas /app/infra/kafka/schemas
 
 ENV PATH="/app/.venv/bin:$PATH"

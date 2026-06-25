@@ -20,7 +20,11 @@ export function createPredictionMarketsApi(t: string | undefined) {
      * `{markets: PredictionMarket[], total}` with the simpler yes/no probability model.
      */
     async getPredictionMarkets(
-      params: { status?: string; limit?: number } = {},
+      // WHY offset added: PRD-0103 dashboard regression #3 — the standalone
+      // /prediction-markets page now paginates through the universe. The
+      // dashboard widget continues to pass only {status, limit:3} so it
+      // shows a tight top-3 view + "View all" link.
+      params: { status?: string; limit?: number; offset?: number; category?: string } = {},
     ): Promise<PredictionMarketsResponse> {
       const qs = new URLSearchParams(
         Object.entries(params)
@@ -42,6 +46,12 @@ export function createPredictionMarketsApi(t: string | undefined) {
           // WHY market_slug: added in B-2 (migration 009); may be null for markets
           // ingested before the field was added. Null → empty URL → search fallback.
           market_slug: string | null;
+          // WHY category: S3 has returned this since PLAN-0049 T-C-3-03 but the
+          // transform silently DROPPED it — which broke every client-side
+          // category filter (m.category was always undefined → zero matches).
+          // Fixed 2026-06-10 (user report "filtering on predictions does not
+          // work"). Nullable: rows ingested before tag-mapping have NULL.
+          category: string | null;
         }>;
         total: number;
         limit: number;
@@ -85,6 +95,11 @@ export function createPredictionMarketsApi(t: string | undefined) {
           // the URL client-side using market_slug as a second fallback after url.
           // Preserving it avoids re-fetching when url is empty.
           market_slug: m.market_slug,
+          // 2026-06-10 fix: forward the server category. The PredictionMarket
+          // type declared `category?` since PLAN-0049 but the transform never
+          // populated it — /prediction-markets' category pills filtered on a
+          // permanently-undefined field.
+          category: m.category ?? null,
           updated_at: m.updated_at,
         };
       });

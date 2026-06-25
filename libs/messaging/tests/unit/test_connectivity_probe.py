@@ -221,3 +221,81 @@ class TestConnectivityProbe:
         assert (
             consume_counter["n"] >= 5
         ), f"consume loop appears to have been blocked by the probe (count={consume_counter['n']})"
+
+
+# ── Lag-stall early warning (BP-690) ──────────────────────────────────────────
+
+
+class TestLagStallDetector:
+    """``_evaluate_lag_stall`` fires only on sustained, non-draining lag.
+
+    The detector backs the ``kafka_consumer_lag_stalled`` CRITICAL alert that
+    catches a connected-but-frozen consumer (the gap that let an OHLCV consumer
+    fall ~19k messages behind for three days unnoticed).
+    """
+
+    def test_below_threshold_never_alerts(self) -> None:
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 5
+        # Ten samples all under the threshold → never a stall, counter stays 0.
+        for _ in range(10):
+            assert c._evaluate_lag_stall(100) is False
+        assert c._lag_stall_count == 0
+
+    def test_sustained_nondraining_lag_alerts_after_n_probes(self) -> None:
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 5
+        # Flat, high lag: first 4 samples arm, the 5th fires.
+        results = [c._evaluate_lag_stall(9_000) for _ in range(5)]
+        assert results == [False, False, False, False, True]
+        # After firing the counter resets so the next window re-alerts (no spam).
+        assert c._lag_stall_count == 0
+
+    def test_growing_lag_alerts(self) -> None:
+        """Monotonically growing lag above threshold is the canonical stall."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        results = [c._evaluate_lag_stall(v) for v in (6_000, 7_000, 8_000)]
+        assert results[-1] is True
+
+    def test_draining_lag_resets_counter(self) -> None:
+        """Large but SHRINKING lag is healthy backlog drain — never alerts."""
+        c = _build_consumer()
+        c._lag_stall_threshold = 5_000
+        c._lag_stall_probes = 3
+        # Arm twice with flat high lag, then lag drops → counter resets, no alert.
+        assert c._evaluate_lag_stall(9_000) is False
+        assert c._evaluate_lag_stall(9_000) is False
+        assert c._evaluate_lag_stall(8_000) is False  # draining
+        assert c._lag_stall_count == 0
+        # A subsequent single high sample does not immediately re-fire.
+        assert c._evaluate_lag_stall(9_000) is False
+
+    def test_compute_total_lag_none_when_no_consumer(self) -> None:
+        c = _build_consumer()
+        c._consumer = None
+        assert c._compute_total_lag() is None
+
+    def test_compute_total_lag_sums_assignment(self) -> None:
+        c = _build_consumer()
+        fake = MagicMock()
+        tp1, tp2 = MagicMock(), MagicMock()
+        fake.assignment.return_value = [tp1, tp2]
+        # (low, high) per partition; positions trail the high watermark.
+        fake.get_watermark_offsets.side_effect = [(0, 1_000), (0, 5_000)]
+        pos1, pos2 = MagicMock(), MagicMock()
+        pos1.offset, pos2.offset = 600, 1_000
+        fake.position.side_effect = [[pos1], [pos2]]
+        c._consumer = fake
+        # lag = (1000-600) + (5000-1000) = 400 + 4000 = 4400
+        assert c._compute_total_lag() == 4_400
+
+    def test_compute_total_lag_none_on_broker_error(self) -> None:
+        c = _build_consumer()
+        fake = MagicMock()
+        fake.assignment.side_effect = RuntimeError("metadata timeout")
+        c._consumer = fake
+        assert c._compute_total_lag() is None

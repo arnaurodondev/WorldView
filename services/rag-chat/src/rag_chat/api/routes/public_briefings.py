@@ -28,6 +28,7 @@ PLAN-0066 Wave C (T-W10-C-01, T-W10-C-02):
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -56,6 +57,129 @@ _CACHE_TTL = 86400
 # to read on Monday morning).  Mirrors ``brief_last_good_ttl_days`` setting;
 # this constant is the seconds equivalent.
 _LASTGOOD_TTL = 7 * 86400
+
+# ── Cache-poisoning guard (2026-06-19 empty-AI-brief investigation) ───────────
+# A "low-context refusal" brief is one the generator produced WITHOUT any usable
+# upstream context: every section reads "No specific items today" and the
+# confidence collapses to 0.0.  This happens on a transient auth/upstream blip
+# (e.g. the gateway service-token mint returning 503, or all upstreams 401'ing).
+#
+# Such a brief MUST NOT overwrite the ``briefing:morning:lastgood:{user_id}``
+# key — doing so clobbers the last KNOWN-GOOD brief and leaves the dashboard
+# blank until the next successful generation.  The matching pregeneration worker
+# already guards its lastgood write (``_looks_empty`` in
+# morning_brief_pregeneration_worker.py); the on-demand GET cold-gen path and
+# the POST /briefings/morning/generate force-regen path did NOT — so a single
+# blip while a user hit "Regenerate" could poison lastgood.  This guard closes
+# that gap.
+#
+# The substring is the deterministic placeholder the use case emits for an empty
+# section (see GenerateBriefingUseCase low-context branch).  We keep it here as a
+# module constant so the test can assert against the exact text.
+_LOW_CONTEXT_PLACEHOLDER = "No specific items today"
+
+
+def _is_low_context_brief(response: PublicBriefingResponse) -> bool:
+    """Return True if ``response`` is a zero-context refusal that must not be
+    written to the last-known-good cache key.
+
+    A brief is treated as low-context when BOTH hold:
+
+    1. ``confidence`` is 0.0 (the generator's signal that it had no real data),
+       AND
+    2. it carries no usable structure — no citations, no real sections (every
+       section body is the "No specific items today" placeholder).
+
+    Requiring confidence==0 AND no citations keeps the guard conservative: a
+    genuine-but-sparse brief (one real citation, or a real section with a
+    positive confidence) still passes through and updates lastgood as normal.
+    We never want to REJECT a good brief — only refuse to let a refusal stomp
+    a previously-good one.
+    """
+    # Signal 1: confidence collapsed to zero. ``confidence`` defaults to 1.0 in
+    # the schema, so a real brief never accidentally trips this.
+    if (response.confidence or 0.0) > 0.0:
+        return False
+
+    # Signal 2a: any citation at all means the brief grounded in real data.
+    if response.citations:
+        return False
+
+    # Signal 2b: any section whose BODY is NOT the empty placeholder means the
+    # generator found real content for at least one section.  We inspect only
+    # body/content fields — NOT the section title (titles like "Portfolio" /
+    # "News" are static labels present even on an empty brief and would falsely
+    # pass the guard if scanned).
+    body_keys = ("body", "content", "text", "markdown", "summary")
+    for section in response.sections or []:
+        # Sections are dicts (list[dict] in the schema), but read defensively in
+        # case a BriefSection model leaks through on some call path.
+        if isinstance(section, dict):
+            section_dict = section
+        elif hasattr(section, "model_dump"):
+            section_dict = section.model_dump()
+        else:
+            section_dict = {}
+        for key in body_keys:
+            value = section_dict.get(key)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped and _LOW_CONTEXT_PLACEHOLDER not in stripped:
+                    return False
+            elif isinstance(value, list):
+                # Bullet lists: any non-placeholder bullet string is real content.
+                for item in value:
+                    if isinstance(item, str):
+                        text = item
+                    elif isinstance(item, dict):
+                        text = str(item.get("text", ""))
+                    else:
+                        text = ""
+                    if text.strip() and _LOW_CONTEXT_PLACEHOLDER not in text:
+                        return False
+
+    # confidence==0, no citations, every section empty/placeholder → refusal.
+    return True
+
+
+async def _write_brief_caches(
+    valkey: Any,
+    *,
+    cache_key: str,
+    lastgood_key: str,
+    response: PublicBriefingResponse,
+) -> None:
+    """Write the fresh brief to ``cache_key`` and (conditionally) ``lastgood_key``.
+
+    The fresh key is ALWAYS written — the caller asked for this brief and should
+    see it immediately, even if it is a low-context refusal (so the frontend can
+    render the EmptyState / Regenerate affordance rather than serving an even
+    older payload).
+
+    The lastgood key is written ONLY when the brief is NOT a low-context refusal
+    (see ``_is_low_context_brief``).  This preserves the previous known-good
+    brief across a transient upstream/auth blip — the core cache-poisoning fix.
+
+    WHY model_dump_json (not json.dumps): avoids stringifying nested Pydantic
+    models to non-deserialisable reprs (BP-319).
+    """
+    if valkey is None:
+        return
+    try:
+        payload_json = response.model_dump_json()
+        # Fresh key: always — the caller wants this exact result back.
+        await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
+        # Lastgood key: only for real briefs, never for a zero-context refusal.
+        if _is_low_context_brief(response):
+            log.warning(  # type: ignore[no-any-return]
+                "briefing_lastgood_write_skipped_low_context",
+                key=lastgood_key,
+                confidence=response.confidence,
+            )
+        else:
+            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
+    except Exception as exc:  # — cache write is best-effort
+        log.warning("briefing_cache_write_failed", error=str(exc), key=cache_key)  # type: ignore[no-any-return]
 
 
 # ── PLAN-0066 Wave B: history response schemas ────────────────────────────────
@@ -387,18 +511,16 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     resp = PublicBriefingResponse(**response_data)
 
     # ── Write to cache ────────────────────────────────────────────────────────
-    # WHY model_dump_json: avoids json.dumps(..., default=str) which stringifies
-    # Pydantic models (BriefSection, BriefBullet) to repr strings that cannot be
-    # re-deserialized on cache read (BP-319).
-    # PLAN-0094 W2: also write the lastgood key so a future regen failure has
-    # a known-good payload to fall back on.
-    if valkey is not None:
-        try:
-            payload_json = resp.model_dump_json()
-            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
-            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
-        except Exception as e:
-            log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
+    # PLAN-0094 W2: write the lastgood key so a future regen failure has a
+    # known-good payload to fall back on. 2026-06-19: gate the lastgood write on
+    # ``_is_low_context_brief`` so a zero-context refusal does not clobber the
+    # previous good brief (cache-poisoning guard).
+    await _write_brief_caches(
+        valkey,
+        cache_key=cache_key,
+        lastgood_key=lastgood_key,
+        response=resp,
+    )
 
     return resp
 
@@ -425,6 +547,24 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     # viewers, cutting cache misses by ~N users per entity per day. Stale-user-brief
     # isolation is preserved by the morning briefing (which retains the user_id key).
     cache_key = f"briefing:instrument:v2:{entity_id}"
+
+    # ── AI-brief-flag fix (2026-06-19): mark this instrument as "active" ──────
+    # Record the view in the Valkey ``active_instruments`` sorted-set (member =
+    # entity_id, score = now) so the InstrumentBriefPregenerationWorker can
+    # proactively keep this instrument's persisted entity brief fresh — mirroring
+    # how S9 populates ``active_users`` for the morning-brief worker. Best-effort:
+    # a failure here must never affect the brief response.
+    if valkey is not None:
+        try:
+            # Lazy import (D-1 / IG-LAYER-002): keep this infrastructure constant
+            # off the module-import path so the API layer stays infra-free.
+            from rag_chat.infrastructure.clients.active_instruments_reader import (
+                ACTIVE_INSTRUMENTS_KEY as _ACTIVE_INSTRUMENTS_KEY,
+            )
+
+            await valkey.zadd(_ACTIVE_INSTRUMENTS_KEY, {entity_id: int(time.time())})
+        except Exception as e:  # pragma: no cover — defensive
+            log.warning("active_instruments_mark_failed", error=str(e), entity_id=entity_id)  # type: ignore[no-any-return]
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
@@ -664,6 +804,164 @@ async def generate_instrument_brief(
             brief_id=None,
             entity_id=entity_id,
         ).model_dump(),
+    )
+
+
+# ── Morning brief force-regenerate endpoint ───────────────────────────────────
+
+
+class MorningGenerateResponse(BaseModel):
+    """Response for POST /api/v1/briefings/morning/generate.
+
+    status is always "queued" — unlike the instrument lazy-generate endpoint
+    there is no "cached" short-circuit because the WHOLE POINT of this
+    endpoint is to bypass the cache (dashboard "Regenerate" button).
+
+    generated_at lets the caller confirm the brief is fresh without an extra
+    round-trip; the canonical payload is still fetched via
+    GET /v1/briefings/morning (which now hits the just-written cache).
+    """
+
+    status: Literal["queued"]
+    generated_at: str | None = None
+
+
+@router.post("/briefings/morning/generate", status_code=202)
+async def generate_morning_brief(request: Request) -> Any:
+    """Force-regenerate the authenticated user's morning brief.
+
+    Unlike GET /briefings/morning (which serves cached/lastgood briefs and
+    only generates cold), this endpoint ALWAYS regenerates — it bypasses the
+    staleness/cache check entirely. Job semantics mirror the instrument
+    lazy-generate endpoint (202 + status="queued"); generation itself runs
+    synchronously within the request (same as the instrument endpoint) and
+    the fresh brief is written to BOTH cache keys (fresh + lastgood) so the
+    follow-up GET returns the new brief immediately.
+
+    Flow:
+      1. Rate-limit: shares the brief_gen_rate:{user_id}:{hour} Valkey
+         counter with the instrument endpoint (60 generations/user/hour
+         across both — a brief regen costs the same LLM tokens either way).
+      2. Generate via execute_public_morning (or the agentic generator when
+         RAG_CHAT_BRIEF_AGENTIC_ENABLED — same branch as the GET route).
+      3. Write briefing:morning:v2:{user_id} + lastgood keys.
+      4. Return 202 + {"status": "queued", "generated_at": ...}.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    import math
+
+    user_id = _extract_user_id(request)
+    tenant_id = _extract_tenant_id(request)
+    valkey = _get_valkey(request)
+    cache_key = f"briefing:morning:v2:{user_id}"
+    lastgood_key = f"briefing:morning:lastgood:{user_id}"
+
+    # ── Step 1: Rate limit (shared 60/user/hour bucket) ───────────────────────
+    # WHY shared with the instrument endpoint: both trigger a full LLM
+    # generation; a per-endpoint bucket would double the effective quota.
+    if valkey is not None:
+        now_utc = datetime.now(tz=UTC)
+        hour_bucket = now_utc.strftime("%Y%m%d%H")
+        rate_key = f"brief_gen_rate:{user_id}:{hour_bucket}"
+        try:
+            count = await valkey.incr(rate_key)
+            if count == 1:
+                await valkey.expire(rate_key, 3600)
+            if count > 60:
+                next_hour = now_utc.replace(minute=0, second=0, microsecond=0, tzinfo=UTC) + timedelta(hours=1)
+                retry_after = math.ceil((next_hour - now_utc).total_seconds())
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Brief generation quota exceeded (60/hour). Retry after {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fail-open: Valkey down → allow generation (availability > strict throttling).
+            log.warning("generate_brief_rate_check_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 2: Generate (bypasses cache by design) ───────────────────────────
+    # WHY set_current_jwt: same rationale as GET /briefings/morning — the
+    # gatherer's S1/S3/S6/S7 calls read the JWT from the ContextVar.
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    internal_jwt = request.headers.get("X-Internal-JWT")
+    set_current_jwt(internal_jwt)
+    uc = _get_briefing_uc(request)
+    _settings = request.app.state.settings
+    try:
+        if getattr(_settings, "brief_agentic_enabled", False):
+            from rag_chat.application.use_cases.agentic_brief_generator import AgenticBriefGenerator
+
+            _factory = request.app.state.tool_executor_factory
+            _tool_executor = _factory.for_request(
+                user_id=UUID(user_id) if user_id else None,
+                tenant_id=UUID(tenant_id) if tenant_id else None,
+                internal_jwt=internal_jwt,
+            )
+            _agentic = AgenticBriefGenerator(
+                llm_chain=request.app.state.llm_chain,
+                tool_executor=_tool_executor,
+                settings=_settings,
+                fallback=uc,
+            )
+            result = await _agentic.generate(
+                user_id=UUID(user_id),
+                tenant_id=UUID(tenant_id),
+            )
+        else:
+            result = await uc.execute_public_morning(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                internal_jwt=internal_jwt,
+            )
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+    except Exception as exc:
+        log.error("generate_morning_brief_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+
+    # ── Step 3: Write BOTH cache keys so the follow-up GET serves fresh ───────
+    fresh_resp = PublicBriefingResponse(
+        narrative=result.get("content", ""),
+        risk_summary=result.get("risk_summary", {}),
+        citations=result.get("citations", []),
+        generated_at=result["generated_at"],
+        cached=False,
+        entity_id=None,
+        summary=result.get("summary"),
+        sections=result.get("sections", []),
+        confidence=result.get("confidence", 1.0),
+        lead=result.get("lead"),
+        is_stale=False,
+        summary_paragraph=result.get("summary_paragraph"),
+    )
+    # 2026-06-19 cache-poisoning guard: a force-regen that lands a zero-context
+    # refusal (e.g. a transient gateway/upstream auth blip) must NOT overwrite
+    # the user's last-known-good brief. ``_write_brief_caches`` always writes the
+    # fresh key (so the follow-up GET serves this result) but skips lastgood for
+    # a low-context refusal.
+    await _write_brief_caches(
+        valkey,
+        cache_key=cache_key,
+        lastgood_key=lastgood_key,
+        response=fresh_resp,
+    )
+
+    log.info(  # type: ignore[no-any-return]
+        "generate_morning_brief_queued",
+        user_id=user_id,
+        generated_at=str(result.get("generated_at")),
+    )
+
+    # ── Step 4: 202 Accepted (route-level status_code) ────────────────────────
+    return MorningGenerateResponse(
+        status="queued",
+        generated_at=str(result["generated_at"]) if result.get("generated_at") is not None else None,
     )
 
 

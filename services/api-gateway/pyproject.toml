@@ -10,7 +10,12 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "messaging",
     "observability",
-    "fastapi==0.111",
+    # WHY >=0.112: FastAPI 0.111 ships starlette<0.38.0 which contains a known
+    # BaseHTTPMiddleware bug where send() raising during cancellation leaves the
+    # response in an undefined state (RuntimeError: No response returned). Starlette
+    # fixed this in 0.38.0. FastAPI 0.112+ allows starlette>=0.38.0. (PLAN-0099 W4)
+    "fastapi>=0.112,<0.116",
+    "starlette>=0.38.0,<0.42",
     "uvicorn[standard]==0.29",
     "pydantic==2.5",
     "pydantic-settings==2.1",
