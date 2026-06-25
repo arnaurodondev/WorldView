@@ -92,6 +92,19 @@ from chat_quality_judge import (  # noqa: E402
     judge_answer,
     summarise_judge_records,
 )
+
+# --- W2 trajectory layer ---
+# The trajectory / tool-chain judge (Multi-Level Eval Framework W2) is an
+# ADDITIVE layer over the answer judge: it grades the agent's PROCESS (its
+# ordered tool calls) without ever changing the answer FAIL/PASS verdict. We
+# import it here and keep every other touch-point in this runner tagged with the
+# same ``# --- W2 trajectory layer ---`` marker so the additive surface is
+# trivially auditable.
+from chat_trajectory_judge import (  # noqa: E402
+    judge_trajectory,
+    summarise_trajectory_records,
+)
+
 from prompts.evaluation import CHAT_QUALITY_JUDGE  # noqa: E402
 
 # PLAN-0110 W4 — the durable longitudinal trend store + regression detection.
@@ -319,6 +332,7 @@ def write_question_artifacts(
     bucket: str,
     reasons: list[str],
     judge_result: dict[str, Any] | None = None,
+    trajectory_result: dict[str, Any] | None = None,  # --- W2 trajectory layer ---
 ) -> None:
     """Write q_<id>.json + q_<id>.log to the run directory.
 
@@ -353,6 +367,11 @@ def write_question_artifacts(
         # New LLM-judge rubric verdict (PLAN-0104 W33). None when judge skipped.
         "rubric": Rubric.from_question(q).to_dict(),
         "judge": judge_result,
+        # --- W2 trajectory layer ---
+        # The tool-chain trajectory verdict (W2). None when trajectory grading is
+        # off. Stored as a SEPARATE block — it is purely additive and never feeds
+        # the answer ``judge`` verdict above.
+        "trajectory": trajectory_result,
         "result": result.to_json_dict(),
     }
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
@@ -675,7 +694,7 @@ def _render_question_block(q_id: str, artifacts: list[dict[str, Any]]) -> list[s
         sd = _safe_stdev([float(s) for s in judge_scores])
         verdict_badges = " ".join(("✅" if v == "PASS" else ("⚠️" if v == "WARN" else "❌")) for v in verdicts)
         lines.append(
-            f"**{n} run{'s' if n != 1 else ''}** — mean score **{mean:.1f}/100** " f"(σ={sd:.1f}) — {verdict_badges}"  # noqa: RUF001
+            f"**{n} run{'s' if n != 1 else ''}** — mean score **{mean:.1f}/100** (σ={sd:.1f}) — {verdict_badges}"  # noqa: RUF001
         )
     else:
         buckets = [a.get("bucket") or "?" for a in artifacts]
@@ -813,7 +832,7 @@ def _render_failure_first_headline(
     lines.append("")
 
     if judged:
-        worst = sorted(judged, key=lambda a: (_run_score(a) or 0.0))[:worst_n]
+        worst = sorted(judged, key=lambda a: _run_score(a) or 0.0)[:worst_n]
         lines.append(f"**Worst {min(worst_n, len(worst))} runs**")
         lines.append("")
         lines.append("| Run | Verdict | Score | Why |")
@@ -1260,6 +1279,52 @@ def _render_tiered_failures(artifacts: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+# --- W2 trajectory layer ---
+def _render_trajectory_section(judge_summary: dict[str, Any] | None) -> list[str]:
+    """Render the "Trajectory (MUST-2)" report section from the W2 roll-up.
+
+    Reads the ``trajectory`` block on ``judge_summary`` (added by the runner when
+    trajectory grading is on). Surfaces the headline MUST-2 metrics — mean
+    trajectory score + the two deterministic pre-signal totals (redundant turns,
+    unrecovered failures) — plus the per-dimension averages. Returns an empty
+    list when there is no trajectory block (grading was off / offline), so the
+    report is byte-identical to a no-trajectory run in that case.
+    """
+    traj = (judge_summary or {}).get("trajectory")
+    if not isinstance(traj, dict):
+        return []
+    lines: list[str] = []
+    lines.append("## Trajectory (MUST-2)")
+    lines.append("")
+    lines.append(
+        "> The agent's TOOL-CHAIN PROCESS, graded separately from the answer "
+        "(it does NOT change the answer verdict). `redundant`/`unrecovered` are "
+        "deterministic LLM-free pre-signals."
+    )
+    lines.append("")
+    mean_score = traj.get("mean_score")
+    mean_str = f"{mean_score:.2f} / 100" if isinstance(mean_score, int | float) else "-"
+    redundant = int(traj.get("redundant_turns_n") or 0)
+    unrecovered = int(traj.get("unrecovered_turns_n") or 0)
+    n_graded = traj.get("n_graded")
+    n_records = traj.get("n_records")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Mean trajectory score | {mean_str} |")
+    lines.append(f"| Redundant turns (identical re-calls) | {redundant} |")
+    lines.append(f"| Unrecovered failures (gave up / looped) | {unrecovered} |")
+    lines.append(f"| Graded / total | {n_graded} / {n_records} |")
+    dim_avg = traj.get("dimension_avg") or {}
+
+    def _fmt_dim(v: Any) -> str:
+        return f"{v:.1f}" if isinstance(v, int | float) else "-"
+
+    dims_str = " · ".join(f"{k} {_fmt_dim(v)}" for k, v in dim_avg.items()) or "(none)"
+    lines.append(f"| Dimensions (avg) | {dims_str} |")
+    lines.append("")
+    return lines
+
+
 def _render_report_md(
     *,
     meta: dict[str, Any],
@@ -1362,6 +1427,13 @@ def _render_report_md(
             artifacts=per_question_artifacts,
         )
     )
+
+    # --- W2 trajectory layer ---
+    # The "Trajectory (MUST-2)" section: mean trajectory score + the two
+    # deterministic pre-signal totals + per-dimension averages. Empty (no-op)
+    # when the run had no trajectory block, so a no-trajectory report is
+    # unchanged.
+    lines.extend(_render_trajectory_section(judge_summary))
 
     # --- Regression vs baseline (single-baseline disk diff) ------------
     lines.extend(
@@ -1624,6 +1696,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run the LLM-judge rubric (PLAN-0104 W33) per question. Requires DEEPINFRA_API_KEY.",
     )
+    # --- W2 trajectory layer ---
+    # ``--trajectory`` / ``--no-trajectory`` toggles the tool-chain trajectory
+    # judge. Default is None → resolved to ON whenever ``--judge`` is on (the
+    # trajectory layer rides along with the answer judge). It never affects the
+    # answer verdict; it only adds a ``trajectory`` block to the artefacts.
+    p.add_argument(
+        "--trajectory",
+        dest="trajectory",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Grade the tool-chain TRAJECTORY (W2). Default: ON when --judge is set.",
+    )
     p.add_argument(
         "--judge-only",
         action="store_true",
@@ -1772,6 +1856,12 @@ def main(argv: list[str] | None = None) -> int:
     category_buckets: dict[str, dict[str, int]] = {}
     # PLAN-0104 W33 — per-Q judge records, aggregated into _judge_summary.json.
     judge_records: list[dict[str, Any]] = []
+    # --- W2 trajectory layer ---
+    # Trajectory grading rides along with the answer judge: ON when --judge is
+    # set unless explicitly disabled with --no-trajectory. Its records aggregate
+    # into the ``trajectory`` block of _judge_summary.json / the report.
+    trajectory_enabled = args.judge and (args.trajectory is not False)
+    trajectory_records: list[dict[str, Any]] = []
 
     try:
         for idx, q in enumerate(filtered):
@@ -1797,6 +1887,17 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         judge_result = judge_answer(judge_input)
                         judge_records.append({"id": q_id, "slot": slot, **judge_result})
+                    # --- W2 trajectory layer ---
+                    # Grade the tool-chain TRAJECTORY from the SAME JudgeInput the
+                    # answer judge used (so both judges see the identical ordered
+                    # trace). This NEVER mutates ``judge_result`` / the answer
+                    # verdict — it is a separate ``trajectory`` block. We reuse
+                    # ``judge_input`` from the --judge branch above; trajectory is
+                    # only enabled when --judge is on, so it is always populated.
+                    trajectory_result: dict[str, Any] | None = None
+                    if trajectory_enabled:
+                        trajectory_result = judge_trajectory(judge_input)
+                        trajectory_records.append({"id": q_id, "slot": slot, **trajectory_result})
                     write_question_artifacts(
                         out_dir=out_dir,
                         slot=slot,
@@ -1806,6 +1907,7 @@ def main(argv: list[str] | None = None) -> int:
                         bucket=bucket,
                         reasons=reasons,
                         judge_result=judge_result,
+                        trajectory_result=trajectory_result,  # --- W2 trajectory layer ---
                     )
                     bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
                     cb = category_buckets.setdefault(category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
@@ -1906,6 +2008,23 @@ def main(argv: list[str] | None = None) -> int:
             "substantiation": _substantiation_rollup(judge_records),
             **summarise_judge_records(judge_records),
         }
+        # --- W2 trajectory layer ---
+        # Roll the trajectory records into a ``trajectory`` block on the SAME
+        # _judge_summary.json. {mean_score, redundant_turns_n, unrecovered_turns_n}
+        # are the headline MUST-2 metrics; the full roll-up (dimension_avg, n_*)
+        # rides alongside. Omitted entirely when trajectory grading was off.
+        if trajectory_enabled:
+            traj_roll = summarise_trajectory_records(trajectory_records)
+            judge_summary["trajectory"] = {
+                "mean_score": traj_roll["mean_score"],
+                "redundant_turns_n": traj_roll["redundant_turns_n"],
+                "unrecovered_turns_n": traj_roll["unrecovered_turns_n"],
+                "dimension_avg": traj_roll["dimension_avg"],
+                "n_records": traj_roll["n_records"],
+                "n_graded": traj_roll["n_graded"],
+                "judge_prompt_id": traj_roll["judge_prompt_id"],
+                "per_question": trajectory_records,
+            }
         (out_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))
 
     # PLAN-0099 W4 — write the human-readable report alongside the JSON
@@ -2004,6 +2123,14 @@ def main(argv: list[str] | None = None) -> int:
         agg = summarise_judge_records(judge_records)
         print(f"judge     : verdicts={agg['verdict_counts']} score_avg={agg['score_avg']}")
         print(f"            dimension_avg={agg['dimension_avg']}")
+    # --- W2 trajectory layer ---
+    if trajectory_enabled and trajectory_records:
+        traj_agg = summarise_trajectory_records(trajectory_records)
+        print(
+            f"trajectory: mean_score={traj_agg['mean_score']} "
+            f"redundant_turns={traj_agg['redundant_turns_n']} "
+            f"unrecovered_turns={traj_agg['unrecovered_turns_n']}"
+        )
     print(f"artifacts : {out_dir}")
     print(f"report    : {out_dir / '_report.md'}")
     print(f"trend     : {trend_store.sqlite_path} (+ {trend_store.jsonl_path.name})")
