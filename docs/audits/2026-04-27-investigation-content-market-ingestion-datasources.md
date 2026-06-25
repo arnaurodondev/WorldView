@@ -1,8 +1,8 @@
 # Investigation Report: Content-Ingestion & Market-Ingestion Data Source Validation
 
-**Date**: 2026-04-27  
-**Investigator**: Claude (investigation skill)  
-**Severity**: HIGH (multiple sources producing 0 data; crypto OHLCV all failing)  
+**Date**: 2026-04-27
+**Investigator**: Claude (investigation skill)
+**Severity**: HIGH (multiple sources producing 0 data; crypto OHLCV all failing)
 **Status**: Root causes identified and fixed (4 bugs)
 
 ---
@@ -53,7 +53,7 @@ docker compose up -d --force-recreate market-ingestion-scheduler market-ingestio
 
 **Fix**:
 - Added `_is_crypto_symbol()` — detects `-USD` suffix
-- Added `_to_alpaca_crypto_symbol()` — converts `BTC-USD` → `BTC/USD`  
+- Added `_to_alpaca_crypto_symbol()` — converts `BTC-USD` → `BTC/USD`
 - `fetch_ohlcv()` and `fetch_ohlcv_batch()` now route crypto to `/v1beta3/crypto/us/bars`
 
 **Result**: 21/22 tasks succeeded immediately after reset; 1 had a timeout that auto-retried.

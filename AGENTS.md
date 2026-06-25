@@ -9,14 +9,14 @@
 
 This is a **Python + TypeScript monorepo** for a thesis-grade market intelligence platform.
 It consists of 10 microservices (S1–S10) + intelligence-migrations, 1 frontend web application,
-6 shared Python libraries, and supporting infrastructure.
+8 shared Python libraries, and supporting infrastructure.
 
 ```
 worldview/
 ├── services/        # 10 FastAPI microservices (S1–S10) + intelligence-migrations (DDL owner for intelligence_db)
 ├── apps/
 │   └── worldview-web/    # Next.js 15 App Router + shadcn/ui + TypeScript web application
-├── libs/            # 8 shared Python packages (messaging, storage, contracts, observability, common, ml-clients, prompts, tools)
+├── libs/            # 8 shared Python packages (common, contracts, messaging, ml-clients, observability, prompts, storage, tools)
 ├── infra/           # Docker Compose, Kafka schemas, Postgres init, MinIO init
 ├── scripts/         # Bootstrap, lint, test, schema generation scripts
 ├── docs/            # All documentation (MASTER_PLAN, per-service, per-lib, workflows, ui)
@@ -115,7 +115,7 @@ src/<service>/
 - [ ] **Task-scoped quality gates first**: run targeted pytest + changed-path `ruff check` + changed-package `mypy`; fix all failures immediately
 - [ ] **Lint + Type check (broad)**: Run `scripts/lint.sh` at wave/final handoff boundary
 - [ ] **Migrations**: If you changed a DB model, create an Alembic migration
-- [ ] **Env vars**: If you added a new config var, update `configs/dev.local.env.example`
+- [ ] **Env vars**: If you added a new config var, update the affected service's `services/<service>/configs/dev.local.env.example` (and `docker.env.example` / `prod.env.example` as needed)
 - [ ] **MASTER_PLAN.md**: If you changed system-wide behavior, update the master doc
 
 ## 5. Hard Rules

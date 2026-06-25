@@ -189,4 +189,3 @@ FROM dead_letter_queue WHERE topic='market.prediction.v1' AND resolved_at IS NUL
 - DB credentials never printed (superuser `postgres` via `docker exec`, password not echoed).
 - The LIVE nlp `dead_letter_queue` `message_processing_timeout` rows (2,528) and `provisional_entity_queue` are owned by another agent and were **not** touched or analyzed here.
 - BP candidates to record after fixes land: BUG-1 (dispatcher dead-letter drops error_detail) and BUG-3 (outbox `mark_failed` strands records outside the `pending` claim set — retry/DLQ machinery unreachable).
-

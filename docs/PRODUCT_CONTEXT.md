@@ -14,8 +14,8 @@ Worldview is a **market intelligence platform** that fuses structured financial 
 
 | Segment | Description | Primary Journeys |
 |---------|-------------|-----------------|
-| **Retail Investors** | Individual investors tracking portfolios and researching companies | J1 (Charts), J2 (Fundamentals), J5 (Chatbot) |
-| **Research Analysts** | Professionals needing comprehensive company intelligence | J2 (Fundamentals), J3 (News Feed), J4 (Signals), J5 (Chatbot) |
+| **Retail Investors** | Individual investors tracking portfolios and researching companies | J1 (Charts), J2 (Fundamentals), J5 (Chatbot), J6 (Portfolio), J7 (Watchlists), J9 (Alerts) |
+| **Research Analysts** | Professionals needing comprehensive company intelligence | J2 (Fundamentals), J3 (News Feed), J4 (Signals), J5 (Chatbot), J8 (Screener), J10 (KG/Intelligence) |
 | **Quantitative Traders** | Algorithmic traders needing programmatic data access | J1 (Charts), API access |
 | **Thesis Evaluators** | Academic reviewers assessing system design and implementation | All journeys |
 
@@ -28,6 +28,11 @@ Worldview is a **market intelligence platform** that fuses structured financial 
 | J3 | **News Feed + Entity Linking** | Timeline of articles linked to companies/tickers via NLP entity extraction with sentiment and topic tags | Articles linked within 30s of ingestion |
 | J4 | **Signals / Events View** | Unified event stream: structured + unstructured events, filterable by entity, sector, type, severity | Cross-source event correlation |
 | J5 | **LLM Chatbot (RAG + KG)** | Hybrid retrieval (vector search + knowledge graph + SQL), grounded cited answers via streaming SSE | < 5s first token, citations on every claim |
+| J6 | **Portfolio Tracking** | Holdings, transactions, performance analytics, and optional read-only brokerage sync (SnapTrade/TastyTrade) | Accurate cost basis + day-change per holding |
+| J7 | **Watchlists** | User-curated instrument lists with live quotes and per-list detail views | Real-time quote refresh |
+| J8 | **Stock Screener** | Filter the universe by fundamental and technical criteria | Server-side projection of matching instruments |
+| J9 | **Custom Alerts** | 5-type alert wizard: price cross, news volume, news momentum, KG connection, and fundamental threshold; delivered in-app / via WebSocket | Alert fires within seconds of condition |
+| J10 | **Knowledge-Graph / Intelligence Explorer** | Entity detail pages, entity-to-entity path discovery, and LLM-generated entity narratives | Grounded, citation-backed entity context |
 
 ## Non-Functional Goals
 
@@ -36,31 +41,36 @@ Worldview is a **market intelligence platform** that fuses structured financial 
 | Reliability | 99.5% uptime read APIs; at-least-once Kafka with idempotent consumers |
 | Latency | < 200ms p95 charts/fundamentals; < 500ms news; < 5s chatbot first token |
 | Cost | $0 infra (local Docker); < $50/month cloud data APIs |
-| Privacy | No PII beyond email; local Ollama as default LLM; GDPR-aware |
+| Privacy | No PII beyond email; hosted inference via DeepInfra (no training on data), local Ollama available as fallback; GDPR-aware |
 | Multi-tenancy | Tenant-isolated data at DB query level; no cross-tenant leakage |
 
 ## Data Sources
 
 | Source | Type | Provider | Content |
 |--------|------|----------|---------|
-| EODHD | Structured + Unstructured | EODHD API | OHLCV, fundamentals, news |
+| EODHD | Structured + Unstructured | EODHD API | OHLCV, fundamentals, global + per-ticker news |
+| Alpaca | Structured | Alpaca Markets | Deep daily OHLCV (primary free source) |
+| Yahoo Finance / Polygon | Structured | Yahoo, Polygon | OHLCV failover providers |
+| Alpha Vantage | Structured | Alpha Vantage API | Optional fundamentals/market data (disabled when no key) |
 | SEC EDGAR | Unstructured | SEC EDGAR EFTS | Company filings (10-K, 10-Q, 8-K) |
 | Finnhub | Unstructured | Finnhub API | News articles, earnings transcripts |
 | NewsAPI | Unstructured | NewsAPI.org | General financial news |
+| Polymarket | Structured | Polymarket API | Prediction-market odds (event probabilities) |
+| Tenant uploads | Unstructured | User-supplied | PDF / plain-text documents ingested per tenant |
 
 ## Product Constraints
 
 1. **Thesis scope** — Must demonstrate microservice architecture, event-driven design, and NLP/ML integration
 2. **Budget** — $0 infrastructure (local Docker), minimal API costs
 3. **Single developer** — All services built and maintained by one person
-4. **Local-first** — Ollama for LLM, MinIO for object storage, Postgres for DB
+4. **Self-hostable** — DeepInfra for hosted LLM/embeddings/extraction (Ollama fallback for local-only runs), MinIO for object storage, Postgres for DB
 5. **Academic timeline** — Must be demonstrably functional for thesis defense
 
 ## Key Product Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM provider | DeepInfra (primary) + Ollama (GLiNER NER fallback) | DeepInfra for LLM/embeddings/extraction; Ollama for local NER only |
+| LLM provider | DeepInfra (primary) + Ollama (fallback) | DeepInfra hosts the chat LLM, embeddings, and relation extraction; Ollama provides a local fallback. Named-entity recognition uses a dedicated GLiNER model (not Ollama) |
 | Data granularity | Daily OHLCV (not intraday) | Sufficient for thesis, lower API costs |
 | Multi-tenancy | Logical (shared DB, tenant_id filter) | Simpler than physical isolation for thesis scope |
 | Frontend framework | Next.js 15 App Router + shadcn/ui + TanStack Query | SSR, dark theme, finance-grade UI, type-safe |

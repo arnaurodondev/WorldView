@@ -158,7 +158,7 @@ After the `ANALYZE`, the 208 MB heap + 212 MB index bloat is still allocated. Op
 ---
 
 ## Priority order for remediation
-1. **`ANALYZE ingestion_events;`** (one line, re-enables autovacuum immediately — fixes the lock-out). 
+1. **`ANALYZE ingestion_events;`** (one line, re-enables autovacuum immediately — fixes the lock-out).
 2. **`VACUUM (FULL, ANALYZE) ingestion_events;`** in a maintenance window (reclaims the 419 MB + rebuilds indexes).
 3. **Per-table aggressive autovacuum** settings (d.2) so it never re-locks.
 4. **Code fix (a)** — commit the dedup row up front so rollbacks stop minting dead tuples.

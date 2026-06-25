@@ -1,6 +1,6 @@
 # Empty Entity Description Investigation
-**Date:** 2026-06-14  
-**Investigator:** Claude Code (Principal Debugging Engineer)  
+**Date:** 2026-06-14
+**Investigator:** Claude Code (Principal Debugging Engineer)
 **Classification:** READ-ONLY audit — no code changes
 
 ---
@@ -157,7 +157,7 @@ These rows appear to have been created before the entity-type guard was added to
 
 **Problem:** 1,268 FI entities with tickers not in market_data are escalating their Valkey backoff key every 5 minutes. After the 1h TTL expires they immediately re-enter the due queue. This wastes CPU, fills logs with 1,268 warnings per cycle, and prevents any newly-ingested instruments from being visible (they get buried in the failure noise).
 
-**Fix:**  
+**Fix:**
 In `FundamentalsRefreshWorker._process_entity_io` (`fundamentals_refresh.py`), after `_instrument_id = await self._resolve_instrument_id(...)` returns `None`, instead of setting `failure_reason = "instrument_lookup_failed"` (which causes backoff escalation), tombstone the entity to a longer retry window (e.g. 7 days or even 30 days). The backoff escalation path is designed for transient errors; a missing instrument is a data-availability gap that will not self-heal within 1h.
 
 Alternatively: after N consecutive `instrument_lookup_failed` failures, set `next_refresh_at = now() + 30 days` (same as a successful refresh) and log at INFO. This drains the perpetual-failure loop.

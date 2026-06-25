@@ -119,6 +119,33 @@ All require `X-Internal-JWT` (RS256, issued by S9 per request).
 successful activation, a background task runs one sync cycle immediately so transactions
 appear in the UI without waiting the 4-hour cycle.
 
+#### Notification Preferences
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/users/me/notification-preferences` | Get the four per-channel/category notification toggles |
+| PATCH | `/api/v1/users/me/notification-preferences` | Update notification toggles (partial update) |
+
+#### Feedback / NPS / Roadmap (PLAN-0052, prefix `/api/v1/feedback`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/feedback/submissions` | Submit feedback (bug/feature/ux/design) |
+| GET | `/api/v1/feedback/submissions` | List feedback submissions (admin) |
+| GET | `/api/v1/feedback/submissions/anonymous` | List anonymous-tenant submissions (admin) |
+| GET | `/api/v1/feedback/submissions/{submission_id}` | Get a submission |
+| PATCH | `/api/v1/feedback/submissions/{submission_id}` | Update submission status (admin) |
+| DELETE | `/api/v1/feedback/submissions/{submission_id}` | Delete a submission (admin) |
+| POST | `/api/v1/feedback/nps` | Submit an NPS score (0-10) |
+| GET | `/api/v1/feedback/nps/aggregate` | NPS aggregate (promoters/passives/detractors) |
+| GET | `/api/v1/feedback/features` | List feature requests |
+| POST | `/api/v1/feedback/features` | Create a feature request |
+| PATCH | `/api/v1/feedback/features/{feature_request_id}` | Update a feature request (admin) |
+| POST | `/api/v1/feedback/features/{feature_request_id}/vote` | Vote on a feature request |
+| POST | `/api/v1/feedback/micro-survey` | Submit a micro-survey response (0/1) |
+| GET | `/api/v1/feedback/beta-program/enrollment` | Get beta-program enrollment |
+| PATCH | `/api/v1/feedback/beta-program/enrollment` | Update beta-program enrollment |
+
 #### Admin / Operator
 
 | Method | Path | Description |
@@ -143,6 +170,7 @@ appear in the UI without waiting the 4-hour cycle.
 | POST | `/internal/v1/watchlists/by-entities` | JWT | Batch resolve watchers (1-100 entity IDs) |
 | GET | `/internal/v1/watchlists/{watchlist_id}/entities` | JWT | Entity IDs in watchlist |
 | GET | `/internal/v1/users/{user_id}/portfolio/context` | JWT | Portfolio context for S8 RAG chat |
+| GET | `/internal/v1/users/{user_id}/portfolio/pnl` | JWT | Aggregate portfolio P&L for S8 RAG chat (`internal_pnl.py`) |
 | GET | `/internal/v1/users/{user_id}` | JWT | User profile (S10 email delivery) |
 | POST | `/internal/v1/users/provision` | JWT `role=system` | Idempotent OIDC user provisioning |
 
@@ -164,7 +192,7 @@ appear in the UI without waiting the 4-hour cycle.
 |--------|------|------|-------------|
 | GET | `/healthz` | None | Liveness probe |
 | GET | `/readyz` | None | Readiness probe (DB check) |
-| GET | `/metrics` | X-Internal-Token | Prometheus metrics |
+| GET | `/metrics` | X-Internal-JWT | Prometheus metrics (protected by `InternalJWTMiddleware`, M-004) |
 
 ---
 
@@ -212,6 +240,9 @@ All paginated endpoints (`GET /portfolios`, `GET /instruments`, `GET /transactio
 # TradeSide enum — only applies when transaction_type = "TRADE"
 TradeSide: "BUY" | "SELL"
 
+# CostBasisMethod enum (domain/enums.py) — per-portfolio cost-basis accounting
+CostBasisMethod: "FIFO" | "AVCO"  # AVCO = running weighted average
+
 # WatchlistMemberCreateRequest
 { "entity_id": UUID, "entity_type": str = "company" }
 
@@ -250,7 +281,7 @@ Response:
 | Topic | Event Types |
 |-------|-------------|
 | `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created`, `watchlist.created`, `watchlist.deleted` |
-| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed`, `watchlist.renamed` |
+| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_deleted`, `watchlist.renamed` |
 | `portfolio.holding.recompute_requested.v1` | `portfolio.holding.recompute_requested` — emitted for MANUAL portfolios on every `RecordTransactionUseCase` call; triggers `ManualHoldingsRecomputeConsumer` (PLAN-0114 W1) |
 
 ### Consumed
@@ -310,6 +341,7 @@ CREATE TABLE portfolios (
     owner_id UUID NOT NULL REFERENCES users(id),
     name TEXT NOT NULL,
     kind VARCHAR(20) DEFAULT 'user',  -- 'user' | 'root'
+    cost_basis_method VARCHAR(10) DEFAULT 'FIFO',  -- CostBasisMethod (migration 0024)
     currency VARCHAR(3) DEFAULT 'USD',
     status VARCHAR(20) DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT now(),
@@ -340,6 +372,9 @@ CREATE TABLE holdings (
     instrument_id UUID NOT NULL,
     quantity NUMERIC(18,8) NOT NULL DEFAULT 0,
     average_cost NUMERIC(18,8) NOT NULL DEFAULT 0,
+    cost_basis_per_unit NUMERIC(18,8),   -- migration 0025
+    total_cost_basis NUMERIC(18,8),      -- migration 0025
+    tenant_id UUID,                       -- migration 0005
     currency VARCHAR(3) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE (portfolio_id, instrument_id)
@@ -416,6 +451,14 @@ CREATE TABLE entity_suppressions (
     entity_id UUID NOT NULL,
     suppressed_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE (user_id, entity_id)
+);
+
+CREATE TABLE notification_preferences (  -- migration 0018
+    tenant_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    -- four NOT NULL boolean category toggles (server_default for forward-compat)
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (tenant_id, user_id)
 );
 
 CREATE TABLE auth_audit_log (
@@ -571,6 +614,11 @@ All env vars use prefix `PORTFOLIO_`.
 | `PORTFOLIO_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | No | Schema registry |
 | `PORTFOLIO_KAFKA_SCHEMA_REGISTRY_BASIC_AUTH` | `""` | No | `user:pass` for schema registry auth |
 | `PORTFOLIO_KAFKA_AUTO_REGISTER_SCHEMAS` | `true` | No | Auto-register Avro schemas |
+| `PORTFOLIO_TOPIC_INSTRUMENT_DISCOVERED` | `market.instrument.discovered.v1` | No | Lightweight discovered-instrument topic (PLAN-0057 D-2) |
+| `PORTFOLIO_TOPIC_INSTRUMENT_CREATED` | `market.instrument.created` | No | Full-fundamentals instrument topic |
+| `PORTFOLIO_TOPIC_INSTRUMENT_UPDATED` | `market.instrument.updated` | No | Instrument update topic |
+| `PORTFOLIO_CONSUMER_GROUP_INSTRUMENT` | `portfolio-instrument-sync` | No | Instrument consumer group |
+| `PORTFOLIO_EMIT_HOLDING_CHANGED` | `false` | No | Gate for `holding.changed` outbox emission (ADR-0007; off by default) |
 | `PORTFOLIO_VALKEY_URL` | `redis://localhost:6379/0` | No | Valkey/Redis URL |
 | `PORTFOLIO_WATCHLIST_CACHE_TTL_SECONDS` | `300` | No | Valkey watchlist reverse-index TTL |
 | `PORTFOLIO_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 URL for JWKS fetch at startup |
@@ -585,6 +633,7 @@ All env vars use prefix `PORTFOLIO_`.
 | `PORTFOLIO_SNAPTRADE_SECRET_ENCRYPTION_KEY` | `""` | For brokerage | Fernet key for encrypting `snaptrade_user_secret` at rest. Empty = plaintext (dev only). |
 | `PORTFOLIO_BROKERAGE_SYNC_CYCLE_SECONDS` | `14400` | No | 4-hour sync interval |
 | `PORTFOLIO_BROKERAGE_SYNC_HISTORY_DAYS` | `730` | No | 2-year initial import window |
+| `PORTFOLIO_BROKERAGE_SYNC_JWT_SECRET` | _(dev placeholder)_ | For brokerage | HMAC secret signing the JWT that the manual-sync route passes to the background sync; override in production |
 | `PORTFOLIO_MARKET_DATA_SERVICE_URL` | `http://market-data:8003` | No | S3 URL for instrument resolution during brokerage sync |
 | `PORTFOLIO_FEEDBACK_S3_BUCKET` | `worldview-feedback-screenshots` | No | Feedback screenshot bucket |
 | `PORTFOLIO_FEEDBACK_SCREENSHOT_TTL_DAYS` | `90` | No | Screenshot retention in S3 |
@@ -702,7 +751,7 @@ docker compose exec portfolio python /app/scripts/<script_name>.py [--dry-run]
 
 ### Day-1 Deploy Checklist
 
-1. Apply migrations (`alembic upgrade head`) — current head: **0021** (adds `transactions.trade_side`, `TRADE` to `TransactionType` enum)
+1. Apply migrations (`alembic upgrade head`) — current head: **0027** (latest: `0024` portfolio `cost_basis_method`, `0025` holdings cost-basis columns, `0026`/`0027` brokerage-sync-error + transaction-date filter indexes)
 2. `repair_holdings_after_replay_drift --dry-run` → review
 3. `repair_holdings_after_replay_drift` (live)
 4. `backfill_root_portfolios`

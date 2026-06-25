@@ -1,7 +1,7 @@
 # Content Store Service (S5)
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Feature-complete (waves A through B-3 + multi-tenant isolation)
+> **Status**: Feature-complete (waves A–B-3 + multi-tenant isolation + H-5 streaming cluster writer + cluster-size/cluster-articles read APIs)
 
 ---
 
@@ -15,12 +15,12 @@ The service never polls external sources, performs NLP, or manages portfolios. I
 
 ## Architecture
 
-Content Store follows the hexagonal architecture. It runs as three independent processes:
+Content Store follows the hexagonal architecture. It runs as four independent processes:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                     API Layer (FastAPI)                        │
-│  health · DLQ admin · GET /articles · POST /documents/batch   │
+│  health · DLQ admin · POST /documents/batch · cluster-sizes   │
 └──────────────────────────┬─────────────────────────────────────┘
                            │ (use cases only)
 ┌──────────────────────────▼─────────────────────────────────────┐
@@ -30,29 +30,31 @@ Content Store follows the hexagonal architecture. It runs as three independent p
 │  ─ StageARawDedup (SHA-256 raw bytes)                          │
 │  ─ StageBNormalizedDedup (normalized URL+text hash)            │
 │  ─ MinHashCompute (128 perms, word bigrams + char trigrams)    │
-│  BatchDocumentsUseCase · GetClusterArticlesUseCase             │
-│  DLQAdminUseCase                                               │
+│  BatchDocumentsUseCase · BatchClusterSizesUseCase             │
+│  GetClusterArticlesUseCase · DLQAdminUseCase                  │
 └─────────┬──────────────────────────┬───────────────────────────┘
           │                          │
 ┌─────────▼────────────┐  ┌──────────▼──────────────────────────┐
 │       Domain         │  │         Infrastructure              │
 │  CanonicalDocument   │  │  Consumer: content.article.raw.v1   │
-│  MinHashSignature    │  │  Storage: MinIO silver tier          │
-│  EntityMention       │  │  Valkey: LSH index (4-band sorted   │
-│  DeduplicationDecision│  │    sets with time-window expiry)    │
-│  DedupOutcome (6)    │  │  DB: Postgres repos + UoW            │
-│  DocumentStatus (5)  │  │  Outbox: content.article.stored.v1  │
-└──────────────────────┘  │  Metrics: Prometheus s5_*            │
-                          └──────────────────────────────────────┘
+│  MinHashSignature    │  │  Consumer: content.article.stored.v1│
+│  EntityMention       │  │  Storage: MinIO silver tier          │
+│  DeduplicationDecision│  │  Valkey: LSH index (4-band sorted   │
+│  DedupOutcome (6)    │  │    sets with time-window expiry)    │
+│  DocumentStatus (5)  │  │  DB: Postgres repos + UoW            │
+│                      │  │  Outbox: content.article.stored.v1  │
+│                      │  │  Metrics: Prometheus s5_*            │
+└──────────────────────┘  └──────────────────────────────────────┘
 ```
 
-### Three Independent Processes
+### Four Independent Processes
 
 | Process | Entry Point | Description |
 |---------|-------------|-------------|
-| API | `uvicorn content_store.app:create_app --factory --port 8005` | HTTP endpoints — health, DLQ, articles |
-| Consumer | `python -m content_store.infrastructure.messaging.consumers.article_consumer_main` | Kafka consumer for content.article.raw.v1 |
-| Dispatcher | `python -m content_store.infrastructure.messaging.outbox.dispatcher_main` | Publishes content.article.stored.v1 events via outbox |
+| API | `uvicorn content_store.app:create_app --factory --port 8005` | HTTP endpoints — health, DLQ, documents |
+| Raw consumer | `python -m content_store.infrastructure.messaging.consumers.article_consumer_main` | Consumes `content.article.raw.v1` (group `content-store-consumer`); runs the clean → dedup → silver → DB → outbox pipeline |
+| Dedup consumer | `python -m content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer_main` | Consumes `content.article.stored.v1` (group `content-store-dedup-consumer`); H-5 streaming Stage-C near-duplicate cluster writer — pairwise Jaccard over the last 14 days, writes pairs ≥ threshold into `duplicate_clusters` |
+| Dispatcher | `python -m content_store.infrastructure.messaging.outbox.dispatcher_main` | Publishes `content.article.stored.v1` events via transactional outbox |
 
 ---
 
@@ -63,15 +65,17 @@ All endpoints at port 8005.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/healthz` | — | Liveness — always 200 |
-| GET | `/readyz` | — | Readiness (DB + Valkey + consumer health); 503 on failure |
+| GET | `/readyz` | — | Readiness (JWKS + DB + Valkey + consumer health); 503 (`{"status":"degraded",...}`) on failure |
 | GET | `/metrics` | — | Prometheus metrics |
-| GET | `/api/v1/articles` | — | List articles (query params: `entity`, `source`, `date_range`) |
-| GET | `/api/v1/articles/{id}` | — | Article detail (body + metadata) |
-| GET | `/admin/dlq` | `X-Admin-Token` | List open DLQ entries |
-| GET | `/admin/dlq/{id}` | `X-Admin-Token` | Get single DLQ entry |
-| POST | `/admin/dlq/{id}/retry` | `X-Admin-Token` | Requeue DLQ entry to outbox |
-| POST | `/admin/dlq/{id}/resolve` | `X-Admin-Token` | Mark DLQ entry as resolved |
-| POST | `/api/v1/documents/batch` | — (internal) | Batch-fetch document metadata by `doc_ids` (1–50 UUIDs). Returns `title`, `url`, `source_type`, `published_at`, `word_count`. Uses read replica (R27). |
+| GET | `/admin/dlq` | `X-Admin-Token` | List open DLQ entries (`limit` 1–1000, `offset`) |
+| GET | `/admin/dlq/{dlq_id}` | `X-Admin-Token` | Get single DLQ entry with full payload |
+| POST | `/admin/dlq/{dlq_id}/retry` | `X-Admin-Token` | Requeue DLQ entry to outbox (202) |
+| POST | `/admin/dlq/{dlq_id}/resolve` | `X-Admin-Token` | Mark DLQ entry as resolved with a note |
+| POST | `/api/v1/documents/batch` | Internal JWT | Batch-fetch document metadata by `doc_ids` (1–50 UUIDs). Returns `title`, `url`, `source_name`, `source_type`, `published_at`, `word_count`. Missing doc_ids silently omitted. Uses read replica (R27). |
+| POST | `/api/v1/documents/cluster-sizes` | Internal JWT | Near-duplicate cluster size for up to 100 `doc_ids`. Returns `{doc_id, cluster_size, cluster_id}` per doc (`cluster_size=1` + `cluster_id=null` means no siblings). Lets S9 enrich ranked articles without a cross-service JOIN (SA-4). |
+| GET | `/api/v1/documents/cluster/{cluster_id}/articles` | Internal JWT | All sibling articles in a near-duplicate cluster (the "+N sim" chip drawer). 404 if cluster not found; a cluster has exactly 2 participants. |
+
+> Internal endpoints (`/api/v1/documents/*`) are protected by `InternalJWTMiddleware` (PRD-0025, RS256 `X-Internal-JWT`). DLQ endpoints use the `X-Admin-Token` header (`hmac.compare_digest`).
 
 **Example curl (batch metadata):**
 ```bash
@@ -88,7 +92,8 @@ curl -X POST http://localhost:8005/api/v1/documents/batch \
 
 | Topic | Consumer Group | Purpose |
 |-------|---------------|---------|
-| `content.article.raw.v1` | `content-store-consumer` | Raw articles from S4 for cleaning and deduplication |
+| `content.article.raw.v1` | `content-store-consumer` | Raw articles from S4 — clean + 3-stage dedup pipeline (raw consumer) |
+| `content.article.stored.v1` | `content-store-dedup-consumer` | Own output, re-consumed by the H-5 dedup consumer to write near-duplicate pairs into `duplicate_clusters` |
 
 ### Produced
 
@@ -247,7 +252,7 @@ CREATE TABLE dead_letter_queue (
 | `0003_add_processed_events` | Add processed_events table for Kafka consumer idempotency |
 | `0004_rename_dedup_hashes_constraint` | Rename UNIQUE constraint to `uq_dedup_hashes_type_value` |
 | `0005_add_tenant_id_to_content_store` | Add tenant_id to documents and dedup_hashes; replace global UNIQUE with partial indexes for global + per-tenant dedup |
-| `0006_rename_duplicate_clusters_constraint` | Rename unique constraint on duplicate_clusters |
+| `0006_rename_duplicate_clusters_constraint` | Rename unique constraint on `duplicate_clusters` (pair) to `uq_duplicate_clusters_pair` (current head) |
 
 ---
 
@@ -338,7 +343,9 @@ All environment variables are prefixed with `CONTENT_STORE_`.
 | `CONTENT_STORE_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Confluent Schema Registry |
 | `CONTENT_STORE_KAFKA_INPUT_TOPIC` | `content.article.raw.v1` | Topic consumed |
 | `CONTENT_STORE_KAFKA_OUTPUT_TOPIC` | `content.article.stored.v1` | Topic produced via outbox |
-| `CONTENT_STORE_KAFKA_CONSUMER_GROUP` | `content-store-consumer` | Consumer group ID |
+| `CONTENT_STORE_KAFKA_CONSUMER_GROUP` | `content-store-consumer` | Raw consumer group ID |
+| `CONTENT_STORE_KAFKA_ARTICLE_CONSUMER_INSTANCE_ID` | `""` | Static group-instance-id for the raw consumer (`""` = dynamic membership) |
+| `CONTENT_STORE_KAFKA_DEDUP_CONSUMER_INSTANCE_ID` | `""` | Static group-instance-id for the dedup consumer (`""` = dynamic membership) |
 | `CONTENT_STORE_MINIO_ENDPOINT` | `localhost:9000` | MinIO endpoint |
 | `CONTENT_STORE_MINIO_ACCESS_KEY` | `""` | MinIO access key |
 | `CONTENT_STORE_MINIO_SECRET_KEY` | `""` | MinIO secret key |
@@ -352,6 +359,7 @@ All environment variables are prefixed with `CONTENT_STORE_`.
 | `CONTENT_STORE_OUTBOX_POLL_INTERVAL_SECONDS` | `5.0` | Dispatcher poll cadence |
 | `CONTENT_STORE_OUTBOX_LEASE_SECONDS` | `30` | Outbox event lease duration |
 | `CONTENT_STORE_OUTBOX_MAX_ATTEMPTS` | `5` | Max dispatch attempts before DLQ |
+| `CONTENT_STORE_OUTBOX_METRICS_POLL_SECONDS` | `30` | Cadence of `s5_outbox_pending_total` gauge refresh |
 | `CONTENT_STORE_MINHASH_NUM_PERM` | `128` | MinHash permutation count |
 | `CONTENT_STORE_LSH_NUM_BANDS` | `4` | LSH bands |
 | `CONTENT_STORE_LSH_ROWS_PER_BAND` | `32` | LSH rows per band |
@@ -421,12 +429,15 @@ make run       # port 8005
 
 # 6. Verify health
 curl http://localhost:8005/healthz     # → {"status": "ok"}
-curl http://localhost:8005/readyz      # → {"status": "ready"}
+curl http://localhost:8005/readyz      # → {"status":"ok","jwks":"...","database":"ok","valkey":"ok","consumer":"ok"} (503 + "degraded" on failure)
 
-# 7. (Optional) Start the consumer in a separate terminal
+# 7. (Optional) Start the raw consumer in a separate terminal
 python -m content_store.infrastructure.messaging.consumers.article_consumer_main
 
-# 8. (Optional) Start the outbox dispatcher
+# 8. (Optional) Start the dedup (cluster-writer) consumer
+python -m content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer_main
+
+# 9. (Optional) Start the outbox dispatcher
 python -m content_store.infrastructure.messaging.outbox.dispatcher_main
 ```
 

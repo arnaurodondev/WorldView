@@ -1,6 +1,6 @@
 # Winners/Losers Row Layout Wrap Investigation
-**Date**: 2026-06-19  
-**Symptom**: Ticker content wraps to two lines in the dashboard winners/losers (top-movers) widgets.  
+**Date**: 2026-06-19
+**Symptom**: Ticker content wraps to two lines in the dashboard winners/losers (top-movers) widgets.
 **Status**: Root cause identified. Fix ready for `/fix-bug`.
 
 ---
@@ -13,7 +13,7 @@
 | WATCHLIST | `WatchlistMoversWidget` → `WatchlistMoverRow` | `features/dashboard/components/WatchlistMoverRow.tsx:70` | `h-7` (28px) |
 | HOLDINGS | `HoldingsMoversWidget` → `MoverRow` | `components/dashboard/HoldingsMoversWidget.tsx:538` | `h-[22px]` |
 
-All three are hosted inside `MoversWidgetTabs`, which lives in the dashboard grid cell  
+All three are hosted inside `MoversWidgetTabs`, which lives in the dashboard grid cell
 `<div className="col-span-1 md:col-span-3 lg:col-span-3 ...">` — **3 of 12 columns**.
 
 ---
@@ -81,7 +81,7 @@ Total fixed = 178 px
 
 ### RC-1 (P0) — Two-column half-column is too narrow for fixed slots (ALL viewport sizes < 1920 px)
 
-**File/line**: `components/dashboard/WatchlistMoversWidget.tsx` ~line 503;  
+**File/line**: `components/dashboard/WatchlistMoversWidget.tsx` ~line 503;
 `components/dashboard/HoldingsMoversWidget.tsx` ~line 450.
 
 The two-column container `<div class="flex">` places each column at `flex-1` = ~50% of the
@@ -116,8 +116,8 @@ The name truncates to 0 px correctly, but the right edge clips the pct column.
 
 ### RC-3 (P2) — Ticker span lacks `overflow-hidden` (all three variants)
 
-**File/line**:  
-- `TopMovers.tsx:411`: `<span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">`  
+**File/line**:
+- `TopMovers.tsx:411`: `<span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">`
 - `HoldingsMoversWidget.tsx:554`: `<span className="w-[40px] shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">`
 
 The ticker span has a fixed `w-[N]px` but no `overflow-hidden`. The transform fallback path
@@ -207,7 +207,7 @@ At 1024 px (md breakpoint) this reclaims 40 px, leaving 217 − 196 = 21 px for 
 // fixed:
 <span className="w-[44px] shrink-0 overflow-hidden font-mono text-[11px] tabular-nums text-foreground">
 ```
-Same for `HoldingsMoversWidget.tsx:554` (`w-[40px]`).  
+Same for `HoldingsMoversWidget.tsx:554` (`w-[40px]`).
 `WatchlistMoverRow.tsx:103` already has correct width; same fix applies.
 
 ---

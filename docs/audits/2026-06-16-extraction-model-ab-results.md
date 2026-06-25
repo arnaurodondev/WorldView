@@ -73,4 +73,3 @@ gpt-oss-120b@medium **ties recall and dominates precision/adherence/fabrication/
 - **Primary:** `openai/gpt-oss-120b`, `reasoning_effort=medium`, `max_tokens=4096` (recall/precision balance). Use `@low` only if raw throughput must trump the recall gain.
 - **Fallback:** `openai/gpt-oss-20b`, `reasoning_effort=low`.
 - Both are reasoning models — `reasoning_effort` MUST be set explicitly (default → empty output).
-

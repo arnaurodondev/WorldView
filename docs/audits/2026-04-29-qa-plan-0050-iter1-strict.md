@@ -122,7 +122,7 @@ Post-rebuild migration status:
       {formatRatio(fund.debt_to_equity)}
     </span>
   </MetricRow>
-  
+
   // Debt & Credit section (line 566)  ← duplicate
   <MetricRow label="Debt / Equity">
     <span className={getMetricClass(fund.debt_to_equity, 1.0, 2.0)}>
@@ -146,10 +146,10 @@ Post-rebuild migration status:
   # DB types:
   docker exec postgres psql -d intelligence_db -c "SELECT entity_type, COUNT(*) FROM canonical_entities GROUP BY entity_type"
   → financial_instrument (40), industry_group (27), sector (11), technology_theme (4), industry (1)
-  
+
   # Graph node types from live API:
   GET /v1/entities/0195daad-.../graph?depth=1 → nodes[0].type = "sector"
-  
+
   # IntelligenceTab hardcodes:
   const ALL_ENTITY_TYPES = ["company", "person", "event", "topic"]  ← none match
   ```

@@ -71,7 +71,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 
 Mints a 5-minute RS256 internal JWT for background workers. Solves the production "OHLCV auth blackhole" problem where workers minted their `X-Internal-JWT` via `POST /v1/auth/dev-login`, which is hard-blocked when `app_env == "production"`.
 
-Authentication: shared `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` secret + service identity on the allow-list (`routes/internal.py::_ALLOWED_SERVICE_NAMES`). Comparison uses `secrets.compare_digest` (constant-time).
+Authentication: shared `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` secret + service identity on the allow-list (`routes/internal.py::_ALLOWED_SERVICE_NAMES`). Comparison uses `secrets.compare_digest` (constant-time). The allow-list currently holds two callers: `nlp-pipeline-price-impact` and `rag-chat-brief-scheduler` (PLAN-0094 W2 — the morning-brief overnight scheduler; without it every scheduled brief 401'd on upstream calls).
 
 Request body (`application/json`):
 
@@ -114,7 +114,7 @@ To register a new service caller:
 | GET | `/v1/companies/{id}/overview` | S3 (fundamentals + OHLCV) + S5 (news) | Yes |
 | GET | `/v1/companies/by-ticker/{ticker}/overview` | Ticker-direct variant of the overview composition (B-Q task 6, 2026-06-10) — resolves the ticker via `resolve_security_id` (S3 lookup + KG alias fallback, 1h TTL cache) then reuses `CompanyOverviewUseCase`. Replaces the chat entity cards' search→overview two-request dance. 404 on unknown ticker. | Yes |
 | GET | `/v1/instruments/{id}/page-bundle` | Composes overview + fundamentals + technicals + insider + top-news in one round-trip (PLAN-0059 I-5) | Yes |
-| GET | `/v1/market/heatmap` | S3 (11 parallel sector-average screener calls) | Yes |
+| GET | `/v1/market/heatmap` | S3 — single `GET /api/v1/market/sector-returns?period=…` call (the old 11-parallel-screener fan-out is dead code; see BP-465) | Yes |
 | GET | `/v1/market/top-movers` | S3 (sorted by daily_return) | Yes |
 | GET | `/v1/market/sparklines` | S3 OHLCV fan-out — batch 14-day close arrays for sparkline rendering. Query: `instrument_ids` (comma-separated UUIDs, max 50), `days` (int, default 14). Valkey TTL 900 s. Response: `{"data": {"<id>": [<close>, ...]}, "meta": {"days_requested": int, "fetched_at": ISO8601, "missing": [<id>]}}` | Yes |
 | GET | `/v1/map/layers` | S3 (GeoJSON overlays) | No |
@@ -304,9 +304,9 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/api/v1/admin/llm-costs` | Cross-service LLM cost aggregation (S6+S7+S8 fan-out) | Yes (admin role) |
+| GET | `/v1/admin/llm-costs` | Cross-service LLM cost aggregation (S6+S7+S8 fan-out). Router prefix is `/v1/admin` (canonical); the `/api/v1/...` form also resolves via the `strip_api_prefix` middleware. | Yes (admin role) |
 
-**Query params** for `/api/v1/admin/llm-costs`:
+**Query params** for `/v1/admin/llm-costs`:
 - `period` (optional, `YYYY-MM`, default: current UTC month)
 - `provider` (optional, default: `all`; choices: `all`, `deepinfra`, `openrouter`, `gemini`, `ollama`)
 - `breakdown` (optional, default: `provider`; choices: `provider`, `capability`, `day`)
@@ -385,18 +385,28 @@ PII redaction: all user-supplied free-text fields (`description`, `comment`, `co
 
 ## Middleware Stack
 
-Middleware executes in order for every request:
+Starlette runs middleware **outermost-first**, i.e. the reverse of the
+`app.add_middleware()` registration order. The **request-time execution order**
+(per `app.py` comment block) is:
 
-| Order | Middleware | Purpose |
-|-------|-----------|---------|
-| 1 | `RequestIdMiddleware` | Validate/generate `X-Request-ID` (ULID), bind to structlog |
-| 2 | `SecurityHeadersMiddleware` | X-Frame-Options, X-Content-Type-Options, Referrer-Policy, HSTS |
-| 3 | Prometheus middleware | Request count/latency metrics |
-| 4 | OTel middleware | Distributed tracing spans |
-| 5 | `CORSMiddleware` | Explicit origin allowlist (never `*`), credentials allowed |
-| 6 | `RateLimitMiddleware` | Sliding-window counter via Valkey (fail-closed — D-001) |
-| 7 | `OIDCAuthMiddleware` | Validate Zitadel RS256 access token → `request.state.user` |
-| 8 | `InternalJWTIssuerMiddleware` | Issue RS256 `X-Internal-JWT` for downstream services |
+| Run order | Middleware | Purpose |
+|-----------|-----------|---------|
+| 1 | `OIDCAuthMiddleware` | Validate Zitadel RS256 access token → `request.state.user` (runs first so user state exists for everything below) |
+| 2 | `InternalJWTIssuerMiddleware` | Issue RS256 `X-Internal-JWT` for downstream services using the resolved user |
+| 3 | `RateLimitMiddleware` | Sliding-window counter via Valkey; sub-tier buckets; fail-closed when Valkey unconfigured (D-001) |
+| 4 | `CORSMiddleware` | Explicit origin allowlist (never `*`), credentials allowed |
+| 5 | OTel middleware | Distributed tracing spans (when `OTLP_ENDPOINT` set) |
+| 6 | Prometheus middleware | Request count/latency metrics (`add_prometheus_middleware`) |
+| 7 | `SecurityHeadersMiddleware` | X-Frame-Options, X-Content-Type-Options, Referrer-Policy, HSTS |
+| 8 | `RequestIdMiddleware` | Validate/generate `X-Request-ID`, bind to structlog (outermost — wraps every response) |
+
+> The registration order in `app.py` is the inverse: `RequestId → SecurityHeaders
+> → Prometheus → OTel → CORS → RateLimit → InternalJWTIssuer → OIDCAuth` (OIDCAuth
+> added last → outermost → runs first).
+
+A separate `strip_api_prefix` HTTP middleware rewrites inbound `/api/v1/...`
+paths to `/v1/...` before routing, so both prefixes resolve to the same handler
+(Cloudflare/Next.js rewrite compatibility — Dashboard Regression #5).
 
 ---
 
@@ -440,7 +450,7 @@ S9 signs every proxied request with an RS256 internal JWT:
 
 ### Legacy Header Removal (2026-04-18)
 
-The `_auth_headers()` helper in `routes/proxy.py` no longer forwards `X-Tenant-Id` or `X-User-Id` headers to downstream services. All backends now extract identity exclusively from the `X-Internal-JWT` token (verified via `InternalJWTMiddleware`). This eliminates the header-spoofing attack vector (see BP-161).
+The `_auth_headers()` helper in `routes/helpers.py` no longer forwards `X-Tenant-Id` or `X-User-Id` headers to downstream services. All backends now extract identity exclusively from the `X-Internal-JWT` token (verified via `InternalJWTMiddleware`). This eliminates the header-spoofing attack vector (see BP-161).
 
 ### Public Paths (skip OIDC validation)
 
@@ -450,10 +460,27 @@ The `_auth_headers()` helper in `routes/proxy.py` no longer forwards `X-Tenant-I
 
 ## Rate Limiting
 
-- **Authenticated**: 300 req/min per `user_id` (key: `rl:v1:user:{user_id}`) — raised from 100 to accommodate multi-panel workspace usage where a single page load may fire 4+ parallel OHLCV calls
-- **Unauthenticated**: 20 req/min per IP hash (key: `rl:v1:ip:{sha256(ip)[:16]}`)
-- **Fail-closed (D-001)**: If Valkey is unavailable, reject requests with 503 (previously fail-open; changed to fail-closed per security audit decision D-001 on 2026-04-18)
-- 429 responses include `Retry-After` header
+Tiered, sliding-window counters keyed in Valkey. All limits are wired from
+`Settings` into `RateLimitMiddleware` in `app.py`:
+
+- **Authenticated (read/general)**: `RATE_LIMIT_REQUESTS` — **default 2000 req/min**
+  per `user_id` (raised again to absorb multi-panel workspace fan-out; the
+  in-code middleware comments still reference the older 300 figure). Key: `user_id`.
+- **Financial mutations**: `RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` — default 30
+  req/min. Applies to authenticated `POST/PUT/DELETE/PATCH` on financial paths
+  (creating/deleting transactions, etc.) in a **dedicated Valkey bucket** so a
+  stolen token cannot fire the full read budget at mutating endpoints (PLAN-0094 W1).
+- **Public feedback**: `RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` — default 10 req/min
+  for `/v1/feedback/*` (anonymous-friendly surface).
+- **Export endpoints**: dedicated low-rate bucket for `GET /*/export` (SEC-103).
+- **Unauthenticated**: `RATE_LIMIT_UNAUTHENTICATED_REQUESTS` — default 20 req/min
+  per IP hash (`sha256(ip)[:16]`).
+- **Fail-closed (D-001)**: when Valkey is **unconfigured / `None`** at request
+  time the limiter rejects with 503 (it will not self-heal and must not run
+  wide-open). Note: the OIDC user-cache read inside `OIDCAuthMiddleware` is
+  independently **fail-open** (a transient Valkey read error rebuilds identity
+  from token claims rather than locking users out).
+- 429 responses include `Retry-After` header.
 
 ---
 
@@ -498,6 +525,8 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `OIDC_DISCOVERY_OPTIONAL` | `false` | No | Allow startup without Zitadel (dev/test) |
 | `INTERNAL_JWT_PRIVATE_KEY` | — | **Yes** | PEM RSA-2048 private key (SecretStr) |
 | `INTERNAL_JWT_PUBLIC_KEY` | — | **Yes** | PEM RSA-2048 public key |
+| `JWT_KEY_VERSION` | `v1` | No | Key-rotation version tag embedded in signed JWTs |
+| `JWKS_GRACE_HOURS` | `24` | No | Grace window during which a rotated-out public key still verifies |
 | `FRONTEND_URL` | `http://localhost:5173` | No | CORS + redirect origin |
 | `COOKIE_SECURE` | `true` | No | Defaults `true` (PLAN-0030 F-013); set `false` only in local dev |
 | `PORTFOLIO_URL` | `http://localhost:8001` | No | S1 URL |
@@ -510,12 +539,22 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `RAG_CHAT_URL` | `http://localhost:8008` | No | S8 URL |
 | `ALERT_URL` | `http://localhost:8010` | No | S10 HTTP URL |
 | `ALERT_WS_URL` | `ws://localhost:8010` | No | S10 WebSocket base URL (separate from HTTP URL for WS routing) |
-| `RATE_LIMIT_REQUESTS` | `300` | No | Authenticated rate limit per minute (raised from 100 for multi-panel workspace) |
+| `RATE_LIMIT_REQUESTS` | `2000` | No | Authenticated read/general rate limit per minute (raised again for multi-panel workspace fan-out) |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Rate limit window |
+| `RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` | `30` | No | Per-minute limit for authenticated financial mutations (POST/PUT/DELETE/PATCH) — separate bucket |
+| `RATE_LIMIT_UNAUTHENTICATED_REQUESTS` | `20` | No | Per-minute limit per IP hash for unauthenticated requests |
+| `RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` | `10` | No | Per-minute limit for `/v1/feedback/*` |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3001` | No | Comma-separated allowed origins (SEC-008: port 3001 is worldview-web, not 3000) |
 | `APP_ENV` | `development` | No | Environment guard: `development`, `staging`, or `production`. When `production`, `POST /v1/auth/dev-login` returns 403 regardless of OIDC config. |
 | `DEV_ADMIN_EMAILS` | `""` | No | Comma-separated emails that receive `role=admin` in dev-login JWTs (dev/staging only; ignored when `APP_ENV=production`) |
 | `SERVICE_ACCOUNT_TOKEN` | `""` | No | Shared secret for `POST /internal/v1/service-token`. Must be set in production for background workers to mint RS256 JWTs. |
+| `DEEPINFRA_API_KEY` | `""` | No | DeepInfra key (SecretStr) — used by gateway-side LLM helpers (e.g. chat-safety pre-checks) |
+| `PREWARM_ENABLED` | `false` | No | Opt-in switch for the bundle pre-warmer worker (see "Workers") |
+| `PREWARM_ENTITY_IDS` | `[]` | No | Comma/JSON list of hot entity UUIDs to keep warm |
+| `PREWARM_INTERVAL_SECONDS` | `240` | No | Pre-warm loop interval |
+| `PREWARM_API_BASE_URL` | `http://localhost:8000` | No | Base URL the worker calls (its own gateway) |
+| `PREWARM_CONCURRENCY` | `3` | No | Max parallel pre-warm fan-out |
+| `PREWARM_REQUEST_TIMEOUT_SECONDS` | `30.0` | No | Per-request timeout for pre-warm calls |
 | `SERVICE_NAME` | `api-gateway` | No | structlog service name |
 | `LOG_LEVEL` | `INFO` | No | Logging level |
 | `LOG_JSON` | `true` | No | JSON-formatted logs |
@@ -544,49 +583,97 @@ On timeout: HTTP 504 with `{"detail": "composition timeout"}`.
 
 **Pydantic response_model** — 25+ S9 routes have `response_model=` annotations generating named OpenAPI component schemas. The committed spec is at `infra/contracts/s9-openapi.json`; TypeScript types at `apps/worldview-web/types/generated/api.ts`.
 
-**Schemas package** — `services/api-gateway/src/api_gateway/schemas/` contains 9 modules:
-`common`, `instruments`, `news`, `portfolios`, `alerts`, `watchlists`, `screener`, `prediction_markets`, `fundamentals`, `dashboard`. All schemas use `ConfigDict(extra="allow")`.
+**Schemas package** — `services/api-gateway/src/api_gateway/schemas/` contains 18 modules:
+`common`, `instruments`, `market`, `news`, `portfolios`, `alerts`, `watchlists`,
+`screener`, `prediction_markets`, `fundamentals`, `dashboard`, `dashboard_bundle`,
+`intelligence`, `intelligence_bundle`, `narratives`, `paths`, `entity_chat`,
+`financials_bundle`. All schemas use `ConfigDict(extra="allow")`.
 
 ---
 
 ## Internal Modules
 
+> **History**: `routes/proxy.py` (4319 lines) was split into focused domain
+> routers (PLAN-0089 B-3). There is **no `proxy.py` anymore** — routes live in
+> the per-domain modules below. The combined router is assembled in
+> `routes/__init__.py` and imported by `app.py` as `main_router`.
+
 ```
 services/api-gateway/src/api_gateway/
-├── app.py                   # FastAPI app factory, lifespan (OIDC discovery, RSA keypair)
-├── config.py                # Settings (all env vars above)
+├── app.py                   # FastAPI app factory, lifespan (OIDC discovery, RSA keypair,
+│                            #   httpx clients, Valkey), middleware wiring, /api/v1→/v1 strip
+├── config.py                # Settings (all env vars below)
 ├── domain.py                # OIDCProviderConfig, InternalJWTClaims dataclasses
-├── middleware.py             # OIDCAuth, InternalJWTIssuer, RateLimit, SecurityHeaders
+├── middleware.py            # RequestId, SecurityHeaders, OIDCAuth, InternalJWTIssuer, RateLimit
 ├── oidc.py                  # OIDC discovery, JWKS parse, RSA key utilities
-├── jwt_utils.py             # RS256 JWT issuance (user/system/ws)
+├── jwt_utils.py             # RS256 JWT issuance (user/system/ws/service)
 ├── pkce.py                  # PKCE verifier/challenge/state + Valkey storage
-├── clients.py               # Typed httpx clients for downstream services
-├── schemas/                 # Pydantic response schemas (PLAN-0070 B-1+B-2+C-1+C-2)
-│   ├── __init__.py          # Exports all public schemas
-│   ├── common.py            # Meta helper
-│   ├── instruments.py       # InstrumentSearchResult, OHLCVBar, OHLCVResponse, QuoteResponse
-│   ├── news.py              # NewsArticle, NewsTopResponse
-│   ├── portfolios.py        # PortfolioResponse, PortfolioBundleResponse
-│   ├── alerts.py            # AlertResponse
-│   ├── watchlists.py        # WatchlistResponse
-│   ├── screener.py          # ScreenerResultItem, ScreenerResponse
-│   ├── prediction_markets.py# PredictionMarket, PredictionMarketsListResponse
-│   ├── fundamentals.py      # FundamentalsResponse, EarningsCalendarResponse
-│   └── dashboard.py         # DashboardSnapshotResponse
+├── resolution.py            # resolve_security_id: ticker | UUID → canonical instrument_id
+│                            #   (UUID short-circuit → S3 lookup → S7 KG alias fallback, 1h TTL)
+├── clients.py               # Legacy aggregate httpx client surface (re-exports clients/*)
+├── clients/                 # Per-domain typed httpx clients
+│   ├── base.py              # BaseClient: _checked_get (3× retry on 500/503), _checked_post (no retry)
+│   ├── portfolio.py · market.py · news.py · instrument.py
+│   ├── dashboard.py · dashboard_bundle.py · alert_rules.py
+├── application/use_cases/   # BFF composition use cases (hexagonal)
+│   ├── company_overview.py · instrument_page_bundle.py
+│   ├── portfolio_bundle.py · dashboard_snapshot.py
+├── workers/                 # Out-of-process background workers (opt-in)
+│   └── bundle_prewarmer_main.py  # PLAN-0099 R3 cache pre-warmer (see "Workers" below)
+├── schemas/                 # 18 Pydantic response-schema modules (all ConfigDict(extra="allow"))
+│   ├── __init__.py · common.py · instruments.py · market.py · news.py
+│   ├── portfolios.py · alerts.py · watchlists.py · screener.py · fundamentals.py
+│   ├── prediction_markets.py · dashboard.py · dashboard_bundle.py
+│   ├── intelligence.py · intelligence_bundle.py · narratives.py · paths.py
+│   ├── entity_chat.py · financials_bundle.py
 └── routes/
-    ├── auth.py              # 7 OIDC auth endpoints
+    ├── __init__.py          # Combines 10 domain routers into main_router (registration order matters)
+    ├── auth.py              # 8 OIDC auth endpoints (login/callback/refresh/logout/me/register/ws-token/dev-login)
     ├── health.py            # /healthz, /readyz
-    ├── internal.py          # GET /internal/jwks
-    └── proxy.py             # 96 proxy/composition routes
+    ├── internal.py          # GET /internal/jwks, POST /internal/v1/service-token
+    ├── admin_costs.py       # GET /v1/admin/llm-costs (registered separately in app.py)
+    ├── risk_metrics.py      # /v1/portfolios/{id}/risk-metrics (registered before main_router)
+    ├── alerts.py · chat.py · chat_safety.py (chat helpers) · content.py
+    ├── dashboard.py · instruments.py · intelligence.py · market.py
+    ├── portfolio.py · signals.py · helpers.py (_auth_headers/_system_headers/proxy_json_response)
 ```
+
+**Route registration order** (`app.py`): `health → internal → auth → admin_costs →
+risk_metrics → main_router`. Within `main_router` (`routes/__init__.py`):
+`alerts → chat → dashboard → content → instruments → intelligence → signals →
+market → portfolio`. Order is load-bearing — `signals_router` is registered
+before `market_router` so its enriched `GET /v1/signals/ai` wins over the dead
+legacy handler in `market.py`; literal-segment routes (`/entities/similar`,
+`/instruments/lookup`) are registered before parameterised ones.
+
+**Total proxy/composition routes**: ~186 route decorators across the domain
+routers (was "96 in proxy.py").
 
 ---
 
 ## Kafka Integration
 
-**None.** S9 is stateless and does not produce or consume Kafka topics.
+**None.** S9 is stateless and does not produce or consume Kafka topics. There is
+no Kafka consumer/producer infrastructure in `src/api_gateway/`. All messaging is
+via synchronous HTTP to downstream services, with Valkey for caching/state.
 
-All messaging is via synchronous HTTP to downstream services and Valkey for caching/state.
+> **Planned (not built)**: `resolution.py` notes a future `entity.dirtied.v1`
+> consumer to invalidate the resolution cache on entity renames (tracked as
+> PLAN-0089 F2 step 6). Until then the resolution cache is TTL-only.
+
+## Workers
+
+The gateway ships one **opt-in, out-of-process** background worker:
+
+| Worker | Entry point | Purpose |
+|--------|-------------|---------|
+| Bundle pre-warmer | `python -m api_gateway.workers.bundle_prewarmer_main` | PLAN-0099 R3 — periodically re-fetches the Intelligence-tab composite bundle for a configured set of hot entity IDs so the underlying S7 intel (60 s) / paths (300 s) caches stay warm (first real request hits ~88 ms instead of a cold 4–10 s fan-out). |
+
+The worker refuses to start unless `API_GATEWAY_PREWARM_ENABLED=true` **and**
+`API_GATEWAY_PREWARM_ENTITY_IDS` has ≥1 UUID (default posture is OFF — dev/test/CI
+never fire it). It mints its own short-lived RS256 service-account JWT using the
+gateway's private key and sends it as both `X-Internal-JWT` and
+`Authorization: Bearer`. Tuned by the `PREWARM_*` env vars (see Configuration).
 
 ---
 
@@ -700,7 +787,7 @@ header (not query param) to S1 — this is by design (API-004).
 | `GET /v1/briefings/morning` | Stub | S8 briefing feature not yet implemented |
 | `GET /v1/briefings/instrument/{id}` | Stub | S8 briefing feature not yet implemented |
 | `GET /v1/signals/ai` (legacy copy in `routes/market.py`) | Dead code | Superseded by `routes/signals.py` (registered first); remove the market.py handler in a follow-up owned by the market routes workstream |
-| `GET /v1/quotes/stream` | Stub | Returns 501 — streaming quotes not yet implemented |
+| `GET /v1/quotes/stream` | Stub | Returns 503 `not_implemented` (+`Retry-After`) — streaming quotes land in PLAN-0059 Wave D; poll `/v1/quotes/{id}` until then |
 | WebSocket proxy | N/A | S9 cannot transparently proxy WS; clients connect to S10 directly with 30s token from `GET /v1/auth/ws-token` |
 
 ---
@@ -721,7 +808,7 @@ header (not query param) to S1 — this is by design (API-004).
 | Integration | Cross-cutting security (headers, CORS, rate limit, JWKS) | `make test-integration` |
 | Lint | Ruff + mypy | `make lint` |
 
-**Test suite**: 20 test files, ~3,700 lines of test code, 84+ tests passing.
+**Test suite**: ~74 test files (unit + integration + contract + e2e), ~700 tests passing.
 
 ---
 
@@ -831,7 +918,7 @@ and add a typed httpx client in `clients.py`.
 | Integration | Cross-cutting security (headers, CORS, rate limit, JWKS) | `make test-integration` |
 | Lint | Ruff + mypy | `make lint` |
 
-**Test suite**: 20 test files, ~3,700 lines of test code, 84+ tests passing.
+**Test suite**: ~74 test files (unit + integration + contract + e2e), ~700 tests passing.
 
 Integration tests validate:
 - Security headers on all responses

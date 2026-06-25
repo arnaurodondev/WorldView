@@ -30,7 +30,7 @@
 
 ### DB Connections — Baseline
 ```
-count |        state        |       datname        
+count |        state        |       datname
 -------+---------------------+----------------------
     24 | idle                | market_data_db
     19 | idle                | intelligence_db
@@ -50,7 +50,7 @@ count |        state        |       datname
 
 ### DB Connections — Under Stress
 ```
-count |        state        |       datname        
+count |        state        |       datname
 -------+---------------------+----------------------
     19 | idle                | intelligence_db
     16 | idle in transaction | market_data_db

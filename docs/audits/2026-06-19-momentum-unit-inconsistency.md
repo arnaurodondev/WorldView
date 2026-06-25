@@ -1,8 +1,8 @@
 # Momentum Widget — Unit Inconsistency Root-Cause Report
 
-**Date**: 2026-06-19  
-**Component**: `apps/worldview-web/components/dashboard/ai-signals/NewsMomentumRow.tsx`  
-**Severity**: P0 display bug (user-visible inconsistency; one unit convention throughout the widget)  
+**Date**: 2026-06-19
+**Component**: `apps/worldview-web/components/dashboard/ai-signals/NewsMomentumRow.tsx`
+**Severity**: P0 display bug (user-visible inconsistency; one unit convention throughout the widget)
 **Status**: Root cause identified; fix recommendation ready for `/fix-bug`
 
 ---

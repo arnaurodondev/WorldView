@@ -40,7 +40,7 @@ $ docker inspect worldview-knowledge-graph-1 --format '{{.Config.Env}}' | grep D
 KNOWLEDGE_GRAPH_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/intelligence_db   ❌
 KNOWLEDGE_GRAPH_DATABASE_URL_READ=
 
-$ docker inspect worldview-knowledge-graph-scheduler-1 ... 
+$ docker inspect worldview-knowledge-graph-scheduler-1 ...
 KNOWLEDGE_GRAPH_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/intelligence_db   ❌
 ```
 

@@ -27,7 +27,7 @@ provides:
 - **`ToolRegistry`** — central lookup that maps tool names to specs and handler
   callables; renders OpenAI-compatible function definitions and system-prompt
   manifest sections from the same spec set.
-- **`capability_manifest.yaml`** — the canonical YAML reference for all 22 platform
+- **`capability_manifest.yaml`** — the canonical YAML reference for all 26 platform
   tools, versioned alongside the code.
 - **`LLMToolResponse` / `ToolCallBatch` / `ToolUseBlock`** — typed response objects
   shared between the LLM provider port and every concrete adapter
@@ -103,7 +103,7 @@ class ToolSpec:
 
 Full specification for a single LLM-callable tool. `source_type` encodes where
 results come from (`"ohlcv"`, `"fundamentals"`, `"knowledge_graph"`, `"portfolio"`,
-`"narrative"`, `"market_data"`, `"alert"`, `"mixed"`) — used by `TrustScorer` to
+`"narrative"`, `"market_data"`, `"news_article"`, `"alert"`, `"mixed"`) — used by `TrustScorer` to
 compute authority weight at query time. Per rule R29, trust weight is **not** stored
 here; `TrustScorer` computes it dynamically.
 
@@ -203,19 +203,31 @@ from the response body so callers can log cost without an extra round-trip.
 
 ### `capability_manifest.yaml`
 
-Canonical YAML file at `libs/tools/src/tools/capability_manifest.yaml`. Contains
-all 22 registered tools, organized into four version groups:
+Canonical YAML file at `libs/tools/src/tools/capability_manifest.yaml`. The file has
+a top-level `version: 5` field and a `tools:` list containing all 26 registered
+tools, organized into five `since` version groups:
 
-| Version | Tools | Source types |
+| Version (`since`) | Tools | Source types |
 |---------|-------|--------------|
-| v1 (PLAN-0066) | `get_price_history`, `get_fundamentals_history`, `search_documents`, `get_entity_graph`, `traverse_graph`, `search_entity_relations`, `search_claims`, `search_events`, `get_contradictions`, `get_portfolio_context` | ohlcv, fundamentals, mixed, knowledge_graph, portfolio |
-| v2 (PLAN-0080) | `get_entity_narrative`, `get_entity_paths`, `get_entity_health`, `get_entity_intelligence` | narrative, knowledge_graph |
-| v3 (PLAN-0081) | `get_morning_brief`, `compare_entities`, `screen_universe`, `get_market_movers`, `get_economic_calendar`, `get_earnings_calendar` | narrative, fundamentals, market_data |
-| v4 (PLAN-0082) | `get_alerts`, `create_alert` | alert |
+| v1 | `get_price_history`, `get_fundamentals_history`, `search_documents`, `get_entity_graph`, `traverse_graph`, `search_entity_relations`, `search_claims`, `search_events`, `get_contradictions`, `get_portfolio_context` | ohlcv, fundamentals, mixed, knowledge_graph, portfolio |
+| v2 | `get_entity_narrative`, `get_entity_paths`, `get_entity_health`, `get_entity_intelligence` | narrative, knowledge_graph |
+| v3 | `get_morning_brief`, `compare_entities`, `screen_universe`, `get_market_movers`, `get_economic_calendar`, `get_earnings_calendar` | narrative, fundamentals, market_data |
+| v4 | `get_fundamentals_history_batch`, `get_alerts`, `create_alert` | fundamentals, alert |
+| v5 | `query_fundamentals`, `get_path_between`, `get_entity_news` | fundamentals, knowledge_graph, news_article |
 
 Each YAML entry has: `name`, `description`, `parameters[]`, `source_type`, `since`,
 `deprecated_at`, and `example_queries[]`. The `create_alert` entry additionally
 carries `requires_confirmation: true`.
+
+Notable v4/v5 additions:
+- `get_fundamentals_history_batch` (v4) — quarterly fundamentals for **multiple**
+  tickers in one call.
+- `query_fundamentals` (v5) — parameterised fundamentals query for a **single**
+  ticker; preferred over `get_fundamentals_history` for targeted metric questions.
+- `get_path_between` (v5) — on-demand, bounded live search for connection paths
+  between two specific entities.
+- `get_entity_news` (v5, `source_type: news_article`) — latest news articles
+  mentioning an entity (by `entity_id` or ticker), filtered by date range.
 
 Rule R29: every registered tool must have a corresponding entry in this file.
 Architecture tests in `test_tool_registry.py` enforce this invariant automatically.
@@ -362,7 +374,7 @@ would produce stale values as the platform's knowledge base grows.
 
 ### Handler stubs in the production registry
 
-The rag-chat service's `build_default_registry()` registers all 22 tools with
+The rag-chat service's `build_default_registry()` registers all 26 tools with
 `handler=lambda **_: None` stubs. Actual dispatch happens inside
 `ToolExecutor.execute()` via name-based routing, not through the registry handler.
 The handler field is kept for future extension when the tool catalog grows to

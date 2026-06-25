@@ -1,5 +1,5 @@
 # Brief Vector Descriptions Evaluation
-**Date:** 2026-06-14  
+**Date:** 2026-06-14
 **Scope:** Should the three entity vector descriptions be fed into the morning portfolio brief and/or instrument brief?
 
 ---
@@ -33,10 +33,10 @@ The three `source_text` fields are NOT currently exposed via any S7 API endpoint
 
 ### Sample Texts for Demo Holdings (GOOGL/AAPL/JPM/TSLA)
 
-**`definition` (~296-327 chars, last refreshed 2026-05-25)**  
+**`definition` (~296-327 chars, last refreshed 2026-05-25)**
 Dry 1-3 sentence EODHD business blurb. Example (AAPL): "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide."
 
-**`narrative` (~447-637 chars, last refreshed 2026-05-21)**  
+**`narrative` (~447-637 chars, last refreshed 2026-05-21)**
 LLM-generated thematic context. Quality is MODERATE. Examples:
 - AAPL: mentions MSFT competition and AI exposure. Useful framing.
 - GOOGL: mentions AI in advertising and MSFT competition. Generic but grounded.
@@ -45,7 +45,7 @@ LLM-generated thematic context. Quality is MODERATE. Examples:
 - Model: `meta-llama/Meta-Llama-3.1-8B-Instruct` — smaller/cheaper model, narratives show it.
 - **CRITICAL STALENESS**: All four generated 2026-05-21 — 24 days old. Weekly Sunday cadence means they lag recent news materially (e.g., no mention of Q2 earnings, tariff developments, AI-product launches since late May).
 
-**`fundamentals_ohlcv` (~1496-2072 chars, last refreshed 2026-06-12 to 2026-06-14)**  
+**`fundamentals_ohlcv` (~1496-2072 chars, last refreshed 2026-06-12 to 2026-06-14)**
 Rich structured prose: full EODHD business description + 4 financial metrics (Revenue, Gross Margin, Net Margin, P/E). Example (AAPL): Revenue $451.44B, Gross Margin 49.3%, Net Margin 26.6%, P/E 35.2. This is the freshest and most factually dense of the three.
 
 ### Freshness Summary

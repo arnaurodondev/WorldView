@@ -1,7 +1,7 @@
 # Market Ingestion Service (S2)
 
 > **Owner**: Ingestion domain · **Database**: `ingestion_db` (PostgreSQL 16) · **Port**: 8002
-> **Status**: Production-ready (waves 01–13 shipped)
+> **Status**: Production-ready (migrations 0001–0024 shipped)
 
 ---
 
@@ -28,6 +28,8 @@ Market Ingestion uses the hexagonal (ports-and-adapters) architecture mandated b
 │  ScheduleTasksUseCase · ClaimTasksUseCase · ExecuteTaskUseCase │
 │  TriggerIngestionUseCase · BackfillUseCase                     │
 │  RunStartupBackfillUseCase · UpdateSymbolTierUseCase           │
+│  SnapshotEodhdQuotaUseCase · DailyBudgetTracker               │
+│  InvalidateCacheUseCase · RoutingReloadUseCase                │
 └───────────┬──────────────────────┬─────────────────────────────┘
             │                      │
 ┌───────────▼──────────┐  ┌────────▼────────────────────────────┐
@@ -43,52 +45,66 @@ Market Ingestion uses the hexagonal (ports-and-adapters) architecture mandated b
 
 ### Four Independent Processes
 
-All four processes ship in the same Docker image with different `command` overrides:
+All processes ship in the same Docker image with different `command` overrides:
 
 | Process | Entry Point | Purpose |
 |---------|-------------|---------|
-| API Server | `uvicorn market_ingestion.app:app` | Manual triggers, status, health |
-| Scheduler | `python -m market_ingestion.infrastructure.scheduler.scheduler_main` | Creates ingestion tasks from polling policies on each tick |
+| API Server | `uvicorn market_ingestion.app:app` | Manual triggers, status, health, quota, cache invalidation |
+| Scheduler | `python -m market_ingestion.infrastructure.scheduler.scheduler_main` | Creates ingestion tasks from polling policies on each tick; also spawns the fundamentals-refresh, instrument-policy-sync and insider-universe loops |
 | Worker | `python -m market_ingestion.infrastructure.workers.worker_main` | Claims tasks, fetches data, stores in MinIO, writes outbox |
-| Outbox Dispatcher | Part of worker or standalone | Publishes outbox events to Kafka |
+| Outbox Dispatcher | `python -m market_ingestion.infrastructure.messaging.outbox.dispatcher_main` | Publishes outbox events to Kafka |
+| Reclaim Worker | `python -m market_ingestion.infrastructure.workers.reclaim_worker_main` | Periodically resets expired-lease tasks back to `RETRY` to prevent crashed-worker deadlock |
 
-A fifth process, **Reclaim Worker** (`reclaim_worker_main.py`), periodically resets expired-lease tasks back to `RETRY` state to prevent crashed-worker deadlock.
+The insider-universe loader (`workers/insider_universe_loader.py`) is a standalone one-shot/cron entry point that refreshes the top-N insider-transaction symbol universe.
 
 ---
 
 ## API Endpoints
 
-All endpoints are prefixed at port 8002. Authentication via `X-Internal-Token` header (mutating endpoints only).
+All endpoints are served at port 8002. The whole app is wrapped in `InternalJWTMiddleware`
+(PRD-0025): every request must carry a valid internal `X-Internal-JWT` bearer token
+(verified against S9's JWKS) unless the route is on the public allow-list (`/healthz`,
+`/readyz`). There is **no** `X-Internal-Token` static-header scheme. `/metrics` is also
+protected by the JWT middleware.
+
+The mounted routers are `routes.router` (no prefix) and `cache_router`
+(`/internal/v1/cache`). The `routing_router` (`/internal/v1/routing`) module exists in
+`api/routing_routes.py` but is **not** wired into the app — routing is config-only and is
+reloaded by restarting the process (see Configuration).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/healthz` | — | Liveness probe — always 200 |
-| GET | `/readyz` | — | Readiness (DB + MinIO + Kafka check) |
-| GET | `/metrics` | `X-Internal-Token` | Prometheus metrics |
-| POST | `/api/v1/ingest/trigger` | `X-Internal-Token` | Manually enqueue an ingestion task for a specific symbol/dataset |
-| POST | `/api/v1/ingest/backfill` | `X-Internal-Token` | Backfill historical data for a symbol over a date range |
-| GET | `/api/v1/ingest/status` | — | Current task queue statistics |
-| GET | `/api/v1/policies` | — | List all polling policies |
+| GET | `/healthz` | public | Liveness probe — always 200 |
+| GET | `/readyz` | public | Readiness (DB + MinIO + Kafka check) |
+| GET | `/metrics` | JWT | Prometheus metrics |
+| POST | `/api/v1/ingest/trigger` | JWT | Manually enqueue ingestion tasks for one or more symbols (202 Accepted) |
+| POST | `/api/v1/ingest/backfill` | JWT | Backfill historical data for a single symbol over a date range (202 Accepted) |
+| GET | `/api/v1/ingest/status` | JWT | Task counts grouped by status |
+| GET | `/api/v1/policies` | JWT | List all enabled polling policies |
+| GET | `/api/v1/eodhd/quota/status` | JWT | Current EODHD monthly + daily budget status |
+| DELETE | `/internal/v1/cache/{dataset_type}/{symbol}` | JWT | Invalidate every cached payload for a `(dataset_type, symbol)` coordinate |
 
-**Trigger request body example:**
+**Trigger request body example** (`symbols` is a list):
 ```json
 {
-  "symbol": "AAPL",
-  "exchange": "US",
+  "provider": "eodhd",
+  "symbols": ["AAPL", "MSFT"],
   "dataset_type": "ohlcv",
   "timeframe": "1d",
-  "provider": "eodhd"
+  "exchange": "US"
 }
 ```
 
-**Backfill request body example:**
+**Backfill request body example** (single `symbol`, `start_date`/`end_date`):
 ```json
 {
+  "provider": "eodhd",
   "symbol": "MSFT",
-  "exchange": "US",
-  "dataset_type": "fundamentals",
-  "range_start": "2024-01-01",
-  "range_end": "2024-12-31"
+  "start_date": "2024-01-01",
+  "end_date": "2024-12-31",
+  "timeframe": "1d",
+  "chunk_days": 365,
+  "exchange": "US"
 }
 ```
 
@@ -96,8 +112,8 @@ All endpoints are prefixed at port 8002. Authentication via `X-Internal-Token` h
 ```bash
 curl -X POST http://localhost:8002/api/v1/ingest/trigger \
   -H "Content-Type: application/json" \
-  -H "X-Internal-Token: $INTERNAL_TOKEN" \
-  -d '{"symbol":"AAPL","exchange":"US","dataset_type":"ohlcv","timeframe":"1d"}'
+  -H "X-Internal-JWT: $INTERNAL_JWT" \
+  -d '{"provider":"eodhd","symbols":["AAPL"],"dataset_type":"ohlcv","timeframe":"1d","exchange":"US"}'
 ```
 
 ---
@@ -209,7 +225,7 @@ CREATE TABLE provider_budgets (
 );
 
 -- Incremental polling watermarks — prevents re-fetching already-ingested data.
-CREATE TABLE watermarks (
+CREATE TABLE ingestion_watermarks (
     id              UUID PRIMARY KEY,
     symbol          VARCHAR(20) NOT NULL,
     dataset_type    VARCHAR(30) NOT NULL,
@@ -251,6 +267,17 @@ CREATE TABLE symbol_tiers (
 | `0011` | Alpaca 1m intraday polling policies |
 | `0012` | Economic events cadence restore |
 | `0013` | Add `dispatched_at` to outbox_events |
+| `0014` | Expand polling_policies to the full S&P 500 universe + 7 global indices |
+| `0015` | Disable EODHD quote polling for US and CC exchanges |
+| `0016` | Disable S2 `news_sentiment` polling policies (moved to S4) |
+| `0017` | Add weekly `insider_transactions` + `market_cap` policies for top-100 S&P 500 |
+| `0018` | Bump Alpaca 1m polling-policy priority to 100 |
+| `0019` | Fix EODHD seed symbols that 404 against the provider API |
+| `0020` | Disable weekly (1w) and monthly (1mo) OHLCV polling — bars are now DERIVED in S3 |
+| `0021` | Add a partial index on `outbox_events` for unpublished rows |
+| `0022` | Seed Tier-1-US tickerless-company polling policies (derived-bar-aware) |
+| `0023` | Poll daily (1d) OHLCV from Alpaca; disable redundant EODHD 1d polling |
+| `0024` | Slow Alpaca 1d OHLCV polling to once-daily (was 6h) — **current head** |
 
 ---
 
@@ -281,18 +308,32 @@ All environment variables are prefixed with `MARKET_INGESTION_`.
 | `MARKET_INGESTION_ALPACA_SECRET_KEY` | `""` | No | Alpaca secret key |
 | `MARKET_INGESTION_ALPACA_BASE_URL` | `https://data.alpaca.markets` | No | Alpaca data base URL |
 | `MARKET_INGESTION_ALPACA_FEED` | `iex` | No | `iex` (free, ~15min delayed) or `sip` (paid, real-time) |
-| `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` | `""` | Yes (prod) | Token for `X-Internal-Token` header — mutating API endpoints return 401 when empty |
-| `MARKET_INGESTION_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 base URL for JWKS endpoint (internal JWT auth) |
+| `MARKET_INGESTION_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 base URL for JWKS endpoint (internal JWT verification) |
+| `MARKET_INGESTION_INTERNAL_JWT_PRIVATE_KEY` | `""` | No | RS256 private key used to mint internal JWTs for outbound calls (e.g. to market-data) |
 | `MARKET_INGESTION_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | No | Set `true` only in E2E tests without S9. **NEVER enable in production** — rejected when `APP_ENV=production` |
+| `MARKET_INGESTION_MARKET_DATA_URL` | `http://market-data:8003` | No | S3 base URL (used by fundamentals-refresh internal endpoint) |
 | `MARKET_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS` | `60.0` | No | How often the scheduler checks for due policies |
 | `MARKET_INGESTION_SCHEDULER_MAX_TASKS_PER_TICK` | `1000` | No | Max tasks enqueued per tick |
 | `MARKET_INGESTION_WORKER_BATCH_SIZE` | `10` | No | Tasks claimed per worker batch |
 | `MARKET_INGESTION_WORKER_LEASE_SECONDS` | `300` | No | Lease duration for claimed tasks |
 | `MARKET_INGESTION_WORKER_CONCURRENCY` | `4` | No | Concurrent task execution slots |
+| `MARKET_INGESTION_WORKER_IDLE_SLEEP_SECONDS` | `5.0` | No | Sleep when no tasks are claimable (also the exponential-backoff base) |
 | `MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS` | `30.0` | No | HTTP timeout for provider API calls |
 | `MARKET_INGESTION_DISPATCHER_BATCH_SIZE` | `50` | No | Outbox events dispatched per batch |
 | `MARKET_INGESTION_DISPATCHER_POLL_INTERVAL_SECONDS` | `1.0` | No | Dispatcher poll cadence |
 | `MARKET_INGESTION_DISPATCHER_LEASE_SECONDS` | `60` | No | Dispatcher outbox event lease duration |
+| `MARKET_INGESTION_DISPATCHER_MAX_ATTEMPTS` | `20` | No | Max publish attempts before an outbox row is dead-lettered |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_ENABLED` | `true` | No | Enable the 6-hourly fundamentals re-trigger loop (scheduler-spawned) |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_INTERVAL_HOURS` | `6.0` | No | Cadence of the fundamentals-refresh loop |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_TOP_N` | `500` | No | Number of top symbols refreshed each cycle |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_PROVIDER` | `eodhd` | No | Provider used by the fundamentals-refresh loop |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_VARIANT` | `quarterly` | No | Fundamentals variant requested by the refresh loop |
+| `MARKET_INGESTION_FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT` | `true` | No | Pull the refresh symbol list from S3's internal endpoint vs static config |
+| `MARKET_INGESTION_INSTRUMENT_POLICY_SYNC_ENABLED` | `true` | No | Enable the 6-hourly instrument-policy sync loop |
+| `MARKET_INGESTION_INSTRUMENT_POLICY_SYNC_INTERVAL_HOURS` | `6.0` | No | Cadence of the instrument-policy sync loop |
+| `MARKET_INGESTION_INSIDER_UNIVERSE_REFRESH_ENABLED` | `false` | No | Enable the weekly insider-universe refresh (off by default — ~2,830 credits/cycle) |
+| `MARKET_INGESTION_INSIDER_UNIVERSE_REFRESH_DAY_OF_WEEK` | `6` | No | Day-of-week (0=Mon) for the insider-universe refresh |
+| `MARKET_INGESTION_INSIDER_UNIVERSE_REFRESH_HOUR_UTC` | `5` | No | UTC hour for the insider-universe refresh |
 | `MARKET_INGESTION_AUTO_BACKFILL_ON_STARTUP` | `false` | No | Enable startup auto-backfill (off by default; gitops flips it on) |
 | `MARKET_INGESTION_AUTO_BACKFILL_INITIAL_DAYS` | `14` | No | How many days back to auto-backfill on startup |
 | `MARKET_INGESTION_AUTO_BACKFILL_YEARS` | `10` | No | Hard cap on backfill horizon |
@@ -304,8 +345,8 @@ All environment variables are prefixed with `MARKET_INGESTION_`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MARKET_INGESTION_ROUTING_OHLCV_INTRADAY` | `alpaca:100,polygon:80` | Provider priority for 1m/5m/15m/1h/4h OHLCV |
-| `MARKET_INGESTION_ROUTING_OHLCV_EOD` | `yahoo_finance:100,eodhd:80` | Provider priority for 1d/1w/1M OHLCV |
+| `MARKET_INGESTION_ROUTING_OHLCV_INTRADAY` | `alpaca:100,polygon:80` | Provider priority for 1m/5m/15m/30m/1h/4h OHLCV |
+| `MARKET_INGESTION_ROUTING_OHLCV_EOD` | `alpaca:100,eodhd:80` | Provider priority for 1d/1w/1M OHLCV (Yahoo dropped — Alpaca 1Day is the free deep-daily source, EODHD is failover) |
 | `MARKET_INGESTION_ROUTING_QUOTES` | `eodhd:100` | Provider priority for real-time quotes |
 | `MARKET_INGESTION_ROUTING_FUNDAMENTALS` | `eodhd:100` | Provider priority for fundamentals |
 | `MARKET_INGESTION_ROUTING_NEWS_SENTIMENT` | `eodhd:100` | Provider priority for news sentiment |
@@ -353,32 +394,31 @@ All environment variables are prefixed with `MARKET_INGESTION_`.
 
 ---
 
-## Covered Symbols (64 total)
+## Covered Symbols
 
-Polling policies are seeded for 64 symbols across 8 categories:
+The seed universe started at 64 symbols (migration 0002/0004) and was expanded to the
+**full S&P 500 + 7 global indices** in migration 0014. Later migrations (0015–0024) tuned
+the per-policy cadence and provider mix:
 
-| Category | Count | Examples |
-|----------|-------|---------|
-| US Large-Cap Equities | 30 | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, JPM, V |
-| Sector ETFs | 9 | XLK, XLV, XLE, XLY, QQQ, IBIT |
-| Broad Market ETFs | 4 | SPY, IVV, VOO, VTI |
-| Fixed Income ETFs | 4 | IEF, TLT, AGG, SHY |
-| Commodity ETFs | 3 | GLD, SLV, USO (fundamentals disabled) |
-| Major Indices | 5 | GSPC, CCMP, INDU, RUT, VIX (fundamentals disabled) |
-| Crypto Top-10 | 10 | BTC-USD, ETH-USD, BNB-USD, SOL-USD (fundamentals disabled) |
-| Forex | 1 | EURUSD |
+| Migration | Effect on the universe / cadence |
+|-----------|----------------------------------|
+| `0014` | Full S&P 500 equities + 7 global indices |
+| `0015` | EODHD `quotes` polling disabled for US + CC exchanges |
+| `0016` | `news_sentiment` polling disabled (moved to S4) |
+| `0017` | Weekly `insider_transactions` + `market_cap` for top-100 S&P 500 by market cap |
+| `0020` | Weekly (1w) + monthly (1mo) OHLCV polling disabled — derived on-read in S3 |
+| `0022` | Tier-1-US tickerless-company policies seeded |
+| `0023`/`0024` | Daily (1d) OHLCV now polled from Alpaca (once-daily) instead of EODHD 6-hourly |
 
-**Per-symbol polling schedule** (5 policies each):
+**Current steady-state per-symbol policies** (after the 0020/0023/0024 cleanup):
 
-| Policy | Interval | Notes |
-|--------|----------|-------|
-| `quotes` (1d) | 5 min | `market_hours_only=true` — only during 13:30–20:00 UTC Mon–Fri |
-| `ohlcv 1d` | 6 hours | Daily bars |
-| `ohlcv 1w` | 7 days | Weekly bars |
-| `ohlcv 1mo` | 30 days | Monthly bars |
-| `fundamentals` | 7 days | Disabled for crypto/indices/commodity ETFs |
+| Policy | Provider | Cadence | Notes |
+|--------|----------|---------|-------|
+| `ohlcv 1d` | Alpaca | once daily | Daily bars; EODHD is failover-only |
+| `fundamentals` | EODHD | 7 days (+ 6h refresh loop) | Disabled for crypto/indices/commodity ETFs |
 
-**Steady-state credit consumption**: ~6,300 EODHD credits/day (well under the 100K/month limit).
+1w/1mo OHLCV are **derived-on-read** in market-data (S3) from the polled daily series and
+are no longer routed or polled here. `quotes` polling for US/CC was disabled in 0015.
 
 ---
 
@@ -462,9 +502,12 @@ curl http://localhost:8002/readyz      # → {"status": "ready"} (or 503 if infr
 ```bash
 curl -X POST http://localhost:8002/api/v1/ingest/trigger \
   -H "Content-Type: application/json" \
-  -H "X-Internal-Token: dev-token" \
-  -d '{"symbol":"AAPL","exchange":"US","dataset_type":"ohlcv","timeframe":"1d"}'
+  -H "X-Internal-JWT: $INTERNAL_JWT" \
+  -d '{"provider":"eodhd","symbols":["AAPL"],"exchange":"US","dataset_type":"ohlcv","timeframe":"1d"}'
 ```
+
+> The API is wrapped in `InternalJWTMiddleware`. For local single-service testing without
+> S9, set `MARKET_INGESTION_INTERNAL_JWT_SKIP_VERIFICATION=true` (never in production).
 
 ---
 

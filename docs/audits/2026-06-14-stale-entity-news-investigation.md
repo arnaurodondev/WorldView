@@ -1,6 +1,6 @@
 # Investigation: Stale Entity News (GOOGL / JPM / demo holdings)
 
-**Date**: 2026-06-14 | **Investigator**: Claude (Principal Debug)  
+**Date**: 2026-06-14 | **Investigator**: Claude (Principal Debug)
 **Branch**: feat/plan-0099-w4
 
 ---
@@ -93,7 +93,7 @@ The `asyncio.wait_for(delivery_event.wait(), timeout=10.0)` in `base.py:451-454`
 ## Ranked Fixes
 
 ### P0 — Immediate operational fix (minutes)
-**Restart `worldview-content-ingestion-dispatcher-1`**  
+**Restart `worldview-content-ingestion-dispatcher-1`**
 This resets `self._producer = None`, forces a fresh rdkafka connection, and will immediately flush the 541 pending `content.article.raw.v1` events. No code change needed.
 
 ```bash

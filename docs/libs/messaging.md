@@ -9,12 +9,14 @@
 
 ## Purpose
 
-The `messaging` library provides five independently usable building blocks:
+The `messaging` library provides these independently usable building blocks:
 
 | Building Block | Module | What it solves |
 |----------------|--------|----------------|
 | **Outbox Dispatcher** | `messaging.kafka.dispatcher` | Atomically couples DB writes with Kafka publishes. Eliminates dual-write inconsistency. |
 | **Kafka Consumer** | `messaging.kafka.consumer` | Idempotent event consumption with automatic retry, back-off, dead-lettering, and optional backpressure. |
+| **Run() Supervision** | `messaging.kafka.consumer.supervisor` | Entry-point wrapper that fails the process loudly on a terminal `run()` exit instead of wedging on a never-awaited task. |
+| **Processed-Events Cleanup** | `messaging.kafka.maintenance` | Retention enforcement for the `processed_events` idempotency table. |
 | **Valkey Client** | `messaging.valkey` | Async Redis/Valkey operations with pooling and structured key taxonomy. |
 | **PostgreSQL Advisory Lock** | `messaging.pg` | Single-leader scheduling across replicas without a dedicated lock service. |
 | **EODHD Quota Service** | `messaging.eodhd_quota` | Shared monthly EODHD credit quota enforcement via Valkey (prevents per-replica over-consumption). |
@@ -129,6 +131,40 @@ from messaging import OutboxStatus
 # OutboxStatus.PENDING | PROCESSING | DELIVERED | FAILED | DEAD_LETTER
 ```
 
+`OutboxStatus` is a `StrEnum`; the string values are the lowercase member names
+(`"pending"`, `"processing"`, `"delivered"`, `"failed"`, `"dead_letter"`).
+
+### Package-root re-exports (`messaging`)
+
+Everything in this list is importable directly from the package root
+(`from messaging import ...`) — see `messaging.__all__`:
+
+- Consumer: `BaseKafkaConsumer`, `ConsumerConfig`, `FailureInfo`,
+  `UnitOfWorkProtocol`, `DLQEmitterProtocol`, `DLQ_TOPIC_SUFFIX`
+- Errors: `ConsumerError` (base), `RetryableError`, `FatalError` and all
+  subclasses (see Error Classification below)
+- Producer / serializer: `KafkaProducerConfig`, `OutboxKafkaValue`,
+  `KafkaEventValueSerializer`, `OutboxEventValueSerializer`,
+  `build_serializing_producer`, `AvroDictable`, `AvroSerializerConfig`,
+  `build_avro_serializer`, `topic_event_type_subject_name_strategy`
+- Schema registry: `SchemaRegistryConfig`, `build_schema_registry_client`
+- Serialization utils: `load_schema`, `serialize_avro`, `deserialize_avro`,
+  `serialize_confluent_avro`, `deserialize_confluent_avro`,
+  `serializer_for_schema`, `decimal_to_str`, `iso_datetime`
+- Dispatcher: `BaseOutboxDispatcher`, `DispatcherConfig`, `DeliveryResult`,
+  `OutboxRecordProtocol`, `OutboxRepositoryProtocol`,
+  `UnitOfWorkWithOutboxProtocol`, `run_dispatcher`
+- Valkey: `ValkeyClient`, `ValkeyConfig`, `create_valkey_client`,
+  `create_valkey_client_from_url`
+- Enums: `OutboxStatus`
+
+> `ProcessedEventsCleanupWorker` is **deliberately not** re-exported at the
+> package root — it imports `sqlalchemy`, which the S9 api-gateway (no DB by
+> design, R7) must not be forced to install. Import it from
+> `messaging.kafka.maintenance` directly. Likewise `ValkeyDedupMixin`,
+> `BackpressurePolicy`, and `LagCalculator` are exported from
+> `messaging.kafka.consumer` (not the package root).
+
 ### Kafka Consumer (`messaging.kafka.consumer`)
 
 | Class | Purpose |
@@ -137,6 +173,21 @@ from messaging import OutboxStatus
 | `ConsumerConfig` | Typed consumer settings (bootstrap servers, group ID, topics, auto offset reset, timeouts, retry tuning). |
 | `FailureInfo[TFailure]` | Carries per-message retry tracking state (event ID, topic, partition, offset, attempt count, last error, optional stored record). |
 | `UnitOfWorkProtocol` | Structural protocol for the UoW passed to `get_unit_of_work()`. |
+| `DLQEmitterProtocol` | Port for publishing a single dead-letter envelope to `<topic>.dead-letter.v1`. Defines `async emit(topic, payload, headers=None, key=None)`. Pass an implementation to `BaseKafkaConsumer(..., dlq_emitter=...)` to make dead-lettered messages observable in kafka-ui; omit it to keep DB-only DLQ persistence. |
+| `DLQ_TOPIC_SUFFIX` | The constant `".dead-letter.v1"` appended to the source topic to derive the canonical DLQ topic. |
+
+**Constructor:**
+
+```python
+BaseKafkaConsumer(
+    config: ConsumerConfig,
+    metrics: ServiceMetrics | None = None,
+    backpressure_policy: BackpressurePolicy | None = None,
+    dlq_emitter: DLQEmitterProtocol | None = None,
+    *,
+    metrics_namespace: str | None = None,
+)
+```
 
 **Abstract methods that subclasses must implement:**
 
@@ -347,14 +398,17 @@ the reconnect logic.
 
 | Function | Purpose |
 |----------|---------|
-| `load_schema(path)` | Load Avro schema from `.avsc` file (fastavro-parsed). |
-| `serialize_avro(schema, record)` | Schemaless Avro binary encoding. |
-| `deserialize_avro(schema, data)` | Schemaless Avro binary decoding. |
-| `serialize_confluent_avro(schema_id, schema, record)` | Confluent 5-byte wire-format header + Avro body. |
-| `deserialize_confluent_avro(schema, data)` | Decode Confluent wire-format (detects 0x00 magic byte). |
-| `serializer_for_schema(schema_str, registry)` | Build Confluent `AvroSerializer` for a specific schema. |
-| `decimal_to_str(d)` | `Decimal` → string for Avro `string` fields. |
-| `iso_datetime(dt)` | `datetime` → ISO-8601 string for Avro `string` fields. |
+| `load_schema(path: str) -> dict` | Load + fastavro-parse an Avro schema from a `.avsc` file. |
+| `serialize_avro(schema: dict, record: dict) -> bytes` | Schemaless Avro binary encoding. |
+| `deserialize_avro(schema: dict, data: bytes) -> dict` | Schemaless Avro binary decoding. |
+| `serialize_confluent_avro(schema_path: str, record: dict, schema_id: int = 0) -> bytes` | Build the Confluent 5-byte wire-format header (`0x00` magic + 4-byte big-endian `schema_id`) and append the Avro body. Takes the `.avsc` **path** (not a parsed schema) and loads it internally. |
+| `deserialize_confluent_avro(schema_path: str, data: bytes, *, expected_schema_ids: set[int] \| None = None) -> dict` | Strip the 5-byte Confluent header (validates the `0x00` magic byte) and decode against the schema at `schema_path`. When `expected_schema_ids` is given, the embedded schema id is checked against it first and a mismatch raises `ValueError` (PLAN-0062 F-020). |
+| `serializer_for_schema(schema_str: str, registry) -> AvroSerializer` | Convenience wrapper around `build_avro_serializer` with default config. |
+| `decimal_to_str(d: Decimal) -> str` | `Decimal` → fixed-point string for Avro `string` fields. |
+| `iso_datetime(dt: datetime) -> str` | `datetime` → ISO-8601 string for Avro `string` fields. |
+
+> Module-level `KNOWN_TOPIC_SCHEMA_IDS: dict[str, set[int]]` is an empty
+> registry consumers may populate at startup to feed `expected_schema_ids`.
 
 ### Schema Registry (`messaging.kafka.schema_registry`)
 
@@ -368,9 +422,9 @@ the reconnect logic.
 | Symbol | Purpose |
 |--------|---------|
 | `BaseOutboxDispatcher` | Lease-based outbox publisher. Hybrid: `dispatch_now()` inline + background `run()` poll loop. Marks records published only after Kafka ACK. Dead-letters records exceeding `max_attempts`. |
-| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, back-off params, `immediate_dispatch`, `worker_id`. |
+| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `idle_poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, `initial_backoff_seconds`/`max_backoff_seconds`/`backoff_multiplier`, `delivery_timeout_seconds`, `immediate_dispatch`, `worker_id` (auto-generated `<hostname>-<uuid8>` when empty). |
 | `DeliveryResult` | Outcome of one dispatch: `record_id`, `success`, `topic`, `error`. |
-| `OutboxRecordProtocol` | Structural type for outbox table rows. |
+| `OutboxRecordProtocol` | Structural type for outbox table rows: `id`, `event_type`, `topic`, `payload`, `attempts`, `leased_until`, and optional `partition_key` (when set, used as the Kafka message key for per-aggregate ordering — F-DATA-06; read via `getattr` so legacy rows without it still work). |
 | `OutboxRepositoryProtocol` | Port for outbox table: `fetch_pending`, `mark_published`, `increment_attempts`, `move_to_dead_letter`. |
 | `UnitOfWorkWithOutboxProtocol` | UoW that exposes `.outbox` repository + `commit`/`rollback`. |
 | `run_dispatcher(dispatcher)` | Coroutine — run in a background task via `asyncio.create_task(run_dispatcher(d))`. |
@@ -382,16 +436,59 @@ the reconnect logic.
 | `get_unit_of_work()` | Return fresh async UoW implementing `UnitOfWorkWithOutboxProtocol`. |
 | `get_serializer(event_type)` | Avro value serializer callable for the given `event_type`. |
 | `get_producer()` | Confluent `SerializingProducer` instance. |
-| `on_delivery_failure(result)` *(optional)* | Override to add alerting on dead-letter. |
+| `on_delivery_failure(result)` *(optional)* | Override to add alerting on dead-letter. The default logs `error_type` + `repr` so an empty-`str` `TimeoutError` can never hide a wedged producer. |
+| `register_notify_listener(on_notify)` *(optional)* | Override to wire a Postgres `LISTEN` (see below). Default returns `None` → legacy polling. |
+
+**LISTEN/NOTIFY wakeup (LIB-003, opt-in):** `DispatcherConfig` carries two
+poll intervals — `poll_interval_seconds` (default `5.0`, used when LISTEN/NOTIFY
+is **not** wired) and `idle_poll_interval_seconds` (default `60.0`, the safety-net
+poll used **when** it is wired). A Postgres-backed subclass overrides
+`register_notify_listener(on_notify)` to `LISTEN` on channel
+`OUTBOX_NOTIFY_CHANNEL` (`"outbox_events_new"`, exported from
+`messaging.kafka.dispatcher.base`) and call `on_notify()` on each NOTIFY; the
+run loop then wakes within microseconds of a new insert instead of polling.
+Producers attach an AFTER-INSERT trigger that runs `NOTIFY outbox_events_new`:
+
+```sql
+CREATE OR REPLACE FUNCTION outbox_notify() RETURNS trigger AS $$
+BEGIN
+    NOTIFY outbox_events_new;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER outbox_events_notify
+    AFTER INSERT ON outbox_events
+    FOR EACH ROW EXECUTE FUNCTION outbox_notify();
+```
+
+The default `register_notify_listener` returns `None`, so services that have not
+opted in keep the 5s poll. A `LISTEN` failure (e.g. SQLite in tests) is caught
+and the dispatcher falls back to polling.
 
 ### Valkey Client (`messaging.valkey`)
 
 | Symbol | Purpose |
 |--------|---------|
-| `ValkeyClient` | Async Redis/Valkey client with connection pooling. Methods: `get`, `set`, `exists`, `delete`, `expire`, `incr`, `incrbyfloat`, `set_json`, `get_json`, `mget_json`, `set_nx`, `hset`, `hget`, `lpush`, `lrange`. |
-| `ValkeyConfig` | Connection config (host, port, db, password, SSL, pool size, timeouts). Has `from_url(url)` classmethod. |
-| `create_valkey_client(config)` | Factory from `ValkeyConfig`. |
-| `create_valkey_client_from_url(url)` | Factory from a Redis-style URL string. |
+| `ValkeyClient` | Async Redis/Valkey client over `redis.asyncio` with connection pooling. Constructed as `ValkeyClient(config=...)` or `ValkeyClient(url=...)`. See the method list below. |
+| `ValkeyConfig` | Connection config (`host`, `port`, `db`, `password`, `username`, `max_connections`, `socket_timeout`, `socket_connect_timeout`, `decode_responses`, `ssl`). Has a `from_url(url, **overrides)` classmethod and a `.url` property. |
+| `create_valkey_client(config: ValkeyConfig) -> ValkeyClient` | **Synchronous** factory from a `ValkeyConfig`. |
+| `create_valkey_client_from_url(url: str) -> ValkeyClient` | **Synchronous** factory from a Redis-style URL string. Do NOT `await` it. |
+
+**`ValkeyClient` method surface** (all `async`):
+
+- Strings/keys: `get`, `set(key, value, ttl=None, *, ex=None)`, `set_nx(key, value, ex)`,
+  `setex(key, seconds, value)`, `delete`, `delete_many`, `delete_pattern`,
+  `getdel`, `exists`, `incr`, `incrbyfloat`, `expire`, `ttl`
+- JSON: `get_json`, `set_json(key, value, ttl=None)` (no `mget_json` — use `mget`)
+- Batch: `mget(keys) -> list[str | None]`, `mset(mapping)`
+- Hashes: `hget`, `hset`, `hgetall`, `hdel`
+- Lists: `lpush`, `rpush`, `lpop`, `rpop`, `lrange`, `llen`
+- Sorted sets: `zadd`, `zrangebyscore`, `zremrangebyscore`, `zcard`
+- Pub/sub: `publish(channel, message)`, `subscribe(*channels)` (async ctx mgr → `PubSub`)
+- Scripting / batching: `execute_lua_script(script, keys, args)`,
+  `pipeline(*, transaction=False)` (async ctx mgr → redis pipeline)
+- Connection: `ping`, `close`
 
 **Key taxonomy**: `<scope>:<version>:<resource>:<id>[:<qualifier>]`
 
@@ -444,10 +541,51 @@ status = await service.get_status()
 |--------|---------|-------------|
 | `try_consume(cost, service, symbol, month)` | `QuotaCheckResult` | Consume credits atomically. `HARD_LIMIT_EXCEEDED` means block; `SOFT_LIMIT_EXCEEDED` means warn but proceed. |
 | `get_status(month)` | `QuotaStatus` | Point-in-time snapshot of usage. |
+| `get_daily_credits_used(day)` | `int` | Cumulative credits consumed on `day` (UTC, defaults to today). The true daily-spend source `DailyBudgetTracker` reads — not derived from token-bucket depletion. |
 | `get_by_service(service, month)` | `int` | Credits used by one service this month. |
 | `get_by_symbol(symbol, month)` | `int` | Credits used for one symbol this month. |
 
-Valkey keys: `eodhd:v1:quota:{YYYY-MM}:credits_used` (32-day TTL, auto-expires).
+`try_consume` can also return `QuotaCheckResult.OK` (below the soft limit).
+Class constants `EodhdQuotaService.HARD_LIMIT` (100,000) and
+`SOFT_LIMIT_RATIO` (0.80) are the defaults; both are overridable per instance.
+
+Valkey keys (32-day TTL on monthly keys, 2-day TTL on the daily key,
+all auto-expiring):
+
+```
+eodhd:v1:quota:{YYYY-MM}:credits_used                 # total monthly counter
+eodhd:v1:quota:{YYYY-MM}:{service}:credits_used       # per-service attribution
+eodhd:v1:quota:{YYYY-MM}:symbol:{sym}:credits_used    # per-symbol attribution
+eodhd:v1:quota:day:{YYYY-MM-DD}:credits_used          # cumulative per-UTC-day
+```
+
+### Processed-Events Cleanup Worker (`messaging.kafka.maintenance`)
+
+Stateless retention enforcer for the per-service `processed_events`
+idempotency table. Not re-exported at the package root (it imports
+`sqlalchemy`); import the concrete path:
+
+```python
+from messaging.kafka.maintenance.processed_events_cleanup import (
+    ProcessedEventsCleanupWorker,
+)
+
+worker = ProcessedEventsCleanupWorker(
+    service_name="content-store",   # keyword-only; used for structured logging
+    retention_days=30,              # rows older than now() - retention_days are deleted
+    batch_size=10_000,              # rows deleted per committed transaction
+)
+deleted = await worker.run_once(session)   # pass a fresh AsyncSession per invocation
+```
+
+| Member | Purpose |
+|--------|---------|
+| `ProcessedEventsCleanupWorker(*, service_name, retention_days=30, batch_size=10_000)` | Constructor; `retention_days` and `batch_size` must be `> 0` (else `ValueError`). |
+| `async run_once(session: AsyncSession) -> int` | Run one cleanup pass in batches, committing per batch; returns total rows deleted. Stops when a batch returns fewer than `batch_size` rows. |
+
+Schedule `run_once` daily (e.g. 02:00 UTC) from the service's scheduler or a
+dedicated `*_cleanup_main.py` process. Class defaults are exposed as
+`DEFAULT_RETENTION_DAYS`, `BATCH_SIZE`, and `INTER_BATCH_SLEEP_SECONDS`.
 
 ---
 
@@ -527,10 +665,12 @@ class ArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 ```python
 from messaging import create_valkey_client_from_url
 
-client = await create_valkey_client_from_url("redis://localhost:6379")
+# The factory is SYNCHRONOUS — construct without await; the I/O methods are async.
+client = create_valkey_client_from_url("redis://localhost:6379")
 await client.set_json("md:v1:quote:AAPL", {"price": 150.0}, ttl=30)
 quote = await client.get_json("md:v1:quote:AAPL")
-quotes = await client.mget_json(["md:v1:quote:AAPL", "md:v1:quote:MSFT"])
+# There is no mget_json — fetch raw and decode, or call get_json per key.
+raw = await client.mget(["md:v1:quote:AAPL", "md:v1:quote:MSFT"])
 ```
 
 ---

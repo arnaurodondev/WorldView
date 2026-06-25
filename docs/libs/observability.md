@@ -23,6 +23,30 @@ setup for all four pillars, ensuring:
 - **Single `ServiceMetrics` instance** shared between messaging, route handlers, and
   workers — no duplicate counter registrations.
 
+Beyond the four pillars, the library also ships the shared cross-cutting building
+blocks every backend service and worker needs: the RS256 `InternalJWTMiddleware`
+(extracted from 9 per-service copies), a standalone `/metrics` + `/healthz` HTTP
+server for non-FastAPI worker processes, a Kafka-consumer liveness probe, ML-API
+cost/latency metrics, a boot-time security guard, and a one-line runtime banner.
+
+The full public surface (`observability.__all__`):
+
+| Symbol | Module | Kind |
+|--------|--------|------|
+| `configure_logging`, `get_logger` | `logging` | function |
+| `create_metrics`, `ServiceMetrics` | `metrics` | function / dataclass |
+| `create_ml_metrics`, `MLMetrics` | `metrics` | function / dataclass |
+| `add_prometheus_middleware` | `metrics` | function |
+| `KAFKA_CONSUMER_MESSAGES` | `metrics` | global `Counter` |
+| `configure_tracing`, `get_tracer`, `add_otel_middleware` | `tracing` | function |
+| `SentrySettings`, `init_sentry` | `sentry` | settings / function |
+| `register_error_handlers` | `error_capture` | function |
+| `InternalJWTMiddleware` | `internal_jwt` | Starlette middleware |
+| `start_metrics_server`, `MetricsServerHandle` | `metrics_server` | function / handle |
+| `ConsumerLivenessProbe`, `make_liveness_probe` | `liveness` | class / function |
+| `log_runtime_banner` | `runtime_banner` | function |
+| `assert_app_env_or_die` | `startup_assert` | function |
+
 ---
 
 ## Installation
@@ -36,11 +60,12 @@ dependencies = ["observability"]
 pip install -e "libs/observability"
 ```
 
-Dependencies: `structlog>=25.0`, `prometheus-client>=0.21`,
-`opentelemetry-api>=1.24`, `opentelemetry-sdk>=1.24`,
-`opentelemetry-exporter-otlp-proto-grpc>=1.24`,
-`opentelemetry-instrumentation-fastapi>=0.45b0`,
-`sentry-sdk[fastapi]>=2.18,<3`. Python 3.11–3.12.
+Dependencies (from `pyproject.toml`): `structlog>=25.0,<26`,
+`prometheus-client>=0.24,<1`, `opentelemetry-api>=1.40,<2`,
+`opentelemetry-sdk>=1.40,<2`, `opentelemetry-exporter-otlp-proto-grpc>=1.40,<2`,
+`opentelemetry-instrumentation-fastapi>=0.61b0,<1`, `starlette>=0.37,<1`,
+`uvicorn>=0.29,<1`, `sentry-sdk[fastapi]>=2.18.0,<3`,
+`pydantic-settings>=2.0,<3`. Python 3.11–3.12.
 
 ---
 
@@ -79,31 +104,50 @@ No manual binding is required in request handlers.
 
 | Symbol | Signature | Description |
 |--------|-----------|-------------|
-| `create_metrics` | `(service_name: str, registry?: CollectorRegistry)` → `ServiceMetrics` | Returns a `ServiceMetrics` dataclass with pre-registered counters and histograms. Caches by `service_name` when using the global registry (safe to call from multiple modules). |
-| `add_prometheus_middleware` | `(app: FastAPI, metrics: ServiceMetrics)` → `None` | Installs HTTP metrics middleware and registers `GET /metrics` Prometheus scrape endpoint. |
+| `create_metrics` | `(service_name: str, registry: CollectorRegistry \| None = None, include_websocket: bool = False)` → `ServiceMetrics` | Returns a `ServiceMetrics` dataclass with pre-registered counters, histograms, and gauges. Caches by `service_name` when using the global registry (safe to call from multiple modules). Set `include_websocket=True` only for services exposing WebSocket endpoints (e.g. alert). |
+| `create_ml_metrics` | `(service_name: str, registry: CollectorRegistry \| None = None)` → `MLMetrics` | Returns an `MLMetrics` dataclass tracking ML-API latency, token usage, and estimated cost. Also caches per `service_name` on the global registry. |
+| `add_prometheus_middleware` | `(app: object, metrics: ServiceMetrics)` → `None` | Installs a Starlette `BaseHTTPMiddleware` that records `requests_total` + `request_duration_seconds` for every request, using the matched route template (`/v1/items/{id}`) as the `path` label to bound cardinality. **Does NOT register a `/metrics` endpoint** — FastAPI apps expose `/metrics` themselves (or use `start_metrics_server` for workers). |
+| `KAFKA_CONSUMER_MESSAGES` | `Counter` (module-level global) | Single cross-service rollup counter `kafka_consumer_messages_consumed_total{service,topic,consumer_group}`, registered once at import on the global `REGISTRY` (guarded against duplicate registration). Lets a Grafana "consumer stalled" alert pivot across every consumer in one expression. Additive — the per-service `<svc>_kafka_messages_consumed_total` on `ServiceMetrics` is still incremented. |
 
 **`ServiceMetrics` fields:**
 
 | Field | Type | Labels | Description |
 |-------|------|--------|-------------|
+| `service_name` | str | — | Service name passed to `create_metrics` |
+| `registry` | CollectorRegistry | — | The registry these metrics are registered on |
 | `requests_total` | Counter | `method`, `path`, `status` | HTTP request count |
-| `request_duration_seconds` | Histogram | `method`, `path` | HTTP request latency |
+| `request_duration_seconds` | Histogram | `method`, `path` | HTTP request latency (buckets 5ms…5s) |
 | `kafka_messages_consumed_total` | Counter | `topic`, `consumer_group` | Kafka consumer throughput |
 | `kafka_messages_produced_total` | Counter | `topic` | Kafka producer throughput |
 | `outbox_dispatched_total` | Counter | — | Successful outbox dispatches |
 | `outbox_dispatch_errors_total` | Counter | — | Failed dispatches / dead-letters |
+| `kafka_consumer_lag` | Gauge | `topic`, `partition`, `consumer_group` | Messages behind high watermark |
+| `outbox_last_delivery_timestamp` | Gauge | — | Unix epoch (s) of the most recent successful outbox delivery; alert on `time() - <metric> > 1800` to catch a wedged producer. Defaults to 0 until first delivery. |
+| `websocket_active_connections` | Gauge \| None | — | Active WebSocket connections; `None` unless `include_websocket=True` |
 
 `BaseKafkaConsumer` and `BaseOutboxDispatcher` from `messaging` accept a
 `ServiceMetrics` instance and increment the Kafka/outbox counters automatically.
 Pass the **same instance** created at app startup to both.
 
+**`MLMetrics` fields** (created via `create_ml_metrics`, namespace `<svc>_ml_api_*`):
+
+| Field | Type | Labels | Description |
+|-------|------|--------|-------------|
+| `service_name` | str | — | Service name |
+| `registry` | CollectorRegistry | — | Registry the metrics live on |
+| `ml_api_requests_total` | Counter | `model_id`, `operation`, `status` | ML API request count |
+| `ml_api_latency_seconds` | Histogram | `model_id`, `operation` | ML API latency (buckets 0.1s…60s) |
+| `ml_api_tokens_in_total` | Counter | `model_id` | Input tokens sent (approximate when actual unavailable) |
+| `ml_api_tokens_out_total` | Counter | `model_id` | Output tokens received |
+| `ml_api_estimated_cost_usd_total` | Counter | `model_id` | Estimated cumulative cost (USD) |
+
 ### OpenTelemetry Tracing
 
 | Symbol | Signature | Description |
 |--------|-----------|-------------|
-| `configure_tracing` | `(service_name: str, otlp_endpoint: str | None = None)` → `None` | Sets up OTel `TracerProvider` + OTLP gRPC exporter. When `otlp_endpoint` is `None` or blank, installs a no-op provider (span creation still works, nothing is exported). |
+| `configure_tracing` | `(service_name: str, otlp_endpoint: str \| None = None, exporter: SpanExporter \| None = None)` → `TracerProvider \| NoOpTracerProvider` | Sets up an OTel `TracerProvider`. `exporter` (e.g. `InMemorySpanExporter` in tests) takes precedence and uses a synchronous `SimpleSpanProcessor`; `otlp_endpoint` uses the OTLP gRPC exporter with a `BatchSpanProcessor`. When neither is given, installs a no-op provider (span creation still works, nothing is exported). Returns the active provider. |
 | `get_tracer` | `(name: str)` → `opentelemetry.trace.Tracer` | Returns an OTel tracer. |
-| `add_otel_middleware` | `(app: FastAPI)` → `None` | FastAPI middleware for automatic request span creation. Must be called **after** `configure_tracing()`. |
+| `add_otel_middleware` | `(app: object)` → `None` | Instruments a FastAPI app via `FastAPIInstrumentor.instrument_app`. Must be called **after** `configure_tracing()`. |
 
 **How trace context reaches log lines:**
 
@@ -120,11 +164,11 @@ automatically carries trace identifiers.
 
 ### Sentry Error Tracking
 
-| Symbol | Purpose |
-|--------|---------|
-| `SentrySettings` | Pydantic-settings model (`SENTRY_` env prefix). |
-| `init_sentry(service_name, *, settings)` | Initialise sentry-sdk. Returns `True` if enabled, `False` if disabled (master switch is off by default). |
-| `register_error_handlers(app)` | Registers FastAPI error handlers that call `sentry_sdk.capture_exception()` for unhandled exceptions. |
+| Symbol | Signature | Purpose |
+|--------|-----------|---------|
+| `SentrySettings` | `BaseSettings` (`SENTRY_` env prefix) | Pydantic-settings model. Validates that `dsn` is non-empty when `enabled=True`. |
+| `init_sentry` | `(service_name: str, *, settings: SentrySettings \| None = None)` → `bool` | Initialise sentry-sdk (reads env when `settings is None`). Returns `True` if actually initialised, `False` if disabled (master switch off by default) or init failed. Call sites MUST log the return value — a silent `False` means Sentry is not capturing. Sets the `service` Sentry tag. |
+| `register_error_handlers` | `(app: FastAPI)` → `None` | Registers an `Exception` handler (`unhandled_exception_handler`) that structlogs the traceback first, then best-effort forwards to Sentry via `sentry_sdk.capture_exception()` (only when `get_client().is_active()`), and returns a generic `500 {"detail": "internal server error"}`. |
 
 **`SentrySettings` fields:**
 
@@ -133,13 +177,108 @@ automatically carries trace identifiers.
 | `enabled` | `SENTRY_ENABLED` | `False` | Master switch |
 | `dsn` | `SENTRY_DSN` | `None` | Required when enabled (`SecretStr`) |
 | `environment` | `SENTRY_ENVIRONMENT` | `"development"` | Sentry environment tag |
-| `traces_sample_rate` | `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Fraction of transactions sampled |
+| `traces_sample_rate` | `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Fraction of transactions sampled (off by default) |
 | `release` | `SENTRY_RELEASE` | `None` | App version string (image tag / git SHA) |
 | `fingerprint_rate_limit` | `SENTRY_FINGERPRINT_RATE_LIMIT` | `10` | Max events per fingerprint per hour |
 
-**PII protection** — `_before_send` strips cookies, `Authorization` and
-`X-Internal-JWT` headers, redacts ticker symbols and entity UUIDs from URLs,
-and sha256-hashes `user.email` before any event leaves the process.
+**PII protection** — `_before_send` strips cookies, the query string,
+`Authorization` and `X-Internal-JWT` headers, redacts ticker symbols and entity
+UUIDs from request and breadcrumb URLs, drops secret-shaped keys from `extra`,
+and sha256-hashes `user.email` before any event leaves the process. It also
+applies a sliding per-fingerprint rate limit (default `fingerprint_rate_limit`
+events/hour) that drops excess events and logs `sentry_event_rate_limited`.
+
+### Internal JWT Middleware
+
+`InternalJWTMiddleware` (module `observability.internal_jwt`) is the shared RS256
+verifier for the `X-Internal-JWT` header S9 attaches to every proxied request.
+It was extracted from 9 per-service copies; each service now subclasses it and
+overrides only what differs.
+
+| Symbol | Signature / type | Description |
+|--------|------------------|-------------|
+| `InternalJWTMiddleware` | `BaseHTTPMiddleware` subclass | Validates the JWT, fetches JWKS from S9, and sets `request.state.tenant_id` / `user_id` / `role` / `service_name`. |
+| `DEFAULT_SKIP_PATHS` | `frozenset[str]` | Paths exempt from auth (`/health`, `/healthz`, `/ready`, `/readyz`, `/internal/v1/health`). |
+| `DEFAULT_SKIP_PREFIXES` | `tuple[str, ...]` | Prefixes exempt from auth (`/health`, `/metrics`, `/readyz`). |
+
+Constructor (selected kwargs):
+
+```python
+InternalJWTMiddleware(
+    app,
+    jwks_url: str,                       # required: f"{api_gateway_url}/internal/jwks"
+    *,
+    issuer: str = "worldview-gateway",
+    audience: str = "worldview-internal",
+    service_name: str = "unknown",
+    skip_verification: bool = False,     # dev/E2E only — accepts forged JWTs
+    jti_replay_check_enabled: bool = True,
+    skip_paths=DEFAULT_SKIP_PATHS,
+    skip_prefixes=DEFAULT_SKIP_PREFIXES,
+    valkey_attr: str = "valkey",
+    jti_key_includes_service_name: bool = False,
+    set_skip_verification_on_state: bool = True,
+    skip_verification_takes_precedence: bool = False,
+)
+```
+
+Call `await middleware.startup()` in the lifespan before `yield` — it fetches the
+JWKS with 3 retries (3s back-off) and starts an hourly background refresh, plus a
+rate-limited (1/60s/process) refresh-on-`kid`-miss so S9 key rotation propagates
+without a restart. Verified decode requires claims `sub`, `tenant_id`, `role`,
+`exp`, `iss`, `aud`. Fail-closed: with no public key and `skip_verification=False`,
+all authenticated requests get `503`. JTI replay protection uses Valkey `SET NX`
+and **fails open** if Valkey is unavailable.
+
+Overridable hooks for per-service behaviour: `_load_token`, `_unverified_decode`,
+`_post_validate`, `_jti_replay_check`, `_on_jti_check_bypass`, `_invalid_token_response`,
+`_expired_token_response`, `_on_invalid_token`, `_on_expired_token`.
+
+### Worker Metrics + Health Server
+
+`start_metrics_server` (module `observability.metrics_server`) gives non-FastAPI
+worker processes a `/metrics` (+ optional `/healthz`) endpoint inside their own
+asyncio loop — replacing the ad-hoc `prometheus_client.start_http_server` that
+spawned an un-stoppable daemon thread.
+
+| Symbol | Signature / type | Description |
+|--------|------------------|-------------|
+| `start_metrics_server` | `(*, service_name: str, port: int = 9100, addr: str = "0.0.0.0", registry: CollectorRegistry \| None = None, include_healthz: bool = True, liveness_probe: Callable[[], bool] \| None = None)` → `MetricsServerHandle` | Starts the server in the current loop. Pre-binds the socket so a port collision raises `OSError` (instead of `sys.exit`). `port=0` binds an ephemeral port. |
+| `MetricsServerHandle` | class | `.bound_port` (actual bound port), `await .aclose(timeout_s=5.0)` (idempotent graceful shutdown, hard-cancels after timeout). |
+
+`GET /healthz` returns `200 {"status":"ok"}` when `liveness_probe` is `None` or
+returns `True`, else `503 {"status":"unhealthy"}`. On boot it logs
+`metrics_server_started` with the registered metric-family count — `registered_families == 0`
+flags a worker that forgot to wire its module-level counters before starting.
+
+### Consumer Liveness Probe
+
+`ConsumerLivenessProbe` (module `observability.liveness`) is the external observer
+of a Kafka consumer's poll-loop heartbeat, wired into `start_metrics_server` so a
+wedged consumer flips `/healthz` to `503` and gets restarted (the "dead consumer,
+green healthcheck" failure mode).
+
+| Symbol | Signature / type | Description |
+|--------|------------------|-------------|
+| `make_liveness_probe` | `(*, startup_grace_s: float = 90.0, stale_after_s: float = 660.0)` → `ConsumerLivenessProbe` | Construct an unbound probe. |
+| `ConsumerLivenessProbe` | callable `() -> bool` | `.bind(consumer)` after the consumer exists, `.attach_task(task)` after `run()` is scheduled. Reads `consumer.seconds_since_progress()` (structural `Protocol` — no import of `libs/messaging`). |
+
+Health rules: healthy while unbound; unhealthy once an attached `run()` task
+finishes (crash/stop); during startup, healthy only within `startup_grace_s` of
+`bind` until the first progress tick; thereafter healthy iff
+`seconds_since_progress() <= stale_after_s`.
+
+### Startup Security Guard
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `assert_app_env_or_die` | `(*, service_name: str, internal_jwt_skip_verification: bool, app_env_var: str = "APP_ENV")` → `None` | Call from every service lifespan before `yield`. Raises `RuntimeError` (after a CRITICAL `startup_security_check_failed` log) when `internal_jwt_skip_verification=True` **and** `APP_ENV` is unset/blank — the "production by accident" guard. Pure library: reads `os.environ` directly, no service config contract. |
+
+### Runtime Banner
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `log_runtime_banner` | `(service_name: str, *, dependencies: dict[str, Any])` → `None` | Emits exactly one `<service_name>_ready` structlog event after dependencies are wired. Masks secret-shaped keys (`password`/`token`/`secret`/`key`/`api_key`, recursing one level into nested dicts) and reports `uptime_seconds_since_boot` and `registered_metric_families`. |
 
 ---
 
@@ -219,6 +358,71 @@ consumer = MyConsumer(
 #   metrics.kafka_messages_consumed_total.labels(topic=..., consumer_group=...).inc()
 ```
 
+### Worker /metrics + /healthz with a Liveness Probe
+
+```python
+# A worker process with no FastAPI app exposes metrics + a real liveness check.
+from observability import create_metrics, make_liveness_probe, start_metrics_server
+
+metrics = create_metrics("ohlcv-consumer")        # registers on global REGISTRY
+liveness = make_liveness_probe()
+handle = start_metrics_server(                     # binds in the current loop
+    service_name="ohlcv-consumer",
+    port=9100,
+    liveness_probe=liveness,                       # /healthz -> 503 when wedged
+)
+
+consumer = OHLCVConsumer(config=..., metrics=metrics)
+task = asyncio.create_task(consumer.run())
+liveness.bind(consumer)                            # after the consumer exists
+liveness.attach_task(task)                         # after run() is scheduled
+
+# In the SIGTERM handler:
+await handle.aclose()
+```
+
+### Internal JWT Middleware in create_app
+
+```python
+from observability import InternalJWTMiddleware, assert_app_env_or_die
+
+app.add_middleware(
+    InternalJWTMiddleware,
+    jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+    service_name="portfolio",
+    skip_verification=settings.internal_jwt_skip_verification,
+)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Refuse to boot with verification off and no APP_ENV (production-by-accident).
+    assert_app_env_or_die(
+        service_name="portfolio",
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
+    # Fetch JWKS + start the hourly refresh before serving traffic.
+    for mw in app.user_middleware:
+        if isinstance(mw.cls, type) and issubclass(mw.cls, InternalJWTMiddleware):
+            ...  # services typically hold a reference and call await mw.startup()
+    yield
+```
+
+### Runtime Banner
+
+```python
+from observability import log_runtime_banner
+
+log_runtime_banner(
+    "portfolio",
+    dependencies={
+        "db": {"host": "postgres", "password": "hunter2"},  # password masked to ***
+        "kafka": "broker:9092",
+        "model_id": "BAAI/bge-large-en-v1.5",
+    },
+)
+# Emits one "portfolio_ready" event with masked secrets + uptime + family count.
+```
+
 ---
 
 ## Architecture Notes
@@ -264,7 +468,7 @@ OTEL_SERVICE_NAME=market-data   # auto-set by configure_tracing()
 SENTRY_ENABLED=false            # set true in staging / production
 SENTRY_DSN=                     # required when SENTRY_ENABLED=true
 SENTRY_ENVIRONMENT=development  # development | staging | production
-SENTRY_TRACES_SAMPLE_RATE=0.1
+SENTRY_TRACES_SAMPLE_RATE=0.0   # default off; raise in staging/production
 SENTRY_RELEASE=                 # optional: git SHA or image tag
 SENTRY_FINGERPRINT_RATE_LIMIT=10
 ```

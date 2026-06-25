@@ -35,12 +35,15 @@ nlp_pipeline/
 ├── main.py                 # uvicorn entry point
 ├── api/                    # FastAPI routers + Pydantic schemas
 │   └── routes/             # news.py, entities.py, signals.py, search.py,
-│                           #   search_documents.py, embed.py, admin.py,
-│                           #   dlq.py, health.py, internal_costs.py
+│                           #   search_documents.py, embed.py, admin.py, dlq.py,
+│                           #   health.py, internal_costs.py, analytics.py,
+│                           #   trending_entities.py, internal_news_rollup.py
 ├── application/            # Pipeline blocks (pure business logic)
 │   ├── blocks/             # sectioning.py, ner.py, routing.py, suppression.py,
 │   │                       #   embeddings.py, novelty.py, entity_resolution.py,
-│   │                       #   deep_extraction.py, rare_token.py
+│   │                       #   deep_extraction.py, rare_token.py, learned_routing.py,
+│   │                       #   relevance_cascade.py, relation_validation.py,
+│   │                       #   relation_entailment.py
 │   ├── ports/              # ABCs for ML and storage clients
 │   └── use_cases/          # API use cases (query, search)
 ├── domain/                 # Frozen dataclasses — entities, mentions, chunks,
@@ -72,6 +75,8 @@ nlp_pipeline/
 | `nlp-pipeline-article-consumer-0` / `-1` | `article_consumer_main.py` | Main NLP enrichment pipeline — DEV static-membership fleet (see below) |
 | `nlp-pipeline-dispatcher` | `dispatcher_main.py` | Outbox → Kafka relay |
 | `nlp-pipeline-watchlist-consumer` | `watchlist_consumer_main.py` | Maintains Valkey watchlist SET |
+| `nlp-pipeline-document-deletion-consumer` | `document_deletion_consumer_main.py` | Cascade-deletes S6 artifacts on `content.document.deleted.v1` |
+| `nlp-pipeline-entity-refresh-consumer` | `entity_refresh_consumer_main.py` | Re-resolves an entity's mentions on `entity.refresh.v1` |
 | `nlp-pipeline-price-impact-worker` | `price_impact_labelling_worker.py` | Retroactive OHLCV price-impact labels |
 | `nlp-pipeline-relevance-scoring` | `article_relevance_scoring_worker.py` | LLM relevance scores for MEDIUM/DEEP |
 | `nlp-pipeline-unresolved-resolution-worker` | `unresolved_resolution_worker_main.py` | Re-resolves UNRESOLVED entity mentions |
@@ -163,25 +168,28 @@ Key behaviours:
 
 ### Block 5 — Routing Score
 
-Computes a composite routing score from 8 weighted signals. Weights sum to exactly 1.0 (enforced
-by a module-level assertion):
+Computes a composite routing score from **5 weighted signals** (PLAN-0093 C-1 v2, `application/blocks/routing.py`
+`SIGNAL_WEIGHTS`). Weights sum to exactly 1.0 (enforced by a module-level assertion):
 
 | Signal | Weight | Data source |
 |--------|--------|-------------|
-| `entity_density` | 0.25 | Block 4 mention count / section count |
-| `source_reliability` | 0.20 | `source_trust_weights` table |
-| `novelty` | 0.15 | Block 8 MinHash similarity |
-| `recency` | 0.10 | `published_at` age |
-| `watchlist` | 0.10 | Valkey SET `nlp:v1:watched_entities` (best-effort, 0.0 on failure) |
-| `price_impact` | 0.10 | `article_impact_windows` (0.0 when not yet labelled) |
-| `document_type` | 0.05 | Source type (filings > news) |
-| `extraction_yield` | 0.05 | Prior LLM extraction quality for this source |
+| `entity_density` | 0.35 | Block 4 mention count / section count |
+| `source_reliability` | 0.30 | `source_trust_weights` table |
+| `recency` | 0.15 | `published_at` age |
+| `document_type` | 0.10 | Source type (filings > news) |
+| `extraction_yield` | 0.10 | Prior LLM extraction quality for this source |
 
-Routing tier boundaries:
-- `DEEP` ≥ 0.70
-- `MEDIUM` ≥ 0.35 (lowered from 0.45 — watchlist signal fires post-resolution)
-- `LIGHT` ≥ 0.20
-- `SUPPRESS` < 0.20
+> **History (v1, deprecated 2026-05-23):** the original 8-signal weighting also carried `novelty` (0.15),
+> `watchlist` (0.10), and `price_impact` (0.10). Those three "dead" signals never fired at routing time
+> (capping the composite at ~0.65), so v2 removed them and redistributed their 0.35 to the surviving live
+> signals. `compute_routing_score` no longer accepts `watched_ids` / `price_impact`. Watchlist and price
+> impact still inform downstream display ranking, just not the routing tier.
+
+Routing tier boundaries — `_assign_tier` defaults to the module constants `TIER_DEEP=0.75`,
+`TIER_MEDIUM=0.45`, `TIER_LIGHT=0.20` (recalibrated for the higher v2 ceiling), but the article consumer
+passes `settings.routing_tier_*` so the **effective** boundaries are config-driven. Config defaults are
+`0.70 / 0.35 / 0.20`; `configs/docker.env` overrides them to **`DEEP=0.45 / MEDIUM=0.35 / LIGHT=0.20`**
+(see `NLP_PIPELINE_ROUTING_TIER_*`). Below `LIGHT` → `SUPPRESS`.
 
 ### Block 6 — Suppression Gate
 
@@ -236,7 +244,9 @@ Two-stage novelty check; both stages are best-effort (failure → treat as novel
 2. **Per-entity embedding similarity** — cosine threshold 0.90 on `narrative` view.
    If ALL entities are near-duplicates → downgrade.
 
-`novelty_score = 1.0 − minhash_similarity` is fed back into Block 5.
+`run_novelty_gate` returns `novelty_score = 1.0 − minhash_similarity`, but the v2 routing model
+(Block 5) **no longer consumes it** — the novelty signal was dropped in PLAN-0093 C-1. The gate's
+only effect on routing is the DEEP→LIGHT downgrade above; the returned score is now observational.
 
 ### Block 9 — Entity Resolution Cascade
 
@@ -324,6 +334,9 @@ GROUP BY 1,2` shows when/why the secondary served calls. The article watchdog
 | GET | `/api/v1/entities` | — | Search entities by mention text |
 | GET | `/api/v1/entities/{id}` | — | Entity detail with resolution statistics |
 | GET | `/api/v1/entities/{id}/articles` | — | Articles mentioning entity with `display_relevance_score`, `sentiment`, `impact_score`. Params: `start_date`, `end_date`, `order_by` |
+| GET | `/api/v1/entities/{id}/briefing-articles` | — | Compact entity article feed for briefing surfaces. Param: `limit` (1–50, default 10) |
+| GET | `/api/v1/entities/{id}/sentiment-timeseries` | X-Internal-JWT | Daily sentiment time series for an entity (tenant scoped from JWT). Param: `days` (1–365, default 90) |
+| GET | `/api/v1/news/trending-entities` | — | Most-mentioned entities in a recent window. Params: `window_hours`, `limit` (1–100, default 30), `min_count` |
 | POST | `/api/v1/entities/resolve` | — | Query-time 5-stage entity resolution |
 | POST | `/api/v1/search/chunks` | — | ANN chunk/section search with entity facets and citation metadata |
 | POST | `/api/v1/vector-search` | — | Semantic section/chunk search (legacy) |
@@ -357,7 +370,9 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 | Topic | Consumer Group | Purpose |
 |-------|----------------|---------|
 | `content.article.stored.v1` | `nlp-pipeline-group` | Trigger NLP enrichment — at-least-once; manual offset commit after all DB writes |
-| `portfolio.watchlist.updated.v1` | `nlp-watchlist-group` | SADD / SREM on Valkey SET `nlp:v1:watched_entities` for Block 5 signal |
+| `portfolio.watchlist.updated.v1` | `nlp-watchlist-group` | SADD / SREM on Valkey SET `nlp:v1:watched_entities` for the watchlist display signal |
+| `entity.refresh.v1` | `nlp-entity-refresh-group` | Manual entity-refresh trigger from S7's `TriggerEntityRefreshUseCase`; re-resolves an entity's mentions (`entity_refresh_consumer_main.py`) |
+| `content.document.deleted.v1` | `s6-document-deletion` | Cascade-deletes all S6 artifacts (sections, chunks, mentions, embeddings, metadata) for a deleted document (`document_deletion_consumer_main.py`) |
 
 ### Produced
 
@@ -545,9 +560,9 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.70` | DEEP tier lower bound |
-| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.35` | MEDIUM tier lower bound |
-| `NLP_PIPELINE_ROUTING_TIER_LIGHT` | `0.20` | LIGHT tier lower bound |
+| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.70` | DEEP tier lower bound (config default; `docker.env` sets **0.45**) |
+| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.35` | MEDIUM tier lower bound (`docker.env` keeps 0.35) |
+| `NLP_PIPELINE_ROUTING_TIER_LIGHT` | `0.20` | LIGHT tier lower bound (`docker.env` keeps 0.20) |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_AUTO_RESOLVE_THRESHOLD` | `0.72` | Auto-resolve above this |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_PROVISIONAL_THRESHOLD` | `0.45` | Provisional queue threshold |
 | `NLP_PIPELINE_NOVELTY_MINHASH_THRESHOLD` | `0.80` | MinHash similarity → near-duplicate |

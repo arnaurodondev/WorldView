@@ -246,4 +246,3 @@ The 18 critical long-running services all PASS the `restart: unless-stopped` che
 - Cycle: edit `scheduler.py:236` `minutes=30 → minutes=20`
 
 **Alternative (Option 5):** if production turns out to exceed 1266/hr, raise SLO threshold from ≤100 stale to ≤500. Decide after measuring real production rate (proposed gauge: `path_insights_inserted_total{source=seeder|stream}`).
-

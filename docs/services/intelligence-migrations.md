@@ -45,6 +45,7 @@ Runs all `.sql` files in `seeds/` in alphabetical order:
 |------|---------|
 | `001_model_registry.sql` | Registers ML models (BGE, Qwen, Llama, Gemini) in `model_registry` |
 | `002_prompt_templates.sql` | Loads LLM prompt templates into `prompt_templates` |
+| `003_seed_sector_entities.sql` | Seeds 11 GICS sector + 27 GICS industry-group entities (`entity_type = 'sector'`) into `canonical_entities` with stable UUIDv7 ids (referenced by S7's `FundamentalsRefreshWorker` for `is_in_sector` / `is_in_industry` relations) |
 
 All seed scripts are idempotent (`ON CONFLICT DO NOTHING` or `INSERT ... WHERE NOT EXISTS`).
 
@@ -104,15 +105,17 @@ PostgreSQL server before migrations run.
 | `prompt_templates` | — | `seeds/002_prompt_templates.sql` | LLM prompts used by S6/S7 workers |
 | `canonical_entities` | — | Migration 0009 (224 bootstrap entities) | Resolved entity registry |
 | `entity_aliases` | — | Migration 0009 | Alias index with type (EXACT, TICKER, ISIN, CUSIP, FIGI, LEI, NAME) |
+| `ticker_aliases` | — | Migration 0040 | Legacy-ticker → canonical-id redirect map for ticker-first URL routing (`/instruments/AAPL`) |
 | `entity_embedding_state` | — | — | Multi-view 1024-dim embeddings (3 rows per entity) |
 | `entity_narrative_versions` | — | — | Version-controlled LLM narratives |
 | `llm_usage_log` | — | — | Per-call LLM cost + latency tracking |
-| `relation_type_registry` | — | Migration 0001 (20 rows), 0004 (+7 rows) | Canonical relation types with decay_class and semantic_mode |
+| `relation_type_registry` | — | Migration 0001 (20 rows), 0004 (+7 rows), 0041 (+5 rows = 32 total) | Canonical relation types with decay_class and semantic_mode |
 | `relations` | HASH ×8 on `subject_entity_id` | — | Aggregated relation state |
 | `relation_evidence_raw` | — | — | Append-only staging (hot path) |
 | `relation_evidence` | RANGE monthly (36 months) | — | Processed relation evidence |
 | `relation_contradiction_links` | — | — | Detected claim contradictions |
 | `relation_summaries` | — | — | LLM summaries with HNSW embedding index |
+| `relations_history` | — | — | Bitemporal version store for relation confidence/validity changes (PLAN-0109 W3, migration 0056) |
 | `claims` | RANGE monthly (36 months) | — | Temporal claims and point-in-time assertions |
 | `events` | RANGE monthly (36 months) | — | Extracted events with `structured_data` JSONB |
 | `event_entities` | — | — | Entity-to-event linkage |
@@ -167,13 +170,17 @@ The correct INSERT lists all columns explicitly, omitting `partition_key`.
 
 ### Current head
 
-Migration `0038_seed_demo_entities.py` (38 applied revisions).
+Migration `0062_covering_index_relation_evidence_raw_density.py` (58 applied revisions, single linear chain).
+
+> Note: early migrations (`0001`–`0007`) use hash revision IDs internally
+> (e.g. `0001` = `a1b2c3d4e5f6`); from `0005` onward the revision id matches the
+> numeric file prefix. `alembic heads` reports `0062`.
 
 ### Complete migration sequence
 
 | Revision | Description |
 |----------|-------------|
-| `0001` | Create full intelligence_db schema: extensions, all 21 tables, 108 partitions, seed decay_class_config + source_trust_weights + relation_type_registry (20 rows) |
+| `0001` | Create full intelligence_db schema: extensions, base tables, 108 partitions, seed decay_class_config (6) + source_trust_weights (11) + relation_type_registry (20 rows) |
 | `0002` | Enhance events and relations: add `event_subtype`, `structured_data` JSONB to events; add `relation_source` fields |
 | `0003` | Remove `fundamentals_ohlcv` view from `entity_embedding_state` for non-company entities |
 | `0004` | Add geopolitical/AGE-related temporal events support; 7 new relation types |
@@ -189,7 +196,7 @@ Migration `0038_seed_demo_entities.py` (38 applied revisions).
 | `0018` | Add `corporate_event_type` to EventType enum |
 | `0019` | Add `evidence_text` column to `relation_evidence_raw` (was missing from hot path) |
 | `0020` | Add `'noise'` to `provisional_entity_queue.status` CHECK constraint (Worker 13E two-layer filter) |
-| `0021` | Add `ck_canonical_entity_type` CHECK constraint on `canonical_entities.entity_type` (12 valid values) |
+| `0021` | Add initial CHECK constraint on `canonical_entities.entity_type` (later superseded/renamed to `ck_canonical_entities_entity_type` by migration 0039, then widened by 0053 + 0055) |
 | `0022` | Add enrichment fields to `canonical_entities`: `enrichment_status`, `enrichment_attempts`, `last_enriched_at` |
 | `0023` | Add source fields to `relation_type_registry`: `source_paper`, `source_url` |
 | `0024` | Add `relation_source` tracking columns to `relations` |
@@ -207,6 +214,30 @@ Migration `0038_seed_demo_entities.py` (38 applied revisions).
 | `0036` | Add `path_templates` seed data |
 | `0037` | Recreate `temporal_events` table idempotently to resolve volume/schema divergence |
 | `0038` | Seed demo entities for local development |
+| `0039` | Replace `canonical_entities.entity_type` CHECK with `ck_canonical_entities_entity_type` (PLAN-0089 F2; widens/unifies the entity_type value set) |
+| `0040` | Create `ticker_aliases` table — legacy-ticker → canonical-id redirect for ticker-first URL routing (PLAN-0089 F2) |
+| `0041` | Add 5 financial relation types to `relation_type_registry` (`reported_revenue_of`, `filed_lawsuit_against`, …); taxonomy grows 27 → 32 |
+| `0042` | Fix `relation_evidence_raw.polarity` + `claims.polarity` defaults from `'positive'` to `'neutral'` (F-018) |
+| `0043` | Bootstrap enrichment pipeline for the 10 seeded `financial_instrument` canonicals (BP-543) |
+| `0044` | Seed KG system-sentinel entities + add `canonical_entities.is_system` flag (PLAN-0093 B-2) |
+| `0045` | Add FK constraints to `relations.subject_entity_id` + `object_entity_id` (PLAN-0093 B-2) |
+| `0046` | Make `relations.confidence` NOT NULL DEFAULT `base_confidence` (PLAN-0093 B-2; ~60% were NULL) |
+| `0047` | `relation_evidence_raw.claim_id` + `chunk_id` NOT NULL + `chunk_id` index (PLAN-0093 B-3) |
+| `0048` | Add per-row summary-attempt tracking columns to `relations` (SummaryWorker / Worker 13C ordering) |
+| `0049` | Add AGE property index on the `entity` vertex `entity_id` property (BP-687 follow-up) |
+| `0050` | Create GIN index on the `entity` vertex `properties` for AGE anchor lookups; fails loud if not materialised (PLAN-0111 A — corrects silent no-op in 0049) |
+| `0051` | Enforce ticker uniqueness for `financial_instrument` canonicals at the DB level (BP-459 guard) |
+| `0052` | Land persisted weirdness metric + node-degree columns on `path_insights` (PLAN-0112 W3, FR-4/FR-5) |
+| `0053` | Add `'exchange'` to `ck_canonical_entities_entity_type` CHECK (FR-12) |
+| `0054` | Add share-class-aware unique index on `financial_instrument` canonicals (FR-11) |
+| `0055` | Add `'organization'` to `ck_canonical_entities_entity_type` CHECK (FR-12) |
+| `0056` | Add `relations_history` bitemporal version store for relation confidence/validity (PLAN-0109 W3) |
+| `0057` | Tombstone orphan `fundamentals_ohlcv` embedding rows for non-FI entities (empty-descriptions RC3) |
+| `0058` | Add `fallback_reason` to `llm_usage_log` (extraction 429-fallback audit, Task #36) |
+| `0059` | Drop the unused `fallback_reason` from `llm_usage_log` (corrective forward-fix for 0058) |
+| `0060` | Add density-subquery indexes on `relation_evidence_raw` (Worker 13B promoter hot-path) |
+| `0061` | Add `promoted_at` promotion marker to `relation_evidence_raw` (Worker 13B promoter hot-path) |
+| `0062` | Covering `(entity, doc)` indexes for the set-based density denominator (follow-up to 0060) |
 
 ---
 
@@ -220,9 +251,11 @@ None. `intelligence-migrations` produces no events and consumes nothing.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `INTELLIGENCE_DB_URL` | Yes | — | PostgreSQL connection string. Both `postgresql://` and `postgresql+asyncpg://` are accepted (asyncpg prefix is automatically rewritten to `postgresql://` for the synchronous Alembic runner). |
+| `INTELLIGENCE_DB_URL` | Yes | — | PostgreSQL connection string. Both `postgresql://` and `postgresql+asyncpg://` are accepted (asyncpg prefix is automatically rewritten to `postgresql://` for the synchronous Alembic runner). In production this targets the dedicated `postgres-intelligence` OLAP instance (workload split 2026-06-08; see `docs/audits/2026-06-08-postgres-workload-split.md`), not the shared `postgres` host. |
 | `EMBEDDING_BASE_URL` | No | `http://ollama:11434` | Ollama API endpoint used to embed `relation_type_registry` canonical types during Step 3. |
-| `EMBEDDING_MODEL` | No | `bge-large:latest` | Embedding model name. Must be the same model as S6/S7 use (`BAAI/bge-large-en-v1.5` compatible, 1024-dim). |
+| `EMBEDDING_MODEL` | No | `bge-large:latest` | Embedding model name (Ollama model tag; default lives in `scripts/populate_embeddings.py`). Must be 1024-dim and compatible with the `BAAI/bge-large-en-v1.5` embeddings S6/S7 query against. |
+
+Production values are documented in `configs/prod.env.example` (injected via `environment:` in `docker-compose.prod.yml`, not an `env_file:`).
 
 ---
 
@@ -308,7 +341,7 @@ Tests verify:
 - Seed data is idempotent (double-run does not fail)
 - Key constraints and indexes exist after migration head
 
-Currently tested migrations: `0034`, `0035`, `0036`, `0037`, `0038`.
+Migrations with dedicated test modules: `0034`–`0038`, `0044`/`0045`/`0046`, `0052`, `0053`, `0054`, `0055`. Generic suites (`tests/integration/`) additionally verify apply/rollback/idempotency, naming conventions, and R24 compliance across the whole chain.
 
 ---
 

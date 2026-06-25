@@ -69,10 +69,21 @@ result = pt.render(name="Alice", role="analyst")
 | `template` | `str` | Python format string with `{parameter}` placeholders |
 | `parameters` | `frozenset[str]` | Required parameter names — `render()` validates against this set |
 
-**`render(**kwargs) → str`**
+**`render(**kwargs: str) → str`**
 - Raises `ValueError` if any parameter in `self.parameters` is missing from `kwargs`.
 - Extra `kwargs` beyond `self.parameters` are silently ignored.
+- Substitution uses `str.format_map(kwargs)`.
 - The template itself is frozen (immutable after creation).
+
+**Construction-time validation (`__post_init__`)** — `PromptTemplate` is validated
+the moment it is constructed (i.e. at import time), failing loud before any LLM call:
+- **Semver guard** — `version` must match `MAJOR.MINOR` or `MAJOR.MINOR.PATCH`
+  (regex `^\d+\.\d+(\.\d+)?$`). `"v1.2"`, pre-release, and build-metadata strings
+  raise `ValueError`.
+- **Brace guard (MN-5)** — the template body is parsed with `string.Formatter().parse`.
+  Every `{slot}` must reference a declared `parameters` entry; literal braces (e.g. a
+  JSON example `{{"score": 25}}`) must be doubled. An undeclared placeholder, a
+  positional `{}`, or an unbalanced brace raises `ValueError` with a guidance message.
 
 ### Versioning & content hashing (PLAN-0107)
 
@@ -114,24 +125,36 @@ from prompts.briefing.morning import MORNING_BRIEFING
 from prompts.briefing.instrument import INSTRUMENT_BRIEFING
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `MORNING_BRIEFING` | `portfolio_context`, `news_context`, `alerts_context`, `market_overview`, `events_context`, `safety` | S8 `GenerateBriefingUseCase` |
-| `INSTRUMENT_BRIEFING` | `entity_context`, `fundamentals_context`, `news_context`, `events_context`, `relationships_context`, `safety` | S8 `GenerateBriefingUseCase` |
+| Template | Version | Parameters | Used by |
+|----------|---------|------------|---------|
+| `MORNING_BRIEFING` | 4.8 | `portfolio_context`, `news_context`, `alerts_context`, `market_overview`, `events_context`, `safety`, `current_date` | S8 `GenerateBriefingUseCase` |
+| `INSTRUMENT_BRIEFING` | 4.3 | `entity_context`, `fundamentals_context`, `news_context`, `events_context`, `relationships_context`, `safety` | S8 `GenerateBriefingUseCase` |
 
 ### Chat Prompts (`prompts.chat`)
 
+The `prompts.chat` package `__init__` re-exports the synthesis, tool-use, and
+injection-classifier members. The 8 intent-specific system prompts live in
+`prompts.chat.intent` and are normally consumed through the `get_system_prompt()`
+helper rather than imported individually.
+
 ```python
-from prompts.chat.intent import INTENT_SYSTEM_PORTFOLIO, INTENT_SYSTEM_MARKET, ...
-from prompts.chat.safety import CHAT_SAFETY
-from prompts.chat.safety_classifier import INJECTION_SAFETY_CLASSIFIER  # PLAN-0107
+from prompts.chat import (
+    INJECTION_SAFETY_CLASSIFIER,
+    SYNTHESIS_SYSTEM_PROMPT,
+    TOOL_USE_SYSTEM_PROMPT_TEMPLATE,
+    get_tool_use_system_prompt,
+)
+from prompts.chat.intent import get_system_prompt  # intent → rendered system prompt
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `INTENT_SYSTEM_*` (8 intent-specific templates) | Varies per intent | S8 `PromptBuilder` |
-| `CHAT_SAFETY` | — | S8 `PromptBuilder` |
-| `INJECTION_SAFETY_CLASSIFIER` (v4.0) | `query` | S8 `LLMInjectionClassifier` — PLAN-0107 moved out of inline string in `llm_injection_classifier.py` |
+| Template / function | Version | Parameters | Used by |
+|---------------------|---------|------------|---------|
+| `FACTUAL_LOOKUP`, `RELATIONSHIP`, `SIGNAL_INTEL`, `FINANCIAL_DATA`, `COMPARISON`, `REASONING`, `PORTFOLIO`, `GENERAL` (in `chat.intent`) | per-template | `safety` | S8 RAG-Chat — 8 intent-specific system prompts |
+| `get_system_prompt(intent: str) -> str` (in `chat.intent`) | — | — | Looks up the template by intent name, renders it with `SAFETY_FOOTER`, falls back to `FACTUAL_LOOKUP` for unknown intents |
+| `SYNTHESIS_SYSTEM_PROMPT` | 1.0 | `safety` | S8 final-answer synthesis (`chat_synthesis_system`) |
+| `TOOL_USE_SYSTEM_PROMPT_TEMPLATE` | 1.9 | `today_iso`, `entity_map_section`, `per_intent_addendum` | S8 agentic tool-use system prompt |
+| `get_tool_use_system_prompt(intent, today_iso, entity_map_section="")` | — | — | Renders `TOOL_USE_SYSTEM_PROMPT_TEMPLATE` with the per-intent addendum looked up from `intent` |
+| `INJECTION_SAFETY_CLASSIFIER` | 4.0 | (none — pure system prompt) | S8 `LLMInjectionClassifier` — PLAN-0107 moved out of inline string in `llm_injection_classifier.py` |
 
 ### Classification Prompts (`prompts.classification`)
 
@@ -142,20 +165,22 @@ from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  #
 
 | Template | Parameters | Used by |
 |----------|-----------|---------|
-| `INTENT_CLASSIFICATION` (v2.1, PLAN-0107) | `intents`, `question` | S8 `IntentClassifier`. PLAN-0107 consolidated W49 + F-NEW-014 examples and priority rules into a single source of truth — previously the prompt existed both inline in `intent_classifier.py` and in libs/prompts and the two had diverged. |
-| `ARTICLE_RELEVANCE_SCORER` (v1.0, PLAN-0107) | (per template) | S6 `ArticleRelevanceScoringWorker` |
+| `INTENT_CLASSIFICATION` (v2.1, PLAN-0107) | `message`, `history`, `entities` | S8 `IntentClassifier`. PLAN-0107 consolidated W49 + F-NEW-014 examples and priority rules into a single source of truth — previously the prompt existed both inline in `intent_classifier.py` and in libs/prompts and the two had diverged. |
+| `ARTICLE_RELEVANCE_SCORER` (v1.0, PLAN-0107) | (none — pure system prompt) | S6 `ArticleRelevanceScoringWorker` |
 
 ### Evaluation Prompts (`prompts.evaluation`, PLAN-0107)
 
 ```python
-from prompts.evaluation.chat_quality import CHAT_QUALITY_JUDGE
+from prompts.evaluation import CHAT_QUALITY_JUDGE, CITATION_JUDGE
+# or directly:
+from prompts.evaluation.chat_quality_judge import CHAT_QUALITY_JUDGE
 from prompts.evaluation.citation_judge import CITATION_JUDGE
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `CHAT_QUALITY_JUDGE` | `question`, `answer`, `rubric` | `scripts/chat_quality_judge.py` — LLM-as-judge over chat-eval transcripts |
-| `CITATION_JUDGE` | `claim`, `snippet` | S8 `ScoreCitationAccuracyUseCase` (via `CitationJudgeAdapter`) — daily citation-accuracy cron (PLAN-0107) |
+| Template | Version | Parameters | Used by |
+|----------|---------|------------|---------|
+| `CHAT_QUALITY_JUDGE` | 3.0 | (none — pure system prompt) | `scripts/chat_quality_judge.py` — 4-dim LLM-as-judge rubric over chat-eval transcripts |
+| `CITATION_JUDGE` | 1.0 | `claim`, `snippet` | S8 `ScoreCitationAccuracyUseCase` (via `CitationJudgeAdapter`) — daily citation-accuracy cron (PLAN-0107) |
 
 Both judge templates carry `version` + `content_hash` so the `judge_prompt_id =
 template.identifier()` written to each evaluation artefact (`q_<id>.json`)
@@ -165,13 +190,17 @@ unambiguously links the scored output to the exact rubric text used.
 
 ```python
 from prompts.extraction.deep import DEEP_EXTRACTION
-from prompts.extraction.entity_mention_classification import SYSTEM_TEMPLATE, USER_TEMPLATE  # PLAN-0107
+from prompts.extraction.entity_mention_classification import (
+    ENTITY_MENTION_CLASSIFIER_SYSTEM,
+    ENTITY_MENTION_CLASSIFIER_USER,
+)  # PLAN-0107
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `DEEP_EXTRACTION` | `entities`, `text` | S6 Block 10 `deep_extraction.py` |
-| `entity_mention_classification` (system + user) | (per template) | S6 entity-mention classification — PLAN-0107 moved out of inline strings |
+| Template | Version | Parameters | Used by |
+|----------|---------|------------|---------|
+| `DEEP_EXTRACTION` | 1.7 | `entities`, `text` | S6 Block 10 `deep_extraction.py` |
+| `ENTITY_MENTION_CLASSIFIER_SYSTEM` | 1.0 | (none — system turn) | S6 entity-mention classification — PLAN-0107 moved out of inline strings |
+| `ENTITY_MENTION_CLASSIFIER_USER` | 1.0 | `surface`, `context` | S6 entity-mention classification — user turn |
 
 ### Knowledge Prompts (`prompts.knowledge`)
 
@@ -183,14 +212,16 @@ from prompts.knowledge.entity_enrichment import SYSTEM_PROMPT, build_entity_enri
 from prompts.knowledge.narrative_prose import NARRATIVE_PROSE  # PLAN-0107
 ```
 
-| Template / function | Parameters | Used by |
-|---------------------|-----------|---------|
-| `RELATION_SUMMARY` | `evidence_statements` | S7 Worker 13C `summary.py` |
-| `ENTITY_PROFILE` | `name`, `entity_class` | S7 Worker 13E `provisional_enrichment.py` |
-| `ALIAS_GENERATION` | `name`, `ticker` | S7 Consumer 13D-4 `instrument_consumer.py` |
-| `SYSTEM_PROMPT` (module-level constant) | — | S7 Worker 13J enrichment — system turn only |
-| `build_entity_enrichment_prompt(entity_name, entity_type, context_hint)` | — | S7 Worker 13J — builds user turn |
-| `NARRATIVE_PROSE` (PLAN-0107) | (per template) | S7 NarrativeGenerationWorker — moved out of inline string |
+| Template / function | Version | Parameters | Used by |
+|---------------------|---------|------------|---------|
+| `RELATION_SUMMARY` | 1.0 | `evidence_statements` | S7 Worker 13C `summary.py` |
+| `ENTITY_PROFILE` | 2.2 | `name`, `entity_class` | S7 Worker 13E `provisional_enrichment.py` |
+| `ALIAS_GENERATION` | 2.0 | `name`, `ticker`, `description`, `aliases_so_far` | S7 Consumer 13D-4 `instrument_consumer.py` |
+| `SYSTEM_PROMPT` (plain `str` constant) | — | — | S7 Worker 13J enrichment — system turn only |
+| `build_entity_enrichment_prompt(entity_name, entity_type, context_hint="")` | — | — | S7 Worker 13J — builds the user turn (injection-safe) |
+| `NARRATIVE_PROSE` (PLAN-0107) | 1.0 | (none — pure system prompt) | S7 NarrativeGenerationWorker — moved out of inline string |
+
+`knowledge.alias` also exports a `sanitize_description(raw: str | None) -> str` helper.
 
 ### Briefing Prompts — agentic scaffold (`prompts.briefing.agentic_plan`, PLAN-0107)
 
@@ -212,9 +243,9 @@ injection (PRD-0073 §12 F-SEC-02). The name is also capped at 200 characters.
 from prompts.description.entity import ENTITY_DESCRIPTION
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `ENTITY_DESCRIPTION` | `name`, `type`, `hints` | `ml_clients.GeminiDescriptionAdapter` |
+| Template | Version | Parameters | Used by |
+|----------|---------|------------|---------|
+| `ENTITY_DESCRIPTION` | 1.0 | `name`, `type`, `hints` | `ml_clients.GeminiDescriptionAdapter` |
 
 The `name` parameter is wrapped in `<entity>...</entity>` XML delimiters in the
 template, preventing a malicious canonical name from closing surrounding delimiters
@@ -226,9 +257,9 @@ or injecting instructions.
 from prompts.retrieval.hyde import HYDE_EXPANSION
 ```
 
-| Template | Parameters | Used by |
-|----------|-----------|---------|
-| `HYDE_EXPANSION` | `query` | S8 `HydeRetriever` (Hypothetical Document Embedding) |
+| Template | Version | Parameters | Used by |
+|----------|---------|------------|---------|
+| `HYDE_EXPANSION` | 2.0 | `query` | S8 `HydeRetriever` (Hypothetical Document Embedding) |
 
 `HYDE_EXPANSION` explicitly instructs the model to avoid inventing specific
 financial figures (prices, percentages, dates) to prevent embedding poisoning —
@@ -240,7 +271,7 @@ HyDE generates a passage to embed for retrieval, not for display to users.
 
 ```
 libs/prompts/src/prompts/
-├── __init__.py              — Re-exports PromptTemplate, SAFETY_FOOTER
+├── __init__.py              — Re-exports PromptTemplate, SAFETY_FOOTER, HYDE_EXPANSION
 ├── _base.py                 — PromptTemplate dataclass (semver-validated version,
 │                              12-char sha256 content_hash, identifier())
 ├── _safety.py               — SAFETY_FOOTER constant
@@ -249,20 +280,23 @@ libs/prompts/src/prompts/
 │   ├── instrument.py        — INSTRUMENT_BRIEFING
 │   └── agentic_plan.py      — AGENTIC_BRIEF_PLAN (PLAN-0107, scaffold v0.1)
 ├── chat/
-│   ├── intent.py            — 8 intent-specific system prompts
-│   ├── safety.py            — CHAT_SAFETY
-│   └── safety_classifier.py — INJECTION_SAFETY_CLASSIFIER v4.0 (PLAN-0107)
+│   ├── __init__.py          — re-exports synthesis/tool-use/injection-classifier
+│   ├── intent.py            — 8 intent-specific system prompts + get_system_prompt()
+│   ├── safety.py            — re-exports SAFETY_FOOTER (convenience)
+│   ├── safety_classifier.py — INJECTION_SAFETY_CLASSIFIER v4.0 (PLAN-0107)
+│   ├── synthesis.py         — SYNTHESIS_SYSTEM_PROMPT v1.0
+│   └── tool_use.py          — TOOL_USE_SYSTEM_PROMPT_TEMPLATE v1.9 + get_tool_use_system_prompt()
 ├── classification/
 │   ├── intent.py            — INTENT_CLASSIFICATION v2.1 (PLAN-0107 consolidated)
 │   └── article_relevance.py — ARTICLE_RELEVANCE_SCORER v1.0 (PLAN-0107)
 ├── description/
-│   └── entity.py            — ENTITY_DESCRIPTION (XML-wrapped)
+│   └── entity.py            — ENTITY_DESCRIPTION v1.0 (XML-wrapped)
 ├── evaluation/              — PLAN-0107 (LLM-as-judge rubrics)
-│   ├── chat_quality.py      — CHAT_QUALITY_JUDGE
-│   └── citation_judge.py    — CITATION_JUDGE
+│   ├── chat_quality_judge.py — CHAT_QUALITY_JUDGE v3.0
+│   └── citation_judge.py    — CITATION_JUDGE v1.0
 ├── extraction/
-│   ├── deep.py                              — DEEP_EXTRACTION
-│   └── entity_mention_classification.py     — system + user templates (PLAN-0107)
+│   ├── deep.py                              — DEEP_EXTRACTION v1.7
+│   └── entity_mention_classification.py     — ENTITY_MENTION_CLASSIFIER_SYSTEM + _USER (PLAN-0107)
 ├── knowledge/
 │   ├── alias.py             — ALIAS_GENERATION
 │   ├── entity_enrichment.py — SYSTEM_PROMPT + build_entity_enrichment_prompt()
@@ -289,6 +323,7 @@ text = MORNING_BRIEFING.render(
     market_overview="S&P 500 up 0.3%, VIX at 14.",
     events_context="Upcoming: NVDA earnings Thursday.",
     safety=SAFETY_FOOTER,
+    current_date="2026-06-25",
 )
 
 # Render with missing required parameter — raises ValueError immediately:
@@ -395,5 +430,6 @@ cd libs/prompts
 python -m pytest tests/ -v
 ```
 
-52 tests cover all templates: render validation, parameter checking, version format,
-frozen immutability, and injection-safety helpers.
+182 tests cover all templates: render validation, parameter checking, semver +
+brace-guard construction validation, content-hash/identifier behaviour, frozen
+immutability, and injection-safety helpers.

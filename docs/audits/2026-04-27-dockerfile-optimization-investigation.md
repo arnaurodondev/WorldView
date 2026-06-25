@@ -423,4 +423,3 @@ sleep 8 && curl -s http://localhost:<port>/healthz
   pin to 3.11 at install time.
 - **`make python-base` must run before `docker compose build`** for any
   migrated service. Add to CI build job before image builds.
-

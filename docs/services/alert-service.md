@@ -1,7 +1,7 @@
 # Alert Service (S10)
 
 > **Owner**: Alert domain · **Database**: `alert_db` · **Port**: 8010
-> **Status**: Feature-complete (Wave E-3 + PLAN-0013 Wave C-2 + PLAN-0082 Wave B)
+> **Status**: Feature-complete (Wave E-3 + PLAN-0082 Wave B + PLAN-0113 user-rule engine)
 
 ---
 
@@ -14,7 +14,10 @@ S10 fans out intelligence signals to users watching relevant entities. It:
 3. Deduplicates alerts per `(entity_id, alert_type, time-window)`
 4. Delivers alerts in real-time via WebSocket (Valkey pub/sub bridge)
 5. Stores undelivered alerts for offline clients (`GET /api/v1/alerts/pending`)
-6. Sends daily email digests (APScheduler, via Resend/SendGrid/SMTP)
+6. Sends weekly email digests (APScheduler `CronTrigger(minute=0)` — hourly tick, per-user day/hour gate, via Resend/SendGrid/SMTP)
+7. Evaluates user-created standing alert rules (PLAN-0113) — a poller process
+   periodically evaluates 5 rule types (`PRICE_CROSS`, `NEWS_COUNT`,
+   `NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`) reading from S3/S6/S7
 
 **Never does**: Any direct database access to other services, JWT issuance,
 business logic about what constitutes a signal.
@@ -46,6 +49,7 @@ injects the correct `user_id` from the JWT.
 | Intelligence consumer | `python -m alert.infrastructure.messaging.consumers.intelligence_consumer_main` | `alert-intelligence-consumer` |
 | Watchlist consumer | `python -m alert.infrastructure.messaging.consumers.watchlist_consumer_main` | `alert-watchlist-consumer` |
 | Email scheduler | `python -m alert.infrastructure.email.scheduler_main` | `alert-email-scheduler` |
+| Rule poller (PLAN-0113) | `python -m alert.infrastructure.rules.poller_main` | `alert-rule-poller` |
 
 ### WebSocket Cross-Process Architecture (Valkey Pub/Sub)
 
@@ -84,6 +88,26 @@ channel for the user it is serving.
 | PATCH | `/api/v1/alerts/{alert_id}/acknowledge` | X-Internal-JWT | Tenant-level alert ack (idempotent) |
 | PATCH | `/api/v1/alerts/{alert_id}/snooze` | X-Internal-JWT | Set `snooze_until` (max 30 days) |
 | GET | `/api/v1/alerts/history` | X-Internal-JWT | Paginated tenant alert history |
+
+### Alert Rule Endpoints (PLAN-0113 — user standing rules)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/alert-rules` | X-Internal-JWT | Create a standing rule (201; 400 bad condition, 409 duplicate, 422 node_a==node_b, 429 per-user cap) |
+| GET | `/api/v1/alert-rules` | X-Internal-JWT | List the caller's rules (filters: `enabled`, `rule_type`; paginated) |
+| GET | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Get one owned rule (404 if missing/cross-owner) |
+| PATCH | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Partial-update; changing `condition` re-arms `last_state`; `rule_type` immutable |
+| DELETE | `/api/v1/alert-rules/{rule_id}` | X-Internal-JWT | Delete one owned rule (204; 404 if missing/cross-owner) |
+
+**Rule types** (`rule_type` enum, `RuleType` StrEnum): `PRICE_CROSS`, `NEWS_COUNT`,
+`NEWS_MOMENTUM`, `KG_CONNECTION`, `FUNDAMENTAL_CROSS`. Each pairs with a
+discriminated-union `condition` value object (`domain/rule_conditions.py`) and a
+`RuleEvaluator` registered in `application/rules/registry.py`.
+
+**Keying**: `PRICE_CROSS` / `NEWS_COUNT` / `NEWS_MOMENTUM` / `FUNDAMENTAL_CROSS`
+key on `entity_id`; `KG_CONNECTION` keys on `node_a_entity_id` + `node_b_entity_id`
+(must be distinct). `FUNDAMENTAL_CROSS` validates its `metric_key` against the S3
+fundamentals vocabulary at create/update time (S3 unreachable → allowed but logged).
 
 ### Internal Service-Caller Endpoints (exposed)
 
@@ -207,6 +231,7 @@ needed for each new connection (30 s TTL).
 |--------|------|------|-------------|
 | GET | `/api/v1/email/preferences` | X-Internal-JWT | Get user's email digest preferences |
 | PUT | `/api/v1/email/preferences` | X-Internal-JWT | Update email digest preferences |
+| POST | `/admin/email/digest/trigger` | `X-Admin-Token` | Manually trigger a digest for a user (202; admin/testing) |
 
 **EmailPreference fields**: `enabled` (bool), `send_day_of_week` (0-6, Mon-Sun),
 `send_hour_utc` (0-23), `timezone` (IANA).
@@ -235,6 +260,7 @@ needed for each new connection (30 s TTL).
 
 | Topic | Description |
 |-------|-------------|
+| `alert.created.v1` | Alert created — published by `CreateAlertUseCase` via the outbox dispatcher (schema `alert.created.v1.avsc`); covers REST-created and LLM `create_alert`-tool alerts |
 | `alert.delivered.v1` | Alert successfully delivered (via outbox dispatcher) |
 | `alert.email.sent.v1` | Email digest sent (schema in `infra/kafka/schemas/alert.email.sent.v1.avsc`) |
 
@@ -256,7 +282,7 @@ CREATE TABLE alerts (
     alert_id UUID PRIMARY KEY,      -- UUIDv7
     tenant_id UUID,
     entity_id UUID NOT NULL,
-    alert_type VARCHAR(30) NOT NULL, -- SIGNAL | GRAPH_CHANGE | CONTRADICTION
+    alert_type VARCHAR(100) NOT NULL, -- SIGNAL | GRAPH_CHANGE | CONTRADICTION | user_rule
     severity VARCHAR(10) NOT NULL DEFAULT 'low',  -- low/medium/high/critical
     source_event_id UUID,
     source_topic TEXT,
@@ -338,7 +364,35 @@ CREATE TABLE email_log (
     error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- PLAN-0113: user standing alert rules (migration 0010)
+CREATE TABLE alert_rules (
+    rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- UUIDv7 in app layer
+    tenant_id        UUID NOT NULL,
+    user_id          UUID NOT NULL,
+    rule_type        VARCHAR(50) NOT NULL,    -- CHECK: PRICE_CROSS|NEWS_COUNT|NEWS_MOMENTUM|KG_CONNECTION|FUNDAMENTAL_CROSS
+    name             VARCHAR(255) NOT NULL,
+    entity_id        UUID,                    -- set for all non-KG types
+    node_a_entity_id UUID,                    -- KG_CONNECTION only (node_a <> node_b)
+    node_b_entity_id UUID,
+    condition        JSONB NOT NULL,          -- discriminated-union condition VO
+    severity         VARCHAR(10) NOT NULL DEFAULT 'medium',  -- CHECK low|medium|high|critical
+    enabled          BOOLEAN NOT NULL DEFAULT true,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 0,  -- CHECK >= 0
+    notify_in_app    BOOLEAN NOT NULL DEFAULT true,
+    notify_email     BOOLEAN NOT NULL DEFAULT false,
+    last_state       JSONB,                   -- edge-trigger memory (nullable until first eval)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- CHECK ck_alert_rules_keying: KG_CONNECTION needs both nodes distinct; else entity_id NOT NULL
+);
+-- Partial indexes (WHERE enabled): idx_alert_rules_type_enabled, idx_alert_rules_entity_enabled,
+-- idx_alert_rules_nodes_enabled; plus idx_alert_rules_owner (tenant_id, user_id) for CRUD list.
 ```
+
+> Migration head: **`0010_create_alert_rules`** (10 migrations: 0001 base, 0002/0003 email,
+> 0004 severity, 0005 tenant_id, 0006 enrichment columns, 0007 ack+snooze, 0008 title backfill,
+> 0009 user_rule alert_type comment, 0010 alert_rules).
 
 ---
 
@@ -473,8 +527,11 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 base URL for watchlist/user lookups |
 | `ALERT_S7_KNOWLEDGE_GRAPH_BASE_URL` | `http://knowledge-graph:8007` | S7 URL for entity name/ticker enrichment |
 | `ALERT_S8_BASE_URL` | `http://rag-chat:8008` | S8 URL for email digest briefing generation |
-| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data in email digests |
+| `ALERT_S3_MARKET_DATA_BASE_URL` | `http://market-data:8003` | S3 URL for portfolio performance data + `PRICE_CROSS`/`FUNDAMENTAL_CROSS` rule reads |
+| `ALERT_S6_NLP_BASE_URL` | `http://nlp-pipeline:8006` | S6 URL for `NEWS_COUNT`/`NEWS_MOMENTUM` rule reads (PLAN-0113) |
 | `ALERT_S1_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S1 calls. **Required for watchlist lookups.** Without it, S1 returns 401. |
+| `ALERT_S3_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S3 internal endpoints (price batch, fundamentals). |
+| `ALERT_S6_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S6 internal endpoints (news-count/momentum reads). |
 | `ALERT_S7_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S7 entity enrichment. Without it, entity_name/ticker will be null in alerts. |
 | `ALERT_S8_INTERNAL_JWT` | `""` | Pre-signed RS256 service JWT for S8 briefing calls in email digests. **Required for email digest generation.** |
 | `ALERT_ALERT_DEDUP_WINDOW_SECONDS` | `300` | Dedup window in seconds (AD-9) |
@@ -486,6 +543,9 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_ADMIN_TOKEN` | `""` | DLQ admin endpoint bearer token (`X-Admin-Token` header) |
 | `ALERT_DISPATCHER_POLL_INTERVAL_S` | `1.0` | Outbox dispatcher poll interval |
 | `ALERT_DISPATCHER_BATCH_SIZE` | `50` | Outbox dispatcher batch size |
+| `ALERT_DISPATCHER_MAX_ATTEMPTS` | `5` | Retries before a failed event is moved to the DLQ (BUG-A2) |
+| `ALERT_DISPATCHER_RETRY_BACKOFF_BASE_S` | `2.0` | Retry back-off base (grows `base * 2**(retry-1)`) |
+| `ALERT_DISPATCHER_RETRY_BACKOFF_MAX_S` | `60.0` | Retry back-off cap |
 | `ALERT_EMAIL_PROVIDER` | `resend` | Email provider: `resend` \| `sendgrid` \| `smtp` |
 | `ALERT_EMAIL_FROM_ADDRESS` | `""` | From address for outbound emails |
 | `ALERT_RESEND_API_KEY` | `""` | Resend API key |
@@ -497,6 +557,16 @@ All env vars use prefix `ALERT_` except where noted.
 | `ALERT_SEVERITY_CRITICAL_THRESHOLD` | `0.85` | `market_impact_score` threshold for CRITICAL |
 | `ALERT_SEVERITY_HIGH_THRESHOLD` | `0.65` | `market_impact_score` threshold for HIGH |
 | `ALERT_SEVERITY_MEDIUM_THRESHOLD` | `0.40` | `market_impact_score` threshold for MEDIUM |
+| `ALERT_ALERT_RULE_POLLER_ENABLED` | `true` | Master switch — when `false` the poller boots but performs no evaluation (instant rollback; CRUD/UI keep working) |
+| `ALERT_ALERT_RULE_POLL_TICK_SECONDS` | `60` | Base poller tick — how often the loop wakes; per-type cadence throttles which rules are due |
+| `ALERT_ALERT_RULE_CADENCE_PRICE_SECONDS` | `60` | `PRICE_CROSS` evaluation cadence |
+| `ALERT_ALERT_RULE_CADENCE_NEWS_COUNT_SECONDS` | `3600` | `NEWS_COUNT` evaluation cadence |
+| `ALERT_ALERT_RULE_CADENCE_NEWS_MOMENTUM_SECONDS` | `3600` | `NEWS_MOMENTUM` evaluation cadence |
+| `ALERT_ALERT_RULE_CADENCE_FUNDAMENTAL_SECONDS` | `21600` | `FUNDAMENTAL_CROSS` evaluation cadence (6h) |
+| `ALERT_ALERT_RULE_MAX_PER_USER` | `200` | Per-user standing-rule cap (429 on exceed) |
+| `ALERT_ALERT_RULE_POLLER_WATCHDOG_SECONDS` | `180` | Liveness gauge staleness threshold (BP-705) |
+| `ALERT_KAFKA_INTELLIGENCE_CONSUMER_INSTANCE_ID` | `""` | Opt-in static-membership id (KIP-345/BP-703); empty = dynamic membership |
+| `ALERT_KAFKA_WATCHLIST_CONSUMER_INSTANCE_ID` | `""` | Opt-in static-membership id for the watchlist consumer |
 | `ALERT_LOG_LEVEL` | `INFO` | Log level |
 | `ALERT_LOG_JSON` | `true` | JSON-structured logs |
 | `ALERT_OTLP_ENDPOINT` | `""` | OpenTelemetry collector endpoint |
@@ -537,6 +607,8 @@ uvicorn alert.app:create_app --factory --host 0.0.0.0 --port 8010 --reload
 python -m alert.infrastructure.messaging.consumers.intelligence_consumer_main
 python -m alert.infrastructure.messaging.consumers.watchlist_consumer_main
 python -m alert.infrastructure.messaging.outbox.dispatcher_main
+python -m alert.infrastructure.email.scheduler_main      # weekly email digests
+python -m alert.infrastructure.rules.poller_main          # PLAN-0113 standing-rule evaluation
 ```
 
 ### Connecting WebSocket (Dev)
@@ -595,6 +667,10 @@ python -m alert.scripts.backfill_alert_titles
 | `s10_alerts_pending_total` | Current unacknowledged alert count |
 | `s10_alerts_by_severity_total` | Alerts created by severity |
 | `s10_flash_overlays_triggered_total` | Frontend flash overlay triggers |
+| `s10_rule_poller_runs_total` | Rule-poller cycles, by `outcome` label (PLAN-0113) |
+| `s10_rule_poller_last_success_timestamp_seconds` | Liveness gauge — last successful poller cycle (watchdog at `ALERT_ALERT_RULE_POLLER_WATCHDOG_SECONDS`) |
+
+> Prometheus alerting rules for the poller live in `infra/prometheus/rules/alert_rule_poller.yml`.
 
 ---
 

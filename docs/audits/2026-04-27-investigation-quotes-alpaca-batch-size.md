@@ -1,8 +1,8 @@
 # Investigation Report: Quotes via Alpaca 1m Bar + Batch Size Limit
 
-**Date**: 2026-04-27  
-**Investigator**: Claude (investigation skill)  
-**Severity**: LOW (improvement, not a regression)  
+**Date**: 2026-04-27
+**Investigator**: Claude (investigation skill)
+**Severity**: LOW (improvement, not a regression)
 **Status**: Root cause identified; fixes applied
 
 ---

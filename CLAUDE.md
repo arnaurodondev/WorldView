@@ -111,7 +111,7 @@ worldview/
 │       │   └── infrastructure/   # DB adapters, Kafka, external APIs
 │       ├── tests/                # unit, integration, contract, e2e
 │       └── alembic/              # DB migrations
-├── libs/               # 6 shared Python libraries
+├── libs/               # 8 shared Python libraries
 │   ├── common/         # IDs, time, constants
 │   ├── contracts/      # Canonical Pydantic models, event envelopes
 │   ├── messaging/      # Kafka, Avro, outbox, Valkey

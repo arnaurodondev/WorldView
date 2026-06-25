@@ -1,8 +1,8 @@
 # Investigation Report: Portfolio, Dashboard & Watchlist UX Issues
 
-**Date**: 2026-04-28  
-**Investigator**: Claude (investigate skill)  
-**Severity**: MEDIUM–HIGH (mix of data correctness bugs and UX improvements)  
+**Date**: 2026-04-28
+**Investigator**: Claude (investigate skill)
+**Severity**: MEDIUM–HIGH (mix of data correctness bugs and UX improvements)
 **Status**: Root cause identified for all issues
 
 ---
@@ -37,51 +37,51 @@ period buttons).
 
 ### BUG-1 · Transaction type shows INFLOW/OUTFLOW (CRITICAL)
 
-**File**: `apps/worldview-web/lib/gateway.ts:829`  
-**Code**: `type: tx.direction.toUpperCase() as "BUY" | "SELL"`  
+**File**: `apps/worldview-web/lib/gateway.ts:829`
+**Code**: `type: tx.direction.toUpperCase() as "BUY" | "SELL"`
 **Root cause**: S1's `TransactionDirection` enum is `INFLOW` / `OUTFLOW` (asset direction).
 The gateway incorrectly uses `direction` as if it were `BUY`/`SELL`. The correct field is
-`tx.transaction_type` which is `TransactionType.BUY / SELL / DIVIDEND`.  
+`tx.transaction_type` which is `TransactionType.BUY / SELL / DIVIDEND`.
 **Impact**: All BUY/SELL/DIV filter buttons show 0 results; badge shows "INFLOW"/"OUTFLOW"
 without color styling; DIVIDEND check `isDividend = tx.type === "DIVIDEND"` never triggers.
 
 ### BUG-2 · Transaction ticker is empty (HIGH)
 
-**File**: `apps/worldview-web/lib/gateway.ts:825`  
-**Code**: `ticker: ""`  
+**File**: `apps/worldview-web/lib/gateway.ts:825`
+**Code**: `ticker: ""`
 **Root cause**: S1's `TransactionListItem` does not include ticker. Gateway hardcodes
-empty string. No enrichment from instrument cache.  
+empty string. No enrichment from instrument cache.
 **Impact**: Ticker column shows "—" for all rows.
 
 ### BUG-3 · Dashboard Portfolio shows instrument_id prefix (019dbf56) (HIGH)
 
-**File**: `apps/worldview-web/components/dashboard/PortfolioSummary.tsx:243`  
-**Code**: `{h.name || h.instrument_id.slice(0, 8)}`  
+**File**: `apps/worldview-web/components/dashboard/PortfolioSummary.tsx:243`
+**Code**: `{h.name || h.instrument_id.slice(0, 8)}`
 **Root cause**: `PortfolioSummary` makes 3 queries (portfolios → holdings → quotes) but
 does NOT make a 4th company-overview query like `portfolio/page.tsx` does. Holdings
-from S1 have `name: null` and `ticker: null`. Fallback renders `h.instrument_id.slice(0,8)`.  
+from S1 have `name: null` and `ticker: null`. Fallback renders `h.instrument_id.slice(0,8)`.
 **Impact**: Every holding on the dashboard shows "019dbf56" as name and "—" as ticker.
 
 ### BUG-4 · Top Gainer displays double "++" (HIGH)
 
-**File**: `apps/worldview-web/components/portfolio/PortfolioKPIStrip.tsx:158`  
-**Code**: `` `${topGainer.ticker} +${formatPercent(topGainer.pnlPct / 100)}` ``  
+**File**: `apps/worldview-web/components/portfolio/PortfolioKPIStrip.tsx:158`
+**Code**: `` `${topGainer.ticker} +${formatPercent(topGainer.pnlPct / 100)}` ``
 **Root cause**: Template literal adds `+` before `formatPercent(...)`. `formatPercent`
 (`lib/utils.ts:81`) also adds `+` sign for positive values: `const sign = value >= 0 ? "+" : ""`.
 Result: `"GOOGL " + "+" + "+143.70%" = "GOOGL ++143.70%"`.
 
 ### BUG-5 · Top Loser VTV shows -100% (MEDIUM)
 
-**File**: `apps/worldview-web/app/(app)/portfolio/page.tsx:822`  
-**Code**: `const livePrice = q?.price ?? h.current_price ?? h.average_cost`  
+**File**: `apps/worldview-web/app/(app)/portfolio/page.tsx:822`
+**Code**: `const livePrice = q?.price ?? h.current_price ?? h.average_cost`
 **Root cause**: `getBatchQuotes` may return `price: 0` for a closed/delisted instrument
 (VTV position was fully sold). `livePrice = 0` → `pnlPct = ((0 - avgCost) / avgCost) * 100 = -100%`.
 The `?? fallback` chain only skips `null`/`undefined`, not `0`.
 
 ### BUG-6 · Recent Alerts shows only "SIGNAL" (HIGH)
 
-**File**: `apps/worldview-web/components/dashboard/RecentAlerts.tsx:74`  
-**Code**: `?? a.body ?? a.alert_type ?? ""`  
+**File**: `apps/worldview-web/components/dashboard/RecentAlerts.tsx:74`
+**Code**: `?? a.body ?? a.alert_type ?? ""`
 **Root cause**: S10's `PendingAlertResponse` (`schemas.py:13-23`) has fields:
 `pending_id`, `alert_id`, `entity_id`, `alert_type`, `source_topic`, `payload`, `created_at`, `severity`.
 No `body`, `title`, or `ticker` fields. The frontend `Alert` type includes `body: string` and
@@ -91,8 +91,8 @@ Fallback chain: `payload.message` (not set in SIGNAL payloads) → `a.body` (und
 
 ### BUG-7 · Watchlist add symbol silently fails (HIGH)
 
-**File**: `apps/worldview-web/lib/gateway.ts:1660–1662`  
-**Code**: `entity_id: inst.id` (search result uses instrument_id as entity_id)  
+**File**: `apps/worldview-web/lib/gateway.ts:1660–1662`
+**Code**: `entity_id: inst.id` (search result uses instrument_id as entity_id)
 **Root cause**: `searchInstruments` transforms S3's `InstrumentListResponse` where
 `entity_id` is synthesised as `inst.id` (= the instrument_id UUID, NOT the KG entity_id).
 S1's `POST /v1/watchlists/{id}/members` requires a real entity_id from S7 Knowledge Graph.
@@ -101,15 +101,15 @@ fails (or creates an orphaned member with no instrument data).
 
 ### BUG-8 · Top quotes in TopBar hard to read (MEDIUM)
 
-**File**: `apps/worldview-web/components/shell/IndexTicker.tsx:127`  
-**Code**: `<div key={ticker.id} className="flex items-center gap-1">`; outer `gap-2`  
+**File**: `apps/worldview-web/components/shell/IndexTicker.tsx:127`
+**Code**: `<div key={ticker.id} className="flex items-center gap-1">`; outer `gap-2`
 **Root cause**: The `gap-1` between label and value within a ticker item is similar to
 `gap-2` between adjacent tickers. No visual separator exists, causing the 4 ticker items
 to blend together at small font size (12px).
 
 ### BUG-9 · Watchlist tab has huge empty space and "search above" not centered (LOW)
 
-**File**: `WatchlistsTabPanel.tsx:165` → `InlineEmptyState`  
+**File**: `WatchlistsTabPanel.tsx:165` → `InlineEmptyState`
 **Root cause**: `InlineEmptyState` renders as a small inline element at the top of the
 `WatchlistTable` content area. The container has `flex flex-col` + remaining height,
 so the empty state sits at the top of a tall space rather than being centered.
@@ -121,57 +121,57 @@ so the empty state sits at the top of a tall space rather than being centered.
 ### FEAT-1 · Portfolio analytics section below holdings
 
 **Request**: Add portfolio growth chart (1D/1W/1M), sector exposure pie chart,
-portfolio stats (total invested, cost basis, beta, etc.)  
+portfolio stats (total invested, cost basis, beta, etc.)
 **API available**: `GET /v1/portfolios/{id}/performance?period=1D|1W|1M` already exists.
 Sector allocation: `SectorAllocationPanel.tsx` component already exists but is rendered
-inside the Holdings tab, not below it.  
+inside the Holdings tab, not below it.
 **New endpoint needed**: Portfolio historical value timeseries (not yet in S1/S9).
 
 ### FEAT-2 · Top bar additional metrics
 
-**Request**: Add daily P&L, unrealized P&L, or other key metrics to top bar.  
+**Request**: Add daily P&L, unrealized P&L, or other key metrics to top bar.
 **Current**: TopBar shows `PORT $343K` (compact portfolio value). User wants more detail.
 
 ### FEAT-3 · Dashboard Portfolio: period buttons + price column + remove ID
 
-**Request**: Add 1D/1W/1M buttons, show current price per holding, remove instrument_id.  
+**Request**: Add 1D/1W/1M buttons, show current price per holding, remove instrument_id.
 **Note**: Comment in code says "PLAN-0043 A-3 removes period buttons — no period-based
 endpoint yet." But `getPortfolioPerformance(portfolioId, period)` exists in gateway.ts.
 The period data should be usable.
 
 ### FEAT-4 · Replace AI Signals with more relevant dashboard widget
 
-**Request**: Remove AI Signals, add something more investor-relevant.  
+**Request**: Remove AI Signals, add something more investor-relevant.
 **Recommendation**: Replace with **Portfolio Performance Sparkline** (compact 1W/1M line
 chart per holding) or **News Sentiment Summary** (aggregated market sentiment from S6).
 Alternatively: **Top Holdings Changes** (which positions moved most today).
 
 ### FEAT-5 · Instruments landing page distinct from screener
 
-**Request**: `/instruments` should feel different from `/screener`.  
+**Request**: `/instruments` should feel different from `/screener`.
 **Current**: `/instruments` page already exists (instruments/page.tsx) with a simple
 search bar + ScreenerTable. It's functionally different from /screener (no filter bar,
-no sector/cap-tier dropdowns). The visual similarity confuses users.  
+no sector/cap-tier dropdowns). The visual similarity confuses users.
 **Recommendation**: Add a page header with total instrument count, featured categories
 (Equities, ETFs, Crypto), and top-level stats. Keep the search table below.
 
 ### FEAT-6 · Morning Brief format and content
 
-**Request**: Investigate preferred briefing format; fix empty/thin content.  
+**Request**: Investigate preferred briefing format; fix empty/thin content.
 **Preferred format for investors**: Bloomberg-style briefing:
 - **1-line executive summary** (biggest market event today)
 - **Bullet points** for key index moves (S&P +/-, VIX level, big sectors)
 - **Numbered top 3 stories** with 1-line explanation each
 - **Risk factors** (2-3 bullet points: macro, sector, portfolio-specific)
-- Total: 150-300 words, no generic filler  
+- Total: 150-300 words, no generic filler
 **Frontend**: MorningBriefCard already renders markdown. S8 prompt engineering needed.
 
 ### FEAT-7 · Top Movers / Portfolio News minimum entry fill
 
-**Request**: Components should have enough entries to fill the full component height.  
+**Request**: Components should have enough entries to fill the full component height.
 **Top Movers**: Currently `PreMarketMoversWidget` shows 5 gainers + 5 losers.
 If market data is thin, fewer entries show. Fix: either increase limit or show a
-"prior session" indicator when fewer than 5 per side are available.  
+"prior session" indicator when fewer than 5 per side are available.
 **Portfolio News**: Currently `limit: 4` articles. If fewer than 4 available,
 empty space appears. Fix: show placeholder "loading more…" or adjust to show
 available articles with padded empty rows.
@@ -236,19 +236,19 @@ message: (() => {
   // Try payload.message first (ideal case when S10 includes it)
   const payloadMsg = (a.payload as Record<string, unknown>)?.message;
   if (typeof payloadMsg === "string" && payloadMsg.trim()) return payloadMsg;
-  
+
   // Try payload.signal_label + entity (for SIGNAL type alerts)
   const label = (a.payload as Record<string, unknown>)?.signal_label;
   const entityName = (a.payload as Record<string, unknown>)?.entity_name;
   if (label && entityName) return `${entityName}: ${label} signal`;
-  
+
   // Try payload.title
   const payloadTitle = (a.payload as Record<string, unknown>)?.title;
   if (typeof payloadTitle === "string" && payloadTitle.trim()) return payloadTitle;
-  
+
   // Try a.body (legacy field that may be set in some alert types)
   if (a.body?.trim()) return a.body;
-  
+
   // Contextual fallback: severity + type (better than just "SIGNAL")
   return `${a.severity} ${a.alert_type} alert`;
 })(),

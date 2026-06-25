@@ -1,13 +1,13 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: PLAN-0080 Wave A (Intelligence-Layer LLM Tools) COMPLETE — 14 tools total (v2 manifest)
+> **Status**: Tool-use chat pipeline + **26-tool catalog** (`capability_manifest.yaml` v5) + SSE streaming + morning/instrument briefings + brief pre-generation scheduler
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 20-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 26-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -23,6 +23,7 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | GET | `/healthz` | Liveness | — |
 | GET | `/readyz` | Readiness (rag_db + Valkey) | — |
 | GET | `/metrics` | Prometheus | — |
+| GET | `/api/v1/providers/status` | LLM provider availability (deepinfra/openrouter/ollama) read from the in-memory negative cache + configured model id | — |
 | POST | `/api/v1/chat` | Sync chat completion | X-Internal-JWT |
 | POST | `/api/v1/chat/stream` | SSE streaming chat | X-Internal-JWT |
 | POST | `/api/v1/chat/entity-context` | Entity-scoped sync chat (PLAN-0074 Wave F) — loads S7 intelligence context, prefixes system prompt with entity narrative/metrics/graph, delegates to chat pipeline | X-Internal-JWT |
@@ -32,7 +33,26 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | GET | `/api/v1/threads/{thread_id}` | Get thread with messages | X-Tenant-Id + X-User-Id |
 | PATCH | `/api/v1/threads/{thread_id}` | Patch mutable thread fields (currently only `title`). Body `{title?: string}` returns full ThreadDetailResponse. Ownership enforced atomically inside `update_title` UPDATE. **Empty body (`{}`) or `title=null` is a no-op** — the use case short-circuits and returns the thread unchanged (QA-iter1 MAJ-3). PLAN-0051 T-E-5-06. | X-Tenant-Id + X-User-Id |
 | DELETE | `/api/v1/threads/{thread_id}` | Soft-delete thread | X-Tenant-Id + X-User-Id |
-| GET | `/internal/v1/llm-costs` | LLM cost aggregates for rag-chat (PLAN-0033); queries `rag_chat_db.llm_usage_log` (no service_name filter — S8-exclusive DB); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| POST | `/api/v1/chat/proposals/{proposal_id}/confirm` | Confirm a pending LLM-proposed `create_alert` action (PLAN-0082) | X-Internal-JWT |
+| POST | `/v1/internal/retrieve` | Eval-harness read-only retrieval (NOT proxied via S9). See Internal Retrieval Endpoint section | X-Internal-JWT (system) |
+| POST | `/internal/v1/briefings` | Generate portfolio risk narrative for the S10 email digest (rate-limited 100/day per user) | X-Internal-JWT |
+| GET | `/internal/v1/llm-costs` | LLM cost aggregates for rag-chat (PLAN-0033); queries `rag_db.llm_usage_log` (no service_name filter — S8-exclusive DB); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| GET | `/internal/v1/instruments/{instrument_id}/ai-brief-flag` | Non-failing rollup: whether any cached entity-scoped AI brief exists for the instrument (`has_ai_brief` + `brief_generated_at`); powers the screener `has_ai_brief` flag. Absence → `has_ai_brief=false` + HTTP 200 (L-5b sync worker) | X-Internal-JWT |
+
+### Public Briefing Endpoints (prefix `/api/v1`, proxied via S9)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/api/v1/briefings/morning` | Generate or retrieve cached morning briefing (`PublicBriefingResponse`) | X-Internal-JWT |
+| POST | `/api/v1/briefings/morning/generate` | Force-regenerate the morning brief — bypasses cache/staleness. 202 + `{"status": "queued", "generated_at"}`; shares the 60/hr `brief_gen_rate` bucket; writes both fresh + lastgood cache keys | X-Internal-JWT |
+| GET | `/api/v1/briefings/morning/history` | Paginated history of past morning briefs for the authenticated user | X-Internal-JWT |
+| GET | `/api/v1/briefings/morning/diff` | Text-normalised bullet diff between today's and yesterday's morning brief | X-Internal-JWT |
+| GET | `/api/v1/briefings/instrument/{entity_id}` | Generate or retrieve cached instrument-specific briefing | X-Internal-JWT |
+| POST | `/api/v1/briefings/instrument/{entity_id}/generate` | Idempotent lazy-generate + persist entity brief (populates the AI-brief flag) | X-Internal-JWT |
+| POST | `/api/v1/briefings/feedback/bullet` | Record helpful/unhelpful reaction to a specific brief bullet | X-Internal-JWT |
+| POST | `/api/v1/briefings/feedback/brief` | Record a 1-5 star rating for a whole morning brief | X-Internal-JWT |
+| POST | `/api/v1/briefings/chat/discuss` | Create a new chat thread pre-seeded with the user's latest brief | X-Internal-JWT |
+| POST | `/api/v1/briefings/{brief_id}/create-alert` | Return pre-filled alert context (`CreateAlertPrefillResponse`) from a brief bullet | X-Internal-JWT |
 
 ### Request/Response Models
 
@@ -193,12 +213,17 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (20 tools — `libs/tools/src/tools/capability_manifest.yaml` v3)
+### Tool Catalog (26 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
+
+The `get_alerts` / `create_alert` action tools are documented separately below
+(Action Tools and User Authorization). The remaining 24 read-only tools:
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
 | `get_price_history` | S3 | OHLCV price data for a ticker | v1 |
-| `get_fundamentals_history` | S3 | Quarterly financial metrics | v1 |
+| `get_fundamentals_history` | S3 | Quarterly financial metrics (single ticker). Description warns NOT to call in a loop — use the batch variant | v1 |
+| `get_fundamentals_history_batch` | S3 | Quarterly financials for 2+ tickers in one call; 5-10x faster than N×`get_fundamentals_history` (PLAN-0095 W2) | v3 |
+| `query_fundamentals` | S3 | Targeted single-ticker fundamentals query: caller-selected `metrics` over `periods`, optional latest snapshot | v3 |
 | `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) | v1 |
 | `get_entity_graph` | S7 | Egocentric graph for an entity | v1 |
 | `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) | v1 |
@@ -214,6 +239,7 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
 | `get_entity_intelligence` | S9→S7 | Full intelligence bundle: narrative + paths + health + relations summary. Single call for "tell me everything about X". Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |
 | `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel | v3 |
+| `get_entity_news` | S9→S6 | Recent news articles scoped to a single entity (PLAN-0103 W2) | v5 |
 | `screen_universe` | S9→S3 | Quantitative screener via S9 `POST /v1/fundamentals/screen`. Filter by market_cap, P/E, sector, region | v3 |
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
@@ -273,13 +299,15 @@ Two tools differ from the rest: they interact with user-owned state rather than 
 
 ## LLM Provider Chain
 
-| Order | Provider | Model (env var to override) | Notes |
+| Order | Provider | Default model (env var to override) | Notes |
 |-------|----------|------------------------------|-------|
-| 1 | DeepInfra | `Qwen/Qwen3-235B-A22B-Instruct-2507` (`RAG_CHAT_COMPLETION_MODEL`) | Primary (requires `RAG_CHAT_DEEPINFRA_API_KEY`) |
+| 1 | DeepInfra | `deepseek-ai/DeepSeek-V4-Flash-Thinking` (`RAG_CHAT_COMPLETION_MODEL`) | Primary (requires `RAG_CHAT_DEEPINFRA_API_KEY`). Often overridden per-deployment via env (e.g. `openai/gpt-oss-120b`, `Qwen/Qwen3-235B-A22B`) |
 | 2 | OpenRouter | `deepseek/deepseek-r1-distill-qwen-32b` (`RAG_CHAT_OPENROUTER_COMPLETION_MODEL`) | Fallback (requires `RAG_CHAT_OPENROUTER_API_KEY`) |
 | 3 | Ollama (local) | `deepseek-r1:32b` (`RAG_CHAT_OLLAMA_COMPLETION_MODEL`) | Emergency fallback |
 
-**Intent classification**: `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` via DeepInfra (`RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL`); Ollama `qwen3:0.6b` fallback.
+**Same-provider stream fallback** (PLAN-0104 W43): when DeepInfra returns HTTP 200 + empty SSE on a long multi-tool synthesis, the adapter retries once with `RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL` (default `deepseek-ai/DeepSeek-V4-Flash`) on the SAME provider. Set to `""` to disable.
+
+**Intent classification**: `Qwen/Qwen3.5-9B` via DeepInfra (`RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL`); Ollama `qwen3:0.6b` fallback.
 
 **Reranker**: Cohere Rerank v2 (requires `RAG_CHAT_COHERE_API_KEY`); falls back to fusion_score ordering when absent. Ollama `bge-reranker-v2-m3` is a legacy option but no longer in the Ollama registry.
 
@@ -310,36 +338,58 @@ Two tools differ from the rest: they interact with user-owned state rather than 
 
 ## Database Schema
 
-### `threads` table
+All tables live in the owned `rag_db`; Alembic head is `0009` (`services/rag-chat/alembic/versions/`).
+
+### `threads` table (migration `0001`, extended by `0005`/`0009`)
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | UUID (PK) | UUIDv7 |
-| `tenant_id` | UUID | Multi-tenant isolation |
-| `user_id` | UUID | Owner |
-| `title` | text | Auto-generated or user-set |
-| `created_at` | timestamptz | |
-| `updated_at` | timestamptz | |
-| `last_message_at` | timestamptz | |
-| `is_deleted` | bool | Soft delete |
+| `id` | UUID (PK) | UUIDv7 (app-generated) |
+| `tenant_id` | UUID NOT NULL | Multi-tenant isolation |
+| `user_id` | UUID NOT NULL | Owner |
+| `title` | text | Nullable; auto-generated from first message or user-set |
+| `entity_ids` | UUID[] NOT NULL DEFAULT '{}' | Pinned entities for context |
+| `seed_brief_id` | UUID FK → `user_briefs(id)` | Nullable; set when a thread is seeded from a brief (migration `0005`) |
+| `estimated_cost_usd` | NUMERIC(12,6) | Nullable; running LLM-cost accumulator (migration `0009`) |
+| `created_at` | timestamptz NOT NULL | UTC |
+| `updated_at` | timestamptz NOT NULL | UTC |
+| `last_msg_at` | timestamptz | Nullable; updated on each new message |
+| `archived_at` | timestamptz | Nullable; set on soft delete |
 
-### `messages` table
+Partial indexes: `ix_threads_user_active (user_id, tenant_id, last_msg_at DESC) WHERE archived_at IS NULL`, `ix_threads_tenant_active (tenant_id, last_msg_at DESC) WHERE archived_at IS NULL`.
+
+### `messages` table (migration `0001`, extended by `0002`/`0008`)
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | UUID (PK) | UUIDv7 |
-| `thread_id` | UUID (FK) | |
-| `role` | text | `user` \| `assistant` |
-| `content` | text | |
-| `intent` | text | Assistant messages only |
-| `provider` | text | LLM provider used |
-| `model` | text | |
-| `token_count_in` | int | |
-| `token_count_out` | int | |
-| `latency_ms` | int | |
-| `citations` | jsonb | |
-| `contradiction_refs` | jsonb | |
-| `created_at` | timestamptz | |
+| `id` | UUID (PK) | UUIDv7 (app-generated) |
+| `thread_id` | UUID NOT NULL FK → `threads` (CASCADE) | |
+| `role` | varchar(20) NOT NULL | CHECK IN (`user`, `assistant`) |
+| `content` | text NOT NULL | |
+| `intent` | varchar(50) | QueryIntent value; nullable (assistant only) |
+| `resolved_entities` | jsonb | Nullable |
+| `retrieval_plan` | jsonb | Nullable (observability) |
+| `citations` | jsonb | Nullable; persists the `Citation.text` field for the judge (stripped before SSE) |
+| `contradiction_refs` | jsonb | Nullable |
+| `provider` | varchar(50) | LLM provider used; nullable |
+| `model` | varchar(100) | LLM model name; nullable |
+| `token_count_in` | int | Nullable |
+| `token_count_out` | int | Nullable |
+| `latency_ms` | int | Nullable |
+| `context_valkey_key` | text | Nullable; cached-chunks key (migration `0002`) |
+| `summary_valkey_key` | text | Nullable; turn-summary key (migration `0002`) |
+| `created_at` | timestamptz NOT NULL | UTC |
+
+Indexes: `ix_messages_thread_created (thread_id, created_at ASC)`; `ix_messages_role_created_partial (role, created_at DESC) WHERE citations IS NOT NULL` (migration `0008`, for the citation cron's `since`-filtered sample).
+
+### Other tables
+
+| Table | Migration | Purpose |
+|-------|-----------|---------|
+| `llm_usage_log` | `0003` (+ `0006`) | Per-call LLM cost/usage telemetry powering `/internal/v1/llm-costs`. `0006` added `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]` |
+| `user_briefs` | `0004` | Persisted generated briefs (morning + entity); read-only source for `get_morning_brief` and the AI-brief flag |
+| `brief_feedback` | `0004` | Bullet/section/brief-level user feedback (FK → `user_briefs`, CASCADE) |
+| `chat_audit_log` | `0007` | Per-turn observability audit trail (E-12) |
 
 ---
 
@@ -428,9 +478,13 @@ All env vars use prefix `RAG_CHAT_`.
 | `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen3:0.6b` | No | Ollama intent classification model |
 | `RAG_CHAT_OLLAMA_RERANKER_MODEL` | `bge-reranker-v2-m3` | No | Ollama reranker (legacy — no longer in Ollama registry) |
 | `RAG_CHAT_COMPLETION_PROVIDER` | `deepinfra` | No | Primary provider: `deepinfra` |
-| `RAG_CHAT_COMPLETION_MODEL` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | No | DeepInfra completion model ID |
+| `RAG_CHAT_COMPLETION_MODEL` | `deepseek-ai/DeepSeek-V4-Flash-Thinking` | No | DeepInfra completion model ID (commonly overridden per-deployment) |
 | `RAG_CHAT_OPENROUTER_COMPLETION_MODEL` | `deepseek/deepseek-r1-distill-qwen-32b` | No | OpenRouter fallback model ID |
-| `RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | No | DeepInfra intent classification model |
+| `RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL` | `deepseek-ai/DeepSeek-V4-Flash` | No | Same-provider stream fallback on empty SSE (PLAN-0104 W43; `""` disables) |
+| `RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL` | `Qwen/Qwen3.5-9B` | No | DeepInfra intent classification model |
+| `RAG_CHAT_DEEPINFRA_TOOLCALL_TIMEOUT` | `90.0` | No | `chat_with_tools` per-call timeout (s) |
+| `RAG_CHAT_MORNING_BRIEF_MAX_TOKENS` | `8000` | No | Morning-brief synthesis `max_tokens` (2000-32000) |
+| `RAG_CHAT_INSTRUMENT_BRIEF_MAX_TOKENS` | `6000` | No | Instrument-brief synthesis `max_tokens` (1500-32000) |
 | `RAG_CHAT_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 URL for JWKS fetch at startup |
 | `RAG_CHAT_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | No | **Dev/test only** — skip RS256 JWT verification |
 | `RAG_CHAT_S1_BASE_URL` | `http://portfolio:8001` | No | S1 portfolio service URL |
@@ -451,7 +505,7 @@ All env vars use prefix `RAG_CHAT_`.
 | `RAG_CHAT_TRUST_W_EXTRACTION` | `0.1` | No | Trust formula weight for extraction confidence |
 | `RAG_CHAT_CITATION_CRON_ENABLED` | `false` | No | Enable citation accuracy cron (costs LLM tokens). Cadence is **DAILY 03:00 UTC** over the **last 24h** of messages (PLAN-0107; was weekly Sunday + 7d window) |
 | `RAG_CHAT_CITATION_JUDGE_PROVIDER` | `deepinfra` | No | `deepinfra` or `ollama` |
-| `RAG_CHAT_CITATION_JUDGE_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` | No | Model for citation accuracy scoring |
+| `RAG_CHAT_CITATION_JUDGE_MODEL` | `deepseek-ai/DeepSeek-V4-Flash` | No | Model for citation accuracy scoring |
 | `RAG_CHAT_CITATION_MIN_SAMPLES` | `10` | No | Min messages required to emit gauge (1-500) |
 | `RAG_CHAT_CITATION_CALL_TIMEOUT_S` | `15.0` | No | Per-judge-call timeout (>0, ≤120s) |
 | `RAG_CHAT_CITATION_RUN_BUDGET_S` | `600.0` | No | Total wall-clock budget per cron run |
@@ -782,16 +836,34 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 
 ## Briefing Endpoints
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/internal/v1/briefings` | X-Internal-Token | Generate portfolio risk narrative for email digest |
-| GET | `/api/v1/briefings/morning` | X-Internal-JWT | Morning briefing (proxied via S9) |
-| POST | `/api/v1/briefings/morning/generate` | X-Internal-JWT | Force-regenerate the morning brief — bypasses the cache/staleness check (dashboard Regenerate button). 202 + `{"status": "queued", "generated_at"}`; shares the 60/hr `brief_gen_rate` bucket with instrument generate; writes both fresh + lastgood cache keys (proxied via S9 `POST /v1/briefings/morning/generate`) |
-| GET | `/api/v1/briefings/instrument/{entity_id}` | X-Internal-JWT | Instrument briefing |
+The full briefing route surface is enumerated in the **Public Briefing Endpoints**
+table under API Surface. Highlights:
 
-**`POST /internal/v1/briefings`**: consumed by S10 email scheduler. Rate-limited to
-100/day per user. Uses `EMAIL_DEEP_BRIEF_PROMPT` system prompt. Returns `BriefingResponse`
-(see API Surface section).
+- **`POST /internal/v1/briefings`** (X-Internal-JWT): consumed by the S10 email
+  scheduler. Rate-limited to 100/day per user. Uses `EMAIL_DEEP_BRIEF_PROMPT`
+  system prompt. Returns `BriefingResponse` (see API Surface section).
+- **`GET /api/v1/briefings/morning`** + **`/morning/generate`** + **`/morning/history`** + **`/morning/diff`**.
+- **`GET /api/v1/briefings/instrument/{entity_id}`** + **`/instrument/{entity_id}/generate`**.
+- Feedback + chat-handoff: **`/feedback/bullet`**, **`/feedback/brief`**, **`/chat/discuss`**, **`/{brief_id}/create-alert`**.
+
+### Brief Pre-Generation Scheduler (second process — PLAN-0094 W2)
+
+A **separate APScheduler process** (`infrastructure/scheduling/brief_scheduler_main.py`,
+NOT the ASGI app) pre-generates briefs on an interval so users never hit a cold
+cache. It runs two `IntervalTrigger` jobs every `RAG_CHAT_BRIEF_PREGEN_INTERVAL_HOURS`:
+
+- **Morning-brief pre-gen** (`MorningBriefPregenerationWorker`) — gated by
+  `RAG_CHAT_BRIEF_PREGEN_ENABLED` (default true). Active users come from the Valkey
+  `active_users` sorted-set populated by S9 auth middleware. Falls back to a
+  last-known-good cache key on regeneration failure.
+- **Instrument-brief pre-gen** (`InstrumentBriefPregenerationWorker`) — gated by
+  `RAG_CHAT_BRIEF_INSTRUMENT_PREGEN_ENABLED` (default true). Persists `brief_type='entity'`
+  briefs for instruments in the Valkey `active_instruments` sorted-set; this is what
+  proactively populates the screener `has_ai_brief` flag.
+
+Tuning knobs (shared by both jobs): `RAG_CHAT_BRIEF_PREGEN_INTERVAL_HOURS` (24),
+`_ACTIVE_WINDOW_DAYS` (7), `_BATCH_SIZE` (50), `_CONCURRENCY` (4),
+`RAG_CHAT_BRIEF_FRESH_TTL_HOURS` (30), `RAG_CHAT_BRIEF_LAST_GOOD_TTL_DAYS` (7).
 
 ---
 
