@@ -191,6 +191,31 @@ is unchanged.
   entities; pairs with the `provisional_enrichment_core.py` fallback hardening
   (tickerless company-class -> `unknown`, not `financial_instrument`).
 
+## chat_trajectory_judge
+
+### 1.0 — 2026-06-25 (NEW — Multi-Level Eval Framework W2, trajectory layer)
+
+- **NEW judge prompt — grades the agent's TOOL-CHAIN PROCESS, not the answer.**
+  Complements `CHAT_QUALITY_JUDGE` (which grades the final answer) with a
+  trajectory grader that reads the SAME ordered tool trace
+  (`call N: tool(args) -> status items=K`) plus the question intent and scores
+  four 0-25 sub-dimensions: `routing` (tools fit intent), `ordering` (a chain
+  resolves a dependency before consuming it), `recovery` (after a failed/empty
+  call the agent retries/substitutes vs gives up/loops), and `efficiency`
+  (minimal, non-redundant calls). `trajectory_score = sum(4)` (0-100) is
+  computed in `scripts/chat_trajectory_judge.py`, not in the prompt.
+- **Strict-JSON output** `{routing, ordering, recovery, efficiency,
+  reviewer_summary}` (per-dim `{score, feedback}`), mirroring the answer judge's
+  shape. content_hash `eb78317b2115` (computed from the body).
+- **Independent of `CHAT_QUALITY_JUDGE`.** The answer grader is NOT modified;
+  a unit test asserts `CHAT_QUALITY_JUDGE.content_hash` is unchanged.
+- **Impact:** additive only — wired into `run_chat_quality_benchmark.py` behind
+  `--trajectory` (default ON when `--judge` is on); it attaches a `trajectory`
+  block to each `q_<id>.json` and a `trajectory` roll-up to `_judge_summary.json`
+  / the `_report.md` "Trajectory (MUST-2)" section. It does NOT change the
+  answer FAIL/PASS verdict. As with any judge prompt, a future body edit flips
+  the hash and breaks longitudinal trajectory comparison — record the bump here.
+
 ## chat_quality_judge
 
 ### 3.0 — 2026-06-12 (BREAKING, PLAN-0110 W3 / PRD-0091 FR-7)
