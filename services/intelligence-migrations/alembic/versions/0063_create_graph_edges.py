@@ -60,6 +60,15 @@ DOWNGRADE:
   Drops the indexes and the view.  Fully reversible; nothing else references the
   view (the adapter is feature-flagged off by default), so dropping it cannot
   break a running service.
+
+SCHEMA QUALIFICATION (collision guard):
+  The matview is created EXPLICITLY in ``public`` (``public.graph_edges``).  Some
+  pre-built Apache-AGE Postgres images carry a stray identically-named matview in
+  the ``ag_catalog`` schema (a leftover from an earlier projection experiment).
+  An UNQUALIFIED ``graph_edges`` reference could resolve to that one whenever the
+  AGE search_path (``ag_catalog`` first) is active on a session.  Qualifying to
+  ``public.graph_edges`` here (and in the adapter SQL) removes all ambiguity: the
+  relational engine always reads exactly the matview this migration owns.
 """
 
 from __future__ import annotations
@@ -81,7 +90,7 @@ def upgrade() -> None:
     # MEMBERSHIP_RELATIONS filter (which uses AGE labels) matches directly.
     op.execute(
         """
-        CREATE MATERIALIZED VIEW IF NOT EXISTS graph_edges AS
+        CREATE MATERIALIZED VIEW IF NOT EXISTS public.graph_edges AS
             SELECT
                 relation_id,
                 subject_entity_id AS src,
@@ -111,21 +120,21 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uidx_graph_edges_rel_src_dst
-            ON graph_edges (relation_id, src, dst)
+            ON public.graph_edges (relation_id, src, dst)
         """
     )
     # Frontier-expansion index: recursive CTE joins on src.
     op.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_graph_edges_src
-            ON graph_edges (src)
+            ON public.graph_edges (src)
         """
     )
     # Symmetric reverse-lookup index.
     op.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_graph_edges_dst
-            ON graph_edges (dst)
+            ON public.graph_edges (dst)
         """
     )
 
@@ -133,7 +142,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Indexes are dropped automatically with the view, but drop explicitly first
     # for clarity/idempotency parity with the upgrade.
-    op.execute("DROP INDEX IF EXISTS idx_graph_edges_dst")
-    op.execute("DROP INDEX IF EXISTS idx_graph_edges_src")
-    op.execute("DROP INDEX IF EXISTS uidx_graph_edges_rel_src_dst")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS graph_edges")
+    op.execute("DROP INDEX IF EXISTS public.idx_graph_edges_dst")
+    op.execute("DROP INDEX IF EXISTS public.idx_graph_edges_src")
+    op.execute("DROP INDEX IF EXISTS public.uidx_graph_edges_rel_src_dst")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS public.graph_edges")

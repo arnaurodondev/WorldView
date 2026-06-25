@@ -33,7 +33,7 @@ pytestmark = [pytest.mark.integration]
 # DDL identical to migration 0063 — used to (idempotently) ensure the matview
 # exists on a test DB that may predate 0063.  Safe: IF NOT EXISTS throughout.
 _ENSURE_MATVIEW = """
-CREATE MATERIALIZED VIEW IF NOT EXISTS graph_edges AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS public.graph_edges AS
     SELECT relation_id, subject_entity_id AS src, object_entity_id AS dst,
            upper(replace(canonical_type, ' ', '_')) AS typ, confidence, subject_entity_id
       FROM relations
@@ -45,9 +45,11 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS graph_edges AS
      WHERE confidence > 0.1 AND subject_entity_id <> object_entity_id
 WITH DATA
 """
-_ENSURE_UIDX = "CREATE UNIQUE INDEX IF NOT EXISTS uidx_graph_edges_rel_src_dst ON graph_edges (relation_id, src, dst)"
-_ENSURE_SRC = "CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges (src)"
-_ENSURE_DST = "CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges (dst)"
+_ENSURE_UIDX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uidx_graph_edges_rel_src_dst " "ON public.graph_edges (relation_id, src, dst)"
+)
+_ENSURE_SRC = "CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON public.graph_edges (src)"
+_ENSURE_DST = "CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON public.graph_edges (dst)"
 
 
 async def _seed_graph(session_factory) -> dict[str, UUID]:
@@ -94,7 +96,7 @@ async def _seed_graph(session_factory) -> dict[str, UUID]:
         await s.commit()
         # CONCURRENTLY needs its own (committed) transaction; plain refresh is fine
         # here since the test owns the table.
-        await s.execute(text("REFRESH MATERIALIZED VIEW graph_edges"))
+        await s.execute(text("REFRESH MATERIALIZED VIEW public.graph_edges"))
         await s.commit()
     return ids
 

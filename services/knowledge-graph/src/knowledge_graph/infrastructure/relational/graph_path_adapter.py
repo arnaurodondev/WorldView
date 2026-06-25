@@ -132,7 +132,7 @@ _PATH_EXISTS_SQL = text(
         UNION
         SELECT e.dst, r.depth + 1
           FROM reach r
-          JOIN graph_edges e ON e.src = r.node
+          JOIN public.graph_edges e ON e.src = r.node
          WHERE r.depth < :max_hops
     )
     SELECT min(depth) AS hops
@@ -180,7 +180,7 @@ def _build_enumerate_sql(*, anchor_free_target: bool) -> TextClause:
               FROM walk w
               JOIN LATERAL (
                     SELECT e.dst, e.relation_id
-                      FROM graph_edges e
+                      FROM public.graph_edges e
                      WHERE e.src = w.node
                        AND NOT e.dst = ANY(w.node_path)
                      ORDER BY e.dst, e.relation_id
@@ -212,7 +212,7 @@ _RESOLVE_NODES_SQL = text(
 _RESOLVE_EDGES_SQL = text(
     """
     SELECT DISTINCT relation_id, typ, confidence, subject_entity_id
-      FROM graph_edges
+      FROM public.graph_edges
      WHERE relation_id = ANY(:ids)
     """
 )
