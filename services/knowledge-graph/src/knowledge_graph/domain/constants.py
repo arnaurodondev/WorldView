@@ -10,9 +10,9 @@ Why these are plain string constants — NOT ``RelationType`` enum values:
   ``"listed_on"`` → ``"LISTED_ON"``).  The traversal Cypher therefore matches on
   these **uppercase** label strings.
 - The ``RelationType`` StrEnum (``domain/enums.py``) is **lowercase** and only
-  covers 16 of the relation types.  Two of the four membership relations
-  (``IS_IN_SECTOR``, ``HEADQUARTERED_IN``) are **not** members of that enum at
-  all — they live only in the AGE label space / ``relation_type_registry``.
+  covers 16 of the relation types.  Several membership relations
+  (e.g. ``IS_IN_SECTOR``, ``HEADQUARTERED_IN``) are **not** members of that enum
+  at all — they live only in the AGE label space / ``relation_type_registry``.
   So this set MUST be defined as literal AGE-label strings, not derived from
   ``RelationType``.
 
@@ -28,6 +28,11 @@ hub blow-up (BP-689) and removes noise from the weirdness ranking (FR-3).
 > in that whitelist live in the *infrastructure* AGE engine module
 > (``infrastructure/age/graph_path_engine.py``), where importing the AGE-sync
 > worker's whitelist is legal.
+
+> **Pruning parity**: the relational hot-path adapter
+> (``infrastructure/relational/graph_path_adapter.py``) reuses this SAME
+> ``MEMBERSHIP_RELATIONS`` set for its post-hoc membership filter so the AGE and
+> relational engines prune identically (PLAN-0113).
 """
 
 from __future__ import annotations
@@ -40,8 +45,10 @@ from __future__ import annotations
 MEMBERSHIP_RELATIONS: frozenset[str] = frozenset(
     {
         "IS_IN_SECTOR",  # company → GICS sector (huge fan-out)
+        "IS_IN_INDUSTRY",  # company → GICS industry (huge fan-out, finer than sector)
         "LISTED_ON",  # security → exchange (every US equity → NASDAQ/NYSE)
         "OPERATES_IN_COUNTRY",  # company → country (geographic membership)
+        "REVENUE_FROM_COUNTRY",  # company → country (geographic-revenue membership)
         "HEADQUARTERED_IN",  # company → country/region (geographic membership)
     },
 )
