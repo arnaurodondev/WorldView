@@ -1203,7 +1203,7 @@ def evaluate_invariants(
 
     # Seed every gate to PASS (True). Disabled gates stay True and are skipped
     # below, so they are reported as "passed" rather than absent.
-    results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
 
     # 1) Degenerate-answer family → CONTROL_TOKEN_LEAK / TRUNCATED /
     #    EMPTY_AFTER_TOOLS. We call the EXISTING detector and re-label its
@@ -1848,7 +1848,7 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
         fired_code: InvariantCode | None = InvariantCode.INFRA_NON_ANSWER
     else:
         fired_code = _DEGENERATE_REASON_TO_CODE.get(reason)
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     if fired_code is not None:
         gate_results[fired_code] = False
     decision = VerdictDecision(
@@ -1857,7 +1857,7 @@ def _degenerate_fail_result(reason: str, *, judge_prompt_id: str) -> dict[str, A
         fail_reason=fired_code,
         gate_results=gate_results,
         grounding_check=GroundingCheck(),
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
 
     return {
@@ -1896,7 +1896,7 @@ def _grounding_contradicted_fail_result(
         f"vs sample {ex.get('nearest_sample')}). The agent stated a number the "
         f"tool's own payload contradicts — fabrication."
     )
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     gate_results[InvariantCode.GROUNDING_CONTRADICTED] = False
     decision = VerdictDecision(
         verdict=Verdict.FAIL,
@@ -1904,7 +1904,7 @@ def _grounding_contradicted_fail_result(
         fail_reason=InvariantCode.GROUNDING_CONTRADICTED,
         gate_results=gate_results,
         grounding_check=grounding_check,
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
     return {
         "verdict": "FAIL",
@@ -1947,7 +1947,7 @@ def _substantiation_unsupported_fail_result(
         f"{ex.get('field')!r}, which the tool returned with no value). The agent "
         f"stated a number the tool's payload does not support — unsupported assertion."
     )
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     gate_results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
     decision = VerdictDecision(
         verdict=Verdict.FAIL,
@@ -1955,7 +1955,7 @@ def _substantiation_unsupported_fail_result(
         fail_reason=InvariantCode.SUBSTANTIATION_UNSUPPORTED,
         gate_results=gate_results,
         grounding_check=GroundingCheck(),
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
     return {
         "verdict": "FAIL",
@@ -1997,7 +1997,7 @@ def _phantom_citation_fail_result(
         f"([{phantom_tool} row N]) but that tool was NEVER called this turn — "
         f"the provenance tag is invented. Fabrication → hard FAIL."
     )
-    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results: dict[InvariantCode, bool] = dict.fromkeys(_ALL_INVARIANTS, True)
     gate_results[InvariantCode.PHANTOM_CITATION] = False
     decision = VerdictDecision(
         verdict=Verdict.FAIL,
@@ -2005,7 +2005,7 @@ def _phantom_citation_fail_result(
         fail_reason=InvariantCode.PHANTOM_CITATION,
         gate_results=gate_results,
         grounding_check=GroundingCheck(),
-        dimensions={k: 0 for k in DIMENSION_KEYS},
+        dimensions=dict.fromkeys(DIMENSION_KEYS, 0),
     )
     return {
         "verdict": "FAIL",
@@ -2118,7 +2118,7 @@ def judge_answer(
         return {
             "verdict": "SKIPPED",
             "score": None,
-            "dimensions": {k: None for k in DIMENSION_KEYS},
+            "dimensions": dict.fromkeys(DIMENSION_KEYS),
             "reviewer_summary": _skipped_note,
             "notes": _skipped_note,  # v1.x back-compat mirror
             "raw_response": None,
@@ -2143,7 +2143,7 @@ def judge_answer(
         return {
             "verdict": "ERROR",
             "score": None,
-            "dimensions": {k: None for k in DIMENSION_KEYS},
+            "dimensions": dict.fromkeys(DIMENSION_KEYS),
             "reviewer_summary": _err_note,
             "notes": _err_note,  # v1.x back-compat mirror
             "raw_response": None,
@@ -2328,7 +2328,7 @@ def _finalise_verdict(
         # floor (we still have the judge sub-score); other gates default to
         # "passed".
         grounding_check = GroundingCheck()
-        gate_results = {code: True for code in _ALL_INVARIANTS}
+        gate_results = dict.fromkeys(_ALL_INVARIANTS, True)
         if grounding_score < GROUNDING_VETO_FLOOR:
             gate_results[InvariantCode.GROUNDING_FLOOR] = False
 
