@@ -27,12 +27,14 @@ if _SCRIPTS_DIR not in sys.path:
 from chat_quality_judge import (  # — sys.path mutation must precede the import
     GroundingCheck,
     InvariantCode,
+    JudgeInput,
     Rubric,
     SubstantiationCheck,
     cross_check_grounding,
     evaluate_invariants,
     evaluate_substantiation,
     first_fired_invariant,
+    judge_answer,
 )
 
 pytestmark = pytest.mark.unit
@@ -342,3 +344,56 @@ def test_unsupported_outranks_phantom_priority() -> None:
     gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
     gates[InvariantCode.PHANTOM_CITATION] = False
     assert first_fired_invariant(gates) is InvariantCode.SUBSTANTIATION_UNSUPPORTED
+
+
+# ===========================================================================
+# T4 — judge_answer attaches substantiation_check; deterministic hard-FAIL;
+#       flag-off / presumed run is byte-identical to the pre-W1 baseline.
+# ===========================================================================
+
+
+def _input(answer: str, results: list[dict[str, object]]) -> JudgeInput:
+    return JudgeInput(prompt="q", rubric=Rubric(), answer_text=answer, tool_calls=[], tool_results=results)
+
+
+def test_judge_answer_attaches_substantiation_check_skipped() -> None:
+    """A SKIPPED judge result still carries the substantiation_check block.
+
+    feedback_audit_returned_value_persistence: the check must reach the artefact.
+    With no LLM configured (llm=None) the answer clears the gates and SKIPS.
+    """
+    results = [_tool_result_with_sample("get_fundamentals_history", {"revenue": "46.7B"})]
+    out = judge_answer(_input("Revenue was $46.7B.", results), llm=None)
+    assert out["verdict"] == "SKIPPED"
+    assert isinstance(out["substantiation_check"], dict)
+    assert out["substantiation_check"]["coverage"] == "verified"
+    assert out["substantiation_check"]["substantiated"] == 1
+
+
+def test_judge_answer_hard_fails_on_unsupported() -> None:
+    """An unsupported assertion is a deterministic hard FAIL (no LLM consulted)."""
+    results = [_tool_result_with_sample("get_fundamentals_history", {"revenue": "N/A"})]
+    out = judge_answer(_input("Revenue was $46.7B.", results), llm=None)
+    assert out["verdict"] == "FAIL"
+    assert out["verdict_decision"]["fail_reason"] == "SUBSTANTIATION_UNSUPPORTED"
+    assert out["veto"]["type"] == "substantiation_unsupported"
+    assert out["substantiation_check"]["unsupported"] == 1
+
+
+def test_flag_off_presumed_run_is_byte_identical_to_baseline() -> None:
+    """With NO grounding samples (flag off) the substantiation block is presumed/
+    all-0 and NEVER changes the verdict — byte-identical to the pre-W1 baseline.
+
+    We assert the gate stays passed and the substantiation_check is the zeroed
+    presumed default, so the only added artefact key carries no signal.
+    """
+    # No grounding_sample on the tool result → presumed mode.
+    results = [{"tool": "get_news", "status": "ok", "item_count": 3}]
+    out = judge_answer(_input("Revenue was $46.7B and EPS was $5.40.", results), llm=None)
+    assert out["verdict"] == "SKIPPED"
+    sc = out["substantiation_check"]
+    assert sc["coverage"] == "presumed"
+    assert (sc["substantiated"], sc["unsupported"], sc["contradicted"], sc["unmatched"]) == (0, 0, 0, 0)
+    # The presumed check can never flip the gate, so the answer SKIPs exactly as it
+    # would have pre-W1 (no fail_reason injected).
+    assert out["verdict_decision"] is None

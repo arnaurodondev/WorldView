@@ -411,6 +411,59 @@ _ANSWER_MAX_CHARS = 1500
 _JUDGE_SUMMARY_SCHEMA_VERSION = "2.0"
 
 
+# --- W1 substantiation rollup ---
+# PLAN-0110 W1 / MUST-1. Roll up every per-Q ``substantiation_check`` block
+# (attached to each judge result by ``judge_answer``) into a single summary block
+# for ``_judge_summary.json`` + a ``_report.md`` section. This is a SINGLE
+# additive helper — it reads the already-persisted per-record dicts and never
+# mutates them. ``pct_unsubstantiated`` is over the VERIFIED-coverage denominator
+# (substantiated+unsupported+contradicted): presumed/unmatched claims are not
+# counted (they carry no evidence either way — the honest coverage bound).
+def _substantiation_rollup(judge_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate per-Q substantiation_check blocks into the MUST-1 summary."""
+    verified_n = 0  # substantiated claims (matched a sampled value)
+    unsupported_n = 0  # claims for a named-but-value-less field
+    contradicted_n = 0  # claims a sample disproves
+    unverifiable_n = 0  # unmatched (no associated sampled field) — neutral
+    for rec in judge_records:
+        sc = rec.get("substantiation_check")
+        if not isinstance(sc, dict):
+            continue
+        verified_n += int(sc.get("substantiated") or 0)
+        unsupported_n += int(sc.get("unsupported") or 0)
+        contradicted_n += int(sc.get("contradicted") or 0)
+        unverifiable_n += int(sc.get("unmatched") or 0)
+    evidenced = verified_n + unsupported_n + contradicted_n
+    pct_unsubstantiated = (100.0 * (unsupported_n + contradicted_n) / evidenced) if evidenced else 0.0
+    return {
+        "verified_n": verified_n,
+        "unsupported_n": unsupported_n,
+        "contradicted_n": contradicted_n,
+        "unverifiable_n": unverifiable_n,
+        "pct_unsubstantiated": round(pct_unsubstantiated, 2),
+    }
+
+
+def _render_substantiation_section(judge_summary: dict[str, Any] | None) -> list[str]:
+    """Render the ``_report.md`` 'Substantiation (MUST-1)' section."""
+    lines: list[str] = ["## Substantiation (MUST-1)", ""]
+    sub = (judge_summary or {}).get("substantiation") if judge_summary else None
+    if not isinstance(sub, dict):
+        lines.append("*(no substantiation rollup — run with `--judge`. Verified")
+        lines.append("coverage requires `CHAT_EVAL_GROUNDING_SAMPLES=true` on the chat.)*")
+        lines.append("")
+        return lines
+    lines.append("| Metric | Count |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Substantiated (matched a sampled value) | {sub.get('verified_n', 0)} |")
+    lines.append(f"| ⚠️ Unsupported (asserted for a value-less field) | {sub.get('unsupported_n', 0)} |")
+    lines.append(f"| ⛔ Contradicted (disproved by a sample) | {sub.get('contradicted_n', 0)} |")
+    lines.append(f"| Unverifiable (no associated sampled field) | {sub.get('unverifiable_n', 0)} |")
+    lines.append(f"| **% unsubstantiated** (of evidenced claims) | **{sub.get('pct_unsubstantiated', 0.0)}%** |")
+    lines.append("")
+    return lines
+
+
 def _fmt_duration(seconds: float) -> str:
     """Format ``seconds`` as ``Xm Ys`` (or ``Ys`` if under a minute)."""
     if seconds < 60:
@@ -1281,6 +1334,11 @@ def _render_report_md(
     # only in the collapsed soft-score appendix below, labelled non-authoritative.
     lines.extend(_render_authoritative_verdict_headline(per_question_artifacts))
 
+    # --- W1 substantiation rollup ---
+    # MUST-1 substantiation summary, surfaced near the headline so a reader sees
+    # the verified/unsupported/contradicted split up front.
+    lines.extend(_render_substantiation_section(judge_summary))
+
     # --- Regressions AT THE TOP (FR-15) --------------------------------
     # The durable-trend regression delta (downgrades, score drops, new
     # invariants) is surfaced above any average + a link to the machine-readable
@@ -1640,6 +1698,8 @@ def _regrade_existing_run(runs_dir: Path) -> int:
         "judge_model_id": os.environ.get("CHAT_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL),
         "verdict_model_version": VERDICT_MODEL_VERSION,
         "per_question": judge_records,
+        # --- W1 substantiation rollup ---
+        "substantiation": _substantiation_rollup(judge_records),
         **summarise_judge_records(judge_records),
     }
     (runs_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))
@@ -1842,6 +1902,8 @@ def main(argv: list[str] | None = None) -> int:
         judge_summary = {
             "schema_version": _JUDGE_SUMMARY_SCHEMA_VERSION,
             "per_question": judge_records,
+            # --- W1 substantiation rollup ---
+            "substantiation": _substantiation_rollup(judge_records),
             **summarise_judge_records(judge_records),
         }
         (out_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))

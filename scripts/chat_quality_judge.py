@@ -2098,6 +2098,19 @@ def judge_answer(
     if grounding_check.contradicted > 0:
         return _grounding_contradicted_fail_result(grounding_check, judge_prompt_id=judge_prompt_id)
 
+    # ── Deterministic substantiation cross-check (PLAN-0110 W1 / MUST-1) ──
+    # An UNSUPPORTED assertion (a number stated for a field the tool NAMED but
+    # never quantified) is an LLM-free hard failure — run it BEFORE the SKIPPED
+    # short-circuit so it fires offline (F-4). It is strictly LOWER priority than a
+    # grounding CONTRADICTION (checked just above), matching _INVARIANT_PRIORITY.
+    # With no samples the check is ``presumed`` (unsupported=0) and this is a no-op
+    # — the answer flows on to the SKIPPED / LLM path unchanged (byte-identical to
+    # pre-W1). The check is threaded onward so every returned judge block carries
+    # ``substantiation_check`` (feedback_audit_returned_value_persistence).
+    substantiation_check = evaluate_substantiation(inp.answer_text, inp.tool_results)
+    if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
+        return _substantiation_unsupported_fail_result(substantiation_check, judge_prompt_id=judge_prompt_id)
+
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
         # can clearly show "judge was not run" rather than a fake 0.
@@ -2117,6 +2130,9 @@ def judge_answer(
             # gate fired and no judge, there is genuinely no verdict to compose,
             # so we emit None rather than a misleading 0-score FAIL.
             "verdict_decision": None,
+            # The substantiation check DID run (it cleared the gate above) — emit
+            # it so even a SKIPPED artefact records the coverage/counts.
+            "substantiation_check": substantiation_check.to_dict(),
         }
 
     user_prompt = _build_user_prompt(inp)
@@ -2135,13 +2151,22 @@ def judge_answer(
             # The judge errored → no sub-scores → no verdict to compose (see the
             # SKIPPED path above for the rationale).
             "verdict_decision": None,
+            "substantiation_check": substantiation_check.to_dict(),
         }
 
     parsed = _parse_judge_response(raw)
     # Pass ``inp`` so the deterministic invariant gate (answer-text + tool-result
     # checks) runs inside the tiered composition — the soft judge alone cannot
     # see leaked tokens / truncation / infra non-answers (PLAN-0110 W1).
-    return _finalise_verdict(parsed, raw_response=raw, judge_prompt_id=judge_prompt_id, inp=inp)
+    # ``substantiation_check`` is threaded through so the final judge block carries
+    # it and the gate map is complete (feedback_audit_returned_value_persistence).
+    return _finalise_verdict(
+        parsed,
+        raw_response=raw,
+        judge_prompt_id=judge_prompt_id,
+        inp=inp,
+        substantiation_check=substantiation_check,
+    )
 
 
 def _parse_judge_response(raw: str) -> dict[str, Any]:
@@ -2215,6 +2240,7 @@ def _finalise_verdict(
     raw_response: str,
     judge_prompt_id: str,
     inp: JudgeInput | None = None,
+    substantiation_check: SubstantiationCheck | None = None,
 ) -> dict[str, Any]:
     """Compute the tiered verdict + legacy fields from parsed dimensions.
 
@@ -2281,6 +2307,11 @@ def _finalise_verdict(
     # check (legacy behaviour — never fails for absence).
     if inp is not None:
         grounding_check = cross_check_grounding(inp.answer_text, inp.tool_results)
+        # PLAN-0110 W1: compute the substantiation check here if the caller did not
+        # already (``judge_answer`` passes it in; a direct ``_finalise_verdict``
+        # caller may not). With no samples it is ``presumed`` and cannot fire.
+        if substantiation_check is None:
+            substantiation_check = evaluate_substantiation(inp.answer_text, inp.tool_results)
         gate_results = evaluate_invariants(
             inp.answer_text,
             inp.tool_results,
@@ -2289,6 +2320,7 @@ def _finalise_verdict(
             grounding_score=grounding_score,
             tool_calls=inp.tool_calls,
             relax_non_answer_gates=_is_appropriate_refusal(inp),
+            substantiation_check=substantiation_check,
         )
     else:
         # No inputs → no answer/samples to cross-check, so the GroundingCheck is
@@ -2376,6 +2408,13 @@ def _finalise_verdict(
         # consumers (trend store W4, report W5) read it. It is emitted ALONGSIDE
         # the legacy keys, never instead of them, for the back-compat window.
         "verdict_decision": decision.to_dict(),
+        # ── W1 substantiation check (MUST-1) ──────────────────────────────
+        # feedback_audit_returned_value_persistence: the substantiation counts +
+        # coverage MUST reach the artefact, not just a counter. Always present
+        # (presumed/all-0 when no samples) so the runner rollup is uniform.
+        "substantiation_check": (
+            substantiation_check.to_dict() if substantiation_check is not None else SubstantiationCheck().to_dict()
+        ),
     }
 
 
