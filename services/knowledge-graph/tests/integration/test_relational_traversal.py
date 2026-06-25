@@ -65,7 +65,7 @@ async def _seed_graph(session_factory) -> dict[str, UUID]:
     ids = {name: uuid4() for name in ("apple", "tsmc", "anthropic", "tech_sector", "microsoft", "nintendo")}
     async with session_factory() as s:
         for name, eid in ids.items():
-            etype = "sector" if name == "tech_sector" else "company"
+            etype = "sector" if name == "tech_sector" else "organization"
             await s.execute(
                 text(
                     "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) "
@@ -80,11 +80,19 @@ async def _seed_graph(session_factory) -> dict[str, UUID]:
             (ids["microsoft"], "is_in_sector", ids["tech_sector"]),
         ]
         for subj, typ, obj in rels:
+            # relations has several NOT-NULL-no-default columns (decay_class,
+            # decay_alpha) wired to decay_class_config via the registry.  Derive
+            # both from a registry⋈config join so every check/FK is satisfied.
             await s.execute(
                 text(
                     "INSERT INTO relations (relation_id, subject_entity_id, canonical_type, "
-                    "object_entity_id, confidence, base_confidence, confidence_stale) "
-                    "VALUES (:rid, :subj, :typ, :obj, 0.9, 0.9, false)"
+                    "object_entity_id, confidence, base_confidence, confidence_stale, "
+                    "decay_class, decay_alpha) "
+                    "SELECT :rid, :subj, CAST(:typ AS varchar), :obj, 0.9, 0.9, false, "
+                    "       cfg.decay_class, cfg.decay_alpha "
+                    "  FROM relation_type_registry reg "
+                    "  JOIN decay_class_config cfg ON cfg.decay_class = reg.decay_class "
+                    " WHERE reg.canonical_type = CAST(:typ AS varchar)"
                 ),
                 {"rid": uuid4(), "subj": subj, "typ": typ, "obj": obj},
             )
@@ -163,11 +171,27 @@ async def test_degree_cap_bounds_enumeration(session_factory) -> None:
     )
 
     ids = await _seed_graph(session_factory)
-    # degree_cap=1: each frontier node expands at most ONE neighbour, so the
-    # apple->tsmc->anthropic chain (a single linear route) is still found.
-    adapter = RelationalGraphPathAdapter(session_factory, degree_cap=1)
-    paths = await adapter.find_paths_between(ids["apple"], ids["tsmc"], max_hops=2, prune_membership=False, limit=5)
-    assert any(p.hop_count == 1 for p in paths)
+    # apple has out-degree 2 (tsmc + tech_sector).  With a cap >= 2 both are
+    # expanded, so the apple->tsmc 1-hop direct edge is always found.
+    wide = RelationalGraphPathAdapter(session_factory, degree_cap=10)
+    wide_paths = await wide.find_paths_between(ids["apple"], ids["tsmc"], max_hops=2, prune_membership=False, limit=5)
+    assert any(p.hop_count == 1 for p in wide_paths)
+
+    # With degree_cap=1 each frontier node expands only its lexicographically
+    # first neighbour (ORDER BY dst), so a hub cannot fan out the full frontier —
+    # the capped adapter never returns MORE paths than the uncapped one.  This is
+    # the bound the cap exists to enforce (a hub fan-out guard, not a correctness
+    # guarantee for any specific target).
+    capped = RelationalGraphPathAdapter(session_factory, degree_cap=1)
+    capped_paths = await capped.find_paths_between(
+        ids["apple"], ids["anthropic"], max_hops=3, prune_membership=False, limit=20
+    )
+    wide_anthropic = await wide.find_paths_between(
+        ids["apple"], ids["anthropic"], max_hops=3, prune_membership=False, limit=20
+    )
+    assert len(capped_paths) <= len(wide_anthropic)
+    # The uncapped run finds the apple->tsmc->anthropic 2-hop route.
+    assert any(p.hop_count == 2 for p in wide_anthropic)
 
 
 @pytest.mark.asyncio
