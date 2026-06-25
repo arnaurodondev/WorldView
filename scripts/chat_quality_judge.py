@@ -220,6 +220,15 @@ class InvariantCode(str, Enum):
     EMPTY_AFTER_TOOLS = "EMPTY_AFTER_TOOLS"  # tool ok+items>=1 but no substantive synthesis
     INFRA_NON_ANSWER = "INFRA_NON_ANSWER"  # all relevant tools transport_error/5xx + apology
     GROUNDING_CONTRADICTED = "GROUNDING_CONTRADICTED"  # numeric claim contradicted by a sample (W3)
+    # SUBSTANTIATION_UNSUPPORTED (PLAN-0110 W1 / MUST-1): the answer asserts a
+    # number for a field the tool NAMED in its grounding sample but never actually
+    # quantified (no parseable value) — an unsupported assertion (weaker proof than
+    # a contradicted value, but still fabrication-adjacent). Deterministic +
+    # LLM-free. Ranked BELOW GROUNDING_CONTRADICTED (a disproved value is strictly
+    # worse) and ABOVE PHANTOM_CITATION. Fires ONLY when coverage=="verified" with
+    # unsupported>0 — so a presumed / flag-off run can NEVER trip it (the W1
+    # byte-identical-baseline guarantee).
+    SUBSTANTIATION_UNSUPPORTED = "SUBSTANTIATION_UNSUPPORTED"  # claim for a named-but-value-less sampled field
     # PHANTOM_CITATION (gold-calibration fix 2026-06-12): the answer attaches a
     # ``[tool_name row N]`` / ``[tool_name]`` provenance tag for a tool that was
     # NEVER called this turn. The cited tool name is disjoint from the called-tool
@@ -239,6 +248,7 @@ class InvariantCode(str, Enum):
 # token AND sits below the grounding floor is reported as CONTROL_TOKEN_LEAK.
 _INVARIANT_PRIORITY: tuple[InvariantCode, ...] = (
     InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.SUBSTANTIATION_UNSUPPORTED,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.CONTROL_TOKEN_LEAK,
     InvariantCode.TRUNCATED,
@@ -1134,6 +1144,7 @@ _ALL_INVARIANTS: tuple[InvariantCode, ...] = (
     InvariantCode.EMPTY_AFTER_TOOLS,
     InvariantCode.INFRA_NON_ANSWER,
     InvariantCode.GROUNDING_CONTRADICTED,
+    InvariantCode.SUBSTANTIATION_UNSUPPORTED,
     InvariantCode.PHANTOM_CITATION,
     InvariantCode.GROUNDING_FLOOR,
 )
@@ -1149,6 +1160,7 @@ def evaluate_invariants(
     tool_calls: list[dict[str, Any]] | None = None,
     relax_non_answer_gates: bool = False,
     enabled: set[InvariantCode] | None = None,
+    substantiation_check: SubstantiationCheck | None = None,
 ) -> dict[InvariantCode, bool]:
     """Run every deterministic invariant gate; return per-code pass/fail.
 
@@ -1221,6 +1233,18 @@ def evaluate_invariants(
     if InvariantCode.GROUNDING_CONTRADICTED in active:
         if grounding_check.contradicted > 0:
             results[InvariantCode.GROUNDING_CONTRADICTED] = False
+
+    # 3a) Substantiation → SUBSTANTIATION_UNSUPPORTED (W1 / MUST-1). Fires when the
+    #     answer asserts a number for a field the tool NAMED but never quantified
+    #     (``unsupported > 0``) AND the check actually had samples to bite on
+    #     (``coverage == "verified"``). The coverage guard is what makes a presumed
+    #     / flag-off / no-sample run byte-identical to the pre-W1 baseline: with no
+    #     samples ``unsupported`` is 0 anyway, but we double-guard on coverage so a
+    #     future change cannot make this gate fire in presumed mode. ``None`` →
+    #     caller did not run the substantiation check → gate cannot fire.
+    if InvariantCode.SUBSTANTIATION_UNSUPPORTED in active and substantiation_check is not None:
+        if substantiation_check.coverage == "verified" and substantiation_check.unsupported > 0:
+            results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
 
     # 3b) Phantom citation → PHANTOM_CITATION. A ``[tool_name row N]`` provenance
     #     tag whose tool name was never in the called-tool set is invented →
@@ -1898,6 +1922,58 @@ def _grounding_contradicted_fail_result(
             "detail": text,
         },
         "verdict_decision": decision.to_dict(),
+    }
+
+
+def _substantiation_unsupported_fail_result(
+    substantiation_check: SubstantiationCheck,
+    *,
+    judge_prompt_id: str,
+) -> dict[str, Any]:
+    """Build a hard-FAIL verdict for a deterministic UNSUPPORTED assertion (W1).
+
+    Mirror of ``_grounding_contradicted_fail_result`` for the
+    ``SUBSTANTIATION_UNSUPPORTED`` gate. The LLM judge is NOT consulted: the agent
+    asserted a number for a field the tool NAMED but never quantified — an
+    unsupported assertion — so we hard-FAIL deterministically (works offline,
+    F-4). The populated ``SubstantiationCheck`` (with examples) is carried on the
+    legacy ``veto`` so the report can render the claim-vs-empty-field mismatch.
+    """
+    ex = next((e for e in substantiation_check.examples if e.get("kind") == "unsupported"), {})
+    text = (
+        f"SUBSTANTIATION UNSUPPORTED: {substantiation_check.unsupported} numeric "
+        f"claim(s) assert a value for a sampled field the tool never quantified "
+        f"(e.g. claim {ex.get('claim_text', ex.get('claim'))!r} for field "
+        f"{ex.get('field')!r}, which the tool returned with no value). The agent "
+        f"stated a number the tool's payload does not support — unsupported assertion."
+    )
+    gate_results: dict[InvariantCode, bool] = {code: True for code in _ALL_INVARIANTS}
+    gate_results[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
+    decision = VerdictDecision(
+        verdict=Verdict.FAIL,
+        quality_score=0,
+        fail_reason=InvariantCode.SUBSTANTIATION_UNSUPPORTED,
+        gate_results=gate_results,
+        grounding_check=GroundingCheck(),
+        dimensions={k: 0 for k in DIMENSION_KEYS},
+    )
+    return {
+        "verdict": "FAIL",
+        "score": 0,
+        "dimensions": {k: {"score": 0, "feedback": text, "reason": text} for k in DIMENSION_KEYS},
+        "reviewer_summary": text,
+        "notes": text,  # back-compat mirror
+        "raw_response": None,
+        "judge_prompt_id": judge_prompt_id,
+        "veto": {
+            "type": "substantiation_unsupported",
+            "reason": "numeric_claim_unsupported",
+            "unsupported": substantiation_check.unsupported,
+            "examples": list(substantiation_check.examples),
+            "detail": text,
+        },
+        "verdict_decision": decision.to_dict(),
+        "substantiation_check": substantiation_check.to_dict(),
     }
 
 

@@ -25,9 +25,14 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 from chat_quality_judge import (  # — sys.path mutation must precede the import
+    GroundingCheck,
+    InvariantCode,
+    Rubric,
     SubstantiationCheck,
     cross_check_grounding,
+    evaluate_invariants,
     evaluate_substantiation,
+    first_fired_invariant,
 )
 
 pytestmark = pytest.mark.unit
@@ -251,3 +256,89 @@ def test_substantiation_check_defaults_and_to_dict() -> None:
         "examples",
     }
     assert d["coverage"] == "presumed"
+
+
+# ===========================================================================
+# T3 — SUBSTANTIATION_UNSUPPORTED invariant gate wiring
+# ===========================================================================
+
+
+def _verified_unsupported() -> SubstantiationCheck:
+    """A ``verified`` substantiation check with one unsupported claim."""
+    return SubstantiationCheck(
+        unsupported=1, coverage="verified", examples=[{"field": "revenue", "kind": "unsupported"}]
+    )
+
+
+def test_gate_fires_when_unsupported_and_verified() -> None:
+    """The gate fires (False) when unsupported>0 AND coverage=='verified'."""
+    gates = evaluate_invariants(
+        "Revenue was $46.7B.",
+        [],
+        Rubric(),
+        GroundingCheck(),
+        substantiation_check=_verified_unsupported(),
+    )
+    assert gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] is False
+
+
+def test_gate_silent_in_presumed_mode() -> None:
+    """A presumed substantiation check (all-0) NEVER fires the gate.
+
+    This is the W1 byte-identical-baseline guarantee: a flag-off / no-sample run
+    classifies everything as presumed, so the gate cannot fire.
+    """
+    presumed = SubstantiationCheck(coverage="presumed")
+    gates = evaluate_invariants(
+        "Revenue was $46.7B.",
+        [],
+        Rubric(),
+        GroundingCheck(),
+        substantiation_check=presumed,
+    )
+    assert gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] is True
+
+
+def test_gate_not_fired_when_check_absent() -> None:
+    """No substantiation_check passed → gate cannot fire (back-compat callers)."""
+    gates = evaluate_invariants("Revenue was $46.7B.", [], Rubric(), GroundingCheck())
+    assert gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] is True
+
+
+def test_gate_disableable() -> None:
+    """The gate is suppressed when not in the ``enabled`` set (FR-3 toggleability)."""
+    enabled = {c for c in InvariantCode if c is not InvariantCode.SUBSTANTIATION_UNSUPPORTED}
+    gates = evaluate_invariants(
+        "Revenue was $46.7B.",
+        [],
+        Rubric(),
+        GroundingCheck(),
+        enabled=enabled,
+        substantiation_check=_verified_unsupported(),
+    )
+    # Disabled → reported as passed (True), never fires.
+    assert gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] is True
+
+
+def test_contradicted_outranks_unsupported_priority() -> None:
+    """When both GROUNDING_CONTRADICTED and SUBSTANTIATION_UNSUPPORTED fire, the
+    contradiction is the reported fail_reason (higher priority)."""
+    gates = evaluate_invariants(
+        "Revenue was $5.4B.",
+        [],
+        Rubric(),
+        GroundingCheck(contradicted=1, evidence_mode="verified"),
+        substantiation_check=_verified_unsupported(),
+    )
+    assert gates[InvariantCode.GROUNDING_CONTRADICTED] is False
+    assert gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] is False
+    # The single reported reason is the more-severe contradiction.
+    assert first_fired_invariant(gates) is InvariantCode.GROUNDING_CONTRADICTED
+
+
+def test_unsupported_outranks_phantom_priority() -> None:
+    """SUBSTANTIATION_UNSUPPORTED outranks PHANTOM_CITATION in the priority order."""
+    gates = {c: True for c in InvariantCode}
+    gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
+    gates[InvariantCode.PHANTOM_CITATION] = False
+    assert first_fired_invariant(gates) is InvariantCode.SUBSTANTIATION_UNSUPPORTED
