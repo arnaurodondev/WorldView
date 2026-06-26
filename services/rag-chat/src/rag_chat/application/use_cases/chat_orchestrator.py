@@ -1952,6 +1952,21 @@ class ChatOrchestratorUseCase:
         # stable key without crashing on frozenset() of unhashable contents.
         _tool_result_cache: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
 
+        # 2026-06-26 failure-analysis #1/#7: empty-``search_documents`` loop guard.
+        # The planner's dominant failure mode is reaching for free-text
+        # ``search_documents`` when unsure, then re-issuing the SAME (or a
+        # near-identical) query after it returns zero rows — burning iterations
+        # and ending in a refusal. We count, per normalised query string, how
+        # many times ``search_documents`` came back EMPTY this turn; once a
+        # query has come back empty twice we inject a one-shot guidance message
+        # telling the LLM to stop repeating it and escalate to a structured tool
+        # (or answer "not found"). The normalisation is intentionally coarse
+        # (lower-cased, whitespace-collapsed) so trivial rewordings of the same
+        # empty query still collide. ``_empty_search_nudge_emitted`` makes the
+        # nudge fire at most once per turn so we never spam the context window.
+        _empty_search_query_counts: dict[str, int] = {}
+        _empty_search_nudge_emitted = False
+
         # BP-604 (PLAN-0100 W1 T-W1-02): per-turn entity-drift guard state.
         # ``_question_entity_ids`` is built ONCE from the resolved-entity set
         # (entities + entity_context) and reused on every iteration.  The
@@ -2485,6 +2500,16 @@ class ChatOrchestratorUseCase:
                 # the second-turn synthesis fallback can name the data sources
                 # that produced results when the LLM summary call fails.
                 _executed_tool_names.append(tc.name)
+                # 2026-06-26 #1/#7: per-query empty-search bookkeeping. Only
+                # ``search_documents`` is tracked — it is the free-text routing
+                # sink. We key on the normalised query so a re-issued or lightly
+                # reworded empty query collides with its prior attempt.
+                if tc.name == "search_documents" and _count == 0 and _status != "transport_error":
+                    _q_raw = tc.input.get("query") if isinstance(tc.input, dict) else None
+                    if isinstance(_q_raw, str):
+                        _q_norm = " ".join(_q_raw.lower().split())
+                        if _q_norm:
+                            _empty_search_query_counts[_q_norm] = _empty_search_query_counts.get(_q_norm, 0) + 1
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
                 # Q1 fix: use accurate per-tool latency from the executor rather than
                 # total_batch_time / n_tools (which incorrectly averages concurrent calls).
@@ -2849,6 +2874,42 @@ class ChatOrchestratorUseCase:
                     }
                 )
                 break
+
+            # ── 2026-06-26 #1/#7: empty-search-loop guardrail ─────────────────
+            # If ANY search_documents query has now come back empty 2+ times this
+            # turn, inject a single guidance message so the LLM stops re-issuing
+            # the dead query and instead escalates to a structured tool (or
+            # answers "not found"). Fires at most once per turn. This catches the
+            # mixed-batch case the all-tools-empty branch above does not (where
+            # search_documents was empty but a sibling tool in the same batch
+            # returned rows, so the loop continued normally).
+            if not _empty_search_nudge_emitted:
+                _looping_queries = [q for q, n in _empty_search_query_counts.items() if n >= 2]
+                if _looping_queries:
+                    _empty_search_nudge_emitted = True
+                    log.info(  # type: ignore[no-any-return]
+                        "empty_search_loop_guard_triggered",
+                        repeated_query_count=len(_looping_queries),
+                        iteration=iteration,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your search_documents query returned no results and has already "
+                                "been tried more than once. STOP re-issuing the same free-text "
+                                "search. Instead, either (a) call the dedicated structured tool "
+                                "that matches the question — get_earnings_calendar for earnings "
+                                "dates, get_economic_calendar for macro events, get_entity_news "
+                                "for single-company news, traverse_graph / search_entity_relations "
+                                "for relationships, query_fundamentals / "
+                                "get_fundamentals_history_batch for numbers, compare_entities for "
+                                "comparisons, search_events for corporate events, search_claims for "
+                                "analyst theses — or (b) answer that no documents were found. Do "
+                                "NOT repeat the empty query."
+                            ),
+                        }
+                    )
 
             # ── Inject tool results into messages for next iteration ──────────
             # Rerank + build context block for message injection.

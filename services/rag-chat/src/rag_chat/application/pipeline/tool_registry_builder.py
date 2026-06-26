@@ -227,9 +227,30 @@ def build_default_registry() -> ToolRegistry:
             description=(
                 "Searches the platform's document corpus using hybrid BM25 + ANN embedding search. "
                 "Returns text excerpts from news articles, SEC filings (10-K, 10-Q, 8-K), earnings "
-                "call transcripts, and analyst reports. Use for factual questions, news, company "
-                "announcements, and any question requiring text evidence. This is the primary "
-                "retrieval tool for unstructured information."
+                "call transcripts, and analyst reports. Use for open-ended factual questions that "
+                "need free-text evidence from documents (e.g. 'what risks does AAPL cite in its "
+                "10-K', 'what did analysts say about NVDA data-centre revenue'). This is a "
+                "LAST-RESORT, broad retrieval tool — prefer the dedicated structured tool whenever "
+                "the question shape matches one.\n"
+                "DO NOT use this tool for — route to the named tool instead:\n"
+                "  - earnings dates / who-reports-when / earnings season → get_earnings_calendar.\n"
+                "  - macro / economic events (CPI, FOMC, GDP) → get_economic_calendar.\n"
+                "  - latest news on ONE named company/ticker → get_entity_news.\n"
+                "  - a company's relationships / partners / subsidiaries / board / 'before joining "
+                "X' history → traverse_graph, search_entity_relations, or get_entity_intelligence.\n"
+                "  - the relation BETWEEN two named entities → traverse_graph.\n"
+                "  - numeric fundamentals (revenue, margins, P/E, EPS, growth) → query_fundamentals "
+                "or get_fundamentals_history (single ticker) / get_fundamentals_history_batch "
+                "(2+ tickers).\n"
+                "  - side-by-side comparison of 2-4 tickers → compare_entities.\n"
+                "  - corporate events (M&A, leadership change, product launch) for an entity → "
+                "search_events.\n"
+                "  - analyst claims / price targets / sector theses → search_claims.\n"
+                "  - filtering the stock universe by criteria (sector, market cap, margin) → "
+                "screen_universe.\n"
+                "GUARDRAIL: if a search_documents call returns NO rows, do NOT re-issue the same or "
+                "a near-identical query — either escalate to the matching structured tool above or "
+                "answer that no documents were found."
             ),
             parameters=[
                 ParameterSpec(name="query", type="string", description="Natural language search query", required=True),
@@ -371,7 +392,12 @@ def build_default_registry() -> ToolRegistry:
             description=(
                 "Searches for relation triplets involving an entity in the knowledge graph. "
                 "Returns structured (subject, relation_type, object) triples with confidence scores. "
-                "Use for listing what is known about an entity's relationships in structured form."
+                "**Use this — NOT search_documents — to list what is known about ONE entity's "
+                "relationships** (who it invests in, competes with, acquired, partners with, "
+                "supplies). Triggers: 'who does X invest in', 'list X's acquisitions', 'X's "
+                "suppliers/partners'. For the relationship BETWEEN two named entities use "
+                "traverse_graph instead; for narrative career/biographical history use "
+                "get_entity_intelligence."
             ),
             parameters=[
                 ParameterSpec(
@@ -412,10 +438,14 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="search_claims",
             description=(
-                "Searches for analyst claims and extracted assertions about an entity. Claims are "
-                'LLM-extracted structured statements from financial documents (e.g., "AAPL will '
-                'expand into India"). Use for opinion-type questions, target price questions, or '
-                "when you need to contrast what analysts are saying."
+                "Searches for analyst claims and extracted assertions about an entity or theme. "
+                "Claims are LLM-extracted structured statements from financial documents (e.g., "
+                '"AAPL will expand into India"). **Use this — NOT search_documents — for '
+                "opinion / thesis / target-price questions and for SECTOR or THEME claims** "
+                "(e.g. 'what are analysts saying about AI-chip demand', 'bullish theses on "
+                "semiconductors'). For a broad sector thesis, query by the theme rather than "
+                "narrowing to a single company. Use when you need to contrast what analysts "
+                "are saying."
             ),
             parameters=[
                 ParameterSpec(
@@ -457,8 +487,12 @@ def build_default_registry() -> ToolRegistry:
             name="search_events",
             description=(
                 "Retrieves structured corporate events involving an entity — earnings releases, "
-                "M&A activity, leadership changes, product launches, regulatory filings. Use for "
-                "timeline or event-based questions."
+                "M&A activity, leadership changes, product launches, regulatory filings. "
+                "**Use this — NOT search_documents — for timeline / event-based questions** "
+                "('when did X last acquire a company', 'what M&A happened in healthcare in 2024', "
+                "'recent leadership changes at Tesla'). Filter by event_type and date range rather "
+                "than free-text searching. For earnings DATES specifically, prefer "
+                "get_earnings_calendar."
             ),
             parameters=[
                 ParameterSpec(
@@ -639,7 +673,7 @@ def build_default_registry() -> ToolRegistry:
                     name="source_entity",
                     type="string",
                     description=(
-                        "First entity — UUID, ticker symbol (e.g. 'NVDA'), or company name. " "Resolved server-side."
+                        "First entity — UUID, ticker symbol (e.g. 'NVDA'), or company name. Resolved server-side."
                     ),
                     required=True,
                 ),
@@ -1032,9 +1066,12 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_earnings_calendar",
             description=(
-                "Returns earnings release dates for companies including EPS estimates and "
-                "actuals. Use when the user asks about upcoming earnings, earnings season, or "
-                "when a specific company reports."
+                "**Use this tool — NOT search_documents — for ANY question about earnings DATES "
+                "or the earnings calendar.** Returns earnings release dates for companies "
+                "including EPS estimates and actuals. Triggers: 'who reports earnings next week', "
+                "'when does Apple next report', 'earnings season', 'upcoming earnings for my "
+                "portfolio'. Free-text document search will NOT reliably surface a structured "
+                "calendar — always come here first for earnings timing."
             ),
             parameters=[
                 ParameterSpec(
@@ -1201,7 +1238,7 @@ def build_default_registry() -> ToolRegistry:
                     name="period_type",
                     type="string",
                     description=(
-                        'Periodicity: "quarterly" (default) or "annual". Anything ' 'else falls back to "quarterly".'
+                        'Periodicity: "quarterly" (default) or "annual". Anything else falls back to "quarterly".'
                     ),
                     required=False,
                 ),
