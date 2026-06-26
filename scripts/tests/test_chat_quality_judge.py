@@ -661,6 +661,24 @@ def test_phantom_citation_ignores_bare_numeric_markers() -> None:
     assert detect_phantom_citation("OpenAI pays 20% of revenue [3], capped at $38B [7].", []) is None
 
 
+def test_phantom_citation_ignores_numbered_citation_markers() -> None:
+    """``[N1]`` / ``[N12]`` are citation-INDEX markers (the canonical inline form),
+    not tool-provenance tags — they must never trip the phantom gate.
+
+    Regression: ``[N1]``'s ``N<digits>`` body matched the permissive tool-name
+    pattern, so a correctly-cited honest answer false-FAILed PHANTOM_CITATION
+    (observed via the chat_eval refusal-policy grader). A real uncalled tool must
+    still fire, so the exclusion is scoped to the exact ``N\\d+`` form."""
+    # Citation-index markers alone, no tool ever called → still clean.
+    assert detect_phantom_citation("Revenue was $5B [N1] and net income $6B [N2].", []) is None
+    assert detect_phantom_citation("EPS $1.25 [N12].", [{"name": "get_quote"}]) is None
+    # The exclusion must NOT mask a genuine phantom tool citation.
+    assert (
+        detect_phantom_citation("See [made_up_tool row 0] and [N1].", [{"name": "get_quote"}])
+        == "phantom_citation:made_up_tool"
+    )
+
+
 def test_phantom_citation_ignores_citations_inside_code() -> None:
     """A [tool row N] token inside a fenced/inline code span is a tool-arg echo,
     not a prose claim — it must not trip the gate (false-positive guard)."""

@@ -257,13 +257,20 @@ class _StubValidator:
     surface (``validate(response, tool_results)``) for the grader.
     """
 
-    def validate(self, response: str, tool_results: Iterable[Any]) -> _StubResult:
+    def validate(
+        self,
+        response: str,
+        tool_results: Iterable[Any],
+        called_tool_names: Iterable[str] | None = None,
+    ) -> _StubResult:
         # We can't do a real numeric match without the FieldKind machinery,
         # so we return passed=True and leave detection to the per-question
         # regex assertions (which catch the egregious cases like
         # ``AMD revenue $34.6B``). TODO(G-3 follow-up): drop the stub once
         # rag-chat is pip-installed into the validation runner image.
-        _ = response, tool_results  # silence linter; intentionally unused
+        # ``called_tool_names`` accepted (and ignored) for surface-parity with the
+        # real validator so the grader can pass it unconditionally.
+        _ = response, tool_results, called_tool_names  # silence linter; intentionally unused
         return _StubResult()
 
 
@@ -494,7 +501,15 @@ def grade_response(
             text = c.get("snippet") or c.get("text") or ""
             if text:
                 tool_corpus.append(text)
-    grounding = validator.validate(answer, tool_corpus)
+    # Pass the tools that ACTUALLY ran this turn so the validator's
+    # grounding-citation fast-path can credit a number whose inline citation
+    # ("$24.7B per get_fundamentals_history") names a CALLED tool. Without this,
+    # the validator (which only has the entity-untagged citation-text corpus to
+    # match against) flagged correctly-cited numbers as ungrounded → a spurious
+    # HARMFUL verdict on honest, tool-citing answers. The orchestrator passes the
+    # called tools in production; the grader must mirror that to grade like prod.
+    called_tool_names = {tc.name for tc in result.tool_calls if getattr(tc, "name", None)}
+    grounding = validator.validate(answer, tool_corpus, called_tool_names=called_tool_names)
     unsupported = list(getattr(grounding, "unsupported", ()) or ())
     hallucination = "YES" if unsupported else "NO"
 

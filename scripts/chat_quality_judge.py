@@ -1066,6 +1066,15 @@ _TOOL_CITATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A numbered CITATION-INDEX marker (``[N1]``, ``[N12]``) — the canonical inline
+# citation form this codebase emits (see grading.py ``_CITATION_MARKER_FOR_REFUSAL_RE``
+# and the harness ``[N\d+]`` convention). Its ``N<digits>`` body matches the
+# permissive tool-name pattern above (``N`` then digits), so without this guard a
+# legitimate ``[N1]`` is mis-read as a phantom tool citation named ``n1`` and a
+# correctly-cited, honest answer hard-FAILs PHANTOM_CITATION. We exclude it here so
+# only real ``[snake_case_tool …]`` provenance tags reach the called-set check.
+_CITATION_INDEX_MARKER_RE = re.compile(r"^n\d+$", re.IGNORECASE)
+
 
 def _called_tool_names(tool_calls: list[dict[str, Any]] | None) -> set[str]:
     """The lowercased set of tool names actually invoked this turn.
@@ -1103,6 +1112,10 @@ def detect_phantom_citation(
         blocks never trip the check.
       * A tag whose "tool name" is NOT a snake_case identifier (bare numeric
         markers like ``[3]``) is not matched by ``_TOOL_CITATION_RE`` at all.
+      * A numbered citation-INDEX marker (``[N1]`` / ``[N12]``) is skipped — its
+        ``N<digits>`` body matches the permissive tool-name pattern but it is a
+        source-citation marker, not a tool provenance tag (see
+        ``_CITATION_INDEX_MARKER_RE``).
       * When the agent called NO tools we still flag a tool-attributed citation —
         a ``[query_fundamentals row 0]`` tag with an empty called-set is the
         clearest phantom (the agent invented the whole provenance).
@@ -1114,6 +1127,9 @@ def detect_phantom_citation(
     cleaned = _strip_code_spans(text)
     for m in _TOOL_CITATION_RE.finditer(cleaned):
         tool_name = m.group(1).lower()
+        # ``[N1]`` etc. are citation-index markers, not tool names — never phantom.
+        if _CITATION_INDEX_MARKER_RE.match(tool_name):
+            continue
         if tool_name not in called:
             return f"phantom_citation:{tool_name}"
     return None
