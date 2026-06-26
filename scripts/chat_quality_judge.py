@@ -1333,7 +1333,17 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "free_cash_flow": ("free cash flow", "free_cash_flow", "fcf"),
     "dividend_yield": ("dividend yield", "dividend_yield"),
     "price": ("price", "share price", "trading at", "quote"),
+    "gross_margin": ("gross margin", "gross_margin"),
+    "net_margin": ("net margin", "net_margin", "profit margin", "net profit margin"),
+    "operating_margin": ("operating margin", "operating_margin", "op margin"),
 }
+
+# Percent-valued fields a handler may emit as a RATIO (``0.586``) while the answer
+# states them as a PERCENT (``"58.6%"``). For these, a claim is compared against
+# BOTH the raw sample and ``sample * 100`` so the ratio/percent representation
+# mismatch does not produce a false contradiction. Cheap, one set — see
+# docs/audits/2026-06-26-substantiation-eval-design.md (margin-as-ratio note).
+_PERCENT_VALUED_FIELDS: frozenset[str] = frozenset({"gross_margin", "net_margin", "operating_margin"})
 
 # How far (chars) on EITHER side of a number we look for a field-name / alias to
 # associate the claim with a sampled field. A short window keeps "revenue is X …
@@ -1456,6 +1466,22 @@ def _values_within_tolerance(claim: float, sample: float) -> bool:
         return True
     denom = max(abs(claim), abs(sample))
     return denom > 0 and (diff / denom) <= _GROUNDING_REL_TOL
+
+
+def _field_value_matches(field_name: str, claim: float, sample: float) -> bool:
+    """Tolerance match that knows percent-valued fields.
+
+    For a margin emitted as a ratio (``0.586``) while the answer states a percent
+    (``"58.6%"`` → claim ``58.6``), also compare the claim against ``sample * 100``
+    so the representation mismatch is not a false contradiction. The extra check is
+    one-directional (only widens matches) and gated on the canonical field name, so
+    non-percent fields are unaffected.
+    """
+    if _values_within_tolerance(claim, sample):
+        return True
+    if field_name in _PERCENT_VALUED_FIELDS:
+        return _values_within_tolerance(claim, sample * 100.0)
+    return False
 
 
 def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict[str, list[float]]:
@@ -1605,7 +1631,7 @@ def cross_check_grounding(
             continue
 
         samples = grounding_fields[field_name]
-        if any(_values_within_tolerance(claim_val, s) for s in samples):
+        if any(_field_value_matches(field_name, claim_val, s) for s in samples):
             matched += 1
             continue
 
@@ -1758,7 +1784,7 @@ def evaluate_substantiation(
             )
             continue
 
-        if any(_values_within_tolerance(claim_val, s) for s in samples):
+        if any(_field_value_matches(field_name, claim_val, s) for s in samples):
             substantiated += 1
             continue
 
