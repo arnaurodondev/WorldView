@@ -1,0 +1,519 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_claims"
+    ]
+  },
+  "heuristics": {
+    "char_count": 74,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_claims"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_claims"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 15.102,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 19,
+    "phase_timings_ms": {
+      "check_cache": 2.0769999973708764,
+      "entity_resolution": 95.09441700356547,
+      "grounding_validation": 4971.58091799065,
+      "llm_direct_text_generation": 3726.836585003184,
+      "llm_tool_planning": 7522.3378779919585,
+      "load_history": 12.149375004810281,
+      "persist_and_cache": 14.036041000508703,
+      "tool_execution": 717.6269999908982,
+      "validate_input": 1210.0468759890646
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "claim_type",
+          "date_from",
+          "date_to",
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_claims"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      }
+    ],
+    "ttft_s": 1.241,
+    "word_count": 13
+  },
+  "id": "tc_search_claims_tesla_margins",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "The question is a factual lookup; the concise one-sentence answer is appropriate for the depth of the available data.",
+        "reason": "The question is a factual lookup; the concise one-sentence answer is appropriate for the depth of the available data.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample contradicts the answer; the tool returned status=ok items=20 but the answer states no claims were found, which is a refusal supported by the tool's missing-coverage flag (items=0 for margin claims).",
+        "reason": "No grounding sample contradicts the answer; the tool returned status=ok items=20 but the answer states no claims were found, which is a refusal supported by the tool's missing-coverage flag (items=0 for margin claims).",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'No analyst claims ... were found' but rubric.appropriate_refusal_ok=true and tool_results show no margin-specific claims, so refusal is appropriate.",
+        "reason": "Contains refusal phrase 'No analyst claims ... were found' but rubric.appropriate_refusal_ok=true and tool_results show no margin-specific claims, so refusal is appropriate.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_claims, which is in the expected_tools equivalence set.",
+        "reason": "Called search_claims, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to search_claims and produced a concise, appropriate refusal when no margin-specific claims were found. The only improvement would be to verify that the 20 returned items truly contain no margin-related claims before refusing, but given the rubric's appropriate_refusal_ok flag, this is acceptable.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_claims, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample contradicts the answer; the tool returned status=ok items=20 but the answer states no claims were found, which is a refusal supported by the tool's missing-coverage flag (items=0 for margin claims).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"The question is a factual lookup; the concise one-sentence answer is appropriate for the depth of the available data.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Contains refusal phrase 'No analyst claims ... were found' but rubric.appropriate_refusal_ok=true and tool_results show no margin-specific claims, so refusal is appropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to search_claims and produced a concise, appropriate refusal when no margin-specific claims were found. The only improvement would be to verify that the 20 returned items truly contain no margin-related claims before refusing, but given the rubric's appropriate_refusal_ok flag, this is acceptable.\"\n}",
+    "reviewer_summary": "The agent correctly routed to search_claims and produced a concise, appropriate refusal when no margin-specific claims were found. The only improvement would be to verify that the 20 returned items truly contain no margin-related claims before refusing, but given the rubric's appropriate_refusal_ok flag, this is acceptable.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 1,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What claims have analysts made recently about Tesla's margins?",
+  "reasons": [],
+  "result": {
+    "answer_text": "No analyst claims about Tesla\u2019s margins were found in the recent data [1].",
+    "citations": [
+      {
+        "confidence": 0.96,
+        "entity_name": "Tesla",
+        "id": "tool:claim:019eef77-3a67-7ae5-bfd9-cf3bd8216dde",
+        "item_type": "claim",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "knowledge_graph",
+        "title": "Claim: OTHER",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1241067
+      ],
+      [
+        "status",
+        1248922
+      ],
+      [
+        "thinking",
+        1345200
+      ],
+      [
+        "agent_iteration",
+        1345263
+      ],
+      [
+        "status",
+        5147109
+      ],
+      [
+        "tool_call",
+        5148157
+      ],
+      [
+        "tool_result",
+        5862236
+      ],
+      [
+        "agent_iteration",
+        6377473
+      ],
+      [
+        "token",
+        10104626
+      ],
+      [
+        "token",
+        10104684
+      ],
+      [
+        "token",
+        10104906
+      ],
+      [
+        "token",
+        10105088
+      ],
+      [
+        "status",
+        10109822
+      ],
+      [
+        "final_answer",
+        15080323
+      ],
+      [
+        "citations",
+        15080526
+      ],
+      [
+        "contradictions",
+        15080977
+      ],
+      [
+        "suggestions",
+        15081065
+      ],
+      [
+        "metadata",
+        15095298
+      ],
+      [
+        "done",
+        15095523
+      ]
+    ],
+    "latency_s": 15.102,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 15059,
+      "message_id": "019f01bb-c06f-70cb-a384-3f1b0be95bc2",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "00131286-1ee2-4c4c-929c-d1e891c3d8c5"
+    },
+    "output_tokens": 19,
+    "phase_timings_ms": {
+      "check_cache": 2.0769999973708764,
+      "entity_resolution": 95.09441700356547,
+      "grounding_validation": 4971.58091799065,
+      "llm_direct_text_generation": 3726.836585003184,
+      "llm_tool_planning": 7522.3378779919585,
+      "load_history": 12.149375004810281,
+      "persist_and_cache": 14.036041000508703,
+      "tool_execution": 717.6269999908982,
+      "validate_input": 1210.0468759890646
+    },
+    "question": "What claims have analysts made recently about Tesla's margins?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_claims\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "claim_type": null,
+            "date_from": "2026-05-01",
+            "date_to": "2026-06-26",
+            "entity_name": "Tesla"
+          },
+          "label": "Checking analyst claims on Tesla",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 717,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Tesla",
+              "ticker_2": "Tesla",
+              "ticker_3": "Tesla"
+            },
+            "sampled_rows": 3,
+            "total_rows": 20,
+            "truncated": false
+          },
+          "item_count": 20,
+          "label": "Checking analyst claims on Tesla",
+          "result_preview": [
+            {
+              "id": "tool:claim:019ed33a-6218-79c6-b6bf-6619e8e0d3f1",
+              "title": "Claim: listed_on"
+            },
+            {
+              "id": "tool:claim:019ebb82-f9f2-7cfc-b263-f4fcce85deaa",
+              "title": "Claim: listed_on"
+            },
+            {
+              "id": "tool:claim:019ebb82-f9e7-7fcc-b657-47809505cc63",
+              "title": "Claim: has_executive"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5031,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that analysts have made "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent claims about Tesla\u2019s margins. The\u202fsearch_claims\u202ftool "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned 12 rows and none support a margin\u2011related "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "claim."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "No analyst claims about Tesla\u2019s margins were found in the recent data [1]."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.96,
+            "entity_name": "Tesla",
+            "id": "tool:claim:019eef77-3a67-7ae5-bfd9-cf3bd8216dde",
+            "item_type": "claim",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "knowledge_graph",
+            "title": "Claim: OTHER",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 15059,
+          "message_id": "019f01bb-c06f-70cb-a384-3f1b0be95bc2",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "00131286-1ee2-4c4c-929c-d1e891c3d8c5"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.0769999973708764,
+            "entity_resolution": 95.09441700356547,
+            "grounding_validation": 4971.58091799065,
+            "llm_direct_text_generation": 3726.836585003184,
+            "llm_tool_planning": 7522.3378779919585,
+            "load_history": 12.149375004810281,
+            "persist_and_cache": 14.036041000508703,
+            "tool_execution": 717.6269999908982,
+            "validate_input": 1210.0468759890646
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "claim_type": null,
+          "date_from": "2026-05-01",
+          "date_to": "2026-06-26",
+          "entity_name": "Tesla"
+        },
+        "name": "search_claims"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Tesla",
+            "ticker_2": "Tesla",
+            "ticker_3": "Tesla"
+          },
+          "sampled_rows": 3,
+          "total_rows": 20,
+          "truncated": false
+        },
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      }
+    ],
+    "tps": 1.371,
+    "tps_streaming": 5.098,
+    "ttft_s": 1.241
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_claims"
+    ],
+    "forbidden_facts": [
+      "unsourced_assertions_no_claim_objects"
+    ],
+    "required_facts": [
+      "tesla_identified",
+      "at_least_one_claim_with_attribution",
+      "margin_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_claims"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, correct tool call \u2014 search_claims(entity_name=Tesla) \u2014 which is precisely the right tool for retrieving analyst claims about a company. The trace is minimal and non-redundant. The only process improvement would be to consider adding a date filter or a claim_type filter (e.g., 'margin') to narrow results, but the current call is already sufficient and efficient for the question's medium depth requirement.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call that directly addresses the question; no redundancy or wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single-call trace \u2014 no ordering constraint to evaluate; full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls (status=ok, items=20); nothing to recover from \u2014 full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses search_claims with entity_name=Tesla, which is exactly the right tool for a 'claims about margins' question. Perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

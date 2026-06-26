@@ -1,0 +1,664 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1116,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 13.605,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "query_fundamentals"
+    ],
+    "output_tokens": 279,
+    "phase_timings_ms": {
+      "check_cache": 4.579708009259775,
+      "entity_resolution": 91.14762500394136,
+      "grounding_validation": 1.729916999465786,
+      "llm_direct_text_generation": 10027.395545999752,
+      "llm_tool_planning": 12215.81562999927,
+      "load_history": 11.506833005114459,
+      "persist_and_cache": 21.37758299068082,
+      "tool_execution": 167.73770800500643,
+      "validate_input": 721.6358760051662
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.778,
+    "word_count": 172
+  },
+  "id": "ru_meta_eps_trend",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for EPS over last 4 quarters; answer provides a clear table with all four values plus brief context \u2014 appropriate depth for a medium-complexity factual lookup.",
+        "reason": "Question asks for EPS over last 4 quarters; answer provides a clear table with all four values plus brief context \u2014 appropriate depth for a medium-complexity factual lookup.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All EPS values are cited to specific tool rows; no fabricated periods or metrics; scope is correctly limited to the four returned quarters.",
+        "reason": "All EPS values are cited to specific tool rows; no fabricated periods or metrics; scope is correctly limited to the four returned quarters.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history with correct ticker and period count, which is one of the expected tools.",
+        "reason": "Called get_fundamentals_history with correct ticker and period count, which is one of the expected tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid answer. The agent correctly routed to get_fundamentals_history, cited each EPS value to its tool row, and presented the data in a clean table. The only minor improvement would be to label the periods more clearly (e.g., 'fiscal year' vs. calendar year) if the tool's period labels are ambiguous, but that's a polish issue, not a correctness one. Keep the citation discipline \u2014 it's the strongest part of this response.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history with correct ticker and period count, which is one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"All EPS values are cited to specific tool rows; no fabricated periods or metrics; scope is correctly limited to the four returned quarters.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for EPS over last 4 quarters; answer provides a clear table with all four values plus brief context \u2014 appropriate depth for a medium-complexity factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"Solid answer. The agent correctly routed to get_fundamentals_history, cited each EPS value to its tool row, and presented the data in a clean table. The only minor improvement would be to label the periods more clearly (e.g., 'fiscal year' vs. calendar year) if the tool's period labels are ambiguous, but that's a polish issue, not a correctness one. Keep the citation discipline \u2014 it's the strongest part of this response.\"\n}",
+    "reviewer_summary": "Solid answer. The agent correctly routed to get_fundamentals_history, cited each EPS value to its tool row, and presented the data in a clean table. The only minor improvement would be to label the periods more clearly (e.g., 'fiscal year' vs. calendar year) if the tool's period labels are ambiguous, but that's a polish issue, not a correctness one. Keep the citation discipline \u2014 it's the strongest part of this response.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 25,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me Meta's EPS over the last 4 quarters.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Headline**  \nMeta\u2019s earnings per share (EPS) for the most recent four quarters were $7.14, $7.25, $8.88 and $7.31, respectively, with the latest quarter (Q1\u202fFY2026) reporting $7.31\u202fEPS\u202f[ get_fundamentals_history row\u202f3 ].\n\n**Supporting Data**  \n\n| Period | EPS (USD) | Source |\n|--------|-----------|--------|\n| Q2\u202fFY2025 | 7.14 | [get_fundamentals_history row\u202f0] |\n| Q3\u202fFY2025 | 7.25 | [get_fundamentals_history row\u202f1] |\n| Q4\u202fFY2025 | 8.88 | [get_fundamentals_history row\u202f2] |\n| Q1\u202fFY2026 | 7.31 | [get_fundamentals_history row\u202f3] |\n\n**Context**  \nThe retrieved data cover only the four most recent quarters; no longer historical series were returned, so a broader multi\u2011year EPS trend cannot be provided.\n\n**Interpretation & Caveats**  \nMeta\u2019s EPS rose modestly from Q2 to Q3 FY2025, peaked at $8.88 in Q4\u202fFY2025, and then fell to $7.31 in Q1\u202fFY2026. The figures reflect reported quarterly results and do not incorporate any forward\u2011looking estimates or adjustments. All values are taken directly from the quarterly fundamentals table; no additional periods or external sources were available for further context.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        777506
+      ],
+      [
+        "status",
+        781708
+      ],
+      [
+        "thinking",
+        873625
+      ],
+      [
+        "agent_iteration",
+        873655
+      ],
+      [
+        "status",
+        3063036
+      ],
+      [
+        "tool_call",
+        3063829
+      ],
+      [
+        "tool_result",
+        3231866
+      ],
+      [
+        "agent_iteration",
+        3536005
+      ],
+      [
+        "token",
+        13565121
+      ],
+      [
+        "token",
+        13565146
+      ],
+      [
+        "token",
+        13565190
+      ],
+      [
+        "token",
+        13565199
+      ],
+      [
+        "token",
+        13565370
+      ],
+      [
+        "token",
+        13565527
+      ],
+      [
+        "token",
+        13565648
+      ],
+      [
+        "token",
+        13565744
+      ],
+      [
+        "token",
+        13565888
+      ],
+      [
+        "token",
+        13566049
+      ],
+      [
+        "token",
+        13566189
+      ],
+      [
+        "token",
+        13566345
+      ],
+      [
+        "token",
+        13566551
+      ],
+      [
+        "token",
+        13566598
+      ],
+      [
+        "token",
+        13566783
+      ],
+      [
+        "token",
+        13566890
+      ],
+      [
+        "token",
+        13567078
+      ],
+      [
+        "token",
+        13567224
+      ],
+      [
+        "token",
+        13567565
+      ],
+      [
+        "token",
+        13567723
+      ],
+      [
+        "token",
+        13567949
+      ],
+      [
+        "token",
+        13568004
+      ],
+      [
+        "status",
+        13577508
+      ],
+      [
+        "final_answer",
+        13577618
+      ],
+      [
+        "citations",
+        13577714
+      ],
+      [
+        "contradictions",
+        13577735
+      ],
+      [
+        "suggestions",
+        13580780
+      ],
+      [
+        "metadata",
+        13600433
+      ],
+      [
+        "done",
+        13600487
+      ]
+    ],
+    "latency_s": 13.605,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 23551,
+      "message_id": "019f01a6-d530-7c73-8fe8-20f23ee0f6fc",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "a90dd5c5-a365-4e59-9f37-59957a8df5e7"
+    },
+    "output_tokens": 279,
+    "phase_timings_ms": {
+      "check_cache": 4.579708009259775,
+      "entity_resolution": 91.14762500394136,
+      "grounding_validation": 1.729916999465786,
+      "llm_direct_text_generation": 10027.395545999752,
+      "llm_tool_planning": 12215.81562999927,
+      "load_history": 11.506833005114459,
+      "persist_and_cache": 21.37758299068082,
+      "tool_execution": 167.73770800500643,
+      "validate_input": 721.6358760051662
+    },
+    "question": "Show me Meta's EPS over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 4,
+            "ticker": "META"
+          },
+          "label": "Fetching fundamentals for Meta",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 167,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "META"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Meta",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:META",
+              "title": "Fundamentals: META"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2661,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta\u2019s earnings per share (EPS) for the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "most recent four quarters were $7.14, $7.25, $8.88 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and $7.31, respectively, with the latest quarter (Q1\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2026) reporting $7.31\u202fEPS\u202f[ get_fundamentals_history row\u202f3 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "].\n\n**Supporting Data**  \n\n| Period | EPS (USD) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Source |\n|--------|-----------|--------|\n| Q2\u202fFY2025 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "7.14 | [get_fundamentals_history row\u202f0] |\n| Q3\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2025 | 7.25 | [get_fundamentals_history row\u202f1] |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Q4\u202fFY2025 | 8.88 | [get_fundamentals_history row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2] |\n| Q1\u202fFY2026 | 7.31 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history row\u202f3] |\n\n**Context**  \nThe retrieved data "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "cover only the four most recent quarters; no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "longer historical series were returned, so a broader "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "multi\u2011year EPS trend cannot be provided.\n\n**Interpretation & "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Caveats**  \nMeta\u2019s EPS rose modestly from Q2 to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q3 FY2025, peaked at $8.88 in Q4\u202fFY2025, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and then fell to $7.31 in Q1\u202fFY2026. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The figures reflect reported quarterly results and do "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "not incorporate any forward\u2011looking estimates or adjustments. All "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "values are taken directly from the quarterly fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "table; no additional periods or external sources were "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "available for further context."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta\u2019s earnings per share (EPS) for the most recent four quarters were $7.14, $7.25, $8.88 and $7.31, respectively, with the latest quarter (Q1\u202fFY2026) reporting $7.31\u202fEPS\u202f[ get_fundamentals_history row\u202f3 ].\n\n**Supporting Data**  \n\n| Period | EPS (USD) | Source |\n|--------|-----------|--------|\n| Q2\u202fFY2025 | 7.14 | [get_fundamentals_history row\u202f0] |\n| Q3\u202fFY2025 | 7.25 | [get_fundamentals_history row\u202f1] |\n| Q4\u202fFY2025 | 8.88 | [get_fundamentals_history row\u202f2] |\n| Q1\u202fFY2026 | 7.31 | [get_fundamentals_history row\u202f3] |\n\n**Context**  \nThe retrieved data cover only the four most recent quarters; no longer historical series were returned, so a broader multi\u2011year EPS trend cannot be provided.\n\n**Interpretation & Caveats**  \nMeta\u2019s EPS rose modestly from Q2 to Q3 FY2025, peaked at $8.88 in Q4\u202fFY2025, and then fell to $7.31 in Q1\u202fFY2026. The figures reflect reported quarterly results and do not incorporate any forward\u2011looking estimates or adjustments. All values are taken directly from the quarterly fundamentals table; no additional periods or external sources were available for further context."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 23551,
+          "message_id": "019f01a6-d530-7c73-8fe8-20f23ee0f6fc",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "a90dd5c5-a365-4e59-9f37-59957a8df5e7"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.579708009259775,
+            "entity_resolution": 91.14762500394136,
+            "grounding_validation": 1.729916999465786,
+            "llm_direct_text_generation": 10027.395545999752,
+            "llm_tool_planning": 12215.81562999927,
+            "load_history": 11.506833005114459,
+            "persist_and_cache": 21.37758299068082,
+            "tool_execution": 167.73770800500643,
+            "validate_input": 721.6358760051662
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 4,
+          "ticker": "META"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "META"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 21.751,
+    "tps_streaming": 27.824,
+    "ttft_s": 0.778
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_values"
+    ],
+    "required_facts": [
+      "eps_per_quarter",
+      "four_quarters_or_trend"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, perfectly-targeted call to get_fundamentals_history with ticker=META, periods=4, period_type=quarterly, which directly answers the question. No routing, ordering, recovery, or efficiency issues exist. The trajectory is a model of minimal, correct tool use.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call with the correct ticker and period parameters; no wasted or redundant calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraint to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_fundamentals_history is exactly the right tool for an EPS-over-quarters question; no mismatch.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

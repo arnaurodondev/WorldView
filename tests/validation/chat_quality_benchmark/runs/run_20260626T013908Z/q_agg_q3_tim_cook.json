@@ -1,0 +1,1139 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ]
+  },
+  "heuristics": {
+    "char_count": 312,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 33.621,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "traverse_graph"
+    ],
+    "output_tokens": 78,
+    "phase_timings_ms": {
+      "check_cache": 10.998207988450304,
+      "entity_resolution": 151.30712499376386,
+      "grounding_validation": 9914.8758789961,
+      "llm_synthesis_streaming": 3629.4448770058807,
+      "llm_tool_planning": 16452.563632978126,
+      "load_history": 34.45324998756405,
+      "persist_and_cache": 25.59050000854768,
+      "tool_execution": 1802.5445009989198,
+      "validate_input": 894.0021669986891
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.982,
+    "word_count": 49
+  },
+  "id": "agg_q3_tim_cook",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup about Tim Cook's pre-Apple career; answer is appropriately concise and transparent about data limitations.",
+        "reason": "Question is a factual lookup about Tim Cook's pre-Apple career; answer is appropriately concise and transparent about data limitations.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Answer correctly states that prior employers are not in the retrieved data; no fabricated claims. No grounding sample provided \u2014 presumed band.",
+        "reason": "Answer correctly states that prior employers are not in the retrieved data; no fabricated claims. No grounding sample provided \u2014 presumed band.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive response (states what data does and does not contain).",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive response (states what data does and does not contain).",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence, which is one of the expected tools (expected_tools=[get_entity_intelligence, traverse_graph]).",
+        "reason": "Called get_entity_intelligence, which is one of the expected tools (expected_tools=[get_entity_intelligence, traverse_graph]).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the question to get_entity_intelligence, which is one of the expected tools, and honestly reported that the retrieved data only covers Tim Cook's Apple roles. The answer is concise, well-grounded (no fabricated claims), and appropriately calibrated to the question's factual nature. The only improvement would be to also call traverse_graph to attempt to find prior employers via the knowledge graph, which might have yielded additional context. Overall, a solid, honest response that avoids hallucination.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence, which is one of the expected tools (expected_tools=[get_entity_intelligence, traverse_graph]).\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer correctly states that prior employers are not in the retrieved data; no fabricated claims. No grounding sample provided \u2014 presumed band.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup about Tim Cook's pre-Apple career; answer is appropriately concise and transparent about data limitations.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive response (states what data does and does not contain).\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the question to get_entity_intelligence, which is one of the expected tools, and honestly reported that the retrieved data only covers Tim Cook's Apple roles. The answer is concise, well-grounded (no fabricated claims), and appropriately calibrated to the question's factual nature. The only improvement would be to also call traverse_graph to attempt to find prior employers via the knowledge graph, which might have yielded additional context. Overall, a solid, honest response that avoids hallucination.\"\n}",
+    "reviewer_summary": "The agent correctly routed the question to get_entity_intelligence, which is one of the expected tools, and honestly reported that the retrieved data only covers Tim Cook's Apple roles. The answer is concise, well-grounded (no fabricated claims), and appropriately calibrated to the question's factual nature. The only improvement would be to also call traverse_graph to attempt to find prior employers via the knowledge graph, which might have yielded additional context. Overall, a solid, honest response that avoids hallucination.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Give me a brief history of Tim Cook \u2014 where did he work before Apple?",
+  "reasons": [],
+  "result": {
+    "answer_text": "The retrieved information only notes Tim\u202fCook\u2019s roles at Apple (Chief Operating Officer and later CEO) and does not specify any prior employers.\u202fTherefore, details about where he worked before joining Apple are not available in the retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        982474
+      ],
+      [
+        "status",
+        1009455
+      ],
+      [
+        "thinking",
+        1163432
+      ],
+      [
+        "agent_iteration",
+        1163460
+      ],
+      [
+        "status",
+        4947142
+      ],
+      [
+        "tool_call",
+        4947263
+      ],
+      [
+        "tool_result",
+        5065493
+      ],
+      [
+        "agent_iteration",
+        5333345
+      ],
+      [
+        "tool_call",
+        9348763
+      ],
+      [
+        "tool_result",
+        10266753
+      ],
+      [
+        "agent_iteration",
+        10440420
+      ],
+      [
+        "tool_call",
+        14486382
+      ],
+      [
+        "tool_result",
+        14876929
+      ],
+      [
+        "agent_iteration",
+        15024062
+      ],
+      [
+        "tool_call",
+        19639916
+      ],
+      [
+        "tool_result",
+        20010975
+      ],
+      [
+        "agent_iteration",
+        20011072
+      ],
+      [
+        "token",
+        23650861
+      ],
+      [
+        "token",
+        23652770
+      ],
+      [
+        "token",
+        23652931
+      ],
+      [
+        "token",
+        23653180
+      ],
+      [
+        "token",
+        23653483
+      ],
+      [
+        "token",
+        23653597
+      ],
+      [
+        "token",
+        23653807
+      ],
+      [
+        "token",
+        23653885
+      ],
+      [
+        "token",
+        23654151
+      ],
+      [
+        "token",
+        23654360
+      ],
+      [
+        "token",
+        23654467
+      ],
+      [
+        "token",
+        23654561
+      ],
+      [
+        "token",
+        23654656
+      ],
+      [
+        "token",
+        23654672
+      ],
+      [
+        "token",
+        23654717
+      ],
+      [
+        "token",
+        23654897
+      ],
+      [
+        "token",
+        23654961
+      ],
+      [
+        "token",
+        23655244
+      ],
+      [
+        "token",
+        23655402
+      ],
+      [
+        "token",
+        23655440
+      ],
+      [
+        "token",
+        23655563
+      ],
+      [
+        "token",
+        23655697
+      ],
+      [
+        "token",
+        23655977
+      ],
+      [
+        "token",
+        23656185
+      ],
+      [
+        "token",
+        23656342
+      ],
+      [
+        "token",
+        23656357
+      ],
+      [
+        "token",
+        23656538
+      ],
+      [
+        "token",
+        23656687
+      ],
+      [
+        "token",
+        23656783
+      ],
+      [
+        "token",
+        23656928
+      ],
+      [
+        "token",
+        23656999
+      ],
+      [
+        "token",
+        23657100
+      ],
+      [
+        "token",
+        23657203
+      ],
+      [
+        "token",
+        23657346
+      ],
+      [
+        "token",
+        23657519
+      ],
+      [
+        "token",
+        23657571
+      ],
+      [
+        "token",
+        23657644
+      ],
+      [
+        "token",
+        23657682
+      ],
+      [
+        "token",
+        23657758
+      ],
+      [
+        "token",
+        23657881
+      ],
+      [
+        "token",
+        23658004
+      ],
+      [
+        "token",
+        23658194
+      ],
+      [
+        "token",
+        23658407
+      ],
+      [
+        "token",
+        23658423
+      ],
+      [
+        "token",
+        23658577
+      ],
+      [
+        "token",
+        23658720
+      ],
+      [
+        "token",
+        23658809
+      ],
+      [
+        "status",
+        23665837
+      ],
+      [
+        "final_answer",
+        33577476
+      ],
+      [
+        "citations",
+        33577644
+      ],
+      [
+        "contradictions",
+        33582060
+      ],
+      [
+        "suggestions",
+        33582658
+      ],
+      [
+        "metadata",
+        33606104
+      ],
+      [
+        "done",
+        33606216
+      ]
+    ],
+    "latency_s": 33.621,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 33510,
+      "message_id": "019f019a-a055-7243-9530-c5d0739bbd54",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "a25db68f-aa85-4bbd-8317-845a3385eed3"
+    },
+    "output_tokens": 78,
+    "phase_timings_ms": {
+      "check_cache": 10.998207988450304,
+      "entity_resolution": 151.30712499376386,
+      "grounding_validation": 9914.8758789961,
+      "llm_synthesis_streaming": 3629.4448770058807,
+      "llm_tool_planning": 16452.563632978126,
+      "load_history": 34.45324998756405,
+      "persist_and_cache": 25.59050000854768,
+      "tool_execution": 1802.5445009989198,
+      "validate_input": 894.0021669986891
+    },
+    "question": "Give me a brief history of Tim Cook \u2014 where did he work before Apple?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "0195daad-c008-7000-8000-00000000000f"
+          },
+          "label": "Loading intelligence for 0195daad-c008-7000-8000-00000000000f",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 118,
+          "item_count": 1,
+          "label": "Loading intelligence for 0195daad-c008-7000-8000-00000000000f",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:0195daad-c008-7000-8000-00000000000f",
+              "title": "Intelligence: Tim Cook"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4168,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": null,
+            "date_to": null,
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 917,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9275,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": null,
+            "date_to": null,
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 392,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 13860,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": null,
+            "date_to": null,
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 372,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18847,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " information"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " only"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " notes"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Tim"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Cook"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " roles"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " at"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Apple"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Chief"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Operating"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Officer"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " later"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " CEO"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " does"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " specify"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " any"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " prior"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " employers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Therefore"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " details"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " about"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " where"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " he"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " worked"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " before"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " joining"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Apple"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " are"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The retrieved information only notes Tim\u202fCook\u2019s roles at Apple (Chief Operating Officer and later CEO) and does not specify any prior employers.\u202fTherefore, details about where he worked before joining Apple are not available in the retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has Tim Cook performed recently?",
+          "How do Tim Cook's fundamentals look?",
+          "What are the biggest risks for Tim Cook right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 33510,
+          "message_id": "019f019a-a055-7243-9530-c5d0739bbd54",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "a25db68f-aa85-4bbd-8317-845a3385eed3"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 10.998207988450304,
+            "entity_resolution": 151.30712499376386,
+            "grounding_validation": 9914.8758789961,
+            "llm_synthesis_streaming": 3629.4448770058807,
+            "llm_tool_planning": 16452.563632978126,
+            "load_history": 34.45324998756405,
+            "persist_and_cache": 25.59050000854768,
+            "tool_execution": 1802.5445009989198,
+            "validate_input": 894.0021669986891
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "0195daad-c008-7000-8000-00000000000f"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 2.39,
+    "tps_streaming": 21.491,
+    "ttft_s": 0.982
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent correctly identified the entity (Tim Cook) via get_entity_intelligence, but then fell into a useless loop of three identical search_documents calls with empty entity_tickers and no date filters, each returning zero items. The question specifically asks for pre-Apple employment history, which is a relational/biographical fact best served by traverse_graph to fetch prior employment nodes. The agent never attempted that tool. The most impactful change: after get_entity_intelligence, call traverse_graph with the entity ID to retrieve prior employers instead of blindly searching documents. Also, never repeat the same failing call without modifying arguments.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The first get_entity_intelligence call was necessary, but the three identical search_documents calls with empty tickers and no filters are completely redundant and wasted. A single well-parameterized call or a different tool would have been efficient.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only one meaningful call (get_entity_intelligence) was made; the subsequent search_documents calls have no data dependency on it. With no chaining required, ordering is not penalized.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After the first search_documents returned empty (items=0), the agent repeated the exact same call twice more with no change in arguments. This is a loop, not a recovery. The agent should have tried a different tool (e.g., traverse_graph) or adjusted the query parameters.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for Tim Cook's pre-Apple employment history. The agent called get_entity_intelligence (correct for entity info) but then made three identical search_documents calls with empty entity_tickers and no date filter, which are mismatched to the biographical intent. A traverse_graph call ",
+        "score": 5
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 3,
+    "verdict": "GRADED"
+  }
+}

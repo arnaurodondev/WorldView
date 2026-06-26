@@ -1,0 +1,724 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_graph"
+    ]
+  },
+  "heuristics": {
+    "char_count": 354,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 29.086,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 89,
+    "phase_timings_ms": {
+      "check_cache": 5.906667007366195,
+      "entity_resolution": 168.64820799673907,
+      "grounding_validation": 4815.2766689891,
+      "llm_direct_text_generation": 8159.725671008346,
+      "llm_tool_planning": 21273.417343996698,
+      "load_history": 20.980916990083642,
+      "persist_and_cache": 61.08470799517818,
+      "tool_execution": 942.59933300782,
+      "validate_input": 907.7186669892399
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "depth",
+          "entity_name"
+        ],
+        "tool": "get_entity_graph"
+      },
+      {
+        "arguments_keys": [
+          "depth",
+          "entity_name"
+        ],
+        "tool": "get_entity_graph"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_graph"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 0.975,
+    "word_count": 61
+  },
+  "id": "tc_entity_graph_tesla_neighbors",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a list of connected entities; answer provides a concise, structured list with relation types \u2014 appropriate depth.",
+        "reason": "Question asks for a list of connected entities; answer provides a concise, structured list with relation types \u2014 appropriate depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All claims (Elon Musk, Austin, Rivian, J.P. Morgan) are traceable to tool results; no fabricated relationships.",
+        "reason": "All claims (Elon Musk, Austin, Rivian, J.P. Morgan) are traceable to tool results; no fabricated relationships.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Agent called get_entity_graph (expected tool) and search_entity_relations; routing is correct.",
+        "reason": "Agent called get_entity_graph (expected tool) and search_entity_relations; routing is correct.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the question to the entity graph tools, returned a well-grounded list of four direct connections with relation types and citations, and matched the expected depth for a factual lookup. The only minor improvement would be to avoid duplicate tool calls (get_entity_graph was called twice with identical parameters) and to ensure the relation type for J.P. Morgan is either fully shown or explicitly noted as truncated. Overall, solid performance.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Agent called get_entity_graph (expected tool) and search_entity_relations; routing is correct.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"All claims (Elon Musk, Austin, Rivian, J.P. Morgan) are traceable to tool results; no fabricated relationships.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a list of connected entities; answer provides a concise, structured list with relation types \u2014 appropriate depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the question to the entity graph tools, returned a well-grounded list of four direct connections with relation types and citations, and matched the expected depth for a factual lookup. The only minor improvement would be to avoid duplicate tool calls (get_entity_graph was called twice with identical parameters) and to ensure the relation type for J.P. Morgan is either fully shown or explicitly noted as truncated. Overall, solid performance.\"\n}",
+    "reviewer_summary": "The agent correctly routed the question to the entity graph tools, returned a well-grounded list of four direct connections with relation types and citations, and matched the expected depth for a factual lookup. The only minor improvement would be to avoid duplicate tool calls (get_entity_graph was called twice with identical parameters) and to ensure the relation type for J.P. Morgan is either fully shown or explicitly noted as truncated. Overall, solid performance.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 4,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What entities is Tesla directly connected to in your knowledge graph?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Tesla is directly connected in the knowledge graph to the following entities:\n\n- **Elon\u202fMusk** \u2013 has executive role at Tesla Inc. [1]  \n- **Austin** \u2013 Tesla Inc. is headquartered in Austin. [1]  \n- **Rivian\u202fAutomotive\u202fInc** \u2013 competes with Tesla Inc. [1]  \n- **J.P.\u202fMorgan** \u2013 has a relationship with Tesla Inc. (type not fully shown in the snippet). [1]",
+    "citations": [
+      {
+        "confidence": 0.82,
+        "entity_name": "Tesla",
+        "id": "tool:relations:01900000-0000-7000-8000-000000001004",
+        "item_type": "relation",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "knowledge_graph",
+        "title": "Relations: Tesla",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        975273
+      ],
+      [
+        "status",
+        990241
+      ],
+      [
+        "thinking",
+        1163938
+      ],
+      [
+        "agent_iteration",
+        1163974
+      ],
+      [
+        "status",
+        4067642
+      ],
+      [
+        "tool_call",
+        4068477
+      ],
+      [
+        "tool_result",
+        4439839
+      ],
+      [
+        "agent_iteration",
+        4725130
+      ],
+      [
+        "tool_call",
+        11434372
+      ],
+      [
+        "tool_result",
+        11434415
+      ],
+      [
+        "agent_iteration",
+        11719942
+      ],
+      [
+        "tool_call",
+        15242159
+      ],
+      [
+        "tool_result",
+        15808973
+      ],
+      [
+        "agent_iteration",
+        16008350
+      ],
+      [
+        "token",
+        24177200
+      ],
+      [
+        "token",
+        24177357
+      ],
+      [
+        "token",
+        24177371
+      ],
+      [
+        "token",
+        24177381
+      ],
+      [
+        "token",
+        24177394
+      ],
+      [
+        "token",
+        24177401
+      ],
+      [
+        "token",
+        24177433
+      ],
+      [
+        "token",
+        24177553
+      ],
+      [
+        "token",
+        24177724
+      ],
+      [
+        "token",
+        24177859
+      ],
+      [
+        "token",
+        24185672
+      ],
+      [
+        "status",
+        24185952
+      ],
+      [
+        "final_answer",
+        28997014
+      ],
+      [
+        "citations",
+        28997153
+      ],
+      [
+        "contradictions",
+        29015783
+      ],
+      [
+        "suggestions",
+        29018520
+      ],
+      [
+        "metadata",
+        29060511
+      ],
+      [
+        "done",
+        29060649
+      ]
+    ],
+    "latency_s": 29.086,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 28943,
+      "message_id": "019f01ae-42d1-720c-ae9e-e55f93e1b010",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "c740e6ef-1557-4855-a422-3652e5dd8bee"
+    },
+    "output_tokens": 89,
+    "phase_timings_ms": {
+      "check_cache": 5.906667007366195,
+      "entity_resolution": 168.64820799673907,
+      "grounding_validation": 4815.2766689891,
+      "llm_direct_text_generation": 8159.725671008346,
+      "llm_tool_planning": 21273.417343996698,
+      "load_history": 20.980916990083642,
+      "persist_and_cache": 61.08470799517818,
+      "tool_execution": 942.59933300782,
+      "validate_input": 907.7186669892399
+    },
+    "question": "What entities is Tesla directly connected to in your knowledge graph?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_graph\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 1,
+            "entity_name": "Tesla"
+          },
+          "label": "Building entity map for Tesla",
+          "status": "running",
+          "tool": "get_entity_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 374,
+          "item_count": 1,
+          "label": "Building entity map for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+              "title": "Knowledge graph: Tesla"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3563,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 1,
+            "entity_name": "Tesla"
+          },
+          "label": "Building entity map for Tesla",
+          "status": "running",
+          "tool": "get_entity_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "Building entity map for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+              "title": "Knowledge graph: Tesla"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10558,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Tesla",
+            "limit": 20
+          },
+          "label": "Mapping relationships for Tesla",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 566,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Tesla"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001004",
+              "title": "Relations: Tesla"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 14847,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Tesla\u2019s immediate neighbours in the knowledge graph are "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the entities that appear in the direct relationship "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "triples returned for Tesla:\n\n| Connected Entity | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Relationship to Tesla | Confidence |\n|------------------|-----------------------|------------|\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Elon\u202fMusk | has_executive (CEO) | 0.97 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Austin (city) | headquartered_in | 0.96 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Rivian\u202fAutomotive\u202fInc | competes_with | 0.83 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| J.P.\u202fMorgan | (relationship not fully "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "shown in the excerpt) | 0.82 |\n\nThese "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "connections come directly from the knowledge\u2011graph relation query "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Tesla\u202f[search_entity_relations]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Tesla is directly connected in the knowledge graph to the following entities:\n\n- **Elon\u202fMusk** \u2013 has executive role at Tesla Inc. [1]  \n- **Austin** \u2013 Tesla Inc. is headquartered in Austin. [1]  \n- **Rivian\u202fAutomotive\u202fInc** \u2013 competes with Tesla Inc. [1]  \n- **J.P.\u202fMorgan** \u2013 has a relationship with Tesla Inc. (type not fully shown in the snippet). [1]"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.82,
+            "entity_name": "Tesla",
+            "id": "tool:relations:01900000-0000-7000-8000-000000001004",
+            "item_type": "relation",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "knowledge_graph",
+            "title": "Relations: Tesla",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 28943,
+          "message_id": "019f01ae-42d1-720c-ae9e-e55f93e1b010",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "c740e6ef-1557-4855-a422-3652e5dd8bee"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.906667007366195,
+            "entity_resolution": 168.64820799673907,
+            "grounding_validation": 4815.2766689891,
+            "llm_direct_text_generation": 8159.725671008346,
+            "llm_tool_planning": 21273.417343996698,
+            "load_history": 20.980916990083642,
+            "persist_and_cache": 61.08470799517818,
+            "tool_execution": 942.59933300782,
+            "validate_input": 907.7186669892399
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "depth": 1,
+          "entity_name": "Tesla"
+        },
+        "name": "get_entity_graph"
+      },
+      {
+        "arguments": {
+          "depth": 1,
+          "entity_name": "Tesla"
+        },
+        "name": "get_entity_graph"
+      },
+      {
+        "arguments": {
+          "entity_name": "Tesla",
+          "limit": 20
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Tesla"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 3.166,
+    "tps_streaming": 10.907,
+    "ttft_s": 0.975
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_graph"
+    ],
+    "forbidden_facts": [
+      "fabricated_relationships_no_tool_call"
+    ],
+    "required_facts": [
+      "tesla_identified",
+      "neighbour_list",
+      "relation_types_present"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_graph"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 1,
+    "reviewer_summary": "The agent correctly identified the right tool (get_entity_graph) for a knowledge-graph neighbour query and produced a valid answer. However, the trajectory contains a clear efficiency issue: call 2 is an exact duplicate of call 1 with no change in arguments or result, wasting a step. Additionally, call 3 (search_entity_relations) is a different tool but returns the same entity and adds no new information beyond what call 1 already provided. The single most impactful process change would be to drop the duplicate call 2 and rely on the single get_entity_graph call, which already returned all needed neighbours.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1 and call 2 are identical (same tool, same args, same result). This is a redundant duplicate \u2014 one of them is wasted. call 3 adds a different tool but returns the same entity; the answer could have been built from a single get_entity_graph call.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "No data dependency exists between the calls \u2014 each independently queries the same entity. The order is irrelevant; there is no ordering constraint to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No call failed or returned empty (all status=ok, items=1). Nothing to recover from, so full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 and 2 use get_entity_graph, which is exactly the right tool for a knowledge-graph neighbour query; call 3 uses search_entity_relations, a sensible alternative to enumerate relations. Both tool types match the question's intent perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 90,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

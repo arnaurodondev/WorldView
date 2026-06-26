@@ -1,0 +1,4814 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 2195,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_economic_calendar"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_economic_calendar",
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 38.447,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "output_tokens": 549,
+    "phase_timings_ms": {
+      "check_cache": 2.5011250108946115,
+      "entity_resolution": 150.10562501265667,
+      "grounding_validation": 15022.74367400969,
+      "llm_synthesis_streaming": 11291.696921995026,
+      "llm_tool_planning": 10483.306588983396,
+      "load_history": 41.814000011072494,
+      "persist_and_cache": 34.751084007439204,
+      "tool_execution": 137.39220800925978,
+      "validate_input": 873.6665839969646
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_economic_calendar"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      }
+    ],
+    "ttft_s": 0.954,
+    "word_count": 320
+  },
+  "id": "agg_q5_tsla_macro",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for macro events likely to affect Tesla in 30 days. Answer provides a structured table with events and rationale, which matches the medium depth expected. Slightly verbose for a single-item tool result, but the structure is appropriate.",
+        "reason": "Question asks for macro events likely to affect Tesla in 30 days. Answer provides a structured table with events and rationale, which matches the medium depth expected. Slightly verbose for a single-item tool result, but the structure is appropriate.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. The answer lists many events (PMI, FedWatch, oil, semiconductors, etc.) but the tool returned only 1 item (status=ok items=1). Most claims are not traceable to the single returned event. Attribution is weak (only [commentary 1] at end). Scope/coverage vi",
+        "reason": "No grounding sample provided \u2014 presumed band. The answer lists many events (PMI, FedWatch, oil, semiconductors, etc.) but the tool returned only 1 item (status=ok items=1). Most claims are not traceable to the single returned event. Attribution is weak (only [commentary 1] at end). Scope/coverage vi",
+        "score": 10
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive analysis with a table of events.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive analysis with a table of events.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_economic_calendar, which is one of the expected tools (equivalence set). Correct routing.",
+        "reason": "Called get_economic_calendar, which is one of the expected tools (equivalence set). Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to get_economic_calendar (one of the expected tools) and produced a well-structured table that matches the medium-depth expectation. However, the tool returned only 1 item, yet the answer lists 8 distinct events \u2014 most are not traceable to the tool result, which is a grounding concern. The single citation [commentary 1] is insufficient. The most impactful fix: either call additional tools (search_events, get_entity_intelligence) to source the other events, or limit the answer to what the tool actually returned and transparently note the gap. Also, the '\u26a0 Some figures could not be verified' banner is a transparency feature, not a grounding iss",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_economic_calendar, which is one of the expected tools (equivalence set). Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 10,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. The answer lists many events (PMI, FedWatch, oil, semiconductors, etc.) but the tool returned only 1 item (status=ok items=1). Most claims are not traceable to the single returned event. Attribution is weak (only [commentary 1] at end). Scope/coverage violation: the tool returned 1 item but the answer describes 8 distinct events.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Question asks for macro events likely to affect Tesla in 30 days. Answer provides a structured table with events and rationale, which matches the medium depth expected. Slightly verbose for a single-item tool result, but the structure is appropriate.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive analysis with a table of events.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_economic_calendar (one of the expected tools) and produced a well-structured table that matches the medium-depth expectation. However, the tool returned only 1 item, yet the answer lists 8 distinct events \u2014 most are not traceable to the tool result, which is a grounding concern. The single citation [commentary 1] is insufficient. The most impactful fix: either call additional tools (search_events, get_entity_intelligence) to source the other events, or limit the answer to what the tool actually returned and transparently note the gap. Also, the '\u26a0 Some figures could not be verified' banner is a transparency feature, not a grounding issue, but the body claims need better attribution.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to get_economic_calendar (one of the expected tools) and produced a well-structured table that matches the medium-depth expectation. However, the tool returned only 1 item, yet the answer lists 8 distinct events \u2014 most are not traceable to the tool result, which is a grounding concern. The single citation [commentary 1] is insufficient. The most impactful fix: either call additional tools (search_events, get_entity_intelligence) to source the other events, or limit the answer to what the tool actually returned and transparently note the gap. Also, the '\u26a0 Some figures could not be verified' banner is a transparency feature, not a grounding iss",
+    "score": 80,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 10,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 80,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN).",
+      "floor": 12,
+      "grounding": 10,
+      "pre_veto_verdict": "WARN",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+  "reasons": [],
+  "result": {
+    "answer_text": "In the coming month the macro\u2011economic data points that could move Tesla\u2019s stock and sales outlook include:\n\n| Event (next\u202f30\u202fdays) | Why it matters for Tesla |\n|----------------------|--------------------------|\n| **U.S. and EU S&P Global Services & Composite PMI (June)** \u2013 measures business activity in the services sector and overall economy. Strong PMI numbers signal healthier consumer and corporate spending, which can boost demand for electric vehicles; weak numbers can dampen it. |\n| **U.S. S&P Global Manufacturing PMI (June)** \u2013 gauges factory output. A robust manufacturing PMI suggests a healthier supply chain and may ease concerns about component shortages that have affected EV production. |\n| **CME FedWatch \u201cprice\u2011rate\u2011hike\u201d risk by year\u2011end** \u2013 reflects market expectations for future Fed rate moves. Higher interest rates raise financing costs for auto purchases and can suppress demand for higher\u2011priced EVs. |\n| **Oil\u2011price movement (oil prices slid)** \u2013 lower oil prices can reduce the cost\u2011advantage argument for EVs, while higher prices tend to make electric cars more attractive to cost\u2011conscious buyers. |\n| **Semiconductor\u2011related market pressure (e.g., Micron, Cerebras dragging Nasdaq lower)** \u2013 semiconductor supply constraints directly affect Tesla\u2019s production capacity and vehicle rollout schedules. |\n| **Industrial Production (Japan \u2013 May)** \u2013 signals broader manufacturing health in a key Asian market; shifts can affect global supply\u2011chain dynamics for batteries and components. |\n| **U.S. USDA crop\u2011cost forecast (rising production costs)** \u2013 higher agricultural input costs can lift overall inflation pressures, influencing consumer disposable income and potentially EV demand. |\n| **India GDP\u2011growth forecast slowdown (to 6.6\u202f% in 2026\u201127)** \u2013 while farther out, a slowdown in a large emerging market can affect long\u2011term growth expectations for EV adoption globally. |\n\nThese releases and market moves are the most immediate macro\u2011economic factors that could influence Tesla\u2019s sales outlook, production costs, financing environment, and investor sentiment over the next 30\u202fdays.\u202f[commentary 1]\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        953971
+      ],
+      [
+        "status",
+        972785
+      ],
+      [
+        "thinking",
+        1125285
+      ],
+      [
+        "agent_iteration",
+        1125402
+      ],
+      [
+        "status",
+        6912967
+      ],
+      [
+        "tool_call",
+        6914143
+      ],
+      [
+        "tool_result",
+        7047837
+      ],
+      [
+        "agent_iteration",
+        7358959
+      ],
+      [
+        "agent_iteration",
+        12059618
+      ],
+      [
+        "token",
+        23209010
+      ],
+      [
+        "token",
+        23209210
+      ],
+      [
+        "token",
+        23209276
+      ],
+      [
+        "token",
+        23209366
+      ],
+      [
+        "token",
+        23209435
+      ],
+      [
+        "token",
+        23209546
+      ],
+      [
+        "token",
+        23209819
+      ],
+      [
+        "token",
+        23209891
+      ],
+      [
+        "token",
+        23210077
+      ],
+      [
+        "token",
+        23210211
+      ],
+      [
+        "token",
+        23210368
+      ],
+      [
+        "token",
+        23210585
+      ],
+      [
+        "token",
+        23210757
+      ],
+      [
+        "token",
+        23210829
+      ],
+      [
+        "token",
+        23210887
+      ],
+      [
+        "token",
+        23210933
+      ],
+      [
+        "token",
+        23211351
+      ],
+      [
+        "token",
+        23211624
+      ],
+      [
+        "token",
+        23211642
+      ],
+      [
+        "token",
+        23211789
+      ],
+      [
+        "token",
+        23211815
+      ],
+      [
+        "token",
+        23211866
+      ],
+      [
+        "token",
+        23212216
+      ],
+      [
+        "token",
+        23212431
+      ],
+      [
+        "token",
+        23212590
+      ],
+      [
+        "token",
+        23212605
+      ],
+      [
+        "token",
+        23212637
+      ],
+      [
+        "token",
+        23212767
+      ],
+      [
+        "token",
+        23212789
+      ],
+      [
+        "token",
+        23212916
+      ],
+      [
+        "token",
+        23213130
+      ],
+      [
+        "token",
+        23213224
+      ],
+      [
+        "token",
+        23213300
+      ],
+      [
+        "token",
+        23213365
+      ],
+      [
+        "token",
+        23213512
+      ],
+      [
+        "token",
+        23213669
+      ],
+      [
+        "token",
+        23213777
+      ],
+      [
+        "token",
+        23213888
+      ],
+      [
+        "token",
+        23214013
+      ],
+      [
+        "token",
+        23214062
+      ],
+      [
+        "token",
+        23214163
+      ],
+      [
+        "token",
+        23214261
+      ],
+      [
+        "token",
+        23214464
+      ],
+      [
+        "token",
+        23214502
+      ],
+      [
+        "token",
+        23214592
+      ],
+      [
+        "token",
+        23214644
+      ],
+      [
+        "token",
+        23214767
+      ],
+      [
+        "token",
+        23214873
+      ],
+      [
+        "token",
+        23214988
+      ],
+      [
+        "token",
+        23215154
+      ],
+      [
+        "token",
+        23215259
+      ],
+      [
+        "token",
+        23215275
+      ],
+      [
+        "token",
+        23215515
+      ],
+      [
+        "token",
+        23215530
+      ],
+      [
+        "token",
+        23215597
+      ],
+      [
+        "token",
+        23215623
+      ],
+      [
+        "token",
+        23215745
+      ],
+      [
+        "token",
+        23215780
+      ],
+      [
+        "token",
+        23215830
+      ],
+      [
+        "token",
+        23215994
+      ],
+      [
+        "token",
+        23216139
+      ],
+      [
+        "token",
+        23228545
+      ],
+      [
+        "token",
+        23230098
+      ],
+      [
+        "token",
+        23230113
+      ],
+      [
+        "token",
+        23230122
+      ],
+      [
+        "token",
+        23230129
+      ],
+      [
+        "token",
+        23230136
+      ],
+      [
+        "token",
+        23230156
+      ],
+      [
+        "token",
+        23230165
+      ],
+      [
+        "token",
+        23230172
+      ],
+      [
+        "token",
+        23230178
+      ],
+      [
+        "token",
+        23232516
+      ],
+      [
+        "token",
+        23232543
+      ],
+      [
+        "token",
+        23232553
+      ],
+      [
+        "token",
+        23232813
+      ],
+      [
+        "token",
+        23232824
+      ],
+      [
+        "token",
+        23232859
+      ],
+      [
+        "token",
+        23233126
+      ],
+      [
+        "token",
+        23233165
+      ],
+      [
+        "token",
+        23233175
+      ],
+      [
+        "token",
+        23233182
+      ],
+      [
+        "token",
+        23233188
+      ],
+      [
+        "token",
+        23233261
+      ],
+      [
+        "token",
+        23234578
+      ],
+      [
+        "token",
+        23234608
+      ],
+      [
+        "token",
+        23234618
+      ],
+      [
+        "token",
+        23234626
+      ],
+      [
+        "token",
+        23234633
+      ],
+      [
+        "token",
+        23234640
+      ],
+      [
+        "token",
+        23234646
+      ],
+      [
+        "token",
+        23234652
+      ],
+      [
+        "token",
+        23234659
+      ],
+      [
+        "token",
+        23234673
+      ],
+      [
+        "token",
+        23234680
+      ],
+      [
+        "token",
+        23234686
+      ],
+      [
+        "token",
+        23234692
+      ],
+      [
+        "token",
+        23234698
+      ],
+      [
+        "token",
+        23234704
+      ],
+      [
+        "token",
+        23234711
+      ],
+      [
+        "token",
+        23235697
+      ],
+      [
+        "token",
+        23236655
+      ],
+      [
+        "token",
+        23236667
+      ],
+      [
+        "token",
+        23236676
+      ],
+      [
+        "token",
+        23236683
+      ],
+      [
+        "token",
+        23236690
+      ],
+      [
+        "token",
+        23236696
+      ],
+      [
+        "token",
+        23236703
+      ],
+      [
+        "token",
+        23236709
+      ],
+      [
+        "token",
+        23236715
+      ],
+      [
+        "token",
+        23236722
+      ],
+      [
+        "token",
+        23236728
+      ],
+      [
+        "token",
+        23236768
+      ],
+      [
+        "token",
+        23236777
+      ],
+      [
+        "token",
+        23236783
+      ],
+      [
+        "token",
+        23236789
+      ],
+      [
+        "token",
+        23236794
+      ],
+      [
+        "token",
+        23236800
+      ],
+      [
+        "token",
+        23236806
+      ],
+      [
+        "token",
+        23236812
+      ],
+      [
+        "token",
+        23236823
+      ],
+      [
+        "token",
+        23236830
+      ],
+      [
+        "token",
+        23237009
+      ],
+      [
+        "token",
+        23237040
+      ],
+      [
+        "token",
+        23237047
+      ],
+      [
+        "token",
+        23237074
+      ],
+      [
+        "token",
+        23237080
+      ],
+      [
+        "token",
+        23237086
+      ],
+      [
+        "token",
+        23237093
+      ],
+      [
+        "token",
+        23237105
+      ],
+      [
+        "token",
+        23237112
+      ],
+      [
+        "token",
+        23237117
+      ],
+      [
+        "token",
+        23237123
+      ],
+      [
+        "token",
+        23237129
+      ],
+      [
+        "token",
+        23237135
+      ],
+      [
+        "token",
+        23237140
+      ],
+      [
+        "token",
+        23237146
+      ],
+      [
+        "token",
+        23237394
+      ],
+      [
+        "token",
+        23237662
+      ],
+      [
+        "token",
+        23237669
+      ],
+      [
+        "token",
+        23237676
+      ],
+      [
+        "token",
+        23237752
+      ],
+      [
+        "token",
+        23237861
+      ],
+      [
+        "token",
+        23237876
+      ],
+      [
+        "token",
+        23237885
+      ],
+      [
+        "token",
+        23237900
+      ],
+      [
+        "token",
+        23237908
+      ],
+      [
+        "token",
+        23237915
+      ],
+      [
+        "token",
+        23237920
+      ],
+      [
+        "token",
+        23237926
+      ],
+      [
+        "token",
+        23237932
+      ],
+      [
+        "token",
+        23237938
+      ],
+      [
+        "token",
+        23237944
+      ],
+      [
+        "token",
+        23240431
+      ],
+      [
+        "token",
+        23240442
+      ],
+      [
+        "token",
+        23240449
+      ],
+      [
+        "token",
+        23240459
+      ],
+      [
+        "token",
+        23240466
+      ],
+      [
+        "token",
+        23240472
+      ],
+      [
+        "token",
+        23240479
+      ],
+      [
+        "token",
+        23240485
+      ],
+      [
+        "token",
+        23240491
+      ],
+      [
+        "token",
+        23240497
+      ],
+      [
+        "token",
+        23240502
+      ],
+      [
+        "token",
+        23243577
+      ],
+      [
+        "token",
+        23243660
+      ],
+      [
+        "token",
+        23243673
+      ],
+      [
+        "token",
+        23243696
+      ],
+      [
+        "token",
+        23243704
+      ],
+      [
+        "token",
+        23243710
+      ],
+      [
+        "token",
+        23243716
+      ],
+      [
+        "token",
+        23243722
+      ],
+      [
+        "token",
+        23243728
+      ],
+      [
+        "token",
+        23243734
+      ],
+      [
+        "token",
+        23243740
+      ],
+      [
+        "token",
+        23243746
+      ],
+      [
+        "token",
+        23243753
+      ],
+      [
+        "token",
+        23243761
+      ],
+      [
+        "token",
+        23243767
+      ],
+      [
+        "token",
+        23243772
+      ],
+      [
+        "token",
+        23243778
+      ],
+      [
+        "token",
+        23243783
+      ],
+      [
+        "token",
+        23243789
+      ],
+      [
+        "token",
+        23243795
+      ],
+      [
+        "token",
+        23243800
+      ],
+      [
+        "token",
+        23243806
+      ],
+      [
+        "token",
+        23243812
+      ],
+      [
+        "token",
+        23243819
+      ],
+      [
+        "token",
+        23243825
+      ],
+      [
+        "token",
+        23243847
+      ],
+      [
+        "token",
+        23243853
+      ],
+      [
+        "token",
+        23243859
+      ],
+      [
+        "token",
+        23243978
+      ],
+      [
+        "token",
+        23244061
+      ],
+      [
+        "token",
+        23244233
+      ],
+      [
+        "token",
+        23244376
+      ],
+      [
+        "token",
+        23244479
+      ],
+      [
+        "token",
+        23244556
+      ],
+      [
+        "token",
+        23244683
+      ],
+      [
+        "token",
+        23247897
+      ],
+      [
+        "token",
+        23247913
+      ],
+      [
+        "token",
+        23247921
+      ],
+      [
+        "token",
+        23247928
+      ],
+      [
+        "token",
+        23247935
+      ],
+      [
+        "token",
+        23247941
+      ],
+      [
+        "token",
+        23247947
+      ],
+      [
+        "token",
+        23247953
+      ],
+      [
+        "token",
+        23247959
+      ],
+      [
+        "token",
+        23247977
+      ],
+      [
+        "token",
+        23247984
+      ],
+      [
+        "token",
+        23247990
+      ],
+      [
+        "token",
+        23247996
+      ],
+      [
+        "token",
+        23248002
+      ],
+      [
+        "token",
+        23248008
+      ],
+      [
+        "token",
+        23248014
+      ],
+      [
+        "token",
+        23248020
+      ],
+      [
+        "token",
+        23248026
+      ],
+      [
+        "token",
+        23248053
+      ],
+      [
+        "token",
+        23248060
+      ],
+      [
+        "token",
+        23248149
+      ],
+      [
+        "token",
+        23248386
+      ],
+      [
+        "token",
+        23248461
+      ],
+      [
+        "token",
+        23248592
+      ],
+      [
+        "token",
+        23248729
+      ],
+      [
+        "token",
+        23249341
+      ],
+      [
+        "token",
+        23249385
+      ],
+      [
+        "token",
+        23249394
+      ],
+      [
+        "token",
+        23249400
+      ],
+      [
+        "token",
+        23249604
+      ],
+      [
+        "token",
+        23249800
+      ],
+      [
+        "token",
+        23250289
+      ],
+      [
+        "token",
+        23250614
+      ],
+      [
+        "token",
+        23250815
+      ],
+      [
+        "token",
+        23251014
+      ],
+      [
+        "token",
+        23251338
+      ],
+      [
+        "token",
+        23251686
+      ],
+      [
+        "token",
+        23252068
+      ],
+      [
+        "token",
+        23252259
+      ],
+      [
+        "token",
+        23254318
+      ],
+      [
+        "token",
+        23254397
+      ],
+      [
+        "token",
+        23254454
+      ],
+      [
+        "token",
+        23254475
+      ],
+      [
+        "token",
+        23254485
+      ],
+      [
+        "token",
+        23254583
+      ],
+      [
+        "token",
+        23254685
+      ],
+      [
+        "token",
+        23263195
+      ],
+      [
+        "token",
+        23263248
+      ],
+      [
+        "token",
+        23263267
+      ],
+      [
+        "token",
+        23263277
+      ],
+      [
+        "token",
+        23263286
+      ],
+      [
+        "token",
+        23263314
+      ],
+      [
+        "token",
+        23263330
+      ],
+      [
+        "token",
+        23263559
+      ],
+      [
+        "token",
+        23263569
+      ],
+      [
+        "token",
+        23263575
+      ],
+      [
+        "token",
+        23263584
+      ],
+      [
+        "token",
+        23263591
+      ],
+      [
+        "token",
+        23263634
+      ],
+      [
+        "token",
+        23263647
+      ],
+      [
+        "token",
+        23263654
+      ],
+      [
+        "token",
+        23263661
+      ],
+      [
+        "token",
+        23263846
+      ],
+      [
+        "token",
+        23263895
+      ],
+      [
+        "token",
+        23263941
+      ],
+      [
+        "token",
+        23263962
+      ],
+      [
+        "token",
+        23263970
+      ],
+      [
+        "token",
+        23263976
+      ],
+      [
+        "token",
+        23263982
+      ],
+      [
+        "token",
+        23263988
+      ],
+      [
+        "token",
+        23263994
+      ],
+      [
+        "token",
+        23264000
+      ],
+      [
+        "token",
+        23264027
+      ],
+      [
+        "token",
+        23264034
+      ],
+      [
+        "token",
+        23264052
+      ],
+      [
+        "token",
+        23264172
+      ],
+      [
+        "token",
+        23264382
+      ],
+      [
+        "token",
+        23264411
+      ],
+      [
+        "token",
+        23264578
+      ],
+      [
+        "token",
+        23264795
+      ],
+      [
+        "token",
+        23265083
+      ],
+      [
+        "token",
+        23265305
+      ],
+      [
+        "token",
+        23265495
+      ],
+      [
+        "token",
+        23265622
+      ],
+      [
+        "token",
+        23265995
+      ],
+      [
+        "token",
+        23266089
+      ],
+      [
+        "token",
+        23266376
+      ],
+      [
+        "token",
+        23266543
+      ],
+      [
+        "token",
+        23266719
+      ],
+      [
+        "token",
+        23267419
+      ],
+      [
+        "token",
+        23267429
+      ],
+      [
+        "token",
+        23267436
+      ],
+      [
+        "token",
+        23267529
+      ],
+      [
+        "token",
+        23267822
+      ],
+      [
+        "token",
+        23268019
+      ],
+      [
+        "token",
+        23268278
+      ],
+      [
+        "token",
+        23268446
+      ],
+      [
+        "token",
+        23268652
+      ],
+      [
+        "token",
+        23268773
+      ],
+      [
+        "token",
+        23268851
+      ],
+      [
+        "token",
+        23268920
+      ],
+      [
+        "token",
+        23269305
+      ],
+      [
+        "token",
+        23269339
+      ],
+      [
+        "token",
+        23269345
+      ],
+      [
+        "token",
+        23269363
+      ],
+      [
+        "token",
+        23269559
+      ],
+      [
+        "token",
+        23270036
+      ],
+      [
+        "token",
+        23270048
+      ],
+      [
+        "token",
+        23270056
+      ],
+      [
+        "token",
+        23270305
+      ],
+      [
+        "token",
+        23270313
+      ],
+      [
+        "token",
+        23270384
+      ],
+      [
+        "token",
+        23270590
+      ],
+      [
+        "token",
+        23270723
+      ],
+      [
+        "token",
+        23270884
+      ],
+      [
+        "token",
+        23271021
+      ],
+      [
+        "token",
+        23271288
+      ],
+      [
+        "token",
+        23271460
+      ],
+      [
+        "token",
+        23271479
+      ],
+      [
+        "token",
+        23271584
+      ],
+      [
+        "token",
+        23271792
+      ],
+      [
+        "token",
+        23271991
+      ],
+      [
+        "token",
+        23272342
+      ],
+      [
+        "token",
+        23272571
+      ],
+      [
+        "token",
+        23272813
+      ],
+      [
+        "token",
+        23272897
+      ],
+      [
+        "token",
+        23273250
+      ],
+      [
+        "token",
+        23273383
+      ],
+      [
+        "token",
+        23273757
+      ],
+      [
+        "token",
+        23273958
+      ],
+      [
+        "token",
+        23274313
+      ],
+      [
+        "token",
+        23274362
+      ],
+      [
+        "token",
+        23274490
+      ],
+      [
+        "token",
+        23275816
+      ],
+      [
+        "token",
+        23275826
+      ],
+      [
+        "token",
+        23275834
+      ],
+      [
+        "token",
+        23275841
+      ],
+      [
+        "token",
+        23275848
+      ],
+      [
+        "token",
+        23275854
+      ],
+      [
+        "token",
+        23275860
+      ],
+      [
+        "token",
+        23276172
+      ],
+      [
+        "token",
+        23276772
+      ],
+      [
+        "token",
+        23276782
+      ],
+      [
+        "token",
+        23276863
+      ],
+      [
+        "token",
+        23277019
+      ],
+      [
+        "token",
+        23277415
+      ],
+      [
+        "token",
+        23277937
+      ],
+      [
+        "token",
+        23278232
+      ],
+      [
+        "token",
+        23278462
+      ],
+      [
+        "token",
+        23278557
+      ],
+      [
+        "token",
+        23278902
+      ],
+      [
+        "token",
+        23279346
+      ],
+      [
+        "token",
+        23279687
+      ],
+      [
+        "token",
+        23279906
+      ],
+      [
+        "token",
+        23280205
+      ],
+      [
+        "token",
+        23280383
+      ],
+      [
+        "token",
+        23280569
+      ],
+      [
+        "token",
+        23280775
+      ],
+      [
+        "token",
+        23281028
+      ],
+      [
+        "token",
+        23281416
+      ],
+      [
+        "token",
+        23281569
+      ],
+      [
+        "token",
+        23281659
+      ],
+      [
+        "token",
+        23281884
+      ],
+      [
+        "token",
+        23282113
+      ],
+      [
+        "token",
+        23282282
+      ],
+      [
+        "token",
+        23282411
+      ],
+      [
+        "token",
+        23282551
+      ],
+      [
+        "token",
+        23282634
+      ],
+      [
+        "token",
+        23282732
+      ],
+      [
+        "token",
+        23282927
+      ],
+      [
+        "token",
+        23283082
+      ],
+      [
+        "token",
+        23283202
+      ],
+      [
+        "token",
+        23283281
+      ],
+      [
+        "token",
+        23283342
+      ],
+      [
+        "token",
+        23283464
+      ],
+      [
+        "token",
+        23283591
+      ],
+      [
+        "token",
+        23283750
+      ],
+      [
+        "token",
+        23283906
+      ],
+      [
+        "token",
+        23284040
+      ],
+      [
+        "token",
+        23284186
+      ],
+      [
+        "token",
+        23284469
+      ],
+      [
+        "token",
+        23284824
+      ],
+      [
+        "token",
+        23285123
+      ],
+      [
+        "token",
+        23285347
+      ],
+      [
+        "token",
+        23285452
+      ],
+      [
+        "token",
+        23285588
+      ],
+      [
+        "token",
+        23285687
+      ],
+      [
+        "token",
+        23285856
+      ],
+      [
+        "token",
+        23286301
+      ],
+      [
+        "token",
+        23286470
+      ],
+      [
+        "token",
+        23286563
+      ],
+      [
+        "token",
+        23286673
+      ],
+      [
+        "token",
+        23286820
+      ],
+      [
+        "token",
+        23287852
+      ],
+      [
+        "token",
+        23288564
+      ],
+      [
+        "token",
+        23288573
+      ],
+      [
+        "token",
+        23288599
+      ],
+      [
+        "token",
+        23288609
+      ],
+      [
+        "token",
+        23288675
+      ],
+      [
+        "token",
+        23288683
+      ],
+      [
+        "token",
+        23289000
+      ],
+      [
+        "token",
+        23289636
+      ],
+      [
+        "token",
+        23290668
+      ],
+      [
+        "token",
+        23290696
+      ],
+      [
+        "token",
+        23291819
+      ],
+      [
+        "token",
+        23292333
+      ],
+      [
+        "token",
+        23292634
+      ],
+      [
+        "token",
+        23292861
+      ],
+      [
+        "token",
+        23293812
+      ],
+      [
+        "token",
+        23294487
+      ],
+      [
+        "token",
+        23294919
+      ],
+      [
+        "token",
+        23295584
+      ],
+      [
+        "token",
+        23296018
+      ],
+      [
+        "token",
+        23296272
+      ],
+      [
+        "token",
+        23296470
+      ],
+      [
+        "token",
+        23299161
+      ],
+      [
+        "token",
+        23299184
+      ],
+      [
+        "token",
+        23299218
+      ],
+      [
+        "token",
+        23299228
+      ],
+      [
+        "token",
+        23299236
+      ],
+      [
+        "token",
+        23299243
+      ],
+      [
+        "token",
+        23299250
+      ],
+      [
+        "token",
+        23299256
+      ],
+      [
+        "token",
+        23299328
+      ],
+      [
+        "token",
+        23299788
+      ],
+      [
+        "token",
+        23300033
+      ],
+      [
+        "token",
+        23300331
+      ],
+      [
+        "token",
+        23300635
+      ],
+      [
+        "token",
+        23302208
+      ],
+      [
+        "token",
+        23303442
+      ],
+      [
+        "token",
+        23303904
+      ],
+      [
+        "token",
+        23303995
+      ],
+      [
+        "token",
+        23304255
+      ],
+      [
+        "token",
+        23304380
+      ],
+      [
+        "token",
+        23304712
+      ],
+      [
+        "token",
+        23305212
+      ],
+      [
+        "token",
+        23305348
+      ],
+      [
+        "token",
+        23305501
+      ],
+      [
+        "token",
+        23339239
+      ],
+      [
+        "status",
+        23391125
+      ],
+      [
+        "final_answer",
+        38405494
+      ],
+      [
+        "citations",
+        38405660
+      ],
+      [
+        "contradictions",
+        38414984
+      ],
+      [
+        "suggestions",
+        38415103
+      ],
+      [
+        "metadata",
+        38441061
+      ],
+      [
+        "done",
+        38441222
+      ]
+    ],
+    "latency_s": 38.447,
+    "metadata": {
+      "intent": "MACRO",
+      "latency_ms": 38363,
+      "message_id": "019f019c-0802-7f7c-8257-5dfef0095d87",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "0bd2014d-c64e-4ce9-8836-2e14b9c5b937"
+    },
+    "output_tokens": 549,
+    "phase_timings_ms": {
+      "check_cache": 2.5011250108946115,
+      "entity_resolution": 150.10562501265667,
+      "grounding_validation": 15022.74367400969,
+      "llm_synthesis_streaming": 11291.696921995026,
+      "llm_tool_planning": 10483.306588983396,
+      "load_history": 41.814000011072494,
+      "persist_and_cache": 34.751084007439204,
+      "tool_execution": 137.39220800925978,
+      "validate_input": 873.6665839969646
+    },
+    "question": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_economic_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-26",
+            "to_date": "2026-07-26"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 136,
+          "item_count": 1,
+          "label": "Loading economic calendar...",
+          "result_preview": [
+            {
+              "id": "tool:economic_calendar",
+              "title": "Economic calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6233,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10933,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "In"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " coming"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " month"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " macro"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "economic"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " data"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " points"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " that"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " could"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " move"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Tesla"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " stock"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sales"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " outlook"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " include"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ":\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Event"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "next"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "30"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "days"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Why"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " it"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " matters"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Tesla"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "----------------"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "------"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "----------------"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "----------"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "U"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EU"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "&P"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Global"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Services"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " &"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Composite"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " PMI"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "June"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " measures"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " business"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " activity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " services"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sector"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " overall"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " economy"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Strong"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " PMI"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " numbers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " signal"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " healthier"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " consumer"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " corporate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " spending"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " which"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " boost"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " demand"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " electric"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " vehicles"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ";"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " weak"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " numbers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " damp"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " it"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "U"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "&P"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Global"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Manufacturing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " PMI"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "June"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " gauges"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " factory"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " output"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " A"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " robust"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " manufacturing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " PMI"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " suggests"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " healthier"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " supply"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " chain"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " may"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ease"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " concerns"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " about"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " component"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " shortages"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " that"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " have"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " affected"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EV"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " production"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "C"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ME"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Fed"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Watch"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u201c"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "price"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "h"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ike"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u201d"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " risk"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " by"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " year"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "end"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " reflects"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " expectations"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " future"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Fed"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " moves"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Higher"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " interest"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rates"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " raise"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " financing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " costs"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " auto"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " purchases"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " suppress"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " demand"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " higher"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "priced"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EV"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Oil"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "price"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " movement"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "oil"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " prices"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " slid"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " lower"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " oil"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " prices"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " reduce"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " cost"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "adv"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "antage"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " argument"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EV"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " while"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " higher"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " prices"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " tend"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " to"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " make"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " electric"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " cars"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " more"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " attractive"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " to"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " cost"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "con"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "scious"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " buyers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Sem"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "iconductor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "related"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " pressure"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "e"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".g"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".,"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Mic"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ron"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Cere"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "bras"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " dragging"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Nasdaq"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " lower"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " semiconductor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " supply"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " constraints"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " directly"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " affect"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Tesla"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " production"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " capacity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " vehicle"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rollout"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " schedules"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Industrial"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Production"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Japan"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " May"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " signals"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " broader"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " manufacturing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " health"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " key"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Asian"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ";"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " shifts"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " affect"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " global"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " supply"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "chain"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " dynamics"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " batteries"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " components"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "U"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " USDA"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " crop"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "cost"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " forecast"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "r"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ising"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " production"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " costs"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " higher"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " agricultural"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " input"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " costs"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " lift"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " overall"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " inflation"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " pressures"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " influencing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " consumer"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " disposable"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " income"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " potentially"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EV"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " demand"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "India"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " GDP"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " forecast"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " slowdown"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "6"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "6"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "%"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "202"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "6"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "27"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " while"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " farther"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " out"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " slowdown"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " large"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " emerging"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " can"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " affect"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " long"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "term"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " growth"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " expectations"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " EV"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " adoption"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " globally"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "These"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " releases"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " moves"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " are"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " most"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " immediate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " macro"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "economic"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " factors"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " that"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " could"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " influence"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Tesla"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sales"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " outlook"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " production"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " costs"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " financing"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " environment"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " investor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sentiment"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " over"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " next"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "30"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "days"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "["
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "comment"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ary"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "In the coming month the macro\u2011economic data points that could move Tesla\u2019s stock and sales outlook include:\n\n| Event (next\u202f30\u202fdays) | Why it matters for Tesla |\n|----------------------|--------------------------|\n| **U.S. and EU S&P Global Services & Composite PMI (June)** \u2013 measures business activity in the services sector and overall economy. Strong PMI numbers signal healthier consumer and corporate spending, which can boost demand for electric vehicles; weak numbers can dampen it. |\n| **U.S. S&P Global Manufacturing PMI (June)** \u2013 gauges factory output. A robust manufacturing PMI suggests a healthier supply chain and may ease concerns about component shortages that have affected EV production. |\n| **CME FedWatch \u201cprice\u2011rate\u2011hike\u201d risk by year\u2011end** \u2013 reflects market expectations for future Fed rate moves. Higher interest rates raise financing costs for auto purchases and can suppress demand for higher\u2011priced EVs. |\n| **Oil\u2011price movement (oil prices slid)** \u2013 lower oil prices can reduce the cost\u2011advantage argument for EVs, while higher prices tend to make electric cars more attractive to cost\u2011conscious buyers. |\n| **Semiconductor\u2011related market pressure (e.g., Micron, Cerebras dragging Nasdaq lower)** \u2013 semiconductor supply constraints directly affect Tesla\u2019s production capacity and vehicle rollout schedules. |\n| **Industrial Production (Japan \u2013 May)** \u2013 signals broader manufacturing health in a key Asian market; shifts can affect global supply\u2011chain dynamics for batteries and components. |\n| **U.S. USDA crop\u2011cost forecast (rising production costs)** \u2013 higher agricultural input costs can lift overall inflation pressures, influencing consumer disposable income and potentially EV demand. |\n| **India GDP\u2011growth forecast slowdown (to 6.6\u202f% in 2026\u201127)** \u2013 while farther out, a slowdown in a large emerging market can affect long\u2011term growth expectations for EV adoption globally. |\n\nThese releases and market moves are the most immediate macro\u2011economic factors that could influence Tesla\u2019s sales outlook, production costs, financing environment, and investor sentiment over the next 30\u202fdays.\u202f[commentary 1]\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "MACRO",
+          "latency_ms": 38363,
+          "message_id": "019f019c-0802-7f7c-8257-5dfef0095d87",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "0bd2014d-c64e-4ce9-8836-2e14b9c5b937"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.5011250108946115,
+            "entity_resolution": 150.10562501265667,
+            "grounding_validation": 15022.74367400969,
+            "llm_synthesis_streaming": 11291.696921995026,
+            "llm_tool_planning": 10483.306588983396,
+            "load_history": 41.814000011072494,
+            "persist_and_cache": 34.751084007439204,
+            "tool_execution": 137.39220800925978,
+            "validate_input": 873.6665839969646
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-26",
+          "to_date": "2026-07-26"
+        },
+        "name": "get_economic_calendar"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      }
+    ],
+    "tps": 14.643,
+    "tps_streaming": 48.62,
+    "ttft_s": 0.954
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made only one tool call (get_economic_calendar) which returned a single event \u2014 insufficient to answer a question about macroeconomic events likely to affect Tesla over 30 days. The routing is too narrow: the agent should have also called get_entity_intelligence to identify Tesla-specific macro sensitivities and search_events to find relevant news/events. The chain is under-informative rather than efficient. The single call was correctly ordered and had no failures, but the overall trajectory fails to gather enough data to support the answer. The most impactful change would be to chain additional tool calls (entity intelligence + event search) after the calendar to enrich the result set.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call returned only 1 item, which is far too few to answer the question about 'macroeconomic events likely to affect Tesla in the next 30 days'. The agent should have made additional calls (e.g., search_events, get_entity_intelligence) to gather sufficient data. The chain is under-informat",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering constraint to evaluate. The single call is trivially correctly ordered.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred (status=ok, items=1). Nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_economic_calendar is appropriate for macro events, but the question asks for events 'likely to affect Tesla' \u2014 the agent should have also called get_entity_intelligence or search_events to link macro events to Tesla specifically. Only one tool call was made, which is insufficient for the ",
+        "score": 10
+      }
+    },
+    "trajectory_score": 70,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

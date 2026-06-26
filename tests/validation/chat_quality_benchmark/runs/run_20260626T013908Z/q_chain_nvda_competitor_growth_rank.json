@@ -1,0 +1,798 @@
+{
+  "bucket": "PASS",
+  "category": "comparison",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_entity_intelligence",
+      "traverse_graph",
+      "search_entity_relations",
+      "get_fundamentals_history_batch",
+      "compare_entities"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1036,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence",
+      "get_fundamentals_history_batch",
+      "search_entity_relations",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 43.425,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "output_tokens": 259,
+    "phase_timings_ms": {
+      "check_cache": 3.7854590045753866,
+      "entity_resolution": 199.08933399710804,
+      "grounding_validation": 15014.161047991365,
+      "llm_direct_text_generation": 15526.186381990556,
+      "llm_tool_planning": 25534.52592798567,
+      "load_history": 63.36766701133456,
+      "persist_and_cache": 68.88670900661964,
+      "tool_execution": 1151.7714159999741,
+      "validate_input": 680.2028329984751
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history_batch",
+      "search_entity_relations"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.743,
+    "word_count": 178
+  },
+  "id": "chain_nvda_competitor_growth_rank",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Deep comparison question answered with a structured table per competitor, clear growth calculation, and a conclusion \u2014 perfectly calibrated depth.",
+        "reason": "Deep comparison question answered with a structured table per competitor, clear growth calculation, and a conclusion \u2014 perfectly calibrated depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All cited revenue figures and growth rates are consistent with the grounding sample; attribution via row references is present. Minor deduction for the unverified banner, which is a transparency feature, not a grounding error.",
+        "reason": "All cited revenue figures and growth rates are consistent with the grounding sample; attribution via row references is present. Minor deduction for the unverified banner, which is a transparency feature, not a grounding error.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+        "reason": "Called search_entity_relations and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Strong overall performance. The agent correctly identified competitors via search_entity_relations, fetched fundamentals for all five, and produced a well-structured comparative table with cited growth rates. The only minor issue is the unverified-data banner, which is harmless but could be removed if the validator is consistently timing out. No factual errors or refusals. Next improvement: ensure the validator timeout is handled gracefully so the banner doesn't appear.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations and get_fundamentals_history_batch, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"All cited revenue figures and growth rates are consistent with the grounding sample; attribution via row references is present. Minor deduction for the unverified banner, which is a transparency feature, not a grounding error.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Deep comparison question answered with a structured table per competitor, clear growth calculation, and a conclusion \u2014 perfectly calibrated depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.\"\n  },\n  \"reviewer_summary\": \"Strong overall performance. The agent correctly identified competitors via search_entity_relations, fetched fundamentals for all five, and produced a well-structured comparative table with cited growth rates. The only minor issue is the unverified-data banner, which is harmless but could be removed if the validator is consistently timing out. No factual errors or refusals. Next improvement: ensure the validator timeout is handled gracefully so the banner doesn't appear.\"\n}",
+    "reviewer_summary": "Strong overall performance. The agent correctly identified competitors via search_entity_relations, fetched fundamentals for all five, and produced a well-structured comparative table with cited growth rates. The only minor issue is the unverified-data banner, which is harmless but could be removed if the validator is consistently timing out. No factual errors or refusals. Next improvement: ensure the validator timeout is handled gracefully so the banner doesn't appear.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 48,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Among NVIDIA's main competitors, which one has had the best revenue growth over the past four quarters?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Among NVIDIA\u2019s main competitors, Broadcom\u202f(AVGO) posted the strongest revenue growth over the most recent four\u2011quarter window.\n\n**Revenue growth over the last four quarters (latest quarter\u202f\u2013\u202ffour quarters earlier)**  \n\n| Competitor | Revenue\u202f(earliest quarter) | Revenue\u202f(latest quarter) | % Growth |\n|------------|----------------------------|--------------------------|----------|\n| Broadcom (AVGO) | $16.0\u202fB\u202f(Q3\u202fFY2025)\u30104\u2020row\u202f0\u3011 | $22.2\u202fB\u202f(Q2\u202fFY2026)\u30104\u2020row\u202f4\u3011 | **\u2248\u202f38.8\u202f%** |\n| AMD | $7.7\u202fB\u202f(Q2\u202fFY2025)\u30102\u2020row\u202f0\u3011 | $10.3\u202fB\u202f(Q1\u202fFY2026)\u30102\u2020row\u202f4\u3011 | \u2248\u202f33.8\u202f% |\n| Intel (INTC) | $12.9\u202fB\u202f(Q2\u202f2025)\u30103\u2020row\u202f0\u3011 | $13.6\u202fB\u202f(Q1\u202f2026)\u30103\u2020row\u202f4\u3011 | \u2248\u202f5.4\u202f% |\n| Qualcomm (QCOM) | $10.4\u202fB\u202f(Q2\u202fFY2025)\u30105\u2020row\u202f0\u3011 | $10.6\u202fB\u202f(Q1\u202fFY2026)\u30105\u2020row\u202f4\u3011 | \u2248\u202f1.9\u202f% |\n| Marvell (MRVL) | $2.0\u202fB\u202f(Q3\u202fFY2025)\u30106\u2020row\u202f0\u3011 | $2.4\u202fB\u202f(Q2\u202fFY2026)\u30106\u2020row\u202f4\u3011 | \u2248\u202f20.0\u202f% |\n\n**Conclusion**  \nBroadcom\u2019s revenue rose from $16.0\u202fB to $22.2\u202fB, a \u2248\u202f38.8\u202f% increase, which is the highest growth rate among the listed competitors.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        743473
+      ],
+      [
+        "status",
+        794911
+      ],
+      [
+        "thinking",
+        995831
+      ],
+      [
+        "agent_iteration",
+        995954
+      ],
+      [
+        "status",
+        4619232
+      ],
+      [
+        "tool_call",
+        4619317
+      ],
+      [
+        "tool_result",
+        5283963
+      ],
+      [
+        "agent_iteration",
+        5571331
+      ],
+      [
+        "tool_call",
+        11976977
+      ],
+      [
+        "tool_result",
+        12448997
+      ],
+      [
+        "agent_iteration",
+        12775626
+      ],
+      [
+        "token",
+        28306554
+      ],
+      [
+        "token",
+        28306661
+      ],
+      [
+        "token",
+        28306671
+      ],
+      [
+        "token",
+        28306679
+      ],
+      [
+        "token",
+        28306689
+      ],
+      [
+        "token",
+        28306704
+      ],
+      [
+        "token",
+        28306711
+      ],
+      [
+        "token",
+        28306717
+      ],
+      [
+        "token",
+        28306724
+      ],
+      [
+        "token",
+        28306743
+      ],
+      [
+        "token",
+        28306857
+      ],
+      [
+        "token",
+        28307009
+      ],
+      [
+        "token",
+        28307121
+      ],
+      [
+        "token",
+        28307253
+      ],
+      [
+        "token",
+        28315100
+      ],
+      [
+        "token",
+        28315216
+      ],
+      [
+        "token",
+        28315325
+      ],
+      [
+        "token",
+        28315581
+      ],
+      [
+        "token",
+        28315837
+      ],
+      [
+        "token",
+        28315933
+      ],
+      [
+        "token",
+        28316041
+      ],
+      [
+        "token",
+        28316158
+      ],
+      [
+        "status",
+        28330005
+      ],
+      [
+        "final_answer",
+        43344028
+      ],
+      [
+        "citations",
+        43344091
+      ],
+      [
+        "contradictions",
+        43353562
+      ],
+      [
+        "suggestions",
+        43353587
+      ],
+      [
+        "metadata",
+        43409268
+      ],
+      [
+        "done",
+        43409584
+      ]
+    ],
+    "latency_s": 43.425,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 849314,
+      "message_id": "019f0201-b961-7fc6-874d-a2d5b0aa5f68",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "b51f012d-dc3b-4b35-836b-b61440746f8f"
+    },
+    "output_tokens": 259,
+    "phase_timings_ms": {
+      "check_cache": 3.7854590045753866,
+      "entity_resolution": 199.08933399710804,
+      "grounding_validation": 15014.161047991365,
+      "llm_direct_text_generation": 15526.186381990556,
+      "llm_tool_planning": 25534.52592798567,
+      "load_history": 63.36766701133456,
+      "persist_and_cache": 68.88670900661964,
+      "tool_execution": 1151.7714159999741,
+      "validate_input": 680.2028329984751
+    },
+    "question": "Among NVIDIA's main competitors, which one has had the best revenue growth over the past four quarters?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "NVIDIA",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": "competitor_of"
+          },
+          "label": "Mapping relationships for NVIDIA",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 663,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "NVIDIA"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for NVIDIA",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001006",
+              "title": "Relations: NVIDIA"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4574,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 5,
+            "tickers": [
+              "AMD",
+              "INTC",
+              "QCOM",
+              "AVGO",
+              "MRVL"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 485,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "AMD",
+              "ticker_2": "INTC",
+              "ticker_3": "QCOM"
+            },
+            "sampled_rows": 3,
+            "total_rows": 5,
+            "truncated": false
+          },
+          "item_count": 5,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:AMD",
+              "title": "Fundamentals: AMD"
+            },
+            {
+              "id": "tool:fundamentals_batch:INTC",
+              "title": "Fundamentals: INTC"
+            },
+            {
+              "id": "tool:fundamentals_batch:QCOM",
+              "title": "Fundamentals: QCOM"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11774,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Among NVIDIA\u2019s main competitors, Broadcom\u202f(AVGO) posted the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "strongest revenue growth over the most recent four\u2011quarter "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "window.\n\n**Revenue growth over the last four quarters "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(latest quarter\u202f\u2013\u202ffour quarters earlier)**  \n\n| Competitor "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Revenue\u202f(earliest quarter) | Revenue\u202f(latest quarter) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| % Growth |\n|------------|----------------------------|--------------------------|----------|\n| Broadcom (AVGO) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $16.0\u202fB\u202f(Q3\u202fFY2025)\u30104\u2020row\u202f0\u3011 | $22.2\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B\u202f(Q2\u202fFY2026)\u30104\u2020row\u202f4\u3011 | **\u2248\u202f38.8\u202f%** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| AMD | $7.7\u202fB\u202f(Q2\u202fFY2025)\u30102\u2020row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0\u3011 | $10.3\u202fB\u202f(Q1\u202fFY2026)\u30102\u2020row\u202f4\u3011 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2248\u202f33.8\u202f% |\n| Intel (INTC) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$12.9\u202fB\u202f(Q2\u202f2025)\u30103\u2020row\u202f0\u3011 | $13.6\u202fB\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(Q1\u202f2026)\u30103\u2020row\u202f4\u3011 | \u2248\u202f5.4\u202f% |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Qualcomm (QCOM) | $10.4\u202fB\u202f(Q2\u202fFY2025)\u30105\u2020row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0\u3011 | $10.6\u202fB\u202f(Q1\u202fFY2026)\u30105\u2020row\u202f4\u3011 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2248\u202f1.9\u202f% |\n| Marvell (MRVL) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$2.0\u202fB\u202f(Q3\u202fFY2025)\u30106\u2020row\u202f0\u3011 | $2.4\u202fB\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(Q2\u202fFY2026)\u30106\u2020row\u202f4\u3011 | \u2248\u202f20.0\u202f% |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Conclusion**  \nBroadcom\u2019s revenue rose from $16.0\u202fB to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$22.2\u202fB, a \u2248\u202f38.8\u202f% increase, which "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is the highest growth rate among the listed "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "competitors."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Among NVIDIA\u2019s main competitors, Broadcom\u202f(AVGO) posted the strongest revenue growth over the most recent four\u2011quarter window.\n\n**Revenue growth over the last four quarters (latest quarter\u202f\u2013\u202ffour quarters earlier)**  \n\n| Competitor | Revenue\u202f(earliest quarter) | Revenue\u202f(latest quarter) | % Growth |\n|------------|----------------------------|--------------------------|----------|\n| Broadcom (AVGO) | $16.0\u202fB\u202f(Q3\u202fFY2025)\u30104\u2020row\u202f0\u3011 | $22.2\u202fB\u202f(Q2\u202fFY2026)\u30104\u2020row\u202f4\u3011 | **\u2248\u202f38.8\u202f%** |\n| AMD | $7.7\u202fB\u202f(Q2\u202fFY2025)\u30102\u2020row\u202f0\u3011 | $10.3\u202fB\u202f(Q1\u202fFY2026)\u30102\u2020row\u202f4\u3011 | \u2248\u202f33.8\u202f% |\n| Intel (INTC) | $12.9\u202fB\u202f(Q2\u202f2025)\u30103\u2020row\u202f0\u3011 | $13.6\u202fB\u202f(Q1\u202f2026)\u30103\u2020row\u202f4\u3011 | \u2248\u202f5.4\u202f% |\n| Qualcomm (QCOM) | $10.4\u202fB\u202f(Q2\u202fFY2025)\u30105\u2020row\u202f0\u3011 | $10.6\u202fB\u202f(Q1\u202fFY2026)\u30105\u2020row\u202f4\u3011 | \u2248\u202f1.9\u202f% |\n| Marvell (MRVL) | $2.0\u202fB\u202f(Q3\u202fFY2025)\u30106\u2020row\u202f0\u3011 | $2.4\u202fB\u202f(Q2\u202fFY2026)\u30106\u2020row\u202f4\u3011 | \u2248\u202f20.0\u202f% |\n\n**Conclusion**  \nBroadcom\u2019s revenue rose from $16.0\u202fB to $22.2\u202fB, a \u2248\u202f38.8\u202f% increase, which is the highest growth rate among the listed competitors.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Shift4 Payments?",
+          "How has FOUR performed recently?",
+          "What are the biggest risks for Shift4 Payments right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 849314,
+          "message_id": "019f0201-b961-7fc6-874d-a2d5b0aa5f68",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "b51f012d-dc3b-4b35-836b-b61440746f8f"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.7854590045753866,
+            "entity_resolution": 199.08933399710804,
+            "grounding_validation": 15014.161047991365,
+            "llm_direct_text_generation": 15526.186381990556,
+            "llm_tool_planning": 25534.52592798567,
+            "load_history": 63.36766701133456,
+            "persist_and_cache": 68.88670900661964,
+            "tool_execution": 1151.7714159999741,
+            "validate_input": 680.2028329984751
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "NVIDIA",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": "competitor_of"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "periods": 5,
+          "tickers": [
+            "AMD",
+            "INTC",
+            "QCOM",
+            "AVGO",
+            "MRVL"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "NVIDIA"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "AMD",
+            "ticker_2": "INTC",
+            "ticker_3": "QCOM"
+          },
+          "sampled_rows": 3,
+          "total_rows": 5,
+          "truncated": false
+        },
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 6.068,
+    "tps_streaming": 16.681,
+    "ttft_s": 0.743
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph",
+      "search_entity_relations",
+      "get_fundamentals_history_batch",
+      "compare_entities"
+    ],
+    "forbidden_facts": [
+      "Includes NVIDIA itself in the competitor ranking"
+    ],
+    "required_facts": [
+      "Names at least two competitors of NVIDIA",
+      "Reports a revenue-growth figure (YoY% or QoQ%) for the winning competitor"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "comparison",
+    "relationship"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent executed a clean, minimal two-step process: first resolving NVIDIA's competitors via search_entity_relations, then fetching revenue history for all identified tickers in a single batch call. The dependency order is correct, no calls are wasted, and no recovery was needed. The only improvement would be to verify that the batch call's ticker list exactly matches the competitors returned by the first call (the trace shows five tickers, but the grounding sample only confirms three; if the first call returned fewer, the extra tickers would be speculative).",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls are the minimal sensible chain: one to get competitors, one to get their revenue history. No redundancy or wasted calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "call 1 resolves the competitor list; call 2 uses that list to fetch fundamentals. Dependency order is correct and there is no inversion.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 search_entity_relations correctly identifies competitors; call 2 get_fundamentals_history_batch fetches the needed revenue data. Both tools match the question's intent perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,436 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 185,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 9.771,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities"
+    ],
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 3.3999170118477196,
+      "entity_resolution": 74.26895800745115,
+      "grounding_validation": 2059.256918000756,
+      "llm_direct_text_generation": 3560.4317920078756,
+      "llm_tool_planning": 6279.879043009714,
+      "load_history": 5.9357910067774355,
+      "persist_and_cache": 15.18495799973607,
+      "tool_execution": 324.6543340064818,
+      "validate_input": 609.8975009954302
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "ttft_s": 0.669,
+    "word_count": 23
+  },
+  "id": "agg_q1_apple_competitors",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for 'main competitors' (plural), but answer only names one. Depth is slightly shallow for a medium-complexity question; a brief list or mention of other key competitors would better match the expected depth.",
+        "reason": "Question asks for 'main competitors' (plural), but answer only names one. Depth is slightly shallow for a medium-complexity question; a brief list or mention of other key competitors would better match the expected depth.",
+        "score": 15
+      },
+      "grounding": {
+        "feedback": "Claims Microsoft is a main competitor, citing get_entity_intelligence row 0. No grounding sample provided, but attribution is present and scope is respected. The transparency banner is neutral.",
+        "reason": "Claims Microsoft is a main competitor, citing get_entity_intelligence row 0. No grounding sample provided, but attribution is present and scope is respected. The transparency banner is neutral.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data (Microsoft as competitor) with citation.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data (Microsoft as competitor) with citation.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence, which is one of the expected tools (equivalence set).",
+        "reason": "Called get_entity_intelligence, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_intelligence and grounded the single claim. However, the question asks for 'main competitors' (plural) at medium depth, and the answer only names one. The agent should either call compare_entities or request a broader competitor list from get_entity_intelligence to cover the full set. The transparency banner is fine but doesn't compensate for the missing breadth. Next iteration: ensure the tool call returns or the answer includes multiple competitors when the question implies plural.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims Microsoft is a main competitor, citing get_entity_intelligence row 0. No grounding sample provided, but attribution is present and scope is respected. The transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 15,\n    \"feedback\": \"Question asks for 'main competitors' (plural), but answer only names one. Depth is slightly shallow for a medium-complexity question; a brief list or mention of other key competitors would better match the expected depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data (Microsoft as competitor) with citation.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_intelligence and grounded the single claim. However, the question asks for 'main competitors' (plural) at medium depth, and the answer only names one. The agent should either call compare_entities or request a broader competitor list from get_entity_intelligence to cover the full set. The transparency banner is fine but doesn't compensate for the missing breadth. Next iteration: ensure the tool call returns or the answer includes multiple competitors when the question implies plural.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_intelligence and grounded the single claim. However, the question asks for 'main competitors' (plural) at medium depth, and the answer only names one. The agent should either call compare_entities or request a broader competitor list from get_entity_intelligence to cover the full set. The transparency banner is fine but doesn't compensate for the missing breadth. Next iteration: ensure the tool call returns or the answer includes multiple competitors when the question implies plural.",
+    "score": 85,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 15,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 85,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Who are Apple's main competitors?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Apple\u2019s main competitor highlighted in the intelligence bundle is **Microsoft Corporation**\u3010get_entity_intelligence row 0\u3011.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        668763
+      ],
+      [
+        "status",
+        671052
+      ],
+      [
+        "thinking",
+        747133
+      ],
+      [
+        "agent_iteration",
+        747180
+      ],
+      [
+        "status",
+        3468408
+      ],
+      [
+        "tool_call",
+        3468471
+      ],
+      [
+        "tool_result",
+        3793457
+      ],
+      [
+        "agent_iteration",
+        4095413
+      ],
+      [
+        "token",
+        7677342
+      ],
+      [
+        "token",
+        7677403
+      ],
+      [
+        "status",
+        7694772
+      ],
+      [
+        "final_answer",
+        9751150
+      ],
+      [
+        "citations",
+        9751242
+      ],
+      [
+        "contradictions",
+        9753456
+      ],
+      [
+        "suggestions",
+        9753528
+      ],
+      [
+        "metadata",
+        9765750
+      ],
+      [
+        "done",
+        9765820
+      ]
+    ],
+    "latency_s": 9.771,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 9704,
+      "message_id": "019f0199-4730-7b31-89db-d93877098714",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "2e3cbdf6-afd6-4cb4-941a-2627810bc21a"
+    },
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 3.3999170118477196,
+      "entity_resolution": 74.26895800745115,
+      "grounding_validation": 2059.256918000756,
+      "llm_direct_text_generation": 3560.4317920078756,
+      "llm_tool_planning": 6279.879043009714,
+      "load_history": 5.9357910067774355,
+      "persist_and_cache": 15.18495799973607,
+      "tool_execution": 324.6543340064818,
+      "validate_input": 609.8975009954302
+    },
+    "question": "Who are Apple's main competitors?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 324,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3347,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s primary competitor mentioned in the intelligence bundle "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is **Microsoft\u202fCorporation**\u30101\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s main competitor highlighted in the intelligence bundle is **Microsoft Corporation**\u3010get_entity_intelligence row 0\u3011.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 9704,
+          "message_id": "019f0199-4730-7b31-89db-d93877098714",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "2e3cbdf6-afd6-4cb4-941a-2627810bc21a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.3999170118477196,
+            "entity_resolution": 74.26895800745115,
+            "grounding_validation": 2059.256918000756,
+            "llm_direct_text_generation": 3560.4317920078756,
+            "llm_tool_planning": 6279.879043009714,
+            "load_history": 5.9357910067774355,
+            "persist_and_cache": 15.18495799973607,
+            "tool_execution": 324.6543340064818,
+            "validate_input": 609.8975009954302
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tps": 5.164,
+    "tps_streaming": 13.201,
+    "ttft_s": 0.669
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made only one call to get_entity_intelligence for AAPL, which returned a single competitor (Microsoft). For a question asking for 'main competitors' (plural), the expected chain includes compare_entities to surface a broader competitive set. The trajectory is too narrow: it lacks the second tool call needed to fully answer the question. The single call is not wasteful, but it is incomplete. The most impactful process change would be to chain get_entity_intelligence with compare_entities to enumerate multiple competitors.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call is not redundant, but it is insufficient for the question. The agent should have also called compare_entities to identify multiple competitors, making the chain incomplete rather than efficient.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there are no ordering dependencies to evaluate. The single call is correctly placed.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred, so there is nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Call 1 uses get_entity_intelligence, which is one of the expected tools for a competitor question. However, the expected chain also includes compare_entities to get a broader set of competitors; the agent only retrieved a single entity's intelligence, which may not fully answer 'main competitors'.",
+        "score": 20
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

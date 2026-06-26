@@ -1,0 +1,518 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 392,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 25.405,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 98,
+    "phase_timings_ms": {
+      "check_cache": 2.1832909988006577,
+      "entity_resolution": 114.08762499922886,
+      "grounding_validation": 14410.498880999512,
+      "llm_direct_text_generation": 4331.4355850016,
+      "llm_tool_planning": 9813.022795991856,
+      "load_history": 29.51787499478087,
+      "persist_and_cache": 22.984916999121197,
+      "tool_execution": 42.94145799940452,
+      "validate_input": 587.936958996579
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.658,
+    "word_count": 67
+  },
+  "id": "ru_tsla_margin_trend",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for trend direction; answer provides quarterly values and a clear directional statement. Depth matches medium complexity perfectly.",
+        "reason": "Question asks for trend direction; answer provides quarterly values and a clear directional statement. Depth matches medium complexity perfectly.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims cite query_fundamentals row 0; no grounding sample provided (presumed band). Attribution is present, but the transparency banner flags unverifiable figures \u2014 minor deduction for scope uncertainty.",
+        "reason": "Claims cite query_fundamentals row 0; no grounding sample provided (presumed band). Attribution is present, but the transparency banner flags unverifiable figures \u2014 minor deduction for scope uncertainty.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is one of the expected tools (equivalence set). Correct routing.",
+        "reason": "Called query_fundamentals, which is one of the expected tools (equivalence set). Correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals and produced a well-structured trend answer with quarterly gross margin figures and a clear directional conclusion. The transparency banner is a minor concern but not a grounding violation. The main improvement would be to ensure the tool call returns enough periods to cover the full 'last year' window \u2014 the answer references Q1 2025 through Q1 2026, but the trace shows only 5 quarterly periods requested, which may not span exactly 12 months. Consider requesting 6 periods or using a date-range filter to guarantee full coverage.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is one of the expected tools (equivalence set). Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims cite query_fundamentals row 0; no grounding sample provided (presumed band). Attribution is present, but the transparency banner flags unverifiable figures \u2014 minor deduction for scope uncertainty.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for trend direction; answer provides quarterly values and a clear directional statement. Depth matches medium complexity perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and produced a well-structured trend answer with quarterly gross margin figures and a clear directional conclusion. The transparency banner is a minor concern but not a grounding violation. The main improvement would be to ensure the tool call returns enough periods to cover the full 'last year' window \u2014 the answer references Q1 2025 through Q1 2026, but the trace shows only 5 quarterly periods requested, which may not span exactly 12 months. Consider requesting 6 periods or using a date-range filter to guarantee full coverage.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals and produced a well-structured trend answer with quarterly gross margin figures and a clear directional conclusion. The transparency banner is a minor concern but not a grounding violation. The main improvement would be to ensure the tool call returns enough periods to cover the full 'last year' window \u2014 the answer references Q1 2025 through Q1 2026, but the trace shows only 5 quarterly periods requested, which may not span exactly 12 months. Consider requesting 6 periods or using a date-range filter to guarantee full coverage.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "How has Tesla's gross margin trended in the last year?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Tesla\u2019s gross margin has been on an upward trajectory over the past twelve months. It rose from\u202f16.31\u202f% in\u202fQ1\u202f2025 to\u202f21.08\u202f% in\u202fQ1\u202f2026, showing a steady improvement each quarter (Q2\u202f2025\u202f17.24\u202f%, Q3\u202f2025\u202f17.99\u202f%, Q4\u202f2025\u202f20.12\u202f%)\u3010query_fundamentals row 0\u3011. This pattern indicates a consistent expansion of margin year\u2011over\u2011year.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        658109
+      ],
+      [
+        "status",
+        673739
+      ],
+      [
+        "thinking",
+        796474
+      ],
+      [
+        "agent_iteration",
+        796493
+      ],
+      [
+        "status",
+        6279965
+      ],
+      [
+        "tool_call",
+        6280616
+      ],
+      [
+        "tool_result",
+        6320998
+      ],
+      [
+        "agent_iteration",
+        6615657
+      ],
+      [
+        "token",
+        10951384
+      ],
+      [
+        "token",
+        10951508
+      ],
+      [
+        "token",
+        10951798
+      ],
+      [
+        "token",
+        10952105
+      ],
+      [
+        "token",
+        10952392
+      ],
+      [
+        "token",
+        10952560
+      ],
+      [
+        "token",
+        10952620
+      ],
+      [
+        "token",
+        10952662
+      ],
+      [
+        "status",
+        10953509
+      ],
+      [
+        "final_answer",
+        25369303
+      ],
+      [
+        "citations",
+        25369430
+      ],
+      [
+        "contradictions",
+        25371399
+      ],
+      [
+        "suggestions",
+        25371453
+      ],
+      [
+        "metadata",
+        25389899
+      ],
+      [
+        "done",
+        25389970
+      ]
+    ],
+    "latency_s": 25.405,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 25317,
+      "message_id": "019f01a8-9733-7205-b10c-daf909489404",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "f52ddced-7f55-4e72-b396-14bbd8589981"
+    },
+    "output_tokens": 98,
+    "phase_timings_ms": {
+      "check_cache": 2.1832909988006577,
+      "entity_resolution": 114.08762499922886,
+      "grounding_validation": 14410.498880999512,
+      "llm_direct_text_generation": 4331.4355850016,
+      "llm_tool_planning": 9813.022795991856,
+      "load_history": 29.51787499478087,
+      "persist_and_cache": 22.984916999121197,
+      "tool_execution": 42.94145799940452,
+      "validate_input": 587.936958996579
+    },
+    "question": "How has Tesla's gross margin trended in the last year?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "gross_margin"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "TSLA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 42,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals query: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5822,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Tesla\u2019s gross margin has been on an upward "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trajectory over the past twelve months. It rose "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from\u202f16.31\u202f% in\u202fQ1\u202f2025 to\u202f21.08\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% in\u202fQ1\u202f2026, showing a steady improvement "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "each quarter (Q2\u202f2025\u202f17.24\u202f%, Q3\u202f2025\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "17.99\u202f%, Q4\u202f2025\u202f20.12\u202f%)\u3010query_fundamentals row 0\u3011. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "This pattern indicates a consistent expansion of margin "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "year\u2011over\u2011year."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Tesla\u2019s gross margin has been on an upward trajectory over the past twelve months. It rose from\u202f16.31\u202f% in\u202fQ1\u202f2025 to\u202f21.08\u202f% in\u202fQ1\u202f2026, showing a steady improvement each quarter (Q2\u202f2025\u202f17.24\u202f%, Q3\u202f2025\u202f17.99\u202f%, Q4\u202f2025\u202f20.12\u202f%)\u3010query_fundamentals row 0\u3011. This pattern indicates a consistent expansion of margin year\u2011over\u2011year.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Hasbro Inc?",
+          "How has HAS performed recently?",
+          "How do Hasbro Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 25317,
+          "message_id": "019f01a8-9733-7205-b10c-daf909489404",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "f52ddced-7f55-4e72-b396-14bbd8589981"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.1832909988006577,
+            "entity_resolution": 114.08762499922886,
+            "grounding_validation": 14410.498880999512,
+            "llm_direct_text_generation": 4331.4355850016,
+            "llm_tool_planning": 9813.022795991856,
+            "load_history": 29.51787499478087,
+            "persist_and_cache": 22.984916999121197,
+            "tool_execution": 42.94145799940452,
+            "validate_input": 587.936958996579
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "gross_margin"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "TSLA"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 3.96,
+    "tps_streaming": 22.625,
+    "ttft_s": 0.658
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_margin_values"
+    ],
+    "required_facts": [
+      "gross_margin_per_period",
+      "trend_direction"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, precise call to query_fundamentals with the correct ticker, metric, period count, and period type, obtaining the full quarterly gross margin history for Tesla. The chain is minimal, correctly routed, and has no ordering or recovery issues. The only improvement would be to verify the period labels (Q1 2025\u2013Q1 2026) match the actual data returned, but that is a data interpretation concern, not a process flaw.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call returns all needed quarterly gross margin data; no wasted or redundant calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call with no dependencies \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses query_fundamentals with ticker TSLA and gross_margin metric, exactly matching the intent of a fundamentals trend question.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "base_url": "http://localhost:8000",
+  "ended_at": "2026-06-26T04:32:54.384780+00:00",
+  "ids_filter": null,
+  "judge_model_id": "deepseek-ai/DeepSeek-V4-Flash",
+  "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+  "judge_prompt_version": "3.0",
+  "max_runs_per_q": 1,
+  "out_dir_label": "run_20260626T013908Z",
+  "questions_file": "/Users/arnaurodon/Projects/University/final_thesis/worldview-consolidation/tests/validation/chat_quality_benchmark/questions",
+  "started_at": "2026-06-26T01:39:08.641293+00:00",
+  "tags_filter": null,
+  "total_questions": 67,
+  "total_runs": 67,
+  "verdict_model_version": "1.1"
+}

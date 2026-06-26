@@ -1,0 +1,654 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 339,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 26.519,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "query_fundamentals"
+    ],
+    "output_tokens": 85,
+    "phase_timings_ms": {
+      "check_cache": 3.1563749944325536,
+      "entity_resolution": 147.62120798695832,
+      "grounding_validation": 9155.19325400237,
+      "llm_direct_text_generation": 8978.694378994987,
+      "llm_tool_planning": 16076.746632985305,
+      "load_history": 9.667916994658299,
+      "persist_and_cache": 40.77195799618494,
+      "tool_execution": 86.70570798858535,
+      "validate_input": 552.2947499994189
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.609,
+    "word_count": 53
+  },
+  "id": "da_tsla_revenue_2024_full_year",
+  "judge": {
+    "dimensions": {
+      "framing": null,
+      "grounding": null,
+      "refusal_judgment": null,
+      "tool_use": null
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "raw_response": null,
+    "reviewer_summary": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "score": null,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 10,
+      "unsupported": 0
+    },
+    "verdict": "ERROR",
+    "verdict_decision": null
+  },
+  "prompt": "Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024).",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Tesla (TSLA) 2024 Quarterly Revenue**\n\n| Calendar Quarter | Revenue |\n|------------------|---------|\n| Q2\u202f2024 | $25.5\u202fB [get_fundamentals_history row\u202f0] |\n| Q3\u202f2024 | $25.2\u202fB [get_fundamentals_history row\u202f1] |\n| Q4\u202f2024 | $25.7\u202fB [get_fundamentals_history row\u202f2] |\n\n*Q1\u202f2024 revenue is not available in the retrieved fundamentals data.*",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        608525
+      ],
+      [
+        "status",
+        610060
+      ],
+      [
+        "thinking",
+        759601
+      ],
+      [
+        "agent_iteration",
+        759642
+      ],
+      [
+        "status",
+        7860503
+      ],
+      [
+        "tool_call",
+        7860847
+      ],
+      [
+        "tool_result",
+        7947203
+      ],
+      [
+        "agent_iteration",
+        8297070
+      ],
+      [
+        "token",
+        17275894
+      ],
+      [
+        "token",
+        17276143
+      ],
+      [
+        "token",
+        17276192
+      ],
+      [
+        "token",
+        17276244
+      ],
+      [
+        "token",
+        17276292
+      ],
+      [
+        "token",
+        17276332
+      ],
+      [
+        "token",
+        17276448
+      ],
+      [
+        "token",
+        17276487
+      ],
+      [
+        "token",
+        17276570
+      ],
+      [
+        "token",
+        17276608
+      ],
+      [
+        "token",
+        17276793
+      ],
+      [
+        "token",
+        17276912
+      ],
+      [
+        "token",
+        17277004
+      ],
+      [
+        "token",
+        17277259
+      ],
+      [
+        "token",
+        17277401
+      ],
+      [
+        "token",
+        17277833
+      ],
+      [
+        "token",
+        17277962
+      ],
+      [
+        "token",
+        17278272
+      ],
+      [
+        "token",
+        17278411
+      ],
+      [
+        "token",
+        17278495
+      ],
+      [
+        "token",
+        17278882
+      ],
+      [
+        "token",
+        17279061
+      ],
+      [
+        "token",
+        17279313
+      ],
+      [
+        "token",
+        17279373
+      ],
+      [
+        "token",
+        17295888
+      ],
+      [
+        "status",
+        17296705
+      ],
+      [
+        "final_answer",
+        26446007
+      ],
+      [
+        "citations",
+        26446083
+      ],
+      [
+        "contradictions",
+        26449642
+      ],
+      [
+        "suggestions",
+        26449771
+      ],
+      [
+        "metadata",
+        26497004
+      ],
+      [
+        "done",
+        26497113
+      ]
+    ],
+    "latency_s": 26.519,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 26412,
+      "message_id": "019f020b-6a8b-7945-86f5-a37d1a6ab5e4",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "74cb1630-8601-4d8f-87d1-bac0da28ec32"
+    },
+    "output_tokens": 85,
+    "phase_timings_ms": {
+      "check_cache": 3.1563749944325536,
+      "entity_resolution": 147.62120798695832,
+      "grounding_validation": 9155.19325400237,
+      "llm_direct_text_generation": 8978.694378994987,
+      "llm_tool_planning": 16076.746632985305,
+      "load_history": 9.667916994658299,
+      "persist_and_cache": 40.77195799618494,
+      "tool_execution": 86.70570798858535,
+      "validate_input": 552.2947499994189
+    },
+    "question": "Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024).",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 8,
+            "ticker": "TSLA"
+          },
+          "label": "Fetching fundamentals for Tesla",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 86,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "TSLA"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7536,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nTesla\u2019s reported quarterly revenue for the calendar "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "year\u202f2024 is available for Q2\u2013Q4, ranging from\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$25.2\u202fbillion to\u202f$25.7\u202fbillion; data for Q1\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2024 is not present in the retrieved fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history].\n\n**Supporting Data**  \n\n| Period | Revenue |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|--------|---------|\n| Q2\u202f2024 | $25.5\u202fB [get_fundamentals_history "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f0] |\n| Q3\u202f2024 | $25.2\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B [get_fundamentals_history row\u202f1] |\n| Q4\u202f2024 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $25.7\u202fB [get_fundamentals_history row\u202f2] |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q1\u202f2024 | N/A \u2013 not returned in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the source data |\n\n**Context**  \nThe source provides "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "quarterly fundamentals for Tesla (TSLA) but only includes "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the three quarters of 2024 that were filed; "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the earliest quarter returned is Q2\u202f2024. No "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "additional historical rows (e.g., Q1\u202f2024) were available, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "so a complete 2024 revenue series cannot be "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "assembled from the current dataset.\n\n**Interpretation & Caveats**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- The three reported quarters show relatively flat "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue, hovering around $25\u202fbillion, suggesting stable top\u2011line "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "performance during the second half of 2024.  \n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Absence of Q1\u202f2024 data limits any year\u2011over\u2011year "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "comparison or trend analysis for the full calendar "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "year.  \n- All figures are taken verbatim from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the retrieved fundamentals; no estimates or extrapolations have "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "been applied."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Tesla (TSLA) 2024 Quarterly Revenue**\n\n| Calendar Quarter | Revenue |\n|------------------|---------|\n| Q2\u202f2024 | $25.5\u202fB [get_fundamentals_history row\u202f0] |\n| Q3\u202f2024 | $25.2\u202fB [get_fundamentals_history row\u202f1] |\n| Q4\u202f2024 | $25.7\u202fB [get_fundamentals_history row\u202f2] |\n\n*Q1\u202f2024 revenue is not available in the retrieved fundamentals data.*"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 26412,
+          "message_id": "019f020b-6a8b-7945-86f5-a37d1a6ab5e4",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "74cb1630-8601-4d8f-87d1-bac0da28ec32"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.1563749944325536,
+            "entity_resolution": 147.62120798695832,
+            "grounding_validation": 9155.19325400237,
+            "llm_direct_text_generation": 8978.694378994987,
+            "llm_tool_planning": 16076.746632985305,
+            "load_history": 9.667916994658299,
+            "persist_and_cache": 40.77195799618494,
+            "tool_execution": 86.70570798858535,
+            "validate_input": 552.2947499994189
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 8,
+          "ticker": "TSLA"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "TSLA"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 3.281,
+    "tps_streaming": 9.467,
+    "ttft_s": 0.609
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "quarters_outside_2024",
+      "fewer_than_4_quarters_returned_without_explanation"
+    ],
+    "required_facts": [
+      "four_quarters_of_2024",
+      "revenue_value_per_quarter",
+      "tesla_or_tsla_referenced"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "financials",
+    "trend"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "Trajectory judge call failed: ReadTimeout('The read operation timed out')",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "",
+        "score": null
+      },
+      "ordering": {
+        "feedback": "",
+        "score": null
+      },
+      "recovery": {
+        "feedback": "",
+        "score": null
+      },
+      "routing": {
+        "feedback": "",
+        "score": null
+      }
+    },
+    "trajectory_score": null,
+    "unrecovered_failures": 0,
+    "verdict": "ERROR"
+  }
+}

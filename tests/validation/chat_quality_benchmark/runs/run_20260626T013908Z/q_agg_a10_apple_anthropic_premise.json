@@ -1,0 +1,537 @@
+{
+  "bucket": "PASS",
+  "category": "refusal_premise",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": []
+  },
+  "heuristics": {
+    "char_count": 180,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 13.09,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 45,
+    "phase_timings_ms": {
+      "check_cache": 4.38383300206624,
+      "entity_resolution": 149.22895800555125,
+      "grounding_validation": 11.468541997601278,
+      "llm_direct_text_generation": 4235.5431690084515,
+      "llm_tool_planning": 8202.068838014384,
+      "load_history": 30.146125005558133,
+      "persist_and_cache": 15.458209003554657,
+      "tool_execution": 604.5146670076065,
+      "validate_input": 853.3235420036362
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 17,
+        "status": "ok",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.923,
+    "word_count": 27
+  },
+  "id": "agg_a10_apple_anthropic_premise",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks about a factual event; concise refusal with citation is appropriate depth for a premise-checking query.",
+        "reason": "Question asks about a factual event; concise refusal with citation is appropriate depth for a premise-checking query.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Answer correctly states no evidence was found; grounded in tool results (status=ok items=17, none support the claim).",
+        "reason": "Answer correctly states no evidence was found; grounded in tool results (status=ok items=17, none support the claim).",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides a substantive finding (no evidence) with tool citation.",
+        "reason": "No refusal phrase present \u2014 answer provides a substantive finding (no evidence) with tool citation.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "No expected tools required; the agent correctly used search_documents to investigate the premise.",
+        "reason": "No expected tools required; the agent correctly used search_documents to investigate the premise.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified that the premise of the question (Apple acquiring Anthropic last quarter) is unsupported by the retrieved documents. It used the appropriate tool, cited the result, and gave a concise, grounded answer. No changes needed; this is a model response for a fact-checking query where the premise is false.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"No expected tools required; the agent correctly used search_documents to investigate the premise.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer correctly states no evidence was found; grounded in tool results (status=ok items=17, none support the claim).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks about a factual event; concise refusal with citation is appropriate depth for a premise-checking query.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides a substantive finding (no evidence) with tool citation.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified that the premise of the question (Apple acquiring Anthropic last quarter) is unsupported by the retrieved documents. It used the appropriate tool, cited the result, and gave a concise, grounded answer. No changes needed; this is a model response for a fact-checking query where the premise is false.\"\n}",
+    "reviewer_summary": "The agent correctly identified that the premise of the question (Apple acquiring Anthropic last quarter) is unsupported by the retrieved documents. It used the appropriate tool, cited the result, and gave a concise, grounded answer. No changes needed; this is a model response for a fact-checking query where the premise is false.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I cannot find evidence that Apple acquired Anthropic last quarter. The\u202fsearch_documents\u202fcall returned 13 items, and none support the claim that Apple completed such an acquisition.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        923293
+      ],
+      [
+        "status",
+        936047
+      ],
+      [
+        "thinking",
+        1092729
+      ],
+      [
+        "agent_iteration",
+        1092778
+      ],
+      [
+        "status",
+        5066328
+      ],
+      [
+        "tool_call",
+        5066612
+      ],
+      [
+        "tool_result",
+        5670992
+      ],
+      [
+        "tool_call",
+        8185369
+      ],
+      [
+        "tool_result",
+        8185439
+      ],
+      [
+        "agent_iteration",
+        8893632
+      ],
+      [
+        "token",
+        13050218
+      ],
+      [
+        "token",
+        13050268
+      ],
+      [
+        "token",
+        13050295
+      ],
+      [
+        "token",
+        13050459
+      ],
+      [
+        "status",
+        13065250
+      ],
+      [
+        "final_answer",
+        13065297
+      ],
+      [
+        "citations",
+        13065516
+      ],
+      [
+        "contradictions",
+        13065555
+      ],
+      [
+        "suggestions",
+        13068444
+      ],
+      [
+        "metadata",
+        13082265
+      ],
+      [
+        "done",
+        13082340
+      ]
+    ],
+    "latency_s": 13.09,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 13023,
+      "message_id": "019f019d-ad10-7c91-aad9-baa00cb948b0",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "fc8bdc18-21bf-4704-980a-22d64834d925"
+    },
+    "output_tokens": 45,
+    "phase_timings_ms": {
+      "check_cache": 4.38383300206624,
+      "entity_resolution": 149.22895800555125,
+      "grounding_validation": 11.468541997601278,
+      "llm_direct_text_generation": 4235.5431690084515,
+      "llm_tool_planning": 8202.068838014384,
+      "load_history": 30.146125005558133,
+      "persist_and_cache": 15.458209003554657,
+      "tool_execution": 604.5146670076065,
+      "validate_input": 853.3235420036362
+    },
+    "question": "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2025-10-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 604,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2025-07-03",
+            "date_to": "2026-09-24",
+            "entity_tickers": [
+              "AAPL"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 2512,
+          "item_count": 17,
+          "result_preview": [
+            {
+              "id": "tool:chunk:019e0e73-eaa3-7aa5-b23d-ae65d33749a3",
+              "title": "Anthropic Inks $1.8 Billion Computing Deal With Akamai"
+            },
+            {
+              "id": "tool:chunk:019e15e0-feee-7af3-8d3d-31149e86f9d1",
+              "title": "Anthropic Inks $1.8 Billion Computing Deal With Akamai"
+            },
+            {
+              "id": "tool:chunk:019e0ef4-4228-79e3-a2f7-4d7278abd773",
+              "title": "Anthropic Signs $1.8 Billion Akamai Cloud Deal Amid Surging Claude AI Demand: Re"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7722,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Apple acquired Anthropic "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "last quarter. The\u202fsearch_documents\u202fcall returned 13 items, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and none support the claim that Apple completed "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "such an acquisition."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Apple acquired Anthropic last quarter. The\u202fsearch_documents\u202fcall returned 13 items, and none support the claim that Apple completed such an acquisition."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has Anthropic performed recently?",
+          "How do Anthropic's fundamentals look?",
+          "Who are Anthropic's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 13023,
+          "message_id": "019f019d-ad10-7c91-aad9-baa00cb948b0",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "fc8bdc18-21bf-4704-980a-22d64834d925"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.38383300206624,
+            "entity_resolution": 149.22895800555125,
+            "grounding_validation": 11.468541997601278,
+            "llm_direct_text_generation": 4235.5431690084515,
+            "llm_tool_planning": 8202.068838014384,
+            "load_history": 30.146125005558133,
+            "persist_and_cache": 15.458209003554657,
+            "tool_execution": 604.5146670076065,
+            "validate_input": 853.3235420036362
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2025-10-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2025-07-03",
+          "date_to": "2026-09-24",
+          "entity_tickers": [
+            "AAPL"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 17,
+        "status": "ok",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 3.699,
+    "tps_streaming": 10.624,
+    "ttft_s": 0.923
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate",
+    "adversarial"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly used search_documents to fact-check the acquisition claim. After the first narrow-date-range call returned empty, it widened the window and got 17 results, which is good recovery. The only process improvement would be to start with the broader date range (call 2's parameters) and skip the first call, saving one redundant step. The final answer correctly states no evidence was found, which matches the tool output.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1 was arguably unnecessary \u2014 the agent could have started with the broader date range in call 2 and saved one call. However, the intent was to be thorough, so the waste is minor.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls, both independent searches with different date ranges. No data dependency between them, so ordering is irrelevant \u2014 no constraint violated.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 1 returned empty (no results for the narrow date range). call 2 widened the date range and returned 17 items, successfully recovering from the empty result. No further recovery needed.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 and 2 use search_documents, which is the correct tool for fact-checking a news/event claim about a company. No other tool type is needed here.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

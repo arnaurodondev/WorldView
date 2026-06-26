@@ -1,0 +1,808 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_claims",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 97,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_claims",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_claims",
+      "search_documents"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 35.072,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 25,
+    "phase_timings_ms": {
+      "check_cache": 2.2265419975155964,
+      "entity_resolution": 121.49491700984072,
+      "grounding_validation": 8216.697003997979,
+      "llm_synthesis_streaming": 1325.011209002696,
+      "llm_tool_planning": 21768.04146701761,
+      "load_history": 10.26954100234434,
+      "persist_and_cache": 13.54029199865181,
+      "tool_execution": 1068.9979570015566,
+      "validate_input": 553.0916670104489
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_claims",
+      "search_documents"
+    ],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.622,
+    "word_count": 15
+  },
+  "id": "tc_search_claims_ai_chip_demand",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; concise refusal is appropriate given empty results.",
+        "reason": "Question is a factual lookup; concise refusal is appropriate given empty results.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample contradicts the answer; the answer is a refusal consistent with empty tool results.",
+        "reason": "No grounding sample contradicts the answer; the answer is a refusal consistent with empty tool results.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_documents and search_claims, both in expected_tools equivalence set.",
+        "reason": "Called search_documents and search_claims, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to both expected tools (search_documents and search_claims) and received empty results for the broad AI/semiconductor demand query. The concise refusal 'Not available in retrieved context' is appropriate given the data gap and rubric's appropriate_refusal_ok flag. The only improvement would be to try a broader date range or different entity names before concluding no data exists, but the current behavior is acceptable.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_documents and search_claims, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample contradicts the answer; the answer is a refusal consistent with empty tool results.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; concise refusal is appropriate given empty results.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to both expected tools (search_documents and search_claims) and received empty results for the broad AI/semiconductor demand query. The concise refusal 'Not available in retrieved context' is appropriate given the data gap and rubric's appropriate_refusal_ok flag. The only improvement would be to try a broader date range or different entity names before concluding no data exists, but the current behavior is acceptable.\"\n}",
+    "reviewer_summary": "The agent correctly routed to both expected tools (search_documents and search_claims) and received empty results for the broad AI/semiconductor demand query. The concise refusal 'Not available in retrieved context' is appropriate given the data gap and rubric's appropriate_refusal_ok flag. The only improvement would be to try a broader date range or different entity names before concluding no data exists, but the current behavior is acceptable.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Find recent claims about AI semiconductor demand.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Not available in retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        621752
+      ],
+      [
+        "status",
+        627943
+      ],
+      [
+        "thinking",
+        750951
+      ],
+      [
+        "agent_iteration",
+        751018
+      ],
+      [
+        "status",
+        6118432
+      ],
+      [
+        "tool_call",
+        6118995
+      ],
+      [
+        "tool_result",
+        6909503
+      ],
+      [
+        "tool_call",
+        7689675
+      ],
+      [
+        "tool_result",
+        7689745
+      ],
+      [
+        "tool_call",
+        7690134
+      ],
+      [
+        "tool_result",
+        7690231
+      ],
+      [
+        "agent_iteration",
+        8068777
+      ],
+      [
+        "tool_call",
+        12836698
+      ],
+      [
+        "tool_result",
+        12871574
+      ],
+      [
+        "agent_iteration",
+        13316599
+      ],
+      [
+        "agent_iteration",
+        19054443
+      ],
+      [
+        "tool_call",
+        25272196
+      ],
+      [
+        "tool_result",
+        25506415
+      ],
+      [
+        "agent_iteration",
+        25506526
+      ],
+      [
+        "token",
+        26827500
+      ],
+      [
+        "token",
+        26827560
+      ],
+      [
+        "token",
+        26827595
+      ],
+      [
+        "token",
+        26827742
+      ],
+      [
+        "token",
+        26827894
+      ],
+      [
+        "token",
+        26827962
+      ],
+      [
+        "status",
+        26835456
+      ],
+      [
+        "final_answer",
+        35050977
+      ],
+      [
+        "citations",
+        35051040
+      ],
+      [
+        "contradictions",
+        35054314
+      ],
+      [
+        "suggestions",
+        35054364
+      ],
+      [
+        "metadata",
+        35065600
+      ],
+      [
+        "done",
+        35065677
+      ]
+    ],
+    "latency_s": 35.072,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 34994,
+      "message_id": "019f01bc-cd5b-7bb2-bd4e-56d86757d991",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "7727a866-a29c-40ca-bf7c-bfca9f4c4ba9"
+    },
+    "output_tokens": 25,
+    "phase_timings_ms": {
+      "check_cache": 2.2265419975155964,
+      "entity_resolution": 121.49491700984072,
+      "grounding_validation": 8216.697003997979,
+      "llm_synthesis_streaming": 1325.011209002696,
+      "llm_tool_planning": 21768.04146701761,
+      "load_history": 10.26954100234434,
+      "persist_and_cache": 13.54029199865181,
+      "tool_execution": 1068.9979570015566,
+      "validate_input": 553.0916670104489
+    },
+    "question": "Find recent claims about AI semiconductor demand.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-27",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "analyst_report",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 792,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2026-02-26",
+            "date_to": "2026-09-24",
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 702,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_name": "C3.ai, Inc."
+          },
+          "is_fallback": true,
+          "label": "Checking analyst claims on C3.ai, Inc.",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 79,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "C3.ai, Inc.",
+              "ticker_2": "C3.ai, Inc.",
+              "ticker_3": "C3.ai, Inc."
+            },
+            "sampled_rows": 3,
+            "total_rows": 20,
+            "truncated": false
+          },
+          "item_count": 20,
+          "result_preview": [
+            {
+              "id": "tool:claim:019eef3d-4381-74c4-b21b-0fd54a02c913",
+              "title": "Claim: has_executive"
+            },
+            {
+              "id": "tool:claim:019eba92-1098-719f-91af-c18e579541e9",
+              "title": "Claim: REVENUE_GROWTH"
+            },
+            {
+              "id": "tool:claim:019ed343-496d-7350-92fa-bcf1faf70dbc",
+              "title": "Claim: listed_on"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7315,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-27",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 35,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12564,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18299,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-27",
+            "date_to": "2026-06-26",
+            "entity_tickers": []
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 240,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 24755,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Not available in retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has AI performed recently?",
+          "Compare C3.ai, Inc. and SJ Semiconductor side by side.",
+          "How do C3.ai, Inc.'s fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 34994,
+          "message_id": "019f01bc-cd5b-7bb2-bd4e-56d86757d991",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "7727a866-a29c-40ca-bf7c-bfca9f4c4ba9"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.2265419975155964,
+            "entity_resolution": 121.49491700984072,
+            "grounding_validation": 8216.697003997979,
+            "llm_synthesis_streaming": 1325.011209002696,
+            "llm_tool_planning": 21768.04146701761,
+            "load_history": 10.26954100234434,
+            "persist_and_cache": 13.54029199865181,
+            "tool_execution": 1068.9979570015566,
+            "validate_input": 553.0916670104489
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-05-27",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "analyst_report",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-02-26",
+          "date_to": "2026-09-24",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_name": "C3.ai, Inc."
+        },
+        "name": "search_claims"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-05-27",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-05-27",
+          "date_to": "2026-06-26",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "C3.ai, Inc.",
+            "ticker_2": "C3.ai, Inc.",
+            "ticker_3": "C3.ai, Inc."
+          },
+          "sampled_rows": 3,
+          "total_rows": 20,
+          "truncated": false
+        },
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 0.726,
+    "tps_streaming": 18.868,
+    "ttft_s": 0.622
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_claims",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "generic_market_commentary_no_sources"
+    ],
+    "required_facts": [
+      "claim_or_evidence_items",
+      "ai_or_semiconductor_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_claims"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent failed to interpret the question's sector-level intent ('AI semiconductor demand') and instead searched for a single company (C3.ai) after broad empty searches. The main issue is routing: the tool calls should have targeted broad AI/semiconductor claims (e.g., search_claims with entity_name='AI' or 'semiconductor') rather than a specific ticker. Additionally, after the first two empty search_documents calls, the agent should have abandoned that approach entirely instead of repeating it three more times. The single productive call (call 3) was too narrow and did not address the question. The most impactful change: replace the repeated empty search_documents calls with a single broad search_claims for 'AI semiconductor' or 'semiconductor demand'.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 1,2,4,5 are redundant: all are search_documents with empty entity_tickers and overlapping date ranges, all returning empty. Call 3 is the only productive call but is too narrow. The chain wastes 4 calls on the same failing strategy.",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "No data dependencies exist between the calls; all are independent searches. There is no ordering constraint to violate, so ordering is correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After calls 1 and 2 returned empty, the agent switched to search_claims (call 3) which returned data, but then reverted to the same failing search_documents pattern (calls 4,5) instead of iterating on the successful approach. No effective recovery from the empty results.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for 'recent claims about AI semiconductor demand', which should target broad AI/semiconductor claims. Call 3 narrows to a single company (C3.ai) rather than the sector. Calls 1,2,4,5 use search_documents with empty entity_tickers, which is too generic and returned no data. The tool",
+        "score": 10
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 4,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,532 @@
+{
+  "bucket": "PASS",
+  "category": "reasoning",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 576,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_intelligence",
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 26.296,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "output_tokens": 144,
+    "phase_timings_ms": {
+      "check_cache": 2.920874991104938,
+      "entity_resolution": 177.72466700989753,
+      "grounding_validation": 15004.47221500508,
+      "llm_direct_text_generation": 3919.3303770007333,
+      "llm_tool_planning": 9931.807838001987,
+      "load_history": 8.565374999307096,
+      "persist_and_cache": 44.09837500134017,
+      "tool_execution": 206.4265829976648,
+      "validate_input": 557.633167001768
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "ttft_s": 0.634,
+    "word_count": 83
+  },
+  "id": "chain_unhealthy_entity_investigation",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a deep synthesis (pick a company with poor data quality, summarise what is known). Answer names GME, gives a health score and description, but is relatively brief; could include more detail (e.g. specific missing fields, recent news) to match 'deep' expected depth.",
+        "reason": "Question asks for a deep synthesis (pick a company with poor data quality, summarise what is known). Answer names GME, gives a health score and description, but is relatively brief; could include more detail (e.g. specific missing fields, recent news) to match 'deep' expected depth.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "Claims cite tool row [1]; health score 0.71 and business description are traceable. No grounding sample provided, but no scope/coverage violation detected. Transparency banner is neutral.",
+        "reason": "Claims cite tool row [1]; health score 0.71 and business description are traceable. No grounding sample provided, but no scope/coverage violation detected. Transparency banner is neutral.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and citations.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and citations.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence, which is one of the expected_tools (equivalence set).",
+        "reason": "Called get_entity_intelligence, which is one of the expected_tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_intelligence and identified GME as a low-health-score entity, satisfying the core ask. The answer is grounded and cites its source. However, the question expects a deeper synthesis: the rubric's required facts include summarising 'whatever data IS available' (description, recent metric, recent news). The answer only provides a business description and a health score; it omits any recent financial metric or news item that the tool might have returned. Next iteration should either call additional tools (e.g. query_fundamentals for a recent metric) or extract more fields from the intelligence result to give a richer picture of what is known about the entity.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence, which is one of the expected_tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims cite tool row [1]; health score 0.71 and business description are traceable. No grounding sample provided, but no scope/coverage violation detected. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Question asks for a deep synthesis (pick a company with poor data quality, summarise what is known). Answer names GME, gives a health score and description, but is relatively brief; could include more detail (e.g. specific missing fields, recent news) to match 'deep' expected depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and citations.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_intelligence and identified GME as a low-health-score entity, satisfying the core ask. The answer is grounded and cites its source. However, the question expects a deeper synthesis: the rubric's required facts include summarising 'whatever data IS available' (description, recent metric, recent news). The answer only provides a business description and a health score; it omits any recent financial metric or news item that the tool might have returned. Next iteration should either call additional tools (e.g. query_fundamentals for a recent metric) or extract more fields from the intelligence result to give a richer picture of what is known about the entity.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_intelligence and identified GME as a low-health-score entity, satisfying the core ask. The answer is grounded and cites its source. However, the question expects a deeper synthesis: the rubric's required facts include summarising 'whatever data IS available' (description, recent metric, recent news). The answer only provides a business description and a health score; it omits any recent financial metric or news item that the tool might have returned. Next iteration should either call additional tools (e.g. query_fundamentals for a recent metric) or extract more fields from the intelligence result to give a richer picture of what is known about the entity.",
+    "score": 92,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 92,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Company:** GameStop Corp. (ticker\u202fGME)\n\n**What we know**\n\n- **Business description:** GameStop Corp. is a retailer of video games, consumer electronics, and gaming merchandise operating in the United States and internationally. It competes directly with eBay Inc. in both online marketplace and retail segments, offering a broad range of products and services to its customers\u30101\u3011.  \n\n- **Data\u2011quality (health) score:** 0.71\u202f\u2013\u202fa relatively low score indicating poorer data coverage and confidence for this entity\u30101\u3011.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        633993
+      ],
+      [
+        "status",
+        640544
+      ],
+      [
+        "thinking",
+        817842
+      ],
+      [
+        "agent_iteration",
+        817873
+      ],
+      [
+        "status",
+        6831912
+      ],
+      [
+        "tool_call",
+        6832119
+      ],
+      [
+        "tool_result",
+        7037884
+      ],
+      [
+        "agent_iteration",
+        7311491
+      ],
+      [
+        "token",
+        11229469
+      ],
+      [
+        "token",
+        11229541
+      ],
+      [
+        "token",
+        11229659
+      ],
+      [
+        "token",
+        11229702
+      ],
+      [
+        "token",
+        11230011
+      ],
+      [
+        "token",
+        11230184
+      ],
+      [
+        "token",
+        11230332
+      ],
+      [
+        "token",
+        11230434
+      ],
+      [
+        "token",
+        11230683
+      ],
+      [
+        "token",
+        11230771
+      ],
+      [
+        "status",
+        11233627
+      ],
+      [
+        "final_answer",
+        26247951
+      ],
+      [
+        "citations",
+        26248107
+      ],
+      [
+        "contradictions",
+        26260448
+      ],
+      [
+        "suggestions",
+        26260658
+      ],
+      [
+        "metadata",
+        26289967
+      ],
+      [
+        "done",
+        26290286
+      ]
+    ],
+    "latency_s": 26.296,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 26176,
+      "message_id": "019f0205-f28c-72bf-8163-6cd5f12f61fc",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "36442184-0dea-471b-8e6d-4a56ec7636b4"
+    },
+    "output_tokens": 144,
+    "phase_timings_ms": {
+      "check_cache": 2.920874991104938,
+      "entity_resolution": 177.72466700989753,
+      "grounding_validation": 15004.47221500508,
+      "llm_direct_text_generation": 3919.3303770007333,
+      "llm_tool_planning": 9931.807838001987,
+      "load_history": 8.565374999307096,
+      "persist_and_cache": 44.09837500134017,
+      "tool_execution": 206.4265829976648,
+      "validate_input": 557.633167001768
+    },
+    "question": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "GME"
+          },
+          "label": "Loading intelligence for GME",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 206,
+          "item_count": 1,
+          "label": "Loading intelligence for GME",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:fe9f03a5-d9d3-4376-a4c6-9771bd49a869",
+              "title": "Intelligence: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6491,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Company:** GameStop Corp. (ticker\u202fGME)\n\n**What we know**\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- **Business description:** GameStop Corp. is a retailer "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of video games, consumer electronics, and gaming merchandise "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "operating in the United States and internationally. It "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "competes directly with eBay Inc. in both online "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "marketplace and retail segments, offering a broad range "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of products and services to its customers\u30101\u3011.  \n\n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Data\u2011quality (health) score:** 0.71\u202f\u2013\u202fa relatively low "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "score indicating poorer data coverage and confidence for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "this entity\u30101\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Company:** GameStop Corp. (ticker\u202fGME)\n\n**What we know**\n\n- **Business description:** GameStop Corp. is a retailer of video games, consumer electronics, and gaming merchandise operating in the United States and internationally. It competes directly with eBay Inc. in both online marketplace and retail segments, offering a broad range of products and services to its customers\u30101\u3011.  \n\n- **Data\u2011quality (health) score:** 0.71\u202f\u2013\u202fa relatively low score indicating poorer data coverage and confidence for this entity\u30101\u3011.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on data?",
+          "How has data performed recently?",
+          "How do data's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 26176,
+          "message_id": "019f0205-f28c-72bf-8163-6cd5f12f61fc",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "36442184-0dea-471b-8e6d-4a56ec7636b4"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.920874991104938,
+            "entity_resolution": 177.72466700989753,
+            "grounding_validation": 15004.47221500508,
+            "llm_direct_text_generation": 3919.3303770007333,
+            "llm_tool_planning": 9931.807838001987,
+            "load_history": 8.565374999307096,
+            "persist_and_cache": 44.09837500134017,
+            "tool_execution": 206.4265829976648,
+            "validate_input": 557.633167001768
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "GME"
+        },
+        "name": "get_entity_intelligence"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tps": 5.611,
+    "tps_streaming": 36.741,
+    "ttft_s": 0.634
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "Claims every entity in coverage is fully healthy"
+    ],
+    "required_facts": [
+      "Names a specific entity flagged with a health concern (low score, missing field, stale data, etc.)",
+      "Summarises whatever data IS available for that entity (description, recent metric, recent news)"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "reasoning",
+    "signal"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified a company with a low health score (GME, 0.71) using get_entity_intelligence, which aligns with the intent. However, the trajectory is too shallow: the question asks 'what we actually know about it', which demands a richer picture (narrative, fundamentals, recent news). The agent stopped after one call, leaving the answer thin. The single most impactful change would be to chain additional tools \u2014 e.g., get_entity_narrative for a description and query_fundamentals for recent metrics \u2014 to provide the depth the rubric expects. No ordering or recovery issues exist, but efficiency is poor because the chain is under-invested for the ask.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call is not redundant, but it is insufficient for the question's depth. The agent should have made additional calls (e.g., get_entity_narrative, query_fundamentals) to gather more information about the entity. The chain is too minimal to be considered efficient for the required depth.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering constraint to evaluate. The single call is trivially correctly ordered.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred, so there is nothing to recover from. Full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_entity_intelligence, which is a reasonable tool for assessing data quality/health. However, the rubric expected a broader set (get_entity_health, get_entity_narrative, query_fundamentals) to fully answer 'what we actually know about it'. The agent only made one call, missing the chan",
+        "score": 20
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

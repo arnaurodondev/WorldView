@@ -1,0 +1,576 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_entity_health"
+    ]
+  },
+  "heuristics": {
+    "char_count": 591,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_health"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 14.171,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 148,
+    "phase_timings_ms": {
+      "check_cache": 2.4243749940069392,
+      "entity_resolution": 114.66070800088346,
+      "grounding_validation": 2226.788875996135,
+      "llm_direct_text_generation": 3508.4674599929713,
+      "llm_tool_planning": 8838.8778380031,
+      "load_history": 22.727874995325692,
+      "persist_and_cache": 227.45833299995866,
+      "tool_execution": 311.8517919938313,
+      "validate_input": 2055.026418005582
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_health"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_health"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "ttft_s": 2.111,
+    "word_count": 93
+  },
+  "id": "tc_entity_health_palantir",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "reason": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "reason": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "reason": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "reason": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+    "raw_response": null,
+    "reviewer_summary": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+    "score": 0,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [
+        {
+          "claim": 40.0,
+          "claim_text": "40\u202f%",
+          "field": "ticker",
+          "kind": "unsupported"
+        },
+        {
+          "claim": 21.0,
+          "claim_text": "21\u202f%",
+          "field": "ticker",
+          "kind": "unsupported"
+        }
+      ],
+      "substantiated": 0,
+      "unmatched": 2,
+      "unsupported": 2
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "SUBSTANTIATION_UNSUPPORTED",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": false,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "SUBSTANTIATION UNSUPPORTED: 2 numeric claim(s) assert a value for a sampled field the tool never quantified (e.g. claim '40\\u202f%' for field 'ticker', which the tool returned with no value). The agent stated a number the tool's payload does not support \u2014 unsupported assertion.",
+      "examples": [
+        {
+          "claim": 40.0,
+          "claim_text": "40\u202f%",
+          "field": "ticker",
+          "kind": "unsupported"
+        },
+        {
+          "claim": 21.0,
+          "claim_text": "21\u202f%",
+          "field": "ticker",
+          "kind": "unsupported"
+        }
+      ],
+      "reason": "numeric_claim_unsupported",
+      "type": "substantiation_unsupported",
+      "unsupported": 2
+    }
+  },
+  "prompt": "How comprehensive is your data coverage for Palantir?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Palantir\u2019s data coverage is relatively limited. The health score is\u202f0.40, indicating modest confidence in the available information. The source mix shows that about\u202f40\u202f% of the data comes from ticker\u2011news feeds (eodhd_ticker_news) and roughly\u202f21\u202f% from the primary ticker feed (eodhd), with the remaining portion coming from narrative sources of unknown date. This distribution suggests that most of the coverage is based on news and basic ticker data rather than deep, diversified filings or analyst reports.\u202f[Health data row\u202f0]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        2111318
+      ],
+      [
+        "status",
+        2128163
+      ],
+      [
+        "thinking",
+        2251749
+      ],
+      [
+        "agent_iteration",
+        2251789
+      ],
+      [
+        "status",
+        7587410
+      ],
+      [
+        "tool_call",
+        7587452
+      ],
+      [
+        "tool_result",
+        7897181
+      ],
+      [
+        "agent_iteration",
+        8182912
+      ],
+      [
+        "token",
+        11690771
+      ],
+      [
+        "token",
+        11690859
+      ],
+      [
+        "token",
+        11690992
+      ],
+      [
+        "token",
+        11691321
+      ],
+      [
+        "token",
+        11691561
+      ],
+      [
+        "token",
+        11691666
+      ],
+      [
+        "token",
+        11691949
+      ],
+      [
+        "token",
+        11692061
+      ],
+      [
+        "token",
+        11692119
+      ],
+      [
+        "token",
+        11692219
+      ],
+      [
+        "token",
+        11697410
+      ],
+      [
+        "status",
+        11697471
+      ],
+      [
+        "final_answer",
+        13944680
+      ],
+      [
+        "citations",
+        13944957
+      ],
+      [
+        "contradictions",
+        13944973
+      ],
+      [
+        "suggestions",
+        13944992
+      ],
+      [
+        "metadata",
+        14157977
+      ],
+      [
+        "done",
+        14158378
+      ]
+    ],
+    "latency_s": 14.171,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 13887,
+      "message_id": "019f01b0-2942-7699-923c-8cd56406857b",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "631c2608-57ff-4b18-9de3-f2ebf519b476"
+    },
+    "output_tokens": 148,
+    "phase_timings_ms": {
+      "check_cache": 2.4243749940069392,
+      "entity_resolution": 114.66070800088346,
+      "grounding_validation": 2226.788875996135,
+      "llm_direct_text_generation": 3508.4674599929713,
+      "llm_tool_planning": 8838.8778380031,
+      "load_history": 22.727874995325692,
+      "persist_and_cache": 227.45833299995866,
+      "tool_execution": 311.8517919938313,
+      "validate_input": 2055.026418005582
+    },
+    "question": "How comprehensive is your data coverage for Palantir?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_health\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "PLTR"
+          },
+          "label": "Computing health score for PLTR",
+          "status": "running",
+          "tool": "get_entity_health",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 310,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "data"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Computing health score for PLTR",
+          "result_preview": [
+            {
+              "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+              "title": "Health: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_health",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5932,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Palantir\u2019s data coverage is relatively limited. The health "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "score is\u202f0.40, indicating modest confidence in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "available information. The source mix shows that about\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "40\u202f% of the data comes from ticker\u2011news "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "feeds (eodhd_ticker_news) and roughly\u202f21\u202f% from the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "primary ticker feed (eodhd), with the remaining portion "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "coming from narrative sources of unknown date. This "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "distribution suggests that most of the coverage is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "based on news and basic ticker data rather "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "than deep, diversified filings or analyst reports.\u202f[Health "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data row\u202f0]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Palantir\u2019s data coverage is relatively limited. The health score is\u202f0.40, indicating modest confidence in the available information. The source mix shows that about\u202f40\u202f% of the data comes from ticker\u2011news feeds (eodhd_ticker_news) and roughly\u202f21\u202f% from the primary ticker feed (eodhd), with the remaining portion coming from narrative sources of unknown date. This distribution suggests that most of the coverage is based on news and basic ticker data rather than deep, diversified filings or analyst reports.\u202f[Health data row\u202f0]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on data?",
+          "How has data performed recently?",
+          "How do data's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 13887,
+          "message_id": "019f01b0-2942-7699-923c-8cd56406857b",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "631c2608-57ff-4b18-9de3-f2ebf519b476"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.4243749940069392,
+            "entity_resolution": 114.66070800088346,
+            "grounding_validation": 2226.788875996135,
+            "llm_direct_text_generation": 3508.4674599929713,
+            "llm_tool_planning": 8838.8778380031,
+            "load_history": 22.727874995325692,
+            "persist_and_cache": 227.45833299995866,
+            "tool_execution": 311.8517919938313,
+            "validate_input": 2055.026418005582
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "PLTR"
+        },
+        "name": "get_entity_health"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "data"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "tps": 12.272,
+    "tps_streaming": 42.184,
+    "ttft_s": 2.111
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "forbidden_facts": [
+      "generic_palantir_summary_no_health_data"
+    ],
+    "required_facts": [
+      "palantir_identified",
+      "health_or_coverage_score",
+      "source_distribution_or_trend"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_health"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (data coverage for Palantir) and made a single, appropriate call to get_entity_health, which returned the health score and source breakdown. The trace is minimal, correctly routed, and has no ordering or recovery issues. The only process improvement would be to verify that the returned source distribution matches the answer's percentages, but that is a prose-accuracy concern outside the tool-use trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call obtains the health/coverage score and source distribution; no wasted calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single-call trace, no ordering constraint to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_entity_health is exactly the right tool for a data-coverage question about Palantir.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

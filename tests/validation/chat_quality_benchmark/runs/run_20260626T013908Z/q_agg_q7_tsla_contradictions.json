@@ -1,0 +1,962 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_contradictions"
+    ]
+  },
+  "heuristics": {
+    "char_count": 2484,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_contradictions"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_contradictions"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 21.052,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 621,
+    "phase_timings_ms": {
+      "check_cache": 4.9810829950729385,
+      "entity_resolution": 158.01608299079817,
+      "grounding_validation": 3573.193584990804,
+      "llm_direct_text_generation": 12799.894337993464,
+      "llm_tool_planning": 15612.471005995758,
+      "load_history": 18.66504100325983,
+      "persist_and_cache": 25.13229098985903,
+      "tool_execution": 292.97733301064,
+      "validate_input": 918.1322090007598
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "confidence_threshold",
+          "entity_name"
+        ],
+        "tool": "get_contradictions"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_contradictions"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 10,
+        "status": "ok",
+        "tool": "get_contradictions"
+      }
+    ],
+    "ttft_s": 1.019,
+    "word_count": 412
+  },
+  "id": "agg_q7_tsla_contradictions",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Structured table with 10 contradictions matches the medium-depth synthesis the question requires.",
+        "reason": "Structured table with 10 contradictions matches the medium-depth synthesis the question requires.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All claims cite tool results; no scope/coverage violations. Grounding sample confirms ticker=Tesla.",
+        "reason": "All claims cite tool results; no scope/coverage violations. Grounding sample confirms ticker=Tesla.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Correctly called get_contradictions, the sole expected tool.",
+        "reason": "Correctly called get_contradictions, the sole expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid routing to get_contradictions and well-structured output. The table format with strength scores and key points is appropriate for a contradictions question. One improvement: consider adding a brief note on the time window the contradictions span (e.g., 'over the past 6 months') to help users contextualize the mixed signals. Otherwise, the answer is grounded, complete, and well-calibrated.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Correctly called get_contradictions, the sole expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"All claims cite tool results; no scope/coverage violations. Grounding sample confirms ticker=Tesla.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Structured table with 10 contradictions matches the medium-depth synthesis the question requires.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"Solid routing to get_contradictions and well-structured output. The table format with strength scores and key points is appropriate for a contradictions question. One improvement: consider adding a brief note on the time window the contradictions span (e.g., 'over the past 6 months') to help users contextualize the mixed signals. Otherwise, the answer is grounded, complete, and well-calibrated.\"\n}",
+    "reviewer_summary": "Solid routing to get_contradictions and well-structured output. The table format with strength scores and key points is appropriate for a contradictions question. One improvement: consider adding a brief note on the time window the contradictions span (e.g., 'over the past 6 months') to help users contextualize the mixed signals. Otherwise, the answer is grounded, complete, and well-calibrated.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 43,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Are there any contradictions in the recent narrative around Tesla?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Here are the recent contradictions detected in the narrative around **Tesla** (strength\u202f\u2265\u202f0.95):\n\n| # | Contradiction (polarity conflict) | Strength | Key points |\n|---|-----------------------------------|----------|-------------|\n| 1 | Market\u2011share growth vs. revenue decline | 0.96 | One source says Tesla\u2019s market share rose to **2.3\u202f%** in May (up from 0.9\u202f% in 2025)\u202f\u2014\u202fa positive signal. Another source claims **automotive revenue sank by\u202f10\u202f%** in 2025, pulling overall revenue down\u202f\u2014\u202fa negative signal. |\n| 2 | Full\u2011year revenue decline vs. quarterly revenue growth | 0.95 | One claim reports **2025 total revenue of $94.8\u202fB**, a year\u2011over\u2011year decline. Another claim states Tesla reported **$22.39\u202fB, up\u202f15.8\u202f% YoY** (presumably a later quarter), suggesting growth. |\n| 3 | Market\u2011share growth vs. \u201cpunishing valuation\u201d | 0.95 | Positive market\u2011share increase (2.3\u202f% in May) contrasted with a negative view that **TSLA stock trades at a punishing valuation**. |\n| 4 | Full\u2011year revenue decline vs. cost\u2011cutting LFP rollout | 0.95 | Revenue down 3\u202f% (first annual decline) versus a positive note that rivals, including Tesla, are adding **LFP\u2011based EVs to cut costs**. |\n| 5 | Revenue decline vs. new insurance product | 0.95 | Revenue down 3\u202f% contrasted with a claim that a **new insurance product halves ownership costs**, implying a positive operational development. |\n| 6 | Market\u2011share growth vs. fleet size shrinkage | 0.96 | Market share up to 2.3\u202f% vs. a claim that **fleet size decreased to around 20 vehicles**, a stark negative. |\n| 7 | Revenue decline vs. automotive gross\u2011margin expansion | 0.95 | Revenue fell 10\u202f% to $69.5\u202fB, yet another source says **automotive gross margin expanded to 21.1\u202f%** year\u2011over\u2011year. |\n| 8 | Revenue decline vs. Q1 gross\u2011margin improvement | 0.95 | Same revenue\u2011fall claim contrasted with **Q1 automotive gross margins expanding to 21\u202f%** from 16\u202f% a year earlier. |\n| 9 | Net\u2011margin collapse vs. gross\u2011margin recovery | 0.95 | Overall net margin dropped from **15.5\u202f% to 3.9\u202f%**, while another source notes **auto gross margins recovering to 18.3\u202f%**. |\n|10 | Revenue decline vs. safety claim on FSD | 0.95 | Full\u2011year revenue down 3\u202f% versus a positive statement that Tesla\u2019s **FSD system is \u201cat least as safe as other driver\u2011assistance systems.\u201d** |\n\nThese contradictions highlight mixed signals in recent coverage\u2014some emphasizing growth or cost\u2011saving initiatives, while others point to revenue declines and valuation concerns.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1019164
+      ],
+      [
+        "status",
+        1029426
+      ],
+      [
+        "thinking",
+        1187773
+      ],
+      [
+        "agent_iteration",
+        1187803
+      ],
+      [
+        "status",
+        4002654
+      ],
+      [
+        "tool_call",
+        4003226
+      ],
+      [
+        "tool_result",
+        4294970
+      ],
+      [
+        "agent_iteration",
+        4630250
+      ],
+      [
+        "token",
+        17429667
+      ],
+      [
+        "token",
+        17429730
+      ],
+      [
+        "token",
+        17429741
+      ],
+      [
+        "token",
+        17429909
+      ],
+      [
+        "token",
+        17430173
+      ],
+      [
+        "token",
+        17430632
+      ],
+      [
+        "token",
+        17430801
+      ],
+      [
+        "token",
+        17430991
+      ],
+      [
+        "token",
+        17431061
+      ],
+      [
+        "token",
+        17431301
+      ],
+      [
+        "token",
+        17431365
+      ],
+      [
+        "token",
+        17431629
+      ],
+      [
+        "token",
+        17431775
+      ],
+      [
+        "token",
+        17431986
+      ],
+      [
+        "token",
+        17432120
+      ],
+      [
+        "token",
+        17432297
+      ],
+      [
+        "token",
+        17432451
+      ],
+      [
+        "token",
+        17432736
+      ],
+      [
+        "token",
+        17433094
+      ],
+      [
+        "token",
+        17433540
+      ],
+      [
+        "token",
+        17433734
+      ],
+      [
+        "token",
+        17434066
+      ],
+      [
+        "token",
+        17434537
+      ],
+      [
+        "token",
+        17434987
+      ],
+      [
+        "token",
+        17435301
+      ],
+      [
+        "token",
+        17435604
+      ],
+      [
+        "token",
+        17435813
+      ],
+      [
+        "token",
+        17435959
+      ],
+      [
+        "token",
+        17436114
+      ],
+      [
+        "token",
+        17436379
+      ],
+      [
+        "token",
+        17436655
+      ],
+      [
+        "token",
+        17436899
+      ],
+      [
+        "token",
+        17437047
+      ],
+      [
+        "token",
+        17437165
+      ],
+      [
+        "token",
+        17437403
+      ],
+      [
+        "token",
+        17437862
+      ],
+      [
+        "token",
+        17438124
+      ],
+      [
+        "token",
+        17438359
+      ],
+      [
+        "token",
+        17438709
+      ],
+      [
+        "token",
+        17438885
+      ],
+      [
+        "token",
+        17439224
+      ],
+      [
+        "token",
+        17439427
+      ],
+      [
+        "token",
+        17439738
+      ],
+      [
+        "token",
+        17440040
+      ],
+      [
+        "token",
+        17440289
+      ],
+      [
+        "token",
+        17440376
+      ],
+      [
+        "token",
+        17440605
+      ],
+      [
+        "token",
+        17440736
+      ],
+      [
+        "token",
+        17440919
+      ],
+      [
+        "token",
+        17441075
+      ],
+      [
+        "token",
+        17441203
+      ],
+      [
+        "token",
+        17441269
+      ],
+      [
+        "status",
+        17460747
+      ],
+      [
+        "final_answer",
+        21017205
+      ],
+      [
+        "citations",
+        21017335
+      ],
+      [
+        "contradictions",
+        21023584
+      ],
+      [
+        "suggestions",
+        21023659
+      ],
+      [
+        "metadata",
+        21045313
+      ],
+      [
+        "done",
+        21045456
+      ]
+    ],
+    "latency_s": 21.052,
+    "metadata": {
+      "intent": "CONTRADICTION",
+      "latency_ms": 20945,
+      "message_id": "019f019d-0625-7011-b3b0-0cc0d2931cda",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "f1c87113-6186-41a2-b7e9-e581be40b9ed"
+    },
+    "output_tokens": 621,
+    "phase_timings_ms": {
+      "check_cache": 4.9810829950729385,
+      "entity_resolution": 158.01608299079817,
+      "grounding_validation": 3573.193584990804,
+      "llm_direct_text_generation": 12799.894337993464,
+      "llm_tool_planning": 15612.471005995758,
+      "load_history": 18.66504100325983,
+      "persist_and_cache": 25.13229098985903,
+      "tool_execution": 292.97733301064,
+      "validate_input": 918.1322090007598
+    },
+    "question": "Are there any contradictions in the recent narrative around Tesla?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_contradictions\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "confidence_threshold": 0.5,
+            "entity_name": "Tesla"
+          },
+          "label": "Detecting contradictions for Tesla",
+          "status": "running",
+          "tool": "get_contradictions",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 292,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Tesla",
+              "ticker_2": "Tesla",
+              "ticker_3": "Tesla"
+            },
+            "sampled_rows": 3,
+            "total_rows": 10,
+            "truncated": false
+          },
+          "item_count": 10,
+          "label": "Detecting contradictions for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            },
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            },
+            {
+              "id": "tool:contradiction:polarity_conflict:01900000-0000-7000-8000-000",
+              "title": "Contradiction: polarity_conflict"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_contradictions",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3440,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Here are the recent contradictions detected in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "narrative around **Tesla** (strength\u202f\u2265\u202f0.95):\n\n| # "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Contradiction (polarity conflict) | Strength | Key "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "points |\n|---|-----------------------------------|----------|-------------|\n| 1 | Market\u2011share growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "vs. revenue decline | 0.96 | One source "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "says Tesla\u2019s market share rose to **2.3\u202f%** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in May (up from 0.9\u202f% in 2025)\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2014\u202fa positive signal. Another source claims **automotive "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue sank by\u202f10\u202f%** in 2025, pulling "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "overall revenue down\u202f\u2014\u202fa negative signal. |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 2 | Full\u2011year revenue decline vs. quarterly "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue growth | 0.95 | One claim reports "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**2025 total revenue of $94.8\u202fB**, a year\u2011over\u2011year "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decline. Another claim states Tesla reported **$22.39\u202fB, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "up\u202f15.8\u202f% YoY** (presumably a later quarter), "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "suggesting growth. |\n| 3 | Market\u2011share growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "vs. \u201cpunishing valuation\u201d | 0.95 | Positive market\u2011share "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "increase (2.3\u202f% in May) contrasted with a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "negative view that **TSLA stock trades at a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "punishing valuation**. |\n| 4 | Full\u2011year revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decline vs. cost\u2011cutting LFP rollout | 0.95 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Revenue down 3\u202f% (first annual decline) versus "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a positive note that rivals, including Tesla, are "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "adding **LFP\u2011based EVs to cut costs**. |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "5 | Revenue decline vs. new insurance product "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 0.95 | Revenue down 3\u202f% contrasted "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with a claim that a **new insurance product "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "halves ownership costs**, implying a positive operational development. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 6 | Market\u2011share growth vs. fleet "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "size shrinkage | 0.96 | Market share up "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to 2.3\u202f% vs. a claim that **fleet "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "size decreased to around 20 vehicles**, a stark "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "negative. |\n| 7 | Revenue decline vs. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "automotive gross\u2011margin expansion | 0.95 | Revenue fell "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "10\u202f% to $69.5\u202fB, yet another source "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "says **automotive gross margin expanded to 21.1\u202f%** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "year\u2011over\u2011year. |\n| 8 | Revenue decline vs. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q1 gross\u2011margin improvement | 0.95 | Same revenue\u2011fall "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "claim contrasted with **Q1 automotive gross margins expanding "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to 21\u202f%** from 16\u202f% a year "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "earlier. |\n| 9 | Net\u2011margin collapse vs. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "gross\u2011margin recovery | 0.95 | Overall net margin "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "dropped from **15.5\u202f% to 3.9\u202f%**, while "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "another source notes **auto gross margins recovering to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "18.3\u202f%**. |\n|10 | Revenue decline vs. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "safety claim on FSD | 0.95 | Full\u2011year "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue down 3\u202f% versus a positive statement "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "that Tesla\u2019s **FSD system is \u201cat least as "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "safe as other driver\u2011assistance systems.\u201d** |\n\nThese contradictions "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "highlight mixed signals in recent coverage\u2014some emphasizing growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "or cost\u2011saving initiatives, while others point to revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "declines and valuation concerns."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not locate any numeric data for Alexandria Real Estate Equities Inc (ARE) in the available tool results. The figures you listed are not supported for this entity."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "CONTRADICTION",
+          "latency_ms": 20945,
+          "message_id": "019f019d-0625-7011-b3b0-0cc0d2931cda",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "f1c87113-6186-41a2-b7e9-e581be40b9ed"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.9810829950729385,
+            "entity_resolution": 158.01608299079817,
+            "grounding_validation": 3573.193584990804,
+            "llm_direct_text_generation": 12799.894337993464,
+            "llm_tool_planning": 15612.471005995758,
+            "load_history": 18.66504100325983,
+            "persist_and_cache": 25.13229098985903,
+            "tool_execution": 292.97733301064,
+            "validate_input": 918.1322090007598
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "confidence_threshold": 0.5,
+          "entity_name": "Tesla"
+        },
+        "name": "get_contradictions"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Tesla",
+            "ticker_2": "Tesla",
+            "ticker_3": "Tesla"
+          },
+          "sampled_rows": 3,
+          "total_rows": 10,
+          "truncated": false
+        },
+        "item_count": 10,
+        "status": "ok",
+        "tool": "get_contradictions"
+      }
+    ],
+    "tps": 31.0,
+    "tps_streaming": 48.516,
+    "ttft_s": 1.019
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_contradictions"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent executed a single, perfectly-targeted tool call (get_contradictions) that directly addresses the user's request for contradictions in Tesla's narrative. The tool returned 10 items with high confidence, and the agent presented them clearly. There is no wasted effort, no redundant calls, and no recovery needed. The only process improvement would be to consider whether a confidence_threshold higher than 0.5 might be more appropriate for a 'recent narrative' question, but the current threshold is reasonable and produced useful results.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "A single well-chosen call (get_contradictions) returned 10 items, which is exactly the minimal number of steps needed to answer the question. No redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering constraint to evaluate. No dependencies to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred (status=ok, items=10). Nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_contradictions, which is exactly the tool expected for a contradiction-detection question. Perfect tool selection.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,621 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_earnings_calendar"
+    ]
+  },
+  "heuristics": {
+    "char_count": 196,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_earnings_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 21.824,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 49,
+    "phase_timings_ms": {
+      "check_cache": 1.9401669997023419,
+      "entity_resolution": 109.02583299321122,
+      "grounding_validation": 0.5507090099854395,
+      "llm_direct_text_generation": 3917.021333996672,
+      "llm_tool_planning": 16316.086713995901,
+      "load_history": 15.373332993476652,
+      "persist_and_cache": 26.914832997135818,
+      "tool_execution": 1017.994459005422,
+      "validate_input": 1564.0229589916999
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_earnings_calendar"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "ttft_s": 1.624,
+    "word_count": 30
+  },
+  "id": "tc_earnings_apple_next",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow factual question answered concisely with appropriate depth; refusal is appropriate given data absence.",
+        "reason": "Shallow factual question answered concisely with appropriate depth; refusal is appropriate given data absence.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer correctly states no date was found, consistent with tool results (items=1 but no specific date cited).",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer correctly states no date was found, consistent with tool results (items=1 but no specific date cited).",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'unable to locate' but rubric.appropriate_refusal_ok=true and tool results show no specific date; refusal is appropriate.",
+        "reason": "Contains refusal phrase 'unable to locate' but rubric.appropriate_refusal_ok=true and tool results show no specific date; refusal is appropriate.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_earnings_calendar (expected tool) twice; routing is correct.",
+        "reason": "Called get_earnings_calendar (expected tool) twice; routing is correct.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_earnings_calendar and search_documents, found no concrete upcoming date, and issued an appropriate refusal. All dimensions score 25. The only minor improvement would be to explicitly note that the calendar returned 1 item (likely a past event) to clarify why it wasn't used, but the current answer is acceptable.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_earnings_calendar (expected tool) twice; routing is correct.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer correctly states no date was found, consistent with tool results (items=1 but no specific date cited).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow factual question answered concisely with appropriate depth; refusal is appropriate given data absence.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Contains refusal phrase 'unable to locate' but rubric.appropriate_refusal_ok=true and tool results show no specific date; refusal is appropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_earnings_calendar and search_documents, found no concrete upcoming date, and issued an appropriate refusal. All dimensions score 25. The only minor improvement would be to explicitly note that the calendar returned 1 item (likely a past event) to clarify why it wasn't used, but the current answer is acceptable.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_earnings_calendar and search_documents, found no concrete upcoming date, and issued an appropriate refusal. All dimensions score 25. The only minor improvement would be to explicitly note that the calendar returned 1 item (likely a past event) to clarify why it wasn't used, but the current answer is acceptable.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "When does Apple next report earnings?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m unable to locate a scheduled earnings release date for Apple (AAPL) in the available data. The earnings\u2011calendar query and document search did not return any specific upcoming reporting dates.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1623957
+      ],
+      [
+        "status",
+        1633081
+      ],
+      [
+        "thinking",
+        1745805
+      ],
+      [
+        "agent_iteration",
+        1745859
+      ],
+      [
+        "status",
+        4610818
+      ],
+      [
+        "tool_call",
+        4611476
+      ],
+      [
+        "tool_result",
+        4735777
+      ],
+      [
+        "agent_iteration",
+        5061133
+      ],
+      [
+        "tool_call",
+        8392188
+      ],
+      [
+        "tool_result",
+        9216995
+      ],
+      [
+        "agent_iteration",
+        10883415
+      ],
+      [
+        "tool_call",
+        17092255
+      ],
+      [
+        "tool_result",
+        17150008
+      ],
+      [
+        "agent_iteration",
+        17857972
+      ],
+      [
+        "token",
+        21779430
+      ],
+      [
+        "token",
+        21779565
+      ],
+      [
+        "token",
+        21780024
+      ],
+      [
+        "token",
+        21780041
+      ],
+      [
+        "status",
+        21790281
+      ],
+      [
+        "final_answer",
+        21790347
+      ],
+      [
+        "citations",
+        21790533
+      ],
+      [
+        "contradictions",
+        21790566
+      ],
+      [
+        "suggestions",
+        21798441
+      ],
+      [
+        "metadata",
+        21818573
+      ],
+      [
+        "done",
+        21818665
+      ]
+    ],
+    "latency_s": 21.824,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 21755,
+      "message_id": "019f01ac-28ff-7094-8518-53128f92e9f9",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "4512fb3e-5d87-466c-af60-6fdf8066cb9d"
+    },
+    "output_tokens": 49,
+    "phase_timings_ms": {
+      "check_cache": 1.9401669997023419,
+      "entity_resolution": 109.02583299321122,
+      "grounding_validation": 0.5507090099854395,
+      "llm_direct_text_generation": 3917.021333996672,
+      "llm_tool_planning": 16316.086713995901,
+      "load_history": 15.373332993476652,
+      "persist_and_cache": 26.914832997135818,
+      "tool_execution": 1017.994459005422,
+      "validate_input": 1564.0229589916999
+    },
+    "question": "When does Apple next report earnings?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_earnings_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-26",
+            "to_date": "2026-07-31"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 126,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3317,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-08-31",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 826,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9135,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-26",
+            "to_date": "2026-12-31"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 63,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16114,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to locate a scheduled earnings release "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "date for Apple (AAPL) in the available data. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The earnings\u2011calendar query and document search did not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "return any specific upcoming reporting dates."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to locate a scheduled earnings release date for Apple (AAPL) in the available data. The earnings\u2011calendar query and document search did not return any specific upcoming reporting dates."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 21755,
+          "message_id": "019f01ac-28ff-7094-8518-53128f92e9f9",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "4512fb3e-5d87-466c-af60-6fdf8066cb9d"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.9401669997023419,
+            "entity_resolution": 109.02583299321122,
+            "grounding_validation": 0.5507090099854395,
+            "llm_direct_text_generation": 3917.021333996672,
+            "llm_tool_planning": 16316.086713995901,
+            "load_history": 15.373332993476652,
+            "persist_and_cache": 26.914832997135818,
+            "tool_execution": 1017.994459005422,
+            "validate_input": 1564.0229589916999
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-26",
+          "to_date": "2026-07-31"
+        },
+        "name": "get_earnings_calendar"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-08-31",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "from_date": "2026-06-26",
+          "to_date": "2026-12-31"
+        },
+        "name": "get_earnings_calendar"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tps": 2.426,
+    "tps_streaming": 12.51,
+    "ttft_s": 1.624
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "forbidden_facts": [
+      "fabricated_specific_date"
+    ],
+    "required_facts": [
+      "apple_identified",
+      "next_earnings_date_or_window"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_earnings_calendar"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for an earnings calendar and used the appropriate tool. After an empty document search, it recovered by widening the calendar range. The only process inefficiency is that call 1 and call 3 could have been merged into one call with a wider date range, avoiding a redundant query. Overall the trajectory is sound and the refusal is appropriate given the data gap.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1 and call 3 are nearly identical (same tool, same start date, only end date differs). The first call already covered the near-term window; the second expansion could have been a single broader call from the start. Minor redundancy.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "No data dependencies exist between the calls; they are independent probes. Order is irrelevant, so no ordering error.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 2 returned empty; the agent did not give up but immediately expanded the date range in call 3, which is a sensible recovery. No failed calls remain unaddressed.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 and call 3 use get_earnings_calendar, which is exactly the right tool for an earnings-date question. call 2 search_documents is a reasonable backup. Routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

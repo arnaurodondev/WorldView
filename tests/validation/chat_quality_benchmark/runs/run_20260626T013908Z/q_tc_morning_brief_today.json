@@ -1,0 +1,531 @@
+{
+  "bucket": "PASS",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_morning_brief"
+    ]
+  },
+  "heuristics": {
+    "char_count": 518,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_morning_brief"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 22.907,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 130,
+    "phase_timings_ms": {
+      "check_cache": 4.059500002767891,
+      "entity_resolution": 110.49962499237154,
+      "grounding_validation": 15008.08238099853,
+      "llm_direct_text_generation": 2912.5835849990835,
+      "llm_tool_planning": 4778.725502997986,
+      "load_history": 12.25091599917505,
+      "persist_and_cache": 31.087499999557622,
+      "tool_execution": 196.4066670043394,
+      "validate_input": 2400.101792998612
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          ""
+        ],
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_morning_brief"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "ttft_s": 2.475,
+    "word_count": 78
+  },
+  "id": "tc_morning_brief_today",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a brief; answer provides a concise, structured summary with market snapshot and portfolio highlights \u2014 appropriate depth.",
+        "reason": "Question asks for a brief; answer provides a concise, structured summary with market snapshot and portfolio highlights \u2014 appropriate depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims cite the morning brief source; no grounding sample provided, so attribution quality is judged. The transparency banner is not fabrication.",
+        "reason": "Claims cite the morning brief source; no grounding sample provided, so attribution quality is judged. The transparency banner is not fabrication.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Correctly called get_morning_brief, which is the expected tool.",
+        "reason": "Correctly called get_morning_brief, which is the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_morning_brief and returned a well-structured, appropriately concise brief. The transparency banner about unverified figures is acceptable. The main improvement would be to include more specific citations (e.g., row numbers) for each claim to strengthen grounding traceability.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Correctly called get_morning_brief, which is the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims cite the morning brief source; no grounding sample provided, so attribution quality is judged. The transparency banner is not fabrication.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a brief; answer provides a concise, structured summary with market snapshot and portfolio highlights \u2014 appropriate depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_morning_brief and returned a well-structured, appropriately concise brief. The transparency banner about unverified figures is acceptable. The main improvement would be to include more specific citations (e.g., row numbers) for each claim to strengthen grounding traceability.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_morning_brief and returned a well-structured, appropriately concise brief. The transparency banner about unverified figures is acceptable. The main improvement would be to include more specific citations (e.g., row numbers) for each claim to strengthen grounding traceability.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's in my morning brief today?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Here\u2019s your morning brief for\u202f2026\u201106\u201126:\n\n**Market snapshot**  \n- **SPY**\u202f727.53\u2003**QQQ**\u202f697.97\u2003**VIX**\u202f16.9 \u2013 a risk\u2011off tone in pre\u2011market trading.\n\n**Your portfolio today**  \n- **META**\u202f+5.06\u202f% pre\u2011market \u2013 the Oklo story and Centrus surge are unrelated; the move appears idiosyncratic.  \n- **AMZN**\u202f+3.97\u202f% pre\u2011market \u2013 the SpaceX\u2011Cursor deal does not affect Amazon; the gain is not tied to sector performance.  \n\n*Source: morning brief (2026\u201106\u201121)\u202f[1]*\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [
+      {
+        "confidence": 0.95,
+        "entity_name": null,
+        "id": "tool:brief:019eec19-1d79-7ac7-9d2d-351ad43ceb30",
+        "item_type": "financial",
+        "published_at": "2026-06-21T21:32:09.467988+00:00",
+        "ref": 1,
+        "source_name": "morning_brief",
+        "title": "## Details  \n**Market Snapshot**  \n- SPY 727.53, QQQ 697.97, VIX 16.9 \u2014 risk-off tone pre-mkt  \n\n**Your Portfolio Today**  \n- META +5.06% pre-mkt \u2014 the [c10] Oklo story is neutral/irrelevant and [c6] Centrus surge is unrelated; stock rose despite Communication Services -1.18% [c11], so driver is idiosyncratic \u2014 no identifiable driver  \n- AMZN +3.97% pre-mkt \u2014 the [c7] SpaceX-Cursor deal is unrelated to Amazon; no direct news link, and sector underperformance makes sector drag unlikely; move lack",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        2474954
+      ],
+      [
+        "status",
+        2475363
+      ],
+      [
+        "thinking",
+        2573428
+      ],
+      [
+        "agent_iteration",
+        2573511
+      ],
+      [
+        "status",
+        4443302
+      ],
+      [
+        "tool_call",
+        4506995
+      ],
+      [
+        "tool_result",
+        4638168
+      ],
+      [
+        "agent_iteration",
+        4937359
+      ],
+      [
+        "token",
+        7851663
+      ],
+      [
+        "token",
+        7851773
+      ],
+      [
+        "token",
+        7851794
+      ],
+      [
+        "token",
+        7851817
+      ],
+      [
+        "token",
+        7852024
+      ],
+      [
+        "token",
+        7852435
+      ],
+      [
+        "token",
+        7852593
+      ],
+      [
+        "token",
+        7852798
+      ],
+      [
+        "token",
+        7861437
+      ],
+      [
+        "status",
+        7861888
+      ],
+      [
+        "final_answer",
+        22873772
+      ],
+      [
+        "citations",
+        22873899
+      ],
+      [
+        "contradictions",
+        22880813
+      ],
+      [
+        "suggestions",
+        22880904
+      ],
+      [
+        "metadata",
+        22899528
+      ],
+      [
+        "done",
+        22899877
+      ]
+    ],
+    "latency_s": 22.907,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 22828,
+      "message_id": "019f01b5-7323-7bf3-948f-2a9c0d0eb35a",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "2ee97812-bbbc-4500-b85d-97a2a0f430d4"
+    },
+    "output_tokens": 130,
+    "phase_timings_ms": {
+      "check_cache": 4.059500002767891,
+      "entity_resolution": 110.49962499237154,
+      "grounding_validation": 15008.08238099853,
+      "llm_direct_text_generation": 2912.5835849990835,
+      "llm_tool_planning": 4778.725502997986,
+      "load_history": 12.25091599917505,
+      "persist_and_cache": 31.087499999557622,
+      "tool_execution": 196.4066670043394,
+      "validate_input": 2400.101792998612
+    },
+    "question": "What's in my morning brief today?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_morning_brief\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "": {}
+          },
+          "label": "Loading morning brief...",
+          "status": "running",
+          "tool": "get_morning_brief",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 196,
+          "item_count": 1,
+          "label": "Loading morning brief...",
+          "result_preview": [
+            {
+              "id": "tool:brief:019eec19-1d79-7ac7-9d2d-351ad43ceb30",
+              "title": "## Details  \n**Market Snapshot**  \n- SPY 727.53, QQQ 697.97, VIX 16.9 \u2014 risk-off"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_morning_brief",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2364,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Here\u2019s your morning brief for\u202f2026\u201106\u201126:\n\n**Market snapshot**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- **SPY**\u202f727.53\u2003**QQQ**\u202f697.97\u2003**VIX**\u202f16.9 \u2013 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a risk\u2011off tone in pre\u2011market trading.\n\n**Your portfolio "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "today**  \n- **META**\u202f+5.06\u202f% pre\u2011market \u2013 the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Oklo story and Centrus surge are unrelated; the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "move appears idiosyncratic.  \n- **AMZN**\u202f+3.97\u202f% pre\u2011market "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 the SpaceX\u2011Cursor deal does not affect Amazon; "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the gain is not tied to sector performance.  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*Source: morning brief (2026\u201106\u201121)\u202f[1]*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Here\u2019s your morning brief for\u202f2026\u201106\u201126:\n\n**Market snapshot**  \n- **SPY**\u202f727.53\u2003**QQQ**\u202f697.97\u2003**VIX**\u202f16.9 \u2013 a risk\u2011off tone in pre\u2011market trading.\n\n**Your portfolio today**  \n- **META**\u202f+5.06\u202f% pre\u2011market \u2013 the Oklo story and Centrus surge are unrelated; the move appears idiosyncratic.  \n- **AMZN**\u202f+3.97\u202f% pre\u2011market \u2013 the SpaceX\u2011Cursor deal does not affect Amazon; the gain is not tied to sector performance.  \n\n*Source: morning brief (2026\u201106\u201121)\u202f[1]*\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.95,
+            "entity_name": null,
+            "id": "tool:brief:019eec19-1d79-7ac7-9d2d-351ad43ceb30",
+            "item_type": "financial",
+            "published_at": "2026-06-21T21:32:09.467988+00:00",
+            "ref": 1,
+            "source_name": "morning_brief",
+            "title": "## Details  \n**Market Snapshot**  \n- SPY 727.53, QQQ 697.97, VIX 16.9 \u2014 risk-off tone pre-mkt  \n\n**Your Portfolio Today**  \n- META +5.06% pre-mkt \u2014 the [c10] Oklo story is neutral/irrelevant and [c6] Centrus surge is unrelated; stock rose despite Communication Services -1.18% [c11], so driver is idiosyncratic \u2014 no identifiable driver  \n- AMZN +3.97% pre-mkt \u2014 the [c7] SpaceX-Cursor deal is unrelated to Amazon; no direct news link, and sector underperformance makes sector drag unlikely; move lack",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 22828,
+          "message_id": "019f01b5-7323-7bf3-948f-2a9c0d0eb35a",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "2ee97812-bbbc-4500-b85d-97a2a0f430d4"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.059500002767891,
+            "entity_resolution": 110.49962499237154,
+            "grounding_validation": 15008.08238099853,
+            "llm_direct_text_generation": 2912.5835849990835,
+            "llm_tool_planning": 4778.725502997986,
+            "load_history": 12.25091599917505,
+            "persist_and_cache": 31.087499999557622,
+            "tool_execution": 196.4066670043394,
+            "validate_input": 2400.101792998612
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "": {}
+        },
+        "name": "get_morning_brief"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tps": 6.363,
+    "tps_streaming": 44.634,
+    "ttft_s": 2.475
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "forbidden_facts": [
+      "generic_market_summary_not_user_specific"
+    ],
+    "required_facts": [
+      "brief_headline_or_lead",
+      "at_least_one_section"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_morning_brief"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the user's intent and made a single, well-chosen tool call (get_morning_brief) that returned the needed data. No wasted steps, no ordering issues, and no recovery needed. The trajectory is a textbook example of efficient routing for a straightforward brief request.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one call, no redundancy \u2014 maximally efficient.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_morning_brief is exactly the right tool for a 'morning brief' question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

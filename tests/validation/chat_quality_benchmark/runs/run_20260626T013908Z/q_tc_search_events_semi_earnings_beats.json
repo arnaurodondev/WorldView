@@ -1,0 +1,906 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 97,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_claims",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_documents",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 26.475,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 25,
+    "phase_timings_ms": {
+      "check_cache": 4.982540995115414,
+      "entity_resolution": 141.3644579879474,
+      "grounding_validation": 2633.47050100856,
+      "llm_synthesis_streaming": 1327.7260000031674,
+      "llm_tool_planning": 19015.04634298908,
+      "load_history": 9.800333995372057,
+      "persist_and_cache": 17.165875004138798,
+      "tool_execution": 1708.685460020206,
+      "validate_input": 477.88579198822845
+    },
+    "status_code": 200,
+    "tool_call_count": 7,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_documents"
+    ],
+    "tool_result_count": 7,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.535,
+    "word_count": 15
+  },
+  "id": "tc_search_events_semi_earnings_beats",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; answer is appropriately concise (one sentence) given no data was found. Depth matches question complexity.",
+        "reason": "Question is a factual lookup; answer is appropriately concise (one sentence) given no data was found. Depth matches question complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer is a refusal consistent with empty tool results (status=empty items=0). No fabricated numbers or scope violations.",
+        "reason": "No grounding sample provided; answer is a refusal consistent with empty tool results (status=empty items=0). No fabricated numbers or scope violations.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Answer contains refusal phrase 'Not available' but rubric.appropriate_refusal_ok=true and all tool results are empty/missing, so refusal is appropriate.",
+        "reason": "Answer contains refusal phrase 'Not available' but rubric.appropriate_refusal_ok=true and all tool results are empty/missing, so refusal is appropriate.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Agent called search_documents and search_claims but none of the expected_tools (search_events, search_documents) were used with appropriate parameters; search_documents returned empty for all calls, and search_claims is not in expected_tools.",
+        "reason": "Agent called search_documents and search_claims but none of the expected_tools (search_events, search_documents) were used with appropriate parameters; search_documents returned empty for all calls, and search_claims is not in expected_tools.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly refused to answer when all tool calls returned empty results, which is appropriate given the rubric's refusal_ok flag. However, tool_use is poor: the agent repeatedly called search_documents with broad parameters that returned nothing, and called search_claims (not in expected_tools) instead of search_events, which would have been the natural tool for earnings events. The single most impactful change is to route earnings-beat questions to search_events first, and to stop retrying search_documents with the same empty parameters. Grounding and framing are fine for a refusal scenario.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Agent called search_documents and search_claims but none of the expected_tools (search_events, search_documents) were used with appropriate parameters; search_documents returned empty for all calls, and search_claims is not in expected_tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer is a refusal consistent with empty tool results (status=empty items=0). No fabricated numbers or scope violations.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; answer is appropriately concise (one sentence) given no data was found. Depth matches question complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Answer contains refusal phrase 'Not available' but rubric.appropriate_refusal_ok=true and all tool results are empty/missing, so refusal is appropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly refused to answer when all tool calls returned empty results, which is appropriate given the rubric's refusal_ok flag. However, tool_use is poor: the agent repeatedly called search_documents with broad parameters that returned nothing, and called search_claims (not in expected_tools) instead of search_events, which would have been the natural tool for earnings events. The single most impactful change is to route earnings-beat questions to search_events first, and to stop retrying search_documents with the same empty parameters. Grounding and framing are fine for a refusal scenario.\"\n}",
+    "reviewer_summary": "The agent correctly refused to answer when all tool calls returned empty results, which is appropriate given the rubric's refusal_ok flag. However, tool_use is poor: the agent repeatedly called search_documents with broad parameters that returned nothing, and called search_claims (not in expected_tools) instead of search_events, which would have been the natural tool for earnings events. The single most impactful change is to route earnings-beat questions to search_events first, and to stop retrying search_documents with the same empty parameters. Grounding and framing are fine for a refusal scenario.",
+    "score": 75,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 75,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Any recent earnings beats in the semiconductor space?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Not available in retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        535058
+      ],
+      [
+        "status",
+        538537
+      ],
+      [
+        "thinking",
+        681688
+      ],
+      [
+        "agent_iteration",
+        681768
+      ],
+      [
+        "status",
+        7071473
+      ],
+      [
+        "tool_call",
+        7071711
+      ],
+      [
+        "tool_result",
+        7491150
+      ],
+      [
+        "tool_call",
+        8010545
+      ],
+      [
+        "tool_result",
+        8010702
+      ],
+      [
+        "tool_call",
+        8010727
+      ],
+      [
+        "tool_result",
+        8010746
+      ],
+      [
+        "tool_call",
+        8011736
+      ],
+      [
+        "tool_result",
+        8011812
+      ],
+      [
+        "agent_iteration",
+        8268731
+      ],
+      [
+        "tool_call",
+        12767757
+      ],
+      [
+        "tool_result",
+        13192396
+      ],
+      [
+        "agent_iteration",
+        13344608
+      ],
+      [
+        "tool_call",
+        17520164
+      ],
+      [
+        "tool_result",
+        17597885
+      ],
+      [
+        "agent_iteration",
+        17747206
+      ],
+      [
+        "tool_call",
+        21706034
+      ],
+      [
+        "tool_result",
+        22486487
+      ],
+      [
+        "agent_iteration",
+        22486580
+      ],
+      [
+        "token",
+        23808501
+      ],
+      [
+        "token",
+        23808664
+      ],
+      [
+        "token",
+        23808897
+      ],
+      [
+        "token",
+        23809220
+      ],
+      [
+        "token",
+        23809401
+      ],
+      [
+        "token",
+        23809482
+      ],
+      [
+        "status",
+        23819727
+      ],
+      [
+        "final_answer",
+        26451559
+      ],
+      [
+        "citations",
+        26451638
+      ],
+      [
+        "contradictions",
+        26455574
+      ],
+      [
+        "suggestions",
+        26455645
+      ],
+      [
+        "metadata",
+        26469668
+      ],
+      [
+        "done",
+        26469821
+      ]
+    ],
+    "latency_s": 26.475,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 26411,
+      "message_id": "019f01c0-5578-785e-b6c1-0b4bad7ca5bd",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "8227d36d-2e2a-471c-8bf2-ceb99faf64ee"
+    },
+    "output_tokens": 25,
+    "phase_timings_ms": {
+      "check_cache": 4.982540995115414,
+      "entity_resolution": 141.3644579879474,
+      "grounding_validation": 2633.47050100856,
+      "llm_synthesis_streaming": 1327.7260000031674,
+      "llm_tool_planning": 19015.04634298908,
+      "load_history": 9.800333995372057,
+      "persist_and_cache": 17.165875004138798,
+      "tool_execution": 1708.685460020206,
+      "validate_input": 477.88579198822845
+    },
+    "question": "Any recent earnings beats in the semiconductor space?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-19",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 419,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2026-03-21",
+            "date_to": "2026-09-24",
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 264,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_name": "SJ Semiconductor"
+          },
+          "is_fallback": true,
+          "label": "Checking analyst claims on SJ Semiconductor",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 112,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+          },
+          "is_fallback": true,
+          "label": "Loading intelligence for e90caaac-b550-4698-8909-8d19cf034ee6",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 142,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:intelligence:e90caaac-b550-4698-8909-8d19cf034ee6",
+              "title": "Intelligence: SJ Semiconductor"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7586,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-19",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 427,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12662,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 78,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17065,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-19",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 781,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 21805,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Not available in retrieved context.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has SJ Semiconductor performed recently?",
+          "How do SJ Semiconductor's fundamentals look?",
+          "Who are SJ Semiconductor's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 26411,
+          "message_id": "019f01c0-5578-785e-b6c1-0b4bad7ca5bd",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "8227d36d-2e2a-471c-8bf2-ceb99faf64ee"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.982540995115414,
+            "entity_resolution": 141.3644579879474,
+            "grounding_validation": 2633.47050100856,
+            "llm_synthesis_streaming": 1327.7260000031674,
+            "llm_tool_planning": 19015.04634298908,
+            "load_history": 9.800333995372057,
+            "persist_and_cache": 17.165875004138798,
+            "tool_execution": 1708.685460020206,
+            "validate_input": 477.88579198822845
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-06-19",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-03-21",
+          "date_to": "2026-09-24",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_name": "SJ Semiconductor"
+        },
+        "name": "search_claims"
+      },
+      {
+        "arguments": {
+          "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-19",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-19",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 0.964,
+    "tps_streaming": 18.829,
+    "ttft_s": 0.535
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_numbers",
+      "generic_sector_commentary"
+    ],
+    "required_facts": [
+      "recent_events_returned",
+      "earnings_or_beat_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent failed to route to appropriate tools for the question: it needed to search for earnings events or news in the semiconductor sector, but instead made repeated empty document searches with no entity or sector filters, then made unrelated calls to search_claims and get_entity_intelligence. The ordering shows no logical dependency chain, and recovery was ineffective\u2014after empty results, the agent repeated the same failing calls rather than adjusting the query. The most impactful change would be to use search_events with a sector filter (e.g., 'semiconductors') or search_documents with relevant entity_tickers/industry tags, and to chain results properly instead of making blind calls.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The trace is highly redundant: calls 1, 5, 6, 7 are nearly identical search_documents calls with the same empty entity_tickers and similar date ranges, all returning empty. Calls 3 and 4 appear unrelated to the question and waste resources. A single well-constructed search with sector/industry filte",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "The sequence shows no logical data dependency chain. Calls 1-2 are broad empty searches, call 3 jumps to a specific entity without any prior resolution, call 4 fetches intelligence on a UUID that was never derived from earlier calls, and calls 5-7 repeat the same failed search pattern. There is no e",
+        "score": 10
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent tried a wider date range (call 2) which also returned empty. Instead of adjusting the query strategy (e.g., adding sector filters, using a different tool), it pivoted to unrelated tools (search_claims, get_entity_intelligence) and then repeated the same failing",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for 'recent earnings beats in the semiconductor space'. The agent should have used a tool like search_events (earnings calendar) or search_documents with sector/industry filters. Instead, it called search_documents with empty entity_tickers and no sector filter, then called search_",
+        "score": 5
+      }
+    },
+    "trajectory_score": 25,
+    "unrecovered_failures": 6,
+    "verdict": "GRADED"
+  }
+}

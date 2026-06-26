@@ -1,0 +1,753 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_price_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 273,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_price_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_price_history"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 32.698,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "output_tokens": 69,
+    "phase_timings_ms": {
+      "check_cache": 4.3371670035412535,
+      "entity_resolution": 113.63258300116286,
+      "grounding_validation": 1.3778329885099083,
+      "llm_direct_text_generation": 25879.35367799946,
+      "llm_tool_planning": 30657.77855500346,
+      "load_history": 62.40766700648237,
+      "persist_and_cache": 29.63254100177437,
+      "tool_execution": 200.0007500028005,
+      "validate_input": 1212.0894999970915
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "interval",
+          "ticker",
+          "to_date"
+        ],
+        "tool": "get_price_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_price_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_price_history"
+      }
+    ],
+    "ttft_s": 1.277,
+    "word_count": 48
+  },
+  "id": "tc_price_history_nvda_90d",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a price plot/summary; answer is a generic refusal that provides zero information, completely mismatched to the request.",
+        "reason": "Question asks for a price plot/summary; answer is a generic refusal that provides zero information, completely mismatched to the request.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "Answer refuses to present any price data despite tool returning status=ok items=1; no claims to ground, but the refusal itself is unsupported by tool results.",
+        "reason": "Answer refuses to present any price data despite tool returning status=ok items=1; no claims to ground, but the refusal itself is unsupported by tool results.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool returned data; wrongful refusal.",
+        "reason": "Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool returned data; wrongful refusal.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called get_price_history with correct ticker and date range \u2014 exactly the expected tool.",
+        "reason": "Called get_price_history with correct ticker and date range \u2014 exactly the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL). The agent correctly routed to get_price_history with the right ticker and window, but then refused to answer despite receiving a valid result (status=ok items=1). This is a hallucinated refusal \u2014 the tool returned data, yet the LLM claimed it could not verify against retrieved data. The fix is to ensure the system prompt instructs the model to trust tool results when status=ok and items>=1, and to present the data (or a summary) rather than defaulting to a generic refusal. Additionally, the answer should include the actual price series or summary statistics to satisfy the question's depth requirement.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_price_history with correct ticker and date range \u2014 exactly the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 0,\n    \"feedback\": \"Answer refuses to present any price data despite tool returning status=ok items=1; no claims to ground, but the refusal itself is unsupported by tool results.\"\n  },\n  \"framing\": {\n    \"score\": 0,\n    \"feedback\": \"Question asks for a price plot/summary; answer is a generic refusal that provides zero information, completely mismatched to the request.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I could not verify this against the data I actually retrieved' and 'I won't present unverified figures' while tool returned data; wrongful refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_price_history with the right ticker and window, but then refused to answer despite receiving a valid result (status=ok items=1). This is a hallucinated refusal \u2014 the tool returned data, yet the LLM claimed it could not verify against retrieved data. The fix is to ensure the system prompt instructs the model to trust tool results when status=ok and items>=1, and to present the data (or a summary) rather than defaulting to a generic refusal. Additionally, the answer should include the actual price series or summary statistics to satisfy the question's depth requirement.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL). The agent correctly routed to get_price_history with the right ticker and window, but then refused to answer despite receiving a valid result (status=ok items=1). This is a hallucinated refusal \u2014 the tool returned data, yet the LLM claimed it could not verify against retrieved data. The fix is to ensure the system prompt instructs the model to trust tool results when status=ok and items>=1, and to present the data (or a summary) rather than defaulting to a generic refusal. Additionally, the answer should include the actual price series or summary statistics to satisfy the question's depth requirement.",
+    "score": 25,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 25,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=25 would otherwise have been FAIL).",
+      "floor": 12,
+      "grounding": 0,
+      "pre_veto_verdict": "FAIL",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "Plot NVDA's price for the last 90 days.",
+  "reasons": [
+    "slow latency_s=32.698"
+  ],
+  "result": {
+    "answer_text": "I could not verify this against the data I actually retrieved \u2014 the answer referenced tool results that were not part of this query. I won't present unverified figures. Please rephrase your question, or ask about a specific ticker or metric so I can pull the data directly.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1277387
+      ],
+      [
+        "status",
+        1327874
+      ],
+      [
+        "thinking",
+        1443455
+      ],
+      [
+        "agent_iteration",
+        1443506
+      ],
+      [
+        "status",
+        6221502
+      ],
+      [
+        "tool_call",
+        6222326
+      ],
+      [
+        "tool_result",
+        6422230
+      ],
+      [
+        "agent_iteration",
+        6747380
+      ],
+      [
+        "token",
+        32631167
+      ],
+      [
+        "token",
+        32632066
+      ],
+      [
+        "token",
+        32632083
+      ],
+      [
+        "token",
+        32632093
+      ],
+      [
+        "token",
+        32632100
+      ],
+      [
+        "token",
+        32632114
+      ],
+      [
+        "token",
+        32632122
+      ],
+      [
+        "token",
+        32632134
+      ],
+      [
+        "token",
+        32632166
+      ],
+      [
+        "token",
+        32632313
+      ],
+      [
+        "token",
+        32632467
+      ],
+      [
+        "token",
+        32632475
+      ],
+      [
+        "token",
+        32632613
+      ],
+      [
+        "token",
+        32632624
+      ],
+      [
+        "token",
+        32632630
+      ],
+      [
+        "token",
+        32632652
+      ],
+      [
+        "token",
+        32632743
+      ],
+      [
+        "token",
+        32633270
+      ],
+      [
+        "token",
+        32633450
+      ],
+      [
+        "token",
+        32633746
+      ],
+      [
+        "token",
+        32634014
+      ],
+      [
+        "token",
+        32634104
+      ],
+      [
+        "token",
+        32634253
+      ],
+      [
+        "token",
+        32634382
+      ],
+      [
+        "token",
+        32634558
+      ],
+      [
+        "token",
+        32635018
+      ],
+      [
+        "token",
+        32635060
+      ],
+      [
+        "token",
+        32635148
+      ],
+      [
+        "token",
+        32635168
+      ],
+      [
+        "token",
+        32635175
+      ],
+      [
+        "status",
+        32651249
+      ],
+      [
+        "final_answer",
+        32651271
+      ],
+      [
+        "citations",
+        32652028
+      ],
+      [
+        "contradictions",
+        32652312
+      ],
+      [
+        "suggestions",
+        32658407
+      ],
+      [
+        "metadata",
+        32684507
+      ],
+      [
+        "done",
+        32684916
+      ]
+    ],
+    "latency_s": 32.698,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 32610,
+      "message_id": "019f01ba-168a-73c5-90c9-60b6b4a25198",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "e6e352cb-65b9-4ce2-9945-f217996d17ba"
+    },
+    "output_tokens": 69,
+    "phase_timings_ms": {
+      "check_cache": 4.3371670035412535,
+      "entity_resolution": 113.63258300116286,
+      "grounding_validation": 1.3778329885099083,
+      "llm_direct_text_generation": 25879.35367799946,
+      "llm_tool_planning": 30657.77855500346,
+      "load_history": 62.40766700648237,
+      "persist_and_cache": 29.63254100177437,
+      "tool_execution": 200.0007500028005,
+      "validate_input": 1212.0894999970915
+    },
+    "question": "Plot NVDA's price for the last 90 days.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_price_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-03-28",
+            "interval": "day",
+            "ticker": "NVDA",
+            "to_date": "2026-06-26"
+          },
+          "label": "Fetching price history for NVIDIA",
+          "status": "running",
+          "tool": "get_price_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 199,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "NVDA"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching price history for NVIDIA",
+          "result_preview": [
+            {
+              "id": "tool:price_history:NVDA",
+              "title": "NVDA price history (day)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_price_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5305,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**NVDA \u2013 Daily Closing Price (last\u202f90\u202fdays)**  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Date       | Close |\n|------------|-------|\n| 2026\u201103\u201130 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $165.17 |\n| 2026\u201103\u201131 | $174.40 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 2026\u201104\u201101 | $175.75 |\n| 2026\u201104\u201102 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$177.39 |\n| 2026\u201104\u201106 | $177.64 |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201104\u201107 | $178.10 |\n| 2026\u201104\u201108 | $182.08 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 2026\u201104\u201109 | $183.91 |\n| 2026\u201104\u201110 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $188.63 |\n| 2026\u201104\u201113 | $189.31 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 2026\u201104\u201114 | $196.51 |\n| 2026\u201104\u201115 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$198.87 |\n| 2026\u201104\u201116 | $198.35 |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201104\u201117 | $201.68 |\n| 2026\u201104\u201120 | $202.06 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 2026\u201104\u201121 | $199.88 |\n| 2026\u201104\u201122 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $202.50 |\n| 2026\u201104\u201123 | $199.64 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 2026\u201104\u201124 | $208.27 |\n| 2026\u201104\u201127 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$216.61 |\n| 2026\u201104\u201128 | $213.17 |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201104\u201129 | $209.25 |\n| 2026\u201104\u201130 | $199.57 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| \u2026 | \u2026 |\n| 2026\u201106\u201124 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $215.42 |\n| 2026\u201106\u201125 | $218.09 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 2026\u201106\u201126 | $221.33 |\n\n*Data source: `get_price_history` "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(daily close prices)\u202f[price_history row\u202f0]*  \n\n---\n\n### "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Quick visual overview (ASCII\u2011style)\n\n```\n$230 \u2524                                                            *\n     "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2502                                                          *\n$220 \u2524                                                      *\n     \u2502                                                    *\n$210 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2524                                                *\n     \u2502                                            *\n$200 \u2524                                      *\n     \u2502                                 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*\n$190 \u2524                           *\n     \u2502                     *\n$180 \u2524                "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*\n     \u2502            *\n$170 \u2524        *\n     \u2502    *\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$160 \u2524 *\n     \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n      Mar   Apr   May   Jun\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "```\n\nThe chart shows NVDA\u2019s price climbing from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the mid\u2011$160s in late\u2011March to the low $220s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "by late\u2011June, with a noticeable upward trend after "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "mid\u2011April."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not verify this against the data I actually retrieved \u2014 the answer referenced tool results that were not part of this query. I won't present unverified figures. Please rephrase your question, or ask about a specific ticker or metric so I can pull the data directly."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on NVIDIA Corporation?",
+          "How do NVIDIA Corporation's fundamentals look?",
+          "Who are NVIDIA Corporation's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 32610,
+          "message_id": "019f01ba-168a-73c5-90c9-60b6b4a25198",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "e6e352cb-65b9-4ce2-9945-f217996d17ba"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.3371670035412535,
+            "entity_resolution": 113.63258300116286,
+            "grounding_validation": 1.3778329885099083,
+            "llm_direct_text_generation": 25879.35367799946,
+            "llm_tool_planning": 30657.77855500346,
+            "load_history": 62.40766700648237,
+            "persist_and_cache": 29.63254100177437,
+            "tool_execution": 200.0007500028005,
+            "validate_input": 1212.0894999970915
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-03-28",
+          "interval": "day",
+          "ticker": "NVDA",
+          "to_date": "2026-06-26"
+        },
+        "name": "get_price_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "NVDA"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_price_history"
+      }
+    ],
+    "tps": 2.196,
+    "tps_streaming": 2.666,
+    "ttft_s": 1.277
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_price_history"
+    ],
+    "forbidden_facts": [
+      "fabricated_prices",
+      "single_point_quote_only"
+    ],
+    "required_facts": [
+      "nvda_identified",
+      "ninety_day_window",
+      "price_series_or_summary_stats"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_price_history"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for historical price data and made a single, well-formed call to get_price_history with the right ticker and a 90-day window. The trace is clean, minimal, and perfectly aligned with the question's intent. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One call, no redundancy \u2014 the minimal possible chain for the requested data.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no dependencies to order \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_price_history, which is exactly the right tool for a price-plot request. Perfect tool\u2013intent match.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

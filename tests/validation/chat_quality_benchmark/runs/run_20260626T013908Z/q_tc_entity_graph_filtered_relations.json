@@ -1,0 +1,740 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ]
+  },
+  "heuristics": {
+    "char_count": 110,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 42.202,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_graph"
+    ],
+    "output_tokens": 28,
+    "phase_timings_ms": {
+      "check_cache": 12.113958000554703,
+      "entity_resolution": 110.67479199846275,
+      "grounding_validation": 2.5087500107474625,
+      "llm_direct_text_generation": 9866.48800400144,
+      "llm_tool_planning": 36552.43784900813,
+      "load_history": 55.111583991674706,
+      "persist_and_cache": 22.86124999227468,
+      "tool_execution": 2917.8831260214793,
+      "validate_input": 739.5143739995547
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_entity_relations"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 0.837,
+    "word_count": 15
+  },
+  "id": "tc_entity_graph_filtered_relations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a simple lookup; answer is concise, cited, and directly addresses the ask.",
+        "reason": "Question is a simple lookup; answer is concise, cited, and directly addresses the ask.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Single claim (TSMC as supplier) cites tool row; no scope/coverage violation; no grounding sample contradicts it.",
+        "reason": "Single claim (TSMC as supplier) cites tool row; no scope/coverage violation; no grounding sample contradicts it.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations, which is in the expected_tools equivalence set.",
+        "reason": "Called search_entity_relations, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the supplier lookup to search_entity_relations, returned a single grounded result (TSMC), and kept the answer appropriately concise. The only improvement would be to note that the tool returned only one item despite a limit of 20, so the answer could transparently mention that the list may be incomplete. Otherwise, solid performance.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Single claim (TSMC as supplier) cites tool row; no scope/coverage violation; no grounding sample contradicts it.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a simple lookup; answer is concise, cited, and directly addresses the ask.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the supplier lookup to search_entity_relations, returned a single grounded result (TSMC), and kept the answer appropriately concise. The only improvement would be to note that the tool returned only one item despite a limit of 20, so the answer could transparently mention that the list may be incomplete. Otherwise, solid performance.\"\n}",
+    "reviewer_summary": "The agent correctly routed the supplier lookup to search_entity_relations, returned a single grounded result (TSMC), and kept the answer appropriately concise. The only improvement would be to note that the tool returned only one item despite a limit of 20, so the answer could transparently mention that the list may be incomplete. Otherwise, solid performance.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 1,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me companies that are suppliers to Apple.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Taiwan Semiconductor Manufacturing (TSMC) \u2013 listed as a supplier of Apple\u202fInc.\u202f[search_entity_relations row 0]",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        837426
+      ],
+      [
+        "status",
+        875422
+      ],
+      [
+        "thinking",
+        990401
+      ],
+      [
+        "agent_iteration",
+        990436
+      ],
+      [
+        "status",
+        7416438
+      ],
+      [
+        "tool_call",
+        7416476
+      ],
+      [
+        "tool_result",
+        7853739
+      ],
+      [
+        "agent_iteration",
+        8134823
+      ],
+      [
+        "tool_call",
+        11781076
+      ],
+      [
+        "tool_result",
+        13478056
+      ],
+      [
+        "agent_iteration",
+        13831032
+      ],
+      [
+        "agent_iteration",
+        19565244
+      ],
+      [
+        "tool_call",
+        26804522
+      ],
+      [
+        "tool_result",
+        27147991
+      ],
+      [
+        "agent_iteration",
+        27708869
+      ],
+      [
+        "tool_call",
+        31716694
+      ],
+      [
+        "tool_result",
+        32114473
+      ],
+      [
+        "agent_iteration",
+        32293452
+      ],
+      [
+        "token",
+        42161652
+      ],
+      [
+        "token",
+        42161733
+      ],
+      [
+        "status",
+        42168690
+      ],
+      [
+        "final_answer",
+        42168777
+      ],
+      [
+        "citations",
+        42168797
+      ],
+      [
+        "contradictions",
+        42168868
+      ],
+      [
+        "suggestions",
+        42172744
+      ],
+      [
+        "metadata",
+        42193071
+      ],
+      [
+        "done",
+        42193307
+      ]
+    ],
+    "latency_s": 42.202,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 42105,
+      "message_id": "019f01af-864f-7ea0-9aa7-53cdce1b0e0e",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "636f9f21-cc0c-4d6a-9099-efe438de5624"
+    },
+    "output_tokens": 28,
+    "phase_timings_ms": {
+      "check_cache": 12.113958000554703,
+      "entity_resolution": 110.67479199846275,
+      "grounding_validation": 2.5087500107474625,
+      "llm_direct_text_generation": 9866.48800400144,
+      "llm_tool_planning": 36552.43784900813,
+      "load_history": 55.111583991674706,
+      "persist_and_cache": 22.86124999227468,
+      "tool_execution": 2917.8831260214793,
+      "validate_input": 739.5143739995547
+    },
+    "question": "Show me companies that are suppliers to Apple.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 438,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7143,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "relation_type": "supplies"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1703,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12833,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18567,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "f5d35022-01ae-47ba-8f3f-c93bbf8c3d1d"
+          },
+          "label": "Loading intelligence for f5d35022-01ae-47ba-8f3f-c93bbf8c3d1d",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 374,
+          "item_count": 1,
+          "label": "Loading intelligence for f5d35022-01ae-47ba-8f3f-c93bbf8c3d1d",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:f5d35022-01ae-47ba-8f3f-c93bbf8c3d1d",
+              "title": "Intelligence: Alexandria Real Estate Equities Inc"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 26718,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "relation_type": "supplier_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 398,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 31300,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Taiwan Semiconductor Manufacturing (TSMC) \u2013 listed as a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "supplier of Apple\u202fInc.\u202f[search_entity_relations row 0]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Taiwan Semiconductor Manufacturing (TSMC) \u2013 listed as a supplier of Apple\u202fInc.\u202f[search_entity_relations row 0]"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 42105,
+          "message_id": "019f01af-864f-7ea0-9aa7-53cdce1b0e0e",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "636f9f21-cc0c-4d6a-9099-efe438de5624"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 12.113958000554703,
+            "entity_resolution": 110.67479199846275,
+            "grounding_validation": 2.5087500107474625,
+            "llm_direct_text_generation": 9866.48800400144,
+            "llm_tool_planning": 36552.43784900813,
+            "load_history": 55.111583991674706,
+            "persist_and_cache": 22.86124999227468,
+            "tool_execution": 2917.8831260214793,
+            "validate_input": 739.5143739995547
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "relation_type": "supplies"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_id": "f5d35022-01ae-47ba-8f3f-c93bbf8c3d1d"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "relation_type": "supplier_of"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 0.677,
+    "tps_streaming": 2.838,
+    "ttft_s": 0.837
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "forbidden_facts": [
+      "fabricated_supplier_names"
+    ],
+    "required_facts": [
+      "apple_identified",
+      "supplier_relation_type",
+      "supplier_list_or_empty"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_graph"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the right tools for a supplier-of-Apple query and obtained a valid supplier (TSMC). However, the trajectory includes two unnecessary calls: a broad search_entity_relations without relation_type (call 1) that duplicates the filtered call 2, and a get_entity_intelligence call (call 3) that adds no supplier information. The answer could have been produced with a single filtered search_entity_relations call. The process is otherwise sound.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 1 (no relation_type) is redundant given call 2 already uses the same tool with a filter. Call 3 (get_entity_intelligence) was not needed to answer the question. Removing these two would yield the same answer in one call.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "No data dependency between calls; they are independent explorations. Order is irrelevant, so full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "All calls are appropriate for a supplier-of-Apple query: search_entity_relations with relation_type filters and get_entity_intelligence for detail. Routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

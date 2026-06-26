@@ -1,0 +1,467 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 65,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 11.854,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "query_fundamentals"
+    ],
+    "output_tokens": 17,
+    "phase_timings_ms": {
+      "check_cache": 9.152124999673106,
+      "entity_resolution": 107.2644579980988,
+      "grounding_validation": 1.8602919881232083,
+      "llm_direct_text_generation": 5511.708417994669,
+      "llm_tool_planning": 10306.663961993763,
+      "load_history": 9.16020899603609,
+      "persist_and_cache": 14.662042012787424,
+      "tool_execution": 38.672957991366275,
+      "validate_input": 481.60508400178514
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.548,
+    "word_count": 12
+  },
+  "id": "da_aapl_pe_dec2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; answer is appropriately concise.",
+        "reason": "Question is a factual lookup; answer is appropriately concise.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample contradicts the claim; the tool returned status=ok items=1 but no pe_ratio value is shown, so the refusal is consistent with the trace.",
+        "reason": "No grounding sample contradicts the claim; the tool returned status=ok items=1 but no pe_ratio value is shown, so the refusal is consistent with the trace.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'data is not available' but rubric.appropriate_refusal_ok=false and tool returned status=ok items=1, so data was available.",
+        "reason": "Contains refusal phrase 'data is not available' but rubric.appropriate_refusal_ok=false and tool returned status=ok items=1, so data was available.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history, which is one of the expected tools.",
+        "reason": "Called get_fundamentals_history, which is one of the expected tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to an expected tool and gave a concise answer, but the refusal was inappropriate: the tool returned data (status=ok items=1), yet the answer claimed no data was available. The agent should have extracted the P/E ratio from the tool results or, if the tool did not return a pe_ratio field, should have stated that explicitly rather than claiming the data is unavailable. Fix: ensure the answer reflects what the tool actually returned, and only refuse when the tool explicitly indicates missing coverage.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history, which is one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample contradicts the claim; the tool returned status=ok items=1 but no pe_ratio value is shown, so the refusal is consistent with the trace.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; answer is appropriately concise.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'data is not available' but rubric.appropriate_refusal_ok=false and tool returned status=ok items=1, so data was available.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to an expected tool and gave a concise answer, but the refusal was inappropriate: the tool returned data (status=ok items=1), yet the answer claimed no data was available. The agent should have extracted the P/E ratio from the tool results or, if the tool did not return a pe_ratio field, should have stated that explicitly rather than claiming the data is unavailable. Fix: ensure the answer reflects what the tool actually returned, and only refuse when the tool explicitly indicates missing coverage.\"\n}",
+    "reviewer_summary": "The agent correctly routed to an expected tool and gave a concise answer, but the refusal was inappropriate: the tool returned data (status=ok items=1), yet the answer claimed no data was available. The agent should have extracted the P/E ratio from the tool results or, if the tool did not return a pe_ratio field, should have stated that explicitly rather than claiming the data is unavailable. Fix: ensure the answer reflects what the tool actually returned, and only refuse when the tool explicitly indicates missing coverage.",
+    "score": 75,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 75,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "What was AAPL's P/E ratio as of December 31, 2024?",
+  "reasons": [],
+  "result": {
+    "answer_text": "P/E data is not available for AAPL in the retrieved tool results.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        548047
+      ],
+      [
+        "status",
+        552250
+      ],
+      [
+        "thinking",
+        663060
+      ],
+      [
+        "agent_iteration",
+        663174
+      ],
+      [
+        "status",
+        5458723
+      ],
+      [
+        "tool_call",
+        5458843
+      ],
+      [
+        "tool_result",
+        5497323
+      ],
+      [
+        "agent_iteration",
+        6309036
+      ],
+      [
+        "token",
+        11822667
+      ],
+      [
+        "token",
+        11822729
+      ],
+      [
+        "status",
+        11832595
+      ],
+      [
+        "final_answer",
+        11832615
+      ],
+      [
+        "citations",
+        11832673
+      ],
+      [
+        "contradictions",
+        11832760
+      ],
+      [
+        "suggestions",
+        11833436
+      ],
+      [
+        "metadata",
+        11848427
+      ],
+      [
+        "done",
+        11848674
+      ]
+    ],
+    "latency_s": 11.854,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 11787,
+      "message_id": "019f020a-775e-7b9d-989e-4a62689fc059",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "5c154c80-1b49-4144-ac4a-185537deba88"
+    },
+    "output_tokens": 17,
+    "phase_timings_ms": {
+      "check_cache": 9.152124999673106,
+      "entity_resolution": 107.2644579980988,
+      "grounding_validation": 1.8602919881232083,
+      "llm_direct_text_generation": 5511.708417994669,
+      "llm_tool_planning": 10306.663961993763,
+      "load_history": 9.16020899603609,
+      "persist_and_cache": 14.662042012787424,
+      "tool_execution": 38.672957991366275,
+      "validate_input": 481.60508400178514
+    },
+    "question": "What was AAPL's P/E ratio as of December 31, 2024?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "Fetching fundamentals for Apple",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 38,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "AAPL"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Apple",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5644,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "P/E data is not available for AAPL in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the retrieved tool results."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "P/E data is not available for AAPL in the retrieved tool results."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 11787,
+          "message_id": "019f020a-775e-7b9d-989e-4a62689fc059",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "5c154c80-1b49-4144-ac4a-185537deba88"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 9.152124999673106,
+            "entity_resolution": 107.2644579980988,
+            "grounding_validation": 1.8602919881232083,
+            "llm_direct_text_generation": 5511.708417994669,
+            "llm_tool_planning": 10306.663961993763,
+            "load_history": 9.16020899603609,
+            "persist_and_cache": 14.662042012787424,
+            "tool_execution": 38.672957991366275,
+            "validate_input": 481.60508400178514
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "AAPL"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 1.504,
+    "tps_streaming": 3.084,
+    "ttft_s": 0.548
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "pe_from_2025_or_2026",
+      "single_quarter_passed_off_as_ttm",
+      "unanchored_pe_value"
+    ],
+    "required_facts": [
+      "pe_value_as_of_2024_12_31",
+      "period_anchor_acknowledged"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "ratio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified that a fundamentals history tool was needed for a P/E ratio question and made exactly one call. The call returned data (items=1) but the agent's answer states the data is unavailable \u2014 this is a contradiction between the tool result and the answer, but the process (tool selection, ordering, recovery, efficiency) is flawless. The only process-level improvement would be to ensure the answer accurately reflects the tool's output; if the tool returned a P/E value, the agent should use it rather than claiming unavailability.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "A single well-chosen call for a single-fact question is the definition of minimal and non-redundant. No wasted calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering dependency to evaluate. Single-call traces are automatically correct on ordering.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred (status=ok, items=1). Nothing to recover from, so full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_fundamentals_history, which is exactly the right kind of tool for a fundamentals metric (P/E) question. The expected chain included this tool; routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

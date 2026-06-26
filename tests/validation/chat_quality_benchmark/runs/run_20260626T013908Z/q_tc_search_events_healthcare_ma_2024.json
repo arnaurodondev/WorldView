@@ -1,0 +1,799 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events"
+    ]
+  },
+  "heuristics": {
+    "char_count": 35,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_documents",
+      "search_events"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 52.85,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 6.558125009178184,
+      "entity_resolution": 136.21191699348856,
+      "grounding_validation": 2.1019580017309636,
+      "llm_synthesis_streaming": 1742.4276680103503,
+      "llm_tool_planning": 47548.03472899948,
+      "load_history": 40.887084003770724,
+      "persist_and_cache": 31.15500000421889,
+      "tool_execution": 1568.024374981178,
+      "validate_input": 615.2444170002127
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_name",
+          "event_type"
+        ],
+        "tool": "search_events"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_events"
+    ],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 15,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.671,
+    "word_count": 5
+  },
+  "id": "tc_search_events_healthcare_ma_2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "The question asks for a list of M&A events (medium depth). The answer is a single sentence refusal. While appropriate given empty results, it could have briefly explained what was attempted (e.g., 'searched for healthcare M&A events in 2024 \u2014 no results found').",
+        "reason": "The question asks for a list of M&A events (medium depth). The answer is a single sentence refusal. While appropriate given empty results, it could have briefly explained what was attempted (e.g., 'searched for healthcare M&A events in 2024 \u2014 no results found').",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. The answer 'Not available in retrieved context' is consistent with tool_results showing empty/0 items for all relevant calls. No fabricated numbers or scope violations.",
+        "reason": "No grounding sample provided \u2014 presumed band. The answer 'Not available in retrieved context' is consistent with tool_results showing empty/0 items for all relevant calls. No fabricated numbers or scope violations.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "Answer contains no refusal phrase from the defined list. 'Not available in retrieved context' is a factual statement about data absence, not a refusal. rubric.appropriate_refusal_ok=true also applies.",
+        "reason": "Answer contains no refusal phrase from the defined list. 'Not available in retrieved context' is a factual statement about data absence, not a refusal. rubric.appropriate_refusal_ok=true also applies.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Expected tool was search_events; agent called search_events once (call 4) but with entity_name='healthcare' (string) instead of a ticker/entity_id, and got empty results. The other 4 calls were to search_documents, which is not in expected_tools. No effective use of the correct tool.",
+        "reason": "Expected tool was search_events; agent called search_events once (call 4) but with entity_name='healthcare' (string) instead of a ticker/entity_id, and got empty results. The other 4 calls were to search_documents, which is not in expected_tools. No effective use of the correct tool.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified that no M&A events for healthcare in 2024 were found across all tool calls, and appropriately reported that. However, tool_use was poor: the only call to the expected tool (search_events) used a string 'healthcare' as entity_name rather than a proper ticker or entity ID, and the other four calls were to search_documents (not in expected_tools). The single most impactful change: ensure search_events is called with a valid entity identifier (e.g., ticker or entity_id) rather than a free-text sector name, and consider using sector filters or category parameters if the tool supports them. The answer itself is honest and grounded, but could be slightly more informative by summarising what was attempted.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tool was search_events; agent called search_events once (call 4) but with entity_name='healthcare' (string) instead of a ticker/entity_id, and got empty results. The other 4 calls were to search_documents, which is not in expected_tools. No effective use of the correct tool.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. The answer 'Not available in retrieved context' is consistent with tool_results showing empty/0 items for all relevant calls. No fabricated numbers or scope violations.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"The question asks for a list of M&A events (medium depth). The answer is a single sentence refusal. While appropriate given empty results, it could have briefly explained what was attempted (e.g., 'searched for healthcare M&A events in 2024 \u2014 no results found').\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Answer contains no refusal phrase from the defined list. 'Not available in retrieved context' is a factual statement about data absence, not a refusal. rubric.appropriate_refusal_ok=true also applies.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified that no M&A events for healthcare in 2024 were found across all tool calls, and appropriately reported that. However, tool_use was poor: the only call to the expected tool (search_events) used a string 'healthcare' as entity_name rather than a proper ticker or entity ID, and the other four calls were to search_documents (not in expected_tools). The single most impactful change: ensure search_events is called with a valid entity identifier (e.g., ticker or entity_id) rather than a free-text sector name, and consider using sector filters or category parameters if the tool supports them. The answer itself is honest and grounded, but could be slightly more informative by summarising what was attempted.\"\n}",
+    "reviewer_summary": "The agent correctly identified that no M&A events for healthcare in 2024 were found across all tool calls, and appropriately reported that. However, tool_use was poor: the only call to the expected tool (search_events) used a string 'healthcare' as entity_name rather than a proper ticker or entity ID, and the other four calls were to search_documents (not in expected_tools). The single most impactful change: ensure search_events is called with a valid entity identifier (e.g., ticker or entity_id) rather than a free-text sector name, and consider using sector filters or category parameters if the tool supports them. The answer itself is honest and grounded, but could be slightly more informative by summarising what was attempted.",
+    "score": 65,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 65,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "Show me M&A events involving healthcare companies in 2024.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Not available in retrieved context.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        670953
+      ],
+      [
+        "status",
+        705536
+      ],
+      [
+        "thinking",
+        849176
+      ],
+      [
+        "agent_iteration",
+        849245
+      ],
+      [
+        "status",
+        7162499
+      ],
+      [
+        "tool_call",
+        7162611
+      ],
+      [
+        "tool_result",
+        7589831
+      ],
+      [
+        "tool_call",
+        7766174
+      ],
+      [
+        "tool_result",
+        7766273
+      ],
+      [
+        "agent_iteration",
+        8109324
+      ],
+      [
+        "tool_call",
+        15274429
+      ],
+      [
+        "tool_result",
+        15748559
+      ],
+      [
+        "agent_iteration",
+        16040678
+      ],
+      [
+        "tool_call",
+        21046579
+      ],
+      [
+        "tool_result",
+        21086733
+      ],
+      [
+        "agent_iteration",
+        21360075
+      ],
+      [
+        "tool_call",
+        50437966
+      ],
+      [
+        "tool_result",
+        51053017
+      ],
+      [
+        "agent_iteration",
+        51053110
+      ],
+      [
+        "token",
+        52791049
+      ],
+      [
+        "token",
+        52791186
+      ],
+      [
+        "token",
+        52791332
+      ],
+      [
+        "token",
+        52791549
+      ],
+      [
+        "token",
+        52792581
+      ],
+      [
+        "token",
+        52792744
+      ],
+      [
+        "status",
+        52812140
+      ],
+      [
+        "final_answer",
+        52812255
+      ],
+      [
+        "citations",
+        52812347
+      ],
+      [
+        "contradictions",
+        52812367
+      ],
+      [
+        "suggestions",
+        52821849
+      ],
+      [
+        "metadata",
+        52842512
+      ],
+      [
+        "done",
+        52842700
+      ]
+    ],
+    "latency_s": 52.85,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 52775,
+      "message_id": "019f01bf-0a41-7fa0-a509-1790f3579668",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "78fbd4e0-9341-4270-a7c6-225ca158321a"
+    },
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 6.558125009178184,
+      "entity_resolution": 136.21191699348856,
+      "grounding_validation": 2.1019580017309636,
+      "llm_synthesis_streaming": 1742.4276680103503,
+      "llm_tool_planning": 47548.03472899948,
+      "load_history": 40.887084003770724,
+      "persist_and_cache": 31.15500000421889,
+      "tool_execution": 1568.024374981178,
+      "validate_input": 615.2444170002127
+    },
+    "question": "Show me M&A events involving healthcare companies in 2024.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-01-01",
+            "date_to": "2024-12-31",
+            "entity_tickers": [],
+            "source_types": [
+              "sec_filing",
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 427,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2023-10-03",
+            "date_to": "2025-03-31",
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 176,
+          "item_count": 15,
+          "result_preview": [
+            {
+              "id": "tool:chunk:ee4b12c5-0515-5a79-b835-8a7e6f7b17ae",
+              "title": "Salesforce Strategic Acquisitions 2023-2024: Informatica, Own Backup, Spiff"
+            },
+            {
+              "id": "tool:chunk:6a08bd31-4c0c-5faf-8688-628beaf299d6",
+              "title": "Alphabet 8-K: Sundar Pichai's Full Letter on 2024 Headcount Reduction"
+            },
+            {
+              "id": "tool:chunk:6367a1da-a32e-5a8c-beef-eafc2f4b1131",
+              "title": "Alphabet Form 8-K: 2024 Workforce Reduction \u2014 12,000 Jobs Cut"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7260,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-01-01",
+            "date_to": "2024-12-31",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 475,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15191,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-01-01",
+            "date_to": "2024-12-31",
+            "entity_name": "healthcare",
+            "event_type": "merger"
+          },
+          "label": "Looking up corporate events...",
+          "status": "running",
+          "tool": "search_events",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 42,
+          "item_count": 0,
+          "label": "Looking up corporate events...",
+          "status": "empty",
+          "tool": "search_events",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 20510,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-01-01",
+            "date_to": "2024-12-31",
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 620,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 50205,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Not available in retrieved context."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 52775,
+          "message_id": "019f01bf-0a41-7fa0-a509-1790f3579668",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "78fbd4e0-9341-4270-a7c6-225ca158321a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.558125009178184,
+            "entity_resolution": 136.21191699348856,
+            "grounding_validation": 2.1019580017309636,
+            "llm_synthesis_streaming": 1742.4276680103503,
+            "llm_tool_planning": 47548.03472899948,
+            "load_history": 40.887084003770724,
+            "persist_and_cache": 31.15500000421889,
+            "tool_execution": 1568.024374981178,
+            "validate_input": 615.2444170002127
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2024-01-01",
+          "date_to": "2024-12-31",
+          "entity_tickers": [],
+          "source_types": [
+            "sec_filing",
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2023-10-03",
+          "date_to": "2025-03-31",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2024-01-01",
+          "date_to": "2024-12-31",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2024-01-01",
+          "date_to": "2024-12-31",
+          "entity_name": "healthcare",
+          "event_type": "merger"
+        },
+        "name": "search_events"
+      },
+      {
+        "arguments": {
+          "date_from": "2024-01-01",
+          "date_to": "2024-12-31",
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 15,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 0.172,
+    "tps_streaming": 5.165,
+    "ttft_s": 0.671
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events"
+    ],
+    "forbidden_facts": [
+      "fabricated_events",
+      "non_ma_events_returned"
+    ],
+    "required_facts": [
+      "event_list_or_empty",
+      "ma_event_type",
+      "year_2024_window",
+      "healthcare_sector"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent misrouted the M&A event question: it spent 4/5 calls on search_documents, which is designed for document retrieval, not structured event lookup. Only call 4 used the correct search_events tool, but it returned empty and the agent gave up. The process would be improved by (a) immediately using search_events with proper entity_name and event_type parameters, (b) trying alternative entity names (e.g., 'health care', 'pharmaceutical') if the first attempt is empty, and (c) not falling back to a document search that cannot produce the required structured event list.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Four search_documents calls (1,2,3,5) are redundant for an event query. Call 2 returned 15 items but was never used. The agent wasted calls on a tool that cannot answer the question instead of focusing on search_events.",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "No ordering issues: calls 1-5 are independent attempts with no data dependencies between them. The sequence does not violate any chaining rule.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent widened the date range (call 2) but then reverted to the original empty-producing parameters (calls 3,5) and only tried the correct tool once (call 4). No meaningful recovery was attempted after call 4's empty result.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for M&A events, which maps to search_events (call 4) or a dedicated M&A tool. The agent instead made four search_documents calls (1-3,5) that are ill-suited for structured event retrieval. Only call 4 used the correct tool, but it was tried once and failed.",
+        "score": 10
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 3,
+    "verdict": "GRADED"
+  }
+}

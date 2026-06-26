@@ -1,0 +1,1101 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "traverse_graph",
+      "search_entity_relations",
+      "screen_universe",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 35,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "query_fundamentals",
+      "screen_universe",
+      "search_entity_relations",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 72.125,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "screen_universe",
+      "search_entity_relations",
+      "traverse_graph"
+    ],
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 6.1056660051690415,
+      "entity_resolution": 208.82354200875852,
+      "grounding_validation": 1.0028749966295436,
+      "llm_synthesis_streaming": 3007.9652099957457,
+      "llm_tool_planning": 61286.779987000045,
+      "load_history": 45.772209006827325,
+      "persist_and_cache": 24.78204100043513,
+      "tool_execution": 4096.513458993286,
+      "validate_input": 878.2814590085763
+    },
+    "status_code": 200,
+    "tool_call_count": 9,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 9,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "error",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 2,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.925,
+    "word_count": 5
+  },
+  "id": "chain_apple_suppliers_high_margin",
+  "judge": {
+    "dimensions": {
+      "framing": null,
+      "grounding": null,
+      "refusal_judgment": null,
+      "tool_use": null
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "raw_response": null,
+    "reviewer_summary": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "score": null,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "ERROR",
+    "verdict_decision": null
+  },
+  "prompt": "Find a supplier in Apple's value chain that has a gross margin above 40%.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Not available in retrieved context.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        925244
+      ],
+      [
+        "status",
+        967053
+      ],
+      [
+        "thinking",
+        1185269
+      ],
+      [
+        "agent_iteration",
+        1185302
+      ],
+      [
+        "status",
+        9016747
+      ],
+      [
+        "tool_call",
+        9016905
+      ],
+      [
+        "tool_result",
+        9578957
+      ],
+      [
+        "tool_call",
+        9824183
+      ],
+      [
+        "tool_result",
+        9824294
+      ],
+      [
+        "agent_iteration",
+        10116610
+      ],
+      [
+        "tool_call",
+        13281892
+      ],
+      [
+        "tool_result",
+        13400188
+      ],
+      [
+        "agent_iteration",
+        13548288
+      ],
+      [
+        "tool_call",
+        18841083
+      ],
+      [
+        "tool_result",
+        20573724
+      ],
+      [
+        "agent_iteration",
+        20859061
+      ],
+      [
+        "tool_call",
+        25767709
+      ],
+      [
+        "tool_result",
+        25798960
+      ],
+      [
+        "agent_iteration",
+        25985117
+      ],
+      [
+        "tool_call",
+        32399032
+      ],
+      [
+        "tool_result",
+        32806503
+      ],
+      [
+        "agent_iteration",
+        33242696
+      ],
+      [
+        "tool_call",
+        39311258
+      ],
+      [
+        "tool_result",
+        39780754
+      ],
+      [
+        "agent_iteration",
+        40032225
+      ],
+      [
+        "tool_call",
+        62482223
+      ],
+      [
+        "tool_result",
+        63118546
+      ],
+      [
+        "agent_iteration",
+        63477275
+      ],
+      [
+        "tool_call",
+        68651539
+      ],
+      [
+        "tool_result",
+        68775620
+      ],
+      [
+        "agent_iteration",
+        69067958
+      ],
+      [
+        "token",
+        72071294
+      ],
+      [
+        "token",
+        72071431
+      ],
+      [
+        "token",
+        72071450
+      ],
+      [
+        "token",
+        72071466
+      ],
+      [
+        "token",
+        72071923
+      ],
+      [
+        "token",
+        72072133
+      ],
+      [
+        "status",
+        72077776
+      ],
+      [
+        "final_answer",
+        72077886
+      ],
+      [
+        "citations",
+        72077926
+      ],
+      [
+        "contradictions",
+        72078027
+      ],
+      [
+        "suggestions",
+        72081234
+      ],
+      [
+        "metadata",
+        72104448
+      ],
+      [
+        "done",
+        72104594
+      ]
+    ],
+    "latency_s": 72.125,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 326153,
+      "message_id": "019f01da-df24-72eb-9ffb-20fca5d0620e",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "6abf86d0-db8e-4707-9e0b-f50855afc47b"
+    },
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 6.1056660051690415,
+      "entity_resolution": 208.82354200875852,
+      "grounding_validation": 1.0028749966295436,
+      "llm_synthesis_streaming": 3007.9652099957457,
+      "llm_tool_planning": 61286.779987000045,
+      "load_history": 45.772209006827325,
+      "persist_and_cache": 24.78204100043513,
+      "tool_execution": 4096.513458993286,
+      "validate_input": 878.2814590085763
+    },
+    "question": "Find a supplier in Apple's value chain that has a gross margin above 40%.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 559,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_tickers": [
+              "AAPL"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 244,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:chunk:019e4cb6-18a3-7971-a59e-916e4dac12f0",
+              "title": "Cirrus Logic\u2019s Apple Manufacturing Role Links Face ID Growth And Valuation"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8931,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "gross_margin"
+            ],
+            "periods": 0,
+            "ticker": "CRUS"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 121,
+          "item_count": 0,
+          "label": "query_fundamentals...",
+          "status": "error",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12365,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "TSM"
+            ],
+            "source_types": [
+              "sec_filing",
+              "analyst_report",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1735,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 19674,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "gross_margin"
+            ],
+            "periods": 0,
+            "ticker": "TSM"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 31,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSM",
+              "title": "Fundamentals query: TSM"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 24802,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "AVGO"
+            ],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 409,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 32058,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 5
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "LRCX"
+            ],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 470,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 38847,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 6
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "AAPL"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 639,
+          "item_count": 2,
+          "label": "Searching documents...",
+          "result_preview": [
+            {
+              "id": "tool:chunk:019e4cb6-18a3-7971-a59e-916e4dac12f0",
+              "title": "Cirrus Logic\u2019s Apple Manufacturing Role Links Face ID Growth And Valuation"
+            },
+            {
+              "id": "tool:chunk:019e493e-1f0b-7c0a-bff9-977672d72cd8",
+              "title": "Is Himax Technologies, Inc. (HIMX) A Good Stock To Buy Now?"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 62293,
+          "iteration": 7,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 7
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "gross_margin"
+            ],
+            "periods": 0,
+            "ticker": "AVGO"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 126,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AVGO",
+              "title": "Fundamentals query: AVGO"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 67884,
+          "iteration": 8,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 8
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Not available in retrieved context."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 326153,
+          "message_id": "019f01da-df24-72eb-9ffb-20fca5d0620e",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "6abf86d0-db8e-4707-9e0b-f50855afc47b"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.1056660051690415,
+            "entity_resolution": 208.82354200875852,
+            "grounding_validation": 1.0028749966295436,
+            "llm_synthesis_streaming": 3007.9652099957457,
+            "llm_tool_planning": 61286.779987000045,
+            "load_history": 45.772209006827325,
+            "persist_and_cache": 24.78204100043513,
+            "tool_execution": 4096.513458993286,
+            "validate_input": 878.2814590085763
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AAPL"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "gross_margin"
+          ],
+          "periods": 0,
+          "ticker": "CRUS"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "TSM"
+          ],
+          "source_types": [
+            "sec_filing",
+            "analyst_report",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "gross_margin"
+          ],
+          "periods": 0,
+          "ticker": "TSM"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AVGO"
+          ],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "LRCX"
+          ],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AAPL"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "gross_margin"
+          ],
+          "periods": 0,
+          "ticker": "AVGO"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "error",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 2,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 0.126,
+    "tps_streaming": 2.992,
+    "ttft_s": 0.925
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "traverse_graph",
+      "search_entity_relations",
+      "screen_universe",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "Claims Apple has no suppliers in the graph"
+    ],
+    "required_facts": [
+      "Names a specific supplier entity (company name or ticker) linked to Apple",
+      "Cites a gross margin value above 40% for the named supplier"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "relationship",
+    "screener"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 1,
+    "reviewer_summary": "Trajectory judge call failed: ReadTimeout('The read operation timed out')",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "",
+        "score": null
+      },
+      "ordering": {
+        "feedback": "",
+        "score": null
+      },
+      "recovery": {
+        "feedback": "",
+        "score": null
+      },
+      "routing": {
+        "feedback": "",
+        "score": null
+      }
+    },
+    "trajectory_score": null,
+    "unrecovered_failures": 0,
+    "verdict": "ERROR"
+  }
+}

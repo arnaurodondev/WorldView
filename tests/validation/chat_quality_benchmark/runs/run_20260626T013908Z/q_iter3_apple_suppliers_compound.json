@@ -1,0 +1,831 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "traverse_graph",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 35,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 19.611,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 2.7287920092931017,
+      "entity_resolution": 195.11620899720583,
+      "grounding_validation": 1.8804999999701977,
+      "llm_synthesis_streaming": 1976.6130839998368,
+      "llm_tool_planning": 12790.86725601519,
+      "load_history": 45.95716700714547,
+      "persist_and_cache": 31.88370799762197,
+      "tool_execution": 1926.9797919987468,
+      "validate_input": 1315.9974589943886
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 1.367,
+    "word_count": 5
+  },
+  "id": "iter3_apple_suppliers_compound",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a list of top suppliers and analysis of the largest; answer is a single refusal sentence, severely under-developed for the question's depth.",
+        "reason": "Question asks for a list of top suppliers and analysis of the largest; answer is a single refusal sentence, severely under-developed for the question's depth.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "Answer states 'Not available in retrieved context' which is consistent with empty tool results, but no substantive claims to ground.",
+        "reason": "Answer states 'Not available in retrieved context' which is consistent with empty tool results, but no substantive claims to ground.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "Answer contains refusal phrase 'Not available' and rubric.appropriate_refusal_ok=false; tool results were empty but the agent did not attempt the correct tools that could have provided the data.",
+        "reason": "Answer contains refusal phrase 'Not available' and rubric.appropriate_refusal_ok=false; tool results were empty but the agent did not attempt the correct tools that could have provided the data.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Agent called only search_documents; expected tools were traverse_graph or get_entity_intelligence. None of the expected tools were used.",
+        "reason": "Agent called only search_documents; expected tools were traverse_graph or get_entity_intelligence. None of the expected tools were used.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=0 would otherwise have been FAIL). The agent failed to route the question to the correct tools (traverse_graph or get_entity_intelligence) and instead made five fruitless search_documents calls. The answer is a bare refusal that does not meet the question's medium-depth requirement. The single most impactful change is to implement tool routing logic that recognizes supplier-list questions as graph-traversal or entity-intelligence tasks, not document searches.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Agent called only search_documents; expected tools were traverse_graph or get_entity_intelligence. None of the expected tools were used.\"\n  },\n  \"grounding\": {\n    \"score\": 0,\n    \"feedback\": \"Answer states 'Not available in retrieved context' which is consistent with empty tool results, but no substantive claims to ground.\"\n  },\n  \"framing\": {\n    \"score\": 0,\n    \"feedback\": \"Question asks for a list of top suppliers and analysis of the largest; answer is a single refusal sentence, severely under-developed for the question's depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Answer contains refusal phrase 'Not available' and rubric.appropriate_refusal_ok=false; tool results were empty but the agent did not attempt the correct tools that could have provided the data.\"\n  },\n  \"reviewer_summary\": \"The agent failed to route the question to the correct tools (traverse_graph or get_entity_intelligence) and instead made five fruitless search_documents calls. The answer is a bare refusal that does not meet the question's medium-depth requirement. The single most impactful change is to implement tool routing logic that recognizes supplier-list questions as graph-traversal or entity-intelligence tasks, not document searches.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=0 would otherwise have been FAIL). The agent failed to route the question to the correct tools (traverse_graph or get_entity_intelligence) and instead made five fruitless search_documents calls. The answer is a bare refusal that does not meet the question's medium-depth requirement. The single most impactful change is to implement tool routing logic that recognizes supplier-list questions as graph-traversal or entity-intelligence tasks, not document searches.",
+    "score": 0,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=0 would otherwise have been FAIL).",
+      "floor": 12,
+      "grounding": 0,
+      "pre_veto_verdict": "FAIL",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "List Apple's top suppliers, then for the largest supplier explain its main business and key customers.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Not available in retrieved context.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1367145
+      ],
+      [
+        "status",
+        1404367
+      ],
+      [
+        "thinking",
+        1601332
+      ],
+      [
+        "agent_iteration",
+        1601376
+      ],
+      [
+        "status",
+        6078998
+      ],
+      [
+        "tool_call",
+        6079092
+      ],
+      [
+        "tool_result",
+        6905102
+      ],
+      [
+        "tool_call",
+        7123734
+      ],
+      [
+        "tool_result",
+        7123766
+      ],
+      [
+        "agent_iteration",
+        7801151
+      ],
+      [
+        "tool_call",
+        10189973
+      ],
+      [
+        "tool_result",
+        10548817
+      ],
+      [
+        "agent_iteration",
+        10755920
+      ],
+      [
+        "tool_call",
+        13153154
+      ],
+      [
+        "tool_result",
+        13525211
+      ],
+      [
+        "agent_iteration",
+        13682984
+      ],
+      [
+        "tool_call",
+        17217984
+      ],
+      [
+        "tool_result",
+        17582414
+      ],
+      [
+        "agent_iteration",
+        17582465
+      ],
+      [
+        "token",
+        19551392
+      ],
+      [
+        "token",
+        19551908
+      ],
+      [
+        "token",
+        19552620
+      ],
+      [
+        "token",
+        19552982
+      ],
+      [
+        "token",
+        19554251
+      ],
+      [
+        "token",
+        19555846
+      ],
+      [
+        "status",
+        19570027
+      ],
+      [
+        "final_answer",
+        19570054
+      ],
+      [
+        "citations",
+        19570108
+      ],
+      [
+        "contradictions",
+        19570126
+      ],
+      [
+        "suggestions",
+        19574368
+      ],
+      [
+        "metadata",
+        19603577
+      ],
+      [
+        "done",
+        19603690
+      ]
+    ],
+    "latency_s": 19.611,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 19537,
+      "message_id": "019f01a4-b6e4-71b0-b1a1-18c687c03f1d",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "b5cf5768-6327-4e4b-bf5b-04f13f86dce8"
+    },
+    "output_tokens": 9,
+    "phase_timings_ms": {
+      "check_cache": 2.7287920092931017,
+      "entity_resolution": 195.11620899720583,
+      "grounding_validation": 1.8804999999701977,
+      "llm_synthesis_streaming": 1976.6130839998368,
+      "llm_tool_planning": 12790.86725601519,
+      "load_history": 45.95716700714547,
+      "persist_and_cache": 31.88370799762197,
+      "tool_execution": 1926.9797919987468,
+      "validate_input": 1315.9974589943886
+    },
+    "question": "List Apple's top suppliers, then for the largest supplier explain its main business and key customers.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2023-01-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 825,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2022-10-03",
+            "date_to": "2026-09-24",
+            "entity_tickers": [
+              "AAPL"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 218,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:chunk:019e4d4e-5f52-75d5-8828-0d1c0fb50389",
+              "title": "Apple Inc. (AAPL): A Top Stock Pick by Graham Stephan?"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6199,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2023-01-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "analyst_report",
+              "sec_filing"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 358,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9155,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2023-01-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "analyst_report",
+              "sec_filing"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 372,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12082,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2023-01-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "analyst_report",
+              "sec_filing"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 369,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15981,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Not available in retrieved context."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 19537,
+          "message_id": "019f01a4-b6e4-71b0-b1a1-18c687c03f1d",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "b5cf5768-6327-4e4b-bf5b-04f13f86dce8"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.7287920092931017,
+            "entity_resolution": 195.11620899720583,
+            "grounding_validation": 1.8804999999701977,
+            "llm_synthesis_streaming": 1976.6130839998368,
+            "llm_tool_planning": 12790.86725601519,
+            "load_history": 45.95716700714547,
+            "persist_and_cache": 31.88370799762197,
+            "tool_execution": 1926.9797919987468,
+            "validate_input": 1315.9974589943886
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2023-01-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2022-10-03",
+          "date_to": "2026-09-24",
+          "entity_tickers": [
+            "AAPL"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2023-01-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "analyst_report",
+            "sec_filing"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2023-01-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "analyst_report",
+            "sec_filing"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2023-01-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "analyst_report",
+            "sec_filing"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 0.493,
+    "tps_streaming": 4.553,
+    "ttft_s": 1.367
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "traverse_graph",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "compound"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent completely misrouted the question: it treated a supplier-relationship query as a text-search task, calling search_documents five times instead of using traverse_graph to find Apple's suppliers and get_entity_intelligence to describe the largest one. After the first empty result, it made minor parameter tweaks (date range, source types) but never pivoted to the correct tool type. Three identical failing calls (3-5) show no recovery logic. The fix is to replace the entire approach: call traverse_graph with edge_type='supplier_of' on AAPL, then call get_entity_intelligence on the top supplier node.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 3, 4, and 5 are identical (same tool, same args) and all returned empty. This is pure redundancy with no new information. The entire 5-call sequence is wasted because the wrong tool class was used from the start.",
+        "score": 0
+      },
+      "ordering": {
+        "feedback": "Only one tool type was called (search_documents) with no data dependencies between calls, so ordering is not applicable. No ordering errors.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent changed date range (call 2) and got 1 item, then reverted to the original date range with added source_types (calls 3-5) all returning empty. It never switched to the correct tool type (traverse_graph) to actually answer the question. No meaningful recovery.",
+        "score": 0
+      },
+      "routing": {
+        "feedback": "The question asks for Apple's top suppliers and the largest supplier's business/customers, which requires graph/entity tools (traverse_graph, get_entity_intelligence). The agent only called search_documents, a text retrieval tool, which cannot resolve supplier relationships. This is a complete tool ",
+        "score": 0
+      }
+    },
+    "trajectory_score": 25,
+    "unrecovered_failures": 3,
+    "verdict": "GRADED"
+  }
+}

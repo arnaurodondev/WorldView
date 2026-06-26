@@ -1,0 +1,706 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 208,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 33.409,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "query_fundamentals"
+    ],
+    "output_tokens": 52,
+    "phase_timings_ms": {
+      "check_cache": 4.853957987506874,
+      "entity_resolution": 80.80695799435489,
+      "grounding_validation": 4435.858876997372,
+      "llm_direct_text_generation": 13909.749755999655,
+      "llm_tool_planning": 27731.111179993604,
+      "load_history": 7.019833006779663,
+      "persist_and_cache": 23.108042005333118,
+      "tool_execution": 73.33800000196788,
+      "validate_input": 689.330875989981
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.743,
+    "word_count": 38
+  },
+  "id": "ru_amzn_revenue_yoy",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow factual question answered concisely with the correct figure and clear calculation \u2014 appropriate depth for the question.",
+        "reason": "Shallow factual question answered concisely with the correct figure and clear calculation \u2014 appropriate depth for the question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All claims cite tool rows; revenue figures and YoY growth calculation are consistent with the returned data. No scope/coverage violations.",
+        "reason": "All claims cite tool rows; revenue figures and YoY growth calculation are consistent with the returned data. No scope/coverage violations.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history, which is one of the expected tools.",
+        "reason": "Called get_fundamentals_history, which is one of the expected tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid answer. The agent correctly routed to get_fundamentals_history, computed YoY growth from the returned quarterly data, and cited the relevant rows. The answer is concise and well-grounded. No changes needed.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history, which is one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"All claims cite tool rows; revenue figures and YoY growth calculation are consistent with the returned data. No scope/coverage violations.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow factual question answered concisely with the correct figure and clear calculation \u2014 appropriate depth for the question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"Solid answer. The agent correctly routed to get_fundamentals_history, computed YoY growth from the returned quarterly data, and cited the relevant rows. The answer is concise and well-grounded. No changes needed.\"\n}",
+    "reviewer_summary": "Solid answer. The agent correctly routed to get_fundamentals_history, computed YoY growth from the returned quarterly data, and cited the relevant rows. The answer is concise and well-grounded. No changes needed.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 11,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's Amazon's YoY revenue growth?",
+  "reasons": [
+    "slow latency_s=33.409"
+  ],
+  "result": {
+    "answer_text": "Amazon\u2019s revenue in Q1\u202f2026 was $181.5\u202fB [get_fundamentals_history row\u202f4], up from $155.7\u202fB in Q1\u202f2025 [get_fundamentals_history row\u202f0].  \nYoY growth = (181.5\u202fB\u202f\u2013\u202f155.7\u202fB)\u202f/\u202f155.7\u202fB \u2248\u202f0.1657, or **\u2248\u202f16.6\u202f%**.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        742656
+      ],
+      [
+        "status",
+        745842
+      ],
+      [
+        "thinking",
+        827562
+      ],
+      [
+        "agent_iteration",
+        827676
+      ],
+      [
+        "status",
+        14652511
+      ],
+      [
+        "tool_call",
+        14652640
+      ],
+      [
+        "tool_result",
+        14724865
+      ],
+      [
+        "agent_iteration",
+        14992376
+      ],
+      [
+        "token",
+        28916384
+      ],
+      [
+        "token",
+        28917823
+      ],
+      [
+        "token",
+        28922600
+      ],
+      [
+        "token",
+        28923140
+      ],
+      [
+        "token",
+        28928246
+      ],
+      [
+        "token",
+        28928692
+      ],
+      [
+        "token",
+        28929066
+      ],
+      [
+        "token",
+        28929198
+      ],
+      [
+        "token",
+        28929433
+      ],
+      [
+        "token",
+        28929661
+      ],
+      [
+        "token",
+        28929929
+      ],
+      [
+        "token",
+        28930244
+      ],
+      [
+        "token",
+        28930299
+      ],
+      [
+        "token",
+        28930351
+      ],
+      [
+        "token",
+        28930654
+      ],
+      [
+        "token",
+        28930804
+      ],
+      [
+        "token",
+        28931009
+      ],
+      [
+        "token",
+        28934099
+      ],
+      [
+        "token",
+        28935269
+      ],
+      [
+        "token",
+        28935395
+      ],
+      [
+        "token",
+        28935679
+      ],
+      [
+        "token",
+        28935836
+      ],
+      [
+        "token",
+        28936266
+      ],
+      [
+        "token",
+        28936285
+      ],
+      [
+        "token",
+        28936309
+      ],
+      [
+        "token",
+        28936325
+      ],
+      [
+        "status",
+        28938620
+      ],
+      [
+        "final_answer",
+        33363842
+      ],
+      [
+        "citations",
+        33364043
+      ],
+      [
+        "contradictions",
+        33366997
+      ],
+      [
+        "suggestions",
+        33367236
+      ],
+      [
+        "metadata",
+        33389214
+      ],
+      [
+        "done",
+        33389550
+      ]
+    ],
+    "latency_s": 33.409,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 33323,
+      "message_id": "019f01a7-c71d-78b5-900e-fa22734698dd",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "98e569b6-0a58-4b35-90f5-7400981166ff"
+    },
+    "output_tokens": 52,
+    "phase_timings_ms": {
+      "check_cache": 4.853957987506874,
+      "entity_resolution": 80.80695799435489,
+      "grounding_validation": 4435.858876997372,
+      "llm_direct_text_generation": 13909.749755999655,
+      "llm_tool_planning": 27731.111179993604,
+      "load_history": 7.019833006779663,
+      "persist_and_cache": 23.108042005333118,
+      "tool_execution": 73.33800000196788,
+      "validate_input": 689.330875989981
+    },
+    "question": "What's Amazon's YoY revenue growth?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AMZN"
+          },
+          "label": "Fetching fundamentals for Amazon",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 72,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "AMZN"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Amazon",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AMZN",
+              "title": "Fundamentals: AMZN"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 14164,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nAmazon\u2019s revenue grew\u202f\u2248\u202f16.6\u202f% year\u2011over\u2011year "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in Q1\u202f2026 (vs. Q1\u202f2025)\u202f[ get_fundamentals_history "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f4 ; get_fundamentals_history row\u202f0 ].\n\n**Supporting "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Data**  \n\n| Metric | Value | Unit | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Period | As\u2011of Date | Source |\n|--------|-------|------|--------|------------|--------|\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Revenue (Q1\u202f2025) | $155.7\u202fB | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 | Q1\u202f2025 | \u2013 | [get_fundamentals_history "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f0] |\n| Revenue (Q1\u202f2026) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$181.5\u202fB | \u2013 | Q1\u202f2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 | [get_fundamentals_history row\u202f4] |\n| YoY "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Revenue Growth | 16.6\u202f% | % | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q1\u202f2026 vs\u202fQ1\u202f2025 | \u2013 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "calculated from rows\u202f0\u202f&\u202f4 |\n\n**Context**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Only two quarterly data points are available for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the YoY comparison, so a longer\u2011term trend cannot "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "be assessed from the retrieved set. The most "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent prior quarter (Q4\u202f2025) showed a higher "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue of $213.4\u202fB, indicating seasonal fluctuations typical "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Amazon\u2019s business cycle.\n\n**Interpretation & Caveats**  \nA "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "16.6\u202f% YoY increase suggests solid top\u2011line momentum "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "into 2026, outpacing the prior\u2011year quarter. However, the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "figure is based solely on reported quarterly results "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and may be revised in later filings. Seasonal "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "effects and the limited historical window mean the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth rate should be viewed as a short\u2011term "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "snapshot rather than a sustained trend."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Amazon\u2019s revenue in Q1\u202f2026 was $181.5\u202fB [get_fundamentals_history row\u202f4], up from $155.7\u202fB in Q1\u202f2025 [get_fundamentals_history row\u202f0].  \nYoY growth = (181.5\u202fB\u202f\u2013\u202f155.7\u202fB)\u202f/\u202f155.7\u202fB \u2248\u202f0.1657, or **\u2248\u202f16.6\u202f%**."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Amazon?",
+          "How has Amazon performed recently?",
+          "Who are Amazon's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 33323,
+          "message_id": "019f01a7-c71d-78b5-900e-fa22734698dd",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "98e569b6-0a58-4b35-90f5-7400981166ff"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.853957987506874,
+            "entity_resolution": 80.80695799435489,
+            "grounding_validation": 4435.858876997372,
+            "llm_direct_text_generation": 13909.749755999655,
+            "llm_tool_planning": 27731.111179993604,
+            "load_history": 7.019833006779663,
+            "persist_and_cache": 23.108042005333118,
+            "tool_execution": 73.33800000196788,
+            "validate_input": 689.330875989981
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AMZN"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "AMZN"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 1.592,
+    "tps_streaming": 3.738,
+    "ttft_s": 0.743
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "single_quarter_passed_off_as_yoy"
+    ],
+    "required_facts": [
+      "yoy_growth_pct",
+      "period_basis"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, correct tool call (get_fundamentals_history for AMZN) that directly provides the quarterly revenue figures needed to compute YoY growth. The chain is minimal, the tool choice is spot-on, and there are no wasted or repeated calls. The only process improvement would be to consider whether annual periods might be more appropriate for a YoY metric, but the quarterly data was used correctly to compute the growth rate, so this is a clean, efficient trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "single well-chosen call obtains all needed data; no redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single-call trace has no ordering constraint; nothing to get wrong.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_fundamentals_history is exactly the right tool for a YoY revenue growth question; matches the expected tool set.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

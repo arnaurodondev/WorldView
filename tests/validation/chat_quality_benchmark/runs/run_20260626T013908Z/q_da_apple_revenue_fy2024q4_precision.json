@@ -1,0 +1,647 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 161,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 18.786,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "query_fundamentals"
+    ],
+    "output_tokens": 41,
+    "phase_timings_ms": {
+      "check_cache": 2.802167000481859,
+      "entity_resolution": 148.01370799250435,
+      "grounding_validation": 4213.56787699915,
+      "llm_direct_text_generation": 8858.478712005308,
+      "llm_tool_planning": 13143.966755014844,
+      "load_history": 18.295916001079604,
+      "persist_and_cache": 10.723416999098845,
+      "tool_execution": 87.25870799389668,
+      "validate_input": 597.1869579952909
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.654,
+    "word_count": 25
+  },
+  "id": "da_apple_revenue_fy2024q4_precision",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Factual lookup answered concisely with the requested precision; depth matches question complexity.",
+        "reason": "Factual lookup answered concisely with the requested precision; depth matches question complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample values to verify against; presumed band. Attribution is present [1] but the date 'September\u202f,\u202f2024' has a formatting error (missing day). Scope is appropriate.",
+        "reason": "No grounding sample values to verify against; presumed band. Attribution is present [1] but the date 'September\u202f,\u202f2024' has a formatting error (missing day). Scope is appropriate.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history, which is in the expected_tools equivalence set.",
+        "reason": "Called get_fundamentals_history, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to an expected tool and provided a concise, precise answer. The main issue is a formatting glitch in the date ('September\u202f,\u202f2024' missing the day number) and the unverifiable transparency banner, which is harmless but unnecessary for a single-value lookup. Next time, ensure the date string is complete and consider omitting the 'could not be verified' banner when the tool returned data successfully.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample values to verify against; presumed band. Attribution is present [1] but the date 'September\u202f,\u202f2024' has a formatting error (missing day). Scope is appropriate.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Factual lookup answered concisely with the requested precision; depth matches question complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to an expected tool and provided a concise, precise answer. The main issue is a formatting glitch in the date ('September\u202f,\u202f2024' missing the day number) and the unverifiable transparency banner, which is harmless but unnecessary for a single-value lookup. Next time, ensure the date string is complete and consider omitting the 'could not be verified' banner when the tool returned data successfully.\"\n}",
+    "reviewer_summary": "The agent correctly routed to an expected tool and provided a concise, precise answer. The main issue is a formatting glitch in the date ('September\u202f,\u202f2024' missing the day number) and the unverifiable transparency banner, which is harmless but unnecessary for a single-value lookup. Next time, ensure the date string is complete and consider omitting the 'could not be verified' banner when the tool returned data successfully.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 3,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What was Apple's reported revenue for fiscal Q4 2024 (quarter ending September 28, 2024), in billions, to 3 decimal places?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Apple\u2019s reported revenue for fiscal Q4\u202f2024 (quarter ending September\u202f,\u202f2024) was **$94.900\u202fB**\u30101\u3011.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        653628
+      ],
+      [
+        "status",
+        657191
+      ],
+      [
+        "thinking",
+        806542
+      ],
+      [
+        "agent_iteration",
+        806676
+      ],
+      [
+        "status",
+        5094496
+      ],
+      [
+        "tool_call",
+        5095000
+      ],
+      [
+        "tool_result",
+        5180957
+      ],
+      [
+        "agent_iteration",
+        5686835
+      ],
+      [
+        "token",
+        14543195
+      ],
+      [
+        "token",
+        14543486
+      ],
+      [
+        "token",
+        14543561
+      ],
+      [
+        "token",
+        14543615
+      ],
+      [
+        "token",
+        14543737
+      ],
+      [
+        "token",
+        14543780
+      ],
+      [
+        "token",
+        14543819
+      ],
+      [
+        "token",
+        14544728
+      ],
+      [
+        "token",
+        14544796
+      ],
+      [
+        "token",
+        14544933
+      ],
+      [
+        "token",
+        14544977
+      ],
+      [
+        "token",
+        14545017
+      ],
+      [
+        "token",
+        14545056
+      ],
+      [
+        "token",
+        14545097
+      ],
+      [
+        "token",
+        14545135
+      ],
+      [
+        "token",
+        14545174
+      ],
+      [
+        "token",
+        14545267
+      ],
+      [
+        "token",
+        14545381
+      ],
+      [
+        "token",
+        14545499
+      ],
+      [
+        "token",
+        14545884
+      ],
+      [
+        "status",
+        14559459
+      ],
+      [
+        "final_answer",
+        18771198
+      ],
+      [
+        "citations",
+        18771345
+      ],
+      [
+        "contradictions",
+        18771861
+      ],
+      [
+        "suggestions",
+        18772000
+      ],
+      [
+        "metadata",
+        18782954
+      ],
+      [
+        "done",
+        18783031
+      ]
+    ],
+    "latency_s": 18.786,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 18747,
+      "message_id": "019f0209-e53f-77ac-8b41-eda14a7aa395",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "bcc6cd38-d7c2-420f-baba-959dc97f4777"
+    },
+    "output_tokens": 41,
+    "phase_timings_ms": {
+      "check_cache": 2.802167000481859,
+      "entity_resolution": 148.01370799250435,
+      "grounding_validation": 4213.56787699915,
+      "llm_direct_text_generation": 8858.478712005308,
+      "llm_tool_planning": 13143.966755014844,
+      "load_history": 18.295916001079604,
+      "persist_and_cache": 10.723416999098845,
+      "tool_execution": 87.25870799389668,
+      "validate_input": 597.1869579952909
+    },
+    "question": "What was Apple's reported revenue for fiscal Q4 2024 (quarter ending September 28, 2024), in billions, to 3 decimal places?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 8,
+            "ticker": "AAPL"
+          },
+          "label": "Fetching fundamentals for Apple",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 87,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "AAPL"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching fundamentals for Apple",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4877,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nApple\u2019s reported revenue for fiscal Q4\u202f2024 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(quarter ending\u202fSeptember\u202f28\u202f2024) was **$94.900\u202fbillion**\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[ get_fundamentals_history row\u202f1 ].\n\n**Supporting Data**  \n\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Metric | Value | Unit | Period | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "As\u2011of Date | Source |\n|--------|-------|------|--------|------------|--------|\n| Revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 94.9 |\u202fbillion | Q4\u202fFY2024 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Sep\u202f28\u202f2024 (quarter end) | get_fundamentals_history |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Context**  \n- The prior quarter (Q3\u202fFY2024) reported "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue of $85.8\u202fbillion, indicating a YoY increase "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of roughly 10\u202f% for Q4\u202fFY2024.  \n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Subsequent quarters show revenue ranging from $94.0\u202fbillion "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to $124.3\u202fbillion, placing the Q4\u202fFY2024 figure "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "near the lower end of Apple\u2019s recent quarterly "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue spectrum.\n\n**Interpretation & Caveats**  \n- The $94.9\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "billion figure is the officially reported revenue for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the quarter and has been rounded to three "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decimal places as requested.  \n- No additional adjustments "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(e.g., currency conversion or restatements) are reflected in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "this number; it represents the raw reported amount "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from Apple\u2019s filings."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s reported revenue for fiscal Q4\u202f2024 (quarter ending September\u202f,\u202f2024) was **$94.900\u202fB**\u30101\u3011.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 18747,
+          "message_id": "019f0209-e53f-77ac-8b41-eda14a7aa395",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "bcc6cd38-d7c2-420f-baba-959dc97f4777"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.802167000481859,
+            "entity_resolution": 148.01370799250435,
+            "grounding_validation": 4213.56787699915,
+            "llm_direct_text_generation": 8858.478712005308,
+            "llm_tool_planning": 13143.966755014844,
+            "load_history": 18.295916001079604,
+            "persist_and_cache": 10.723416999098845,
+            "tool_execution": 87.25870799389668,
+            "validate_input": 597.1869579952909
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 8,
+          "ticker": "AAPL"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "AAPL"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 2.261,
+    "tps_streaming": 4.628,
+    "ttft_s": 0.654
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "hallucinated_decimal_padding",
+      "value_from_unanchored_quarter"
+    ],
+    "required_facts": [
+      "apple_revenue_fy2024_q4_value",
+      "three_decimal_precision_or_explicit_unavailability"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "financials",
+    "precision"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, correct tool call (get_fundamentals_history with ticker=AAPL, 8 quarterly periods) that directly answers the question. The chain is minimal, the tool choice is appropriate, and there are no failures to recover from. The only process improvement would be to verify that the returned data actually contains the Q4 2024 revenue value \u2014 the trace shows items=1 but does not confirm the field was present; a quick sanity check on the output would prevent potential hallucination risks.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call retrieves the needed quarterly revenue data; no redundancy or wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single-call trace; no ordering constraint to violate \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from, so full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_fundamentals_history, which is exactly the right tool for a historical revenue figure \u2014 matches the expected tool set perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

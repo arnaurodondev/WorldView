@@ -1,0 +1,466 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 118,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 9.837,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 5.249040987109765,
+      "entity_resolution": 168.78258300130256,
+      "grounding_validation": 1.3157500070519745,
+      "llm_direct_text_generation": 715.050999991945,
+      "llm_tool_planning": 3351.636167994002,
+      "load_history": 22.39874999213498,
+      "persist_and_cache": 102.19858300115447,
+      "tool_execution": 56.10762500145938,
+      "validate_input": 5278.047377010807
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 5.377,
+    "word_count": 21
+  },
+  "id": "ru_aapl_forward_pe",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow question answered with a concise refusal; depth matches the factual lookup nature.",
+        "reason": "Shallow question answered with a concise refusal; depth matches the factual lookup nature.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Refusal is consistent with tool result status=ok items=1 but no forward_pe value returned; no fabricated numbers.",
+        "reason": "Refusal is consistent with tool result status=ok items=1 but no forward_pe value returned; no fabricated numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Refusal phrase 'unable to provide' present, but rubric.appropriate_refusal_ok=true and tool returned no forward_pe data; correct refusal.",
+        "reason": "Refusal phrase 'unable to provide' present, but rubric.appropriate_refusal_ok=true and tool returned no forward_pe data; correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals with forward_pe, which is one of the expected tools.",
+        "reason": "Called query_fundamentals with forward_pe, which is one of the expected tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the question to query_fundamentals with the forward_pe metric, which is one of the expected tools. The tool returned status=ok items=1 but apparently no forward_pe value, so the agent appropriately refused to fabricate a number. All dimensions score 25: tool routing was correct, grounding is clean (no invented figures), framing is appropriately concise for a shallow factual lookup, and the refusal is justified per rubric. No changes needed.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals with forward_pe, which is one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal is consistent with tool result status=ok items=1 but no forward_pe value returned; no fabricated numbers.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow question answered with a concise refusal; depth matches the factual lookup nature.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Refusal phrase 'unable to provide' present, but rubric.appropriate_refusal_ok=true and tool returned no forward_pe data; correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the question to query_fundamentals with the forward_pe metric, which is one of the expected tools. The tool returned status=ok items=1 but apparently no forward_pe value, so the agent appropriately refused to fabricate a number. All dimensions score 25: tool routing was correct, grounding is clean (no invented figures), framing is appropriately concise for a shallow factual lookup, and the refusal is justified per rubric. No changes needed.\"\n}",
+    "reviewer_summary": "The agent correctly routed the question to query_fundamentals with the forward_pe metric, which is one of the expected tools. The tool returned status=ok items=1 but apparently no forward_pe value, so the agent appropriately refused to fabricate a number. All dimensions score 25: tool routing was correct, grounding is clean (no invented figures), framing is appropriately concise for a shallow factual lookup, and the refusal is justified per rubric. No changes needed.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's AAPL's forward P/E?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m unable to provide a forward\u202fP/E for Apple (AAPL) because the requested metric is not available in the data source.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        5376945
+      ],
+      [
+        "status",
+        5396247
+      ],
+      [
+        "thinking",
+        5567488
+      ],
+      [
+        "agent_iteration",
+        5567593
+      ],
+      [
+        "status",
+        8220408
+      ],
+      [
+        "tool_call",
+        8222360
+      ],
+      [
+        "tool_result",
+        8264952
+      ],
+      [
+        "agent_iteration",
+        8989236
+      ],
+      [
+        "token",
+        9704463
+      ],
+      [
+        "token",
+        9704570
+      ],
+      [
+        "token",
+        9719889
+      ],
+      [
+        "status",
+        9720157
+      ],
+      [
+        "final_answer",
+        9720947
+      ],
+      [
+        "citations",
+        9720963
+      ],
+      [
+        "contradictions",
+        9724580
+      ],
+      [
+        "suggestions",
+        9724663
+      ],
+      [
+        "metadata",
+        9827518
+      ],
+      [
+        "done",
+        9827593
+      ]
+    ],
+    "latency_s": 9.837,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 9634,
+      "message_id": "019f01aa-95b9-7461-8b39-ce8222b074d4",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "5a1e335f-64ba-4e7c-9c2a-a0fb76bad10a"
+    },
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 5.249040987109765,
+      "entity_resolution": 168.78258300130256,
+      "grounding_validation": 1.3157500070519745,
+      "llm_direct_text_generation": 715.050999991945,
+      "llm_tool_planning": 3351.636167994002,
+      "load_history": 22.39874999213498,
+      "persist_and_cache": 102.19858300115447,
+      "tool_execution": 56.10762500145938,
+      "validate_input": 5278.047377010807
+    },
+    "question": "What's AAPL's forward P/E?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "forward_pe"
+            ],
+            "periods": 0,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 54,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3421,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to provide a forward\u202fP/E for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple (AAPL) because the requested metric is not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "available in the data source."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m unable to provide a forward\u202fP/E for Apple (AAPL) because the requested metric is not available in the data source."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 9634,
+          "message_id": "019f01aa-95b9-7461-8b39-ce8222b074d4",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "5a1e335f-64ba-4e7c-9c2a-a0fb76bad10a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.249040987109765,
+            "entity_resolution": 168.78258300130256,
+            "grounding_validation": 1.3157500070519745,
+            "llm_direct_text_generation": 715.050999991945,
+            "llm_tool_planning": 3351.636167994002,
+            "load_history": 22.39874999213498,
+            "persist_and_cache": 102.19858300115447,
+            "tool_execution": 56.10762500145938,
+            "validate_input": 5278.047377010807
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "forward_pe"
+          ],
+          "periods": 0,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 6.726,
+    "tps_streaming": 41.955,
+    "ttft_s": 5.377
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_forward_pe",
+      "blanket_refusal_without_lookup"
+    ],
+    "required_facts": [
+      "forward_pe_value_or_honest_unavailable"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio",
+    "forward"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the required tool (query_fundamentals) and the exact metric (forward_pe) for AAPL in a single, efficient call. The data source returned no value, and the agent appropriately refused to fabricate a number. The trajectory is clean, minimal, and perfectly aligned with the question's intent. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one precisely-targeted call is the minimal possible chain for a single-metric question \u2014 no waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no dependency ordering to evaluate \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses query_fundamentals with the exact metric (forward_pe) and ticker (AAPL) the question asks for \u2014 perfect tool choice.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

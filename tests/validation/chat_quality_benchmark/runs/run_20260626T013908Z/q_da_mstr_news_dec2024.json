@@ -1,0 +1,628 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_entity_news",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 284,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_claims",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "search_documents"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 27.472,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news"
+    ],
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 3.2772080012364313,
+      "entity_resolution": 139.14625000325032,
+      "grounding_validation": 15010.011338992626,
+      "llm_direct_text_generation": 7009.440960988286,
+      "llm_tool_planning": 9596.229378978023,
+      "load_history": 36.10125000705011,
+      "persist_and_cache": 28.39812499587424,
+      "tool_execution": 463.1720420002239,
+      "validate_input": 1079.7345419996418
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_documents"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      }
+    ],
+    "ttft_s": 1.122,
+    "word_count": 41
+  },
+  "id": "da_mstr_news_dec2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for news from a specific week; answer concisely states no news found. Depth matches the factual lookup nature of the query. Could have noted the search_claims results were irrelevant.",
+        "reason": "Question asks for news from a specific week; answer concisely states no news found. Depth matches the factual lookup nature of the query. Could have noted the search_claims results were irrelevant.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "No grounding sample for news \u2014 presumed band. The answer correctly reports empty results from search_documents and does not fabricate specific news items. The refusal is supported by the tool's empty status.",
+        "reason": "No grounding sample for news \u2014 presumed band. The answer correctly reports empty results from search_documents and does not fabricate specific news items. The refusal is supported by the tool's empty status.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides a clear statement of what was found (no news articles) and cites the tool result. This is a valid answer, not a refusal.",
+        "reason": "No refusal phrase present \u2014 answer provides a clear statement of what was found (no news articles) and cites the tool result. This is a valid answer, not a refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Expected tools: get_entity_news or search_documents. Agent called search_documents (twice) and search_claims, but search_documents returned empty; no call to get_entity_news, which might have had different coverage. Zero tools from expected set produced usable results.",
+        "reason": "Expected tools: get_entity_news or search_documents. Agent called search_documents (twice) and search_claims, but search_documents returned empty; no call to get_entity_news, which might have had different coverage. Zero tools from expected set produced usable results.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified the need for news data and attempted search_documents, but the tool returned empty. The answer honestly reports that no news was found, which is appropriate given the tool results. However, the agent did not try get_entity_news, which is an alternative expected tool that might have returned results. The main improvement would be to try all expected tools before concluding no data exists, especially when one tool returns empty. The grounding is acceptable for a 'no data' scenario, and the framing is appropriately concise for a factual lookup.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tools: get_entity_news or search_documents. Agent called search_documents (twice) and search_claims, but search_documents returned empty; no call to get_entity_news, which might have had different coverage. Zero tools from expected set produced usable results.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample for news \u2014 presumed band. The answer correctly reports empty results from search_documents and does not fabricate specific news items. The refusal is supported by the tool's empty status.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Question asks for news from a specific week; answer concisely states no news found. Depth matches the factual lookup nature of the query. Could have noted the search_claims results were irrelevant.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides a clear statement of what was found (no news articles) and cites the tool result. This is a valid answer, not a refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified the need for news data and attempted search_documents, but the tool returned empty. The answer honestly reports that no news was found, which is appropriate given the tool results. However, the agent did not try get_entity_news, which is an alternative expected tool that might have returned results. The main improvement would be to try all expected tools before concluding no data exists, especially when one tool returns empty. The grounding is acceptable for a 'no data' scenario, and the framing is appropriately concise for a factual lookup.\"\n}",
+    "reviewer_summary": "The agent correctly identified the need for news data and attempted search_documents, but the tool returned empty. The answer honestly reports that no news was found, which is appropriate given the tool results. However, the agent did not try get_entity_news, which is an alternative expected tool that might have returned results. The main improvement would be to try all expected tools before concluding no data exists, especially when one tool returns empty. The grounding is acceptable for a 'no data' scenario, and the framing is appropriately concise for a factual lookup.",
+    "score": 65,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 4,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 65,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "Show me news on MSTR from the week of December 9-15, 2024 \u2014 what should I know?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn\u2019t find any news articles about MicroStrategy (MSTR) dated between\u202f2024\u201112\u201109\u202fand\u202f2024\u201112\u2011; the search returned only generic knowledge\u2011graph entries without a news source or date for that week\u3010search_documents row 0\u3011.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1122257
+      ],
+      [
+        "status",
+        1154630
+      ],
+      [
+        "thinking",
+        1304878
+      ],
+      [
+        "agent_iteration",
+        1305444
+      ],
+      [
+        "status",
+        3890189
+      ],
+      [
+        "tool_call",
+        3890349
+      ],
+      [
+        "tool_result",
+        4351319
+      ],
+      [
+        "tool_call",
+        4693315
+      ],
+      [
+        "tool_result",
+        4693468
+      ],
+      [
+        "tool_call",
+        4694308
+      ],
+      [
+        "tool_result",
+        4694458
+      ],
+      [
+        "agent_iteration",
+        5398938
+      ],
+      [
+        "token",
+        12408923
+      ],
+      [
+        "token",
+        12409092
+      ],
+      [
+        "token",
+        12409256
+      ],
+      [
+        "token",
+        12409297
+      ],
+      [
+        "status",
+        12421865
+      ],
+      [
+        "final_answer",
+        27430941
+      ],
+      [
+        "citations",
+        27431048
+      ],
+      [
+        "contradictions",
+        27441403
+      ],
+      [
+        "suggestions",
+        27441495
+      ],
+      [
+        "metadata",
+        27463288
+      ],
+      [
+        "done",
+        27463406
+      ]
+    ],
+    "latency_s": 27.472,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 27400,
+      "message_id": "019f0207-352f-7e87-8ad4-1605b8952b35",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "dc977473-fbbb-4bbc-90ed-44bd069e9295"
+    },
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 3.2772080012364313,
+      "entity_resolution": 139.14625000325032,
+      "grounding_validation": 15010.011338992626,
+      "llm_direct_text_generation": 7009.440960988286,
+      "llm_tool_planning": 9596.229378978023,
+      "load_history": 36.10125000705011,
+      "persist_and_cache": 28.39812499587424,
+      "tool_execution": 463.1720420002239,
+      "validate_input": 1079.7345419996418
+    },
+    "question": "Show me news on MSTR from the week of December 9-15, 2024 \u2014 what should I know?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-12-09",
+            "date_to": "2024-12-15",
+            "entity_tickers": [
+              "MSTR"
+            ],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 462,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2024-09-10",
+            "date_to": "2025-03-15",
+            "entity_tickers": [
+              "MSTR"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 15,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_name": "MicroStrategy Incorporated"
+          },
+          "is_fallback": true,
+          "label": "Checking analyst claims on MicroStrategy Incorporated",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 325,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MicroStrategy Incorporated",
+              "ticker_2": "MicroStrategy Incorporated",
+              "ticker_3": "MicroStrategy Incorporated"
+            },
+            "sampled_rows": 3,
+            "total_rows": 20,
+            "truncated": false
+          },
+          "item_count": 20,
+          "result_preview": [
+            {
+              "id": "tool:claim:019e10b2-97b1-7d74-9092-1bc7e3d78069",
+              "title": "Claim: EPS_MISS"
+            },
+            {
+              "id": "tool:claim:019e10b2-97b3-78bd-a47a-458c0602ca7d",
+              "title": "Claim: MARGIN_CHANGE"
+            },
+            {
+              "id": "tool:claim:019e10b2-97b2-7e0a-98bf-38171383fd2c",
+              "title": "Claim: REVENUE_GROWTH"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4096,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I couldn\u2019t find any news articles about MicroStrategy "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(MSTR) dated between\u202f2024\u201112\u201109\u202fand\u202f2024\u201112\u201115; the search "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned only generic knowledge\u2011graph entries without a news "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "source or date for that week\u3010search_documents row 0\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn\u2019t find any news articles about MicroStrategy (MSTR) dated between\u202f2024\u201112\u201109\u202fand\u202f2024\u201112\u2011; the search returned only generic knowledge\u2011graph entries without a news source or date for that week\u3010search_documents row 0\u3011.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has MSTR performed recently?",
+          "How do MicroStrategy Incorporated's fundamentals look?",
+          "Who are MicroStrategy Incorporated's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 27400,
+          "message_id": "019f0207-352f-7e87-8ad4-1605b8952b35",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "dc977473-fbbb-4bbc-90ed-44bd069e9295"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.2772080012364313,
+            "entity_resolution": 139.14625000325032,
+            "grounding_validation": 15010.011338992626,
+            "llm_direct_text_generation": 7009.440960988286,
+            "llm_tool_planning": 9596.229378978023,
+            "load_history": 36.10125000705011,
+            "persist_and_cache": 28.39812499587424,
+            "tool_execution": 463.1720420002239,
+            "validate_input": 1079.7345419996418
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2024-12-09",
+          "date_to": "2024-12-15",
+          "entity_tickers": [
+            "MSTR"
+          ],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2024-09-10",
+          "date_to": "2025-03-15",
+          "entity_tickers": [
+            "MSTR"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_name": "MicroStrategy Incorporated"
+        },
+        "name": "search_claims"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MicroStrategy Incorporated",
+            "ticker_2": "MicroStrategy Incorporated",
+            "ticker_3": "MicroStrategy Incorporated"
+          },
+          "sampled_rows": 3,
+          "total_rows": 20,
+          "truncated": false
+        },
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_claims"
+      }
+    ],
+    "tps": 2.695,
+    "tps_streaming": 10.129,
+    "ttft_s": 1.122
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_news",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "news_dated_after_2024_12_15",
+      "blanket_no_data_when_corpus_has_period"
+    ],
+    "required_facts": [
+      "news_items_from_dec_2024",
+      "microstrategy_or_mstr_referenced"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "news"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for news but failed to recover from empty search_documents results. After two empty news searches, it pivoted to search_claims, which returns entity metadata rather than news articles, and then gave up. The process should have tried alternative news sources, different entity identifiers (e.g., 'MicroStrategy' instead of 'MSTR'), or a different date format. The chain is inefficient due to the redundant second search and the irrelevant claims call. The single most impactful change would be to chain a different news-fetching tool or adjust search parameters after the first empty result.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 2 is redundant with call 1 (same tool, wider date range but still empty) and call 3 is wasted because it does not address the news request. The chain could have stopped after call 1 and tried a different news source or entity identifier.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "No data dependencies exist between the three calls; they are independent attempts, so ordering is not a concern.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, call 2 widened the date range but still returned empty. Instead of retrying with corrected parameters (e.g., different source_types or entity name), call 3 switched to an inappropriate tool and gave up, never obtaining news data.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "call 1 and 2 used search_documents for news, which is acceptable per expected tools, but call 3 switched to search_claims (a knowledge-graph tool) which is mismatched to the 'news' intent and returned entity metadata, not news articles.",
+        "score": 10
+      }
+    },
+    "trajectory_score": 50,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

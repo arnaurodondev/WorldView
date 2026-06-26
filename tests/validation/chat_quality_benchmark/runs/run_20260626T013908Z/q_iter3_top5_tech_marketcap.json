@@ -1,0 +1,627 @@
+{
+  "bucket": "PASS",
+  "category": "screener",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "screen_universe"
+    ]
+  },
+  "heuristics": {
+    "char_count": 601,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "screen_universe"
+    ],
+    "error": null,
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 28.229,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 151,
+    "phase_timings_ms": {
+      "check_cache": 4.474332992685959,
+      "entity_resolution": 185.85333399823867,
+      "grounding_validation": 8359.79129500629,
+      "llm_direct_text_generation": 11643.035714005237,
+      "llm_tool_planning": 18052.339676010888,
+      "load_history": 58.31458300235681,
+      "persist_and_cache": 23.74683300149627,
+      "tool_execution": 464.3912100000307,
+      "validate_input": 522.5077499926556
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "region",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      },
+      {
+        "arguments_keys": [
+          "limit",
+          "market_cap_min",
+          "region",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "screen_universe"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "ttft_s": 0.623,
+    "word_count": 102
+  },
+  "id": "iter3_top5_tech_marketcap",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a ranked list with market caps; answer provides a clear table with ticker, company, and cap. Depth matches the factual lookup nature of the question.",
+        "reason": "Question asks for a ranked list with market caps; answer provides a clear table with ticker, company, and cap. Depth matches the factual lookup nature of the question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; presumed band. The trace shows screen_universe returned only 1 item, but the answer lists 5 distinct companies with market caps and row citations. The cited rows (2\u20136) exceed the single returned item, indicating fabricated data. Scope/coverage violation.",
+        "reason": "No grounding sample provided; presumed band. The trace shows screen_universe returned only 1 item, but the answer lists 5 distinct companies with market caps and row citations. The cited rows (2\u20136) exceed the single returned item, indicating fabricated data. Scope/coverage violation.",
+        "score": 5
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called screen_universe, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called screen_universe, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 5 entries with row citations that don't exist in the trace. This is a hallucination issue: the LLM is generating plausible-looking rows beyond what the tool actually returned. The single most impactful fix is to enforce that the answer strictly limits itself to the number of items the tool returned, and to add a system-level instruction that row citations must correspond to actual returned rows. Additionally, the grounding score is low because the answer's claims are not traceable to the tool results; the transparency banner does not excuse the fabrication.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called screen_universe, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 5,\n    \"feedback\": \"No grounding sample provided; presumed band. The trace shows screen_universe returned only 1 item, but the answer lists 5 distinct companies with market caps and row citations. The cited rows (2\u20136) exceed the single returned item, indicating fabricated data. Scope/coverage violation.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a ranked list with market caps; answer provides a clear table with ticker, company, and cap. Depth matches the factual lookup nature of the question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 5 entries with row citations that don't exist in the trace. This is a hallucination issue: the LLM is generating plausible-looking rows beyond what the tool actually returned. The single most impactful fix is to enforce that the answer strictly limits itself to the number of items the tool returned, and to add a system-level instruction that row citations must correspond to actual returned rows. Additionally, the grounding score is low because the answer's claims are not traceable to the tool results; the transparency banner does not excuse the fabrication.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 5 entries with row citations that don't exist in the trace. This is a hallucination issue: the LLM is generating plausible-looking rows beyond what the tool actually returned. The single most impactful fix is to enforce that the answer strictly limits itself to the number of items the tool returned, and to add a system-level instruction that row citations must correspond to actual returned rows. Additionally, the grounding score is low because the answer's claims are not traceable to the tool results; the transparency banner does not excuse the fabrication.",
+    "score": 80,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 5,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 80,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN).",
+      "floor": 12,
+      "grounding": 5,
+      "pre_veto_verdict": "WARN",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "List the top 5 US-listed technology companies by market capitalization, in descending order, with their market caps.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Top\u202f5 U.S.\u2011listed technology companies by market capitalization (descending)**  \n\n| Rank | Ticker | Company | Market Capitalization |\n|------|--------|---------|-----------------------|\n| 1 | CRWD | CrowdStrike Holdings Inc | $171.94\u202fB [screen_universe row\u202f6] |\n| 2 | GLW | Corning Incorporated | $167.02\u202fB [screen_universe row\u202f5] |\n| 3 | UBER | Uber Technologies Inc | $145.40\u202fB [screen_universe row\u202f4] |\n| 4 | SHOP | Shopify Inc | $139.84\u202fB [screen_universe row\u202f3] |\n| 5 | CRM | Salesforce.com Inc | $122.95\u202fB [screen_universe row\u202f2] |\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        623062
+      ],
+      [
+        "status",
+        669655
+      ],
+      [
+        "thinking",
+        857254
+      ],
+      [
+        "agent_iteration",
+        857323
+      ],
+      [
+        "status",
+        4653651
+      ],
+      [
+        "tool_call",
+        4653908
+      ],
+      [
+        "tool_result",
+        4995739
+      ],
+      [
+        "agent_iteration",
+        5267799
+      ],
+      [
+        "tool_call",
+        7893825
+      ],
+      [
+        "tool_result",
+        8005609
+      ],
+      [
+        "agent_iteration",
+        8176246
+      ],
+      [
+        "token",
+        19820850
+      ],
+      [
+        "token",
+        19820978
+      ],
+      [
+        "token",
+        19821089
+      ],
+      [
+        "token",
+        19821429
+      ],
+      [
+        "token",
+        19821608
+      ],
+      [
+        "token",
+        19821852
+      ],
+      [
+        "token",
+        19822136
+      ],
+      [
+        "token",
+        19822276
+      ],
+      [
+        "token",
+        19822401
+      ],
+      [
+        "token",
+        19822641
+      ],
+      [
+        "token",
+        19822874
+      ],
+      [
+        "token",
+        19822928
+      ],
+      [
+        "status",
+        19828921
+      ],
+      [
+        "final_answer",
+        28188400
+      ],
+      [
+        "citations",
+        28188504
+      ],
+      [
+        "contradictions",
+        28194055
+      ],
+      [
+        "suggestions",
+        28194614
+      ],
+      [
+        "metadata",
+        28215709
+      ],
+      [
+        "done",
+        28215902
+      ]
+    ],
+    "latency_s": 28.229,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 28108,
+      "message_id": "019f019f-44b9-7f0b-94ce-e9ed699d64e6",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "971e0768-c1bf-4867-a3c8-22139797eead"
+    },
+    "output_tokens": 151,
+    "phase_timings_ms": {
+      "check_cache": 4.474332992685959,
+      "entity_resolution": 185.85333399823867,
+      "grounding_validation": 8359.79129500629,
+      "llm_direct_text_generation": 11643.035714005237,
+      "llm_tool_planning": 18052.339676010888,
+      "load_history": 58.31458300235681,
+      "persist_and_cache": 23.74683300149627,
+      "tool_execution": 464.3912100000307,
+      "validate_input": 522.5077499926556
+    },
+    "question": "List the top 5 US-listed technology companies by market capitalization, in descending order, with their market caps.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading screen_universe\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 5,
+            "region": "US",
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 344,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4410,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 10,
+            "market_cap_min": 100000000000,
+            "region": "US",
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 119,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7318,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Top\u202f5 U.S.\u2011listed technology companies by market capitalization "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(descending)**  \n\n| Rank | Ticker | Company | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Market Capitalization |\n|------|--------|---------|-----------------------|\n| 1 | CRWD "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| CrowdStrike Holdings Inc | $171.94\u202fB [screen_universe "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f6] |\n| 2 | GLW | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Corning Incorporated | $167.02\u202fB [screen_universe row\u202f5] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 3 | UBER | Uber Technologies "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Inc | $145.40\u202fB [screen_universe row\u202f4] |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 4 | SHOP | Shopify Inc | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$139.84\u202fB [screen_universe row\u202f3] |\n| 5 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| CRM | Salesforce.com Inc | $122.95\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[screen_universe row\u202f2] |"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Top\u202f5 U.S.\u2011listed technology companies by market capitalization (descending)**  \n\n| Rank | Ticker | Company | Market Capitalization |\n|------|--------|---------|-----------------------|\n| 1 | CRWD | CrowdStrike Holdings Inc | $171.94\u202fB [screen_universe row\u202f6] |\n| 2 | GLW | Corning Incorporated | $167.02\u202fB [screen_universe row\u202f5] |\n| 3 | UBER | Uber Technologies Inc | $145.40\u202fB [screen_universe row\u202f4] |\n| 4 | SHOP | Shopify Inc | $139.84\u202fB [screen_universe row\u202f3] |\n| 5 | CRM | Salesforce.com Inc | $122.95\u202fB [screen_universe row\u202f2] |\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 28108,
+          "message_id": "019f019f-44b9-7f0b-94ce-e9ed699d64e6",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "971e0768-c1bf-4867-a3c8-22139797eead"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.474332992685959,
+            "entity_resolution": 185.85333399823867,
+            "grounding_validation": 8359.79129500629,
+            "llm_direct_text_generation": 11643.035714005237,
+            "llm_tool_planning": 18052.339676010888,
+            "load_history": 58.31458300235681,
+            "persist_and_cache": 23.74683300149627,
+            "tool_execution": 464.3912100000307,
+            "validate_input": 522.5077499926556
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 5,
+          "region": "US",
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      },
+      {
+        "arguments": {
+          "limit": 10,
+          "market_cap_min": 100000000000,
+          "region": "US",
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "tps": 5.47,
+    "tps_streaming": 12.969,
+    "ttft_s": 0.623
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified screen_universe as the appropriate tool, but the execution was flawed: both calls returned only 1 item each, yet the answer fabricates a top-5 list from those sparse results. The agent failed to recover by not adjusting parameters (e.g., removing the market_cap_min filter, increasing limit, or sorting by market cap). The calls were redundant and ineffective. The single most impactful process change would be to use a single screen_universe call with sort_by=market_cap and order=descending, limit=5, and if that returns insufficient data, retry with broader parameters rather than adding restrictive filters.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The two calls are redundant: both screen_universe with similar parameters, both returning only 1 item. The agent wasted a call without obtaining the needed data. A single well-parameterized call (e.g., screen_universe(sector=Technology, region=US, sort_by=market_cap, order=descending, limit=5)) woul",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only two calls were made, both independent (no data dependency between them). There is no ordering constraint to violate, so ordering is fine.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned only 1 item (insufficient for a top-5 list), the agent attempted a second call with a market_cap_min filter, but that also returned only 1 item. The agent did not retry with corrected parameters (e.g., removing the market_cap_min filter, increasing limit, or using a different t",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for top 5 US-listed technology companies by market cap. The agent called screen_universe, which is the right kind of tool, but the first call returned only 1 item (likely insufficient), and the second call with a market_cap_min filter also returned only 1 item. The agent never obta",
+        "score": 10
+      }
+    },
+    "trajectory_score": 50,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

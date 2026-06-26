@@ -1,0 +1,606 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 990,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 24.18,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 248,
+    "phase_timings_ms": {
+      "check_cache": 4.525249998550862,
+      "entity_resolution": 225.72683299949858,
+      "grounding_validation": 10340.63879599853,
+      "llm_direct_text_generation": 7547.592461996828,
+      "llm_tool_planning": 12317.662963992916,
+      "load_history": 7.980541995493695,
+      "persist_and_cache": 48.5874580044765,
+      "tool_execution": 37.51112500322051,
+      "validate_input": 790.1680420036428
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.841,
+    "word_count": 151
+  },
+  "id": "iter3_nvda_pe_conditional",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for conditional list; answer correctly checks condition, provides structured table with three reasons, depth matches medium complexity.",
+        "reason": "Question asks for conditional list; answer correctly checks condition, provides structured table with three reasons, depth matches medium complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "P/E claim 31.95x cites query_fundamentals row 0; the three qualitative reasons are not grounded in tool results but are reasonable market commentary. The transparency banner is neutral.",
+        "reason": "P/E claim 31.95x cites query_fundamentals row 0; the three qualitative reasons are not grounded in tool results but are reasonable market commentary. The transparency banner is neutral.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals with ticker=NVDA, metrics=[\"pe_ratio\"], which is exactly one of the expected tools.",
+        "reason": "Called query_fundamentals with ticker=NVDA, metrics=[\"pe_ratio\"], which is exactly one of the expected tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid routing and framing: the agent correctly called query_fundamentals to check the P/E condition and delivered a well-structured table of three qualitative reasons. Grounding is good for the numeric claim but the three reasons are entirely unsourced from tool results \u2014 they read as generic LLM knowledge. For a production system, either cite analyst reports or add a disclaimer that these are illustrative market observations, not retrieved facts. The transparency banner is fine but redundant here since no unverifiable numbers were asserted.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals with ticker=NVDA, metrics=[\\\"pe_ratio\\\"], which is exactly one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"P/E claim 31.95x cites query_fundamentals row 0; the three qualitative reasons are not grounded in tool results but are reasonable market commentary. The transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for conditional list; answer correctly checks condition, provides structured table with three reasons, depth matches medium complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides full substantive analysis.\"\n  },\n  \"reviewer_summary\": \"Solid routing and framing: the agent correctly called query_fundamentals to check the P/E condition and delivered a well-structured table of three qualitative reasons. Grounding is good for the numeric claim but the three reasons are entirely unsourced from tool results \u2014 they read as generic LLM knowledge. For a production system, either cite analyst reports or add a disclaimer that these are illustrative market observations, not retrieved facts. The transparency banner is fine but redundant here since no unverifiable numbers were asserted.\"\n}",
+    "reviewer_summary": "Solid routing and framing: the agent correctly called query_fundamentals to check the P/E condition and delivered a well-structured table of three qualitative reasons. Grounding is good for the numeric claim but the three reasons are entirely unsourced from tool results \u2014 they read as generic LLM knowledge. For a production system, either cite analyst reports or add a disclaimer that these are illustrative market observations, not retrieved facts. The transparency banner is fine but redundant here since no unverifiable numbers were asserted.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be considered expensive. Otherwise say it is not currently below 50 and skip the list.",
+  "reasons": [],
+  "result": {
+    "answer_text": "NVIDIA\u2019s price\u2011to\u2011earnings multiple is indeed below 50 (31.95\u00d7\u202f[query_fundamentals row\u202f0]). Even with a sub\u201150 P/E, the stock can still be viewed as expensive for several reasons:\n\n| Reason | Why it matters |\n|--------|----------------|\n| **High growth expectations** | Investors price in continued rapid revenue and earnings expansion from AI\u2011driven demand, which can keep the valuation elevated despite a modest P/E. |\n| **Premium relative to peers** | Compared with other semiconductor and AI\u2011chip makers, NVIDIA often trades at a higher multiple, reflecting a \u201cpremium\u201d for its market position and technology leadership. |\n| **Large market\u2011cap premium** | As a mega\u2011cap (over $1\u202ftrillion) company, NVIDIA benefits from a \u201csize premium\u201d where investors accept higher valuations for perceived stability and liquidity. |\n\nThese factors can make the stock feel expensive even when the headline P/E ratio is comfortably under 50.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        841238
+      ],
+      [
+        "status",
+        846802
+      ],
+      [
+        "thinking",
+        1076386
+      ],
+      [
+        "agent_iteration",
+        1076484
+      ],
+      [
+        "status",
+        5847615
+      ],
+      [
+        "tool_call",
+        5847700
+      ],
+      [
+        "tool_result",
+        5882740
+      ],
+      [
+        "agent_iteration",
+        6228437
+      ],
+      [
+        "token",
+        13775758
+      ],
+      [
+        "token",
+        13775826
+      ],
+      [
+        "token",
+        13775857
+      ],
+      [
+        "token",
+        13775921
+      ],
+      [
+        "token",
+        13775983
+      ],
+      [
+        "token",
+        13776102
+      ],
+      [
+        "token",
+        13776169
+      ],
+      [
+        "token",
+        13776296
+      ],
+      [
+        "token",
+        13776512
+      ],
+      [
+        "token",
+        13776753
+      ],
+      [
+        "token",
+        13777004
+      ],
+      [
+        "token",
+        13777167
+      ],
+      [
+        "token",
+        13777447
+      ],
+      [
+        "token",
+        13777581
+      ],
+      [
+        "token",
+        13777798
+      ],
+      [
+        "token",
+        13778075
+      ],
+      [
+        "token",
+        13778214
+      ],
+      [
+        "token",
+        13778308
+      ],
+      [
+        "status",
+        13781637
+      ],
+      [
+        "final_answer",
+        24131491
+      ],
+      [
+        "citations",
+        24131833
+      ],
+      [
+        "contradictions",
+        24142152
+      ],
+      [
+        "suggestions",
+        24142563
+      ],
+      [
+        "metadata",
+        24174225
+      ],
+      [
+        "done",
+        24174272
+      ]
+    ],
+    "latency_s": 24.18,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 24084,
+      "message_id": "019f01a1-a808-76b4-9a80-ed10004509b0",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "f2836727-b9ca-4054-a347-c917d21421b6"
+    },
+    "output_tokens": 248,
+    "phase_timings_ms": {
+      "check_cache": 4.525249998550862,
+      "entity_resolution": 225.72683299949858,
+      "grounding_validation": 10340.63879599853,
+      "llm_direct_text_generation": 7547.592461996828,
+      "llm_tool_planning": 12317.662963992916,
+      "load_history": 7.980541995493695,
+      "persist_and_cache": 48.5874580044765,
+      "tool_execution": 37.51112500322051,
+      "validate_input": 790.1680420036428
+    },
+    "question": "If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be considered expensive. Otherwise say it is not currently below 50 and skip the list.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "periods": 0,
+            "ticker": "NVDA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 37,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:NVDA",
+              "title": "Fundamentals query: NVDA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5154,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "NVIDIA\u2019s price\u2011to\u2011earnings multiple is indeed below 50 (31.95\u00d7\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[query_fundamentals row\u202f0]). Even with a sub\u201150 P/E, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the stock can still be viewed as expensive "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for several reasons:\n\n| Reason | Why it "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "matters |\n|--------|----------------|\n| **High growth expectations** | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Investors price in continued rapid revenue and earnings "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "expansion from AI\u2011driven demand, which can keep the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "valuation elevated despite a modest P/E. |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Premium relative to peers** | Compared with other "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "semiconductor and AI\u2011chip makers, NVIDIA often trades at "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a higher multiple, reflecting a \u201cpremium\u201d for its "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "market position and technology leadership. |\n| **Large "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "market\u2011cap premium** | As a mega\u2011cap (over $1\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trillion) company, NVIDIA benefits from a \u201csize premium\u201d "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "where investors accept higher valuations for perceived stability "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and liquidity. |\n\nThese factors can make the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "stock feel expensive even when the headline P/E "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ratio is comfortably under 50."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "NVIDIA\u2019s price\u2011to\u2011earnings multiple is indeed below 50 (31.95\u00d7\u202f[query_fundamentals row\u202f0]). Even with a sub\u201150 P/E, the stock can still be viewed as expensive for several reasons:\n\n| Reason | Why it matters |\n|--------|----------------|\n| **High growth expectations** | Investors price in continued rapid revenue and earnings expansion from AI\u2011driven demand, which can keep the valuation elevated despite a modest P/E. |\n| **Premium relative to peers** | Compared with other semiconductor and AI\u2011chip makers, NVIDIA often trades at a higher multiple, reflecting a \u201cpremium\u201d for its market position and technology leadership. |\n| **Large market\u2011cap premium** | As a mega\u2011cap (over $1\u202ftrillion) company, NVIDIA benefits from a \u201csize premium\u201d where investors accept higher valuations for perceived stability and liquidity. |\n\nThese factors can make the stock feel expensive even when the headline P/E ratio is comfortably under 50.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 24084,
+          "message_id": "019f01a1-a808-76b4-9a80-ed10004509b0",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "f2836727-b9ca-4054-a347-c917d21421b6"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.525249998550862,
+            "entity_resolution": 225.72683299949858,
+            "grounding_validation": 10340.63879599853,
+            "llm_direct_text_generation": 7547.592461996828,
+            "llm_tool_planning": 12317.662963992916,
+            "load_history": 7.980541995493695,
+            "persist_and_cache": 48.5874580044765,
+            "tool_execution": 37.51112500322051,
+            "validate_input": 790.1680420036428
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "periods": 0,
+          "ticker": "NVDA"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 10.626,
+    "tps_streaming": 32.858,
+    "ttft_s": 0.841
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "conditional"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the single required fact (NVIDIA's P/E ratio) and made exactly one call to query_fundamentals, which returned the needed data. The routing was spot-on, the chain was minimal, and there were no failures to recover from. The only process improvement would be to verify the 'include_snapshot' parameter is necessary when only a single metric is requested, but this is a minor nit \u2014 the trajectory is otherwise textbook efficient.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call for a single-fact question \u2014 no waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single-call trace, no ordering constraint \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 query_fundamentals is exactly the right tool for a P/E ratio question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

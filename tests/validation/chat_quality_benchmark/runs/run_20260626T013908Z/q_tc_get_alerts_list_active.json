@@ -1,0 +1,186 @@
+{
+  "bucket": "FAIL",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_alerts"
+    ]
+  },
+  "heuristics": {
+    "char_count": 0,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [],
+    "error": {
+      "code": "INPUT_REJECTED",
+      "message": "Your request was blocked by our input safety check and was not processed. Please rephrase without instructions that attempt to override the assistant, and I'll be happy to help with a market or portfolio question."
+    },
+    "expected_tools": [
+      "get_alerts"
+    ],
+    "is_empty": true,
+    "is_refusal": false,
+    "latency_s": 1.399,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_alerts"
+    ],
+    "output_tokens": null,
+    "phase_timings_ms": {},
+    "status_code": 400,
+    "tool_call_count": 0,
+    "tool_calls_summary": [],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 0,
+    "tool_results_summary": [],
+    "ttft_s": null,
+    "word_count": 0
+  },
+  "id": "tc_get_alerts_list_active",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "reason": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "reason": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "reason": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "reason": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+    "raw_response": null,
+    "reviewer_summary": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+    "score": 0,
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "EMPTY_AFTER_TOOLS",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": false,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "DEGENERATE ANSWER: empty / whitespace-only answer.",
+      "reason": "empty_answer",
+      "type": "degenerate"
+    }
+  },
+  "prompt": "What alerts do I currently have set up?",
+  "reasons": [
+    "http_status=400 error={'code': 'INPUT_REJECTED', 'message': \"Your request was blocked by our input safety check and was not processed. Please rephrase without instructions that attempt to override the assistant, and I'll be happy to help with a market or portfolio question.\"}"
+  ],
+  "result": {
+    "answer_text": "",
+    "citations": [],
+    "contradictions": [],
+    "error": {
+      "code": "INPUT_REJECTED",
+      "message": "Your request was blocked by our input safety check and was not processed. Please rephrase without instructions that attempt to override the assistant, and I'll be happy to help with a market or portfolio question."
+    },
+    "event_timings": [
+      [
+        "error",
+        1398954
+      ]
+    ],
+    "latency_s": 1.399,
+    "metadata": {},
+    "output_tokens": null,
+    "phase_timings_ms": {},
+    "question": "What alerts do I currently have set up?",
+    "raw_events": [
+      {
+        "data": {
+          "code": "INPUT_REJECTED",
+          "message": "Your request was blocked by our input safety check and was not processed. Please rephrase without instructions that attempt to override the assistant, and I'll be happy to help with a market or portfolio question."
+        },
+        "event": "error"
+      }
+    ],
+    "status_code": 400,
+    "tool_calls": [],
+    "tool_results": [],
+    "tps": null,
+    "tps_streaming": null,
+    "ttft_s": null
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_alerts"
+    ],
+    "forbidden_facts": [
+      "fabricated_alert_thresholds"
+    ],
+    "required_facts": [
+      "alert_list_or_empty_state"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_alerts"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made no tool calls at all for a question that clearly requires fetching the user's alerts via get_alerts. The trajectory is empty, which means the agent did not even attempt to gather the necessary data. The single most impactful change is to always call the appropriate data-retrieval tool (here, get_alerts) when the question asks for user-specific information.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The agent made zero calls, failing to retrieve the required data. This is not minimal; it is absent.",
+        "score": 0
+      },
+      "ordering": {
+        "feedback": "No calls were made, so there is no ordering to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred, so recovery is not applicable.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "No tool was called. The question asks for the user's current alerts, which requires calling get_alerts. The agent did not attempt any tool.",
+        "score": 0
+      }
+    },
+    "trajectory_score": 50,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}
