@@ -1926,6 +1926,30 @@ class ChatOrchestratorUseCase:
         )
         system_prompt = tool_executor._registry.to_system_prompt_section() + "\n\n" + _tool_use_prompt
 
+        # ── 2026-06-26 #6: language-agnostic tool routing ─────────────────────
+        # The Spanish variant of an answerable question mis-routed where the
+        # English sibling passed (iter3_apple_competitors_spanish: routed to
+        # get_entity_intelligence+search_documents, missed compare_entities, and
+        # refused in Spanish). Tool selection must not depend on the query
+        # language. We append a short directive instructing the model to
+        # interpret the user's INTENT independently of language and select tools
+        # exactly as it would for the English equivalent, while still replying in
+        # the user's language. Appended to the orchestrator-assembled prompt (not
+        # the versioned tool_use template) to keep this localised and low-risk.
+        _multilingual_routing_directive = (
+            "\n\n## LANGUAGE-AGNOSTIC ROUTING\n"
+            "The user may write in any language (e.g. Spanish, French, German). "
+            "Determine the question's INTENT and select tools EXACTLY as you would "
+            "for the English equivalent — tool choice must never depend on the "
+            "input language. A comparison ('compara X con Y') still routes to "
+            "compare_entities; a relationship question still routes to "
+            "traverse_graph; entity names and tickers are the same across "
+            "languages. Compose your final answer in the user's language, but do "
+            "NOT let the language change which tools you call or cause a refusal "
+            "on a question you would have answered in English."
+        )
+        system_prompt = system_prompt + _multilingual_routing_directive
+
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for msg in conversation_history:
             role = getattr(msg, "role", None)
