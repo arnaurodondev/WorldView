@@ -154,6 +154,13 @@ class RetrievedItem:
     # Informational only — does NOT affect fusion_score formula (PLAN-0079 Wave A).
     # Set by callers that have extraction confidence (e.g. ClaimResult); None = unknown.
     extraction_confidence: float | None = None
+    # Ordered key→str-value pairs of structured numeric fields returned by the tool
+    # handler (e.g. ("revenue", "81600000000")). Tool-agnostic bag — the sse_emitter
+    # allow-list is the single gate on what is actually exposed. Does NOT affect
+    # fusion_score (mirrors extraction_confidence / graph_enrichment). Frozen/hashable
+    # via tuple-of-tuples. Consumed by build_grounding_sample for value-based
+    # substantiation in the chat-quality eval (behind CHAT_EVAL_GROUNDING_SAMPLES).
+    grounding_fields: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         expected = self.score * self.recency_score * self.trust_weight
@@ -179,6 +186,7 @@ class RetrievedItem:
         graph_enrichment: tuple[dict, ...] = (),
         source_type: str | None = None,
         extraction_confidence: float | None = None,
+        grounding_fields: tuple[tuple[str, str], ...] = (),
     ) -> RetrievedItem:
         """Factory that computes recency_score and fusion_score automatically.
 
@@ -210,6 +218,7 @@ class RetrievedItem:
             published_at=published_at,
             graph_enrichment=graph_enrichment,
             extraction_confidence=extraction_confidence,
+            grounding_fields=grounding_fields,
         )
 
 
