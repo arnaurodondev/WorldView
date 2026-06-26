@@ -306,6 +306,49 @@ def _grounding_fields_from_rows(
     return tuple(fields)
 
 
+def _grounding_fields_from_bars(
+    bars: list[dict[str, Any]],
+    *,
+    ticker: str,
+) -> tuple[tuple[str, str], ...]:
+    """Build the ``grounding_fields`` bag for a price-history (OHLCV) result.
+
+    PLAN-0116 W5 / Item 3. Two benchmark questions cite price figures the matcher
+    could not substantiate (``tc_price_history_msft_ytd_range`` — "MSFT's high and
+    low so far this year"; ``tc_price_history_nvda_90d``): the handler returned a
+    close-only markdown table with no structured numbers. We lift the WINDOW
+    high/low (max bar high / min bar low across the returned bars) and the latest
+    CLOSE so a "high was $X, low was $Y" claim substantiates and a fabricated
+    high/low is contradicted (the rubric's ``fabricated_high_low`` forbidden fact).
+
+    Emitted RAW + unscaled (``_coerce_grounding_number``), ``ticker`` first. A bar
+    may carry ``high``/``low``/``close`` (live ``/ohlcv/bars`` shape); a missing
+    field is simply skipped so no phantom number enters. Flag-safe: this only fills
+    the in-memory item; CHAT_EVAL_GROUNDING_SAMPLES still gates the wire.
+    """
+    if not bars:
+        return ()
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    # Window high = max of bar highs; window low = min of bar lows. Collect only
+    # the numeric values so a None/garbled bar field never poisons the extremum.
+    highs = [float(h) for b in bars if (h := _coerce_grounding_number(b.get("high"))) is not None]
+    lows = [float(low) for b in bars if (low := _coerce_grounding_number(b.get("low"))) is not None]
+    if highs:
+        hi = _coerce_grounding_number(max(highs))
+        if hi is not None:
+            fields.append(("high", hi))
+    if lows:
+        lo = _coerce_grounding_number(min(lows))
+        if lo is not None:
+            fields.append(("low", lo))
+    # Latest close (bars are sliced to the trailing window in ASC order, so the
+    # last entry is the most-recent bar).
+    last_close = _coerce_grounding_number(bars[-1].get("close"))
+    if last_close is not None:
+        fields.append(("close", last_close))
+    return tuple(fields)
+
+
 # ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
 # Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
 # ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
@@ -645,6 +688,10 @@ class MarketHandler(ToolHandler):
         item_id = (
             f"tool:price_history:{ticker}:latest_1m" if n == 1 and interval == "1m" else f"tool:price_history:{ticker}"
         )
+        # Value-substantiation (PLAN-0116 W5 / Item 3): lift the window high/low +
+        # latest close so the eval can verify "high $X / low $Y" claims rather than
+        # re-parse the close-only markdown table. Flag-gated at the SSE layer.
+        grounding_fields = _grounding_fields_from_bars(bars, ticker=ticker.upper())
         return RetrievedItem.create(
             item_id=item_id,
             item_type=ItemType.financial,
@@ -662,6 +709,7 @@ class MarketHandler(ToolHandler):
                 published_at=None,
                 entity_name=ticker.upper(),
             ),
+            grounding_fields=grounding_fields,
         )
 
     async def _handle_get_fundamentals_history(

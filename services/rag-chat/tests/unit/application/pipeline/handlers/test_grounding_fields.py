@@ -450,3 +450,56 @@ async def test_compare_entities_suffixes_second_entity() -> None:
     assert gf["revenue_2"] == "7440000000"
     assert gf["eps_2"] == "0.78"
     assert gf["price_2"] == "150"
+
+
+# ── _handle_get_price_history (PLAN-0116 W5 / Item 3) ─────────────────────────
+
+
+def _bar(date_str: str, *, high: float, low: float, close: float) -> dict[str, Any]:
+    """A bar in the live /ohlcv/bars shape (keyed by 'date')."""
+    return {"date": date_str, "open": close, "high": high, "low": low, "close": close, "volume": 100}
+
+
+@pytest.mark.asyncio
+async def test_price_history_emits_window_high_low_close() -> None:
+    """get_price_history lifts the WINDOW high (max), low (min) + latest close.
+
+    Substantiates the "MSFT high and low so far this year" benchmark question
+    (tc_price_history_msft_ytd_range) which the close-only table could not.
+    """
+    s3 = AsyncMock()
+    # ASC by date; window high = 478.50, window low = 344.79, latest close = 460.10.
+    s3.get_ohlcv_range.return_value = [
+        _bar("2026-01-05", high=400.0, low=344.79, close=360.0),
+        _bar("2026-03-10", high=478.50, low=420.0, close=470.0),
+        _bar("2026-06-12", high=465.0, low=455.0, close=460.10),
+    ]
+    handler = _make_handler(s3)
+    result = await handler._handle_get_price_history(ticker="MSFT", from_date="2026-01-01", to_date="2026-06-12")
+
+    assert result is not None
+    gf = _gf_dict(result)
+    assert gf["ticker"] == "MSFT"
+    assert gf["high"] == "478.5"  # max bar high across the window
+    assert gf["low"] == "344.79"  # min bar low across the window
+    assert gf["close"] == "460.1"  # latest bar close
+
+
+@pytest.mark.asyncio
+async def test_price_history_skips_missing_extrema() -> None:
+    """Bars with missing high/low never poison the extremum (no phantom number)."""
+    s3 = AsyncMock()
+    s3.get_ohlcv_range.return_value = [
+        {"date": "2026-06-11", "close": 100.0, "volume": 1},  # no high/low keys
+        _bar("2026-06-12", high=110.0, low=95.0, close=105.0),
+    ]
+    handler = _make_handler(s3)
+    result = await handler._handle_get_price_history(ticker="AAPL", from_date="2026-06-11", to_date="2026-06-12")
+
+    assert result is not None
+    gf = _gf_dict(result)
+    # Only the one bar with extrema contributes; the close-only bar is skipped.
+    # Integer-valued floats are emitted without a trailing ".0" (110.0 -> "110").
+    assert gf["high"] == "110"
+    assert gf["low"] == "95"
+    assert gf["close"] == "105"
