@@ -340,7 +340,7 @@ def test_contradicted_outranks_unsupported_priority() -> None:
 
 def test_unsupported_outranks_phantom_priority() -> None:
     """SUBSTANTIATION_UNSUPPORTED outranks PHANTOM_CITATION in the priority order."""
-    gates = {c: True for c in InvariantCode}
+    gates = dict.fromkeys(InvariantCode, True)
     gates[InvariantCode.SUBSTANTIATION_UNSUPPORTED] = False
     gates[InvariantCode.PHANTOM_CITATION] = False
     assert first_fired_invariant(gates) is InvariantCode.SUBSTANTIATION_UNSUPPORTED
@@ -397,3 +397,59 @@ def test_flag_off_presumed_run_is_byte_identical_to_baseline() -> None:
     # The presumed check can never flip the gate, so the answer SKIPs exactly as it
     # would have pre-W1 (no fail_reason injected).
     assert out["verdict_decision"] is None
+
+
+# ---------------------------------------------------------------------------
+# Value-substantiation smoke (2026-06-26) — RAW unscaled grounding_fields.
+# These mirror what the fundamentals handlers now emit: raw integer/float
+# strings ("81600000000", "1.87"), NOT pre-scaled "$81.6B".
+# ---------------------------------------------------------------------------
+
+
+def test_raw_value_fields_substantiate_scaled_prose_claims() -> None:
+    """Answer "Revenue $81.6B, EPS $1.87" + raw fields → 2 substantiated, 0 unmatched."""
+    results = [
+        _tool_result_with_sample(
+            "get_fundamentals_history",
+            {"ticker": "NVDA", "revenue": "81600000000", "eps": "1.87"},
+        )
+    ]
+    check = evaluate_substantiation("Revenue was $81.6B and EPS was $1.87.", results)
+    assert check.coverage == "verified"
+    assert check.substantiated == 2
+    assert check.contradicted == 0
+    assert check.unsupported == 0
+    # The ticker token ("NVDA") is not a numeric claim, so it adds no count.
+    assert check.unmatched == 0
+
+
+def test_raw_value_field_contradiction() -> None:
+    """A "$200B" revenue claim against a raw 81.6B sample → contradicted==1."""
+    results = [
+        _tool_result_with_sample(
+            "get_fundamentals_history",
+            {"ticker": "NVDA", "revenue": "81600000000"},
+        )
+    ]
+    check = evaluate_substantiation("Revenue was $200B last quarter.", results)
+    assert check.coverage == "verified"
+    assert check.contradicted == 1
+    assert check.substantiated == 0
+
+
+def test_margin_ratio_sample_substantiates_percent_claim() -> None:
+    """A ratio margin sample (0.586) substantiates a "58.6%" prose claim.
+
+    The percent-valued field set compares the claim against ``sample * 100`` so
+    the ratio-vs-percent representation mismatch is not a false contradiction.
+    """
+    results = [
+        _tool_result_with_sample(
+            "get_fundamentals_history",
+            {"ticker": "NVDA", "gross_margin": "0.586"},
+        )
+    ]
+    check = evaluate_substantiation("Gross margin was 58.6% in the quarter.", results)
+    assert check.coverage == "verified"
+    assert check.substantiated == 1
+    assert check.contradicted == 0

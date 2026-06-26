@@ -261,3 +261,127 @@ class TestEmitToolResultGroundingGating:
                 assert "grounding_sample" in payload
             else:
                 assert "grounding_sample" not in payload
+
+
+# ---------------------------------------------------------------------------
+# build_grounding_sample reads RetrievedItem.grounding_fields (2026-06-26).
+# ---------------------------------------------------------------------------
+
+
+def _fundamentals_item_with_grounding(ticker: str, fields: tuple[tuple[str, str], ...]) -> RetrievedItem:
+    """A fundamentals RetrievedItem carrying structured grounding_fields.
+
+    Text intentionally has NO parseable numbers — proving the builder reads the
+    structured bag, not the markdown blob.
+    """
+    return RetrievedItem.create(
+        item_id=f"tool:fundamentals:{ticker}",
+        item_type=ItemType.financial,
+        text=f"Fundamentals table for {ticker} (see structured fields).",
+        score=0.88,
+        trust_weight=0.90,
+        citation_meta=CitationMeta(
+            title=f"Fundamentals: {ticker}",
+            url=None,
+            source_name="fundamentals",
+            published_at=None,
+            entity_name=ticker,
+        ),
+        grounding_fields=fields,
+    )
+
+
+class TestBuildGroundingSampleReadsGroundingFields:
+    def test_revenue_and_eps_surface_from_grounding_fields(self) -> None:
+        """A handler that only fills grounding_fields still yields numeric fields."""
+        item = _fundamentals_item_with_grounding(
+            "AAPL",
+            (("ticker", "AAPL"), ("revenue", "81600000000"), ("eps", "1.87")),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        # revenue/eps come from grounding_fields, NOT just the ticker.
+        assert sample["fields"]["ticker"] == "AAPL"
+        assert sample["fields"]["revenue"] == "81600000000"
+        assert sample["fields"]["eps"] == "1.87"
+
+    def test_widened_metrics_surface(self) -> None:
+        """net_income / forward_pe / ebitda / free_cash_flow are now allow-listed."""
+        item = _fundamentals_item_with_grounding(
+            "AAPL",
+            (
+                ("ticker", "AAPL"),
+                ("net_income", "23000000000"),
+                ("forward_pe", "27.8"),
+                ("ebitda", "30000000000"),
+                ("free_cash_flow", "19000000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["net_income"] == "23000000000"
+        assert f["forward_pe"] == "27.8"
+        assert f["ebitda"] == "30000000000"
+        assert f["free_cash_flow"] == "19000000000"
+
+    def test_compare_entities_suffixed_keys_survive(self) -> None:
+        """compare_entities packs both tickers in one item; ``_2`` keys survive.
+
+        The real compare handler sets ``citation_meta.entity_name=None`` (no single
+        owner entity), so the bare ``ticker`` resolves from grounding_fields rather
+        than the citation fallback.
+        """
+        item = RetrievedItem.create(
+            item_id="tool:compare:NVDA-AMD",
+            item_type=ItemType.financial,
+            text="Comparison table (see structured fields).",
+            score=0.88,
+            trust_weight=0.85,
+            citation_meta=CitationMeta(
+                title="Comparison: NVDA, AMD",
+                url=None,
+                source_name="fundamentals",
+                published_at=None,
+                entity_name=None,
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("revenue", "44100000000"),
+                ("ticker_2", "AMD"),
+                ("revenue_2", "7440000000"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("compare_entities", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["ticker"] == "NVDA"
+        assert f["revenue"] == "44100000000"
+        # Suffixed keys whose base (revenue/ticker) is allow-listed are admitted.
+        assert f["revenue_2"] == "7440000000"
+
+    def test_direct_attr_still_wins_over_grounding_fields(self) -> None:
+        """The grounding_fields probe is LAST — a direct attr/citation still wins."""
+        # citation_meta.entity_name supplies ticker; grounding_fields supplies the
+        # numbers. The ticker must resolve via the (earlier) citation_meta path.
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "ZZZZ"), ("revenue", "81600000000")))
+        sample = SSEEmitter.build_grounding_sample("get_fundamentals_history", [item])
+        assert sample is not None
+        # entity_name "AAPL" wins over the grounding_fields ticker "ZZZZ".
+        assert sample["fields"]["ticker"] == "AAPL"
+        assert sample["fields"]["revenue"] == "81600000000"
+
+    def test_flag_off_payload_byte_identical_with_grounding_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """NFR-2: even with grounding_fields populated, flag-OFF frame is legacy 4-key."""
+        monkeypatch.delenv("CHAT_EVAL_GROUNDING_SAMPLES", raising=False)
+        item = _fundamentals_item_with_grounding("AAPL", (("ticker", "AAPL"), ("revenue", "81600000000")))
+        emitter = SSEEmitter()
+        frame = emitter.emit_tool_result(
+            "get_fundamentals_history",
+            status="ok",
+            item_count=1,
+            grounding_sample=emitter.build_grounding_sample("get_fundamentals_history", [item]),
+        )
+        payload = json.loads(frame["data"])
+        assert "grounding_sample" not in payload
+        assert set(payload.keys()) == {"type", "tool", "status", "item_count"}
