@@ -259,6 +259,55 @@ async def test_query_fundamentals_honours_coverage_flag() -> None:
     assert "net_income" not in gf
 
 
+@pytest.mark.asyncio
+async def test_query_fundamentals_emits_margins_as_raw_ratios() -> None:
+    """STEP A (2026-06-26): ``ok``-coverage margins land as RAW RATIOS, not percent.
+
+    The W1 percent-typed matcher (``_PERCENT_VALUED_FIELDS``) cross-checks a
+    "58.6 %" claim against BOTH the raw sample AND sample*100, so the canonical
+    emitted form is the fraction ("0.586") — pre-scaling here would double it.
+    This is what makes ``ru_tsla_margin_trend`` substantiate instead of staying
+    ``presumed`` (no margin field was emitted before).
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [
+                {
+                    "period_label": "Q1 FY2026",
+                    "revenue": 24_000_000_000.0,
+                    "gross_margin": 0.182,
+                    "operating_margin": 0.097,
+                },
+                {
+                    "period_label": "Q2 FY2026",
+                    "revenue": 25_500_000_000.0,
+                    "gross_margin": 0.176,  # latest period margin
+                    "operating_margin": 0.104,
+                },
+            ],
+            "snapshot": None,
+            "coverage": {
+                "revenue": "ok",
+                "gross_margin": "ok",
+                "operating_margin": "ok",
+            },
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="TSLA",
+        metrics=["revenue", "gross_margin", "operating_margin"],
+        periods=2,
+    )
+    assert result is not None
+    gf = _gf_dict(result)
+    # Latest period margins as RAW RATIOS — no "%", no *100 pre-scaling.
+    assert gf["gross_margin"] == "0.176"
+    assert gf["operating_margin"] == "0.104"
+    assert all("%" not in v for v in gf.values())
+
+
 # ── _handle_compare_entities ──────────────────────────────────────────────────
 
 

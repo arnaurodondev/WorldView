@@ -147,6 +147,15 @@ _GROUNDING_PERIOD_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ebitda", ("ebitda",)),
     ("free_cash_flow", ("free_cash_flow", "fcf")),
     ("forward_pe", ("forward_pe",)),
+    # Margins (2026-06-26 STEP A): emitted as RAW RATIOS ("0.586"), NOT pre-
+    # scaled to a percent. The W1 percent-typed matcher (_PERCENT_VALUED_FIELDS)
+    # cross-checks a "58.6 %" claim against BOTH the raw sample AND sample*100,
+    # so the ratio form is the canonical one — pre-scaling here would double the
+    # value. These are the per-period margin fractions ``query_fundamentals`` and
+    # the history rows carry; a missing margin is skipped (never a phantom 0).
+    ("gross_margin", ("gross_margin",)),
+    ("operating_margin", ("operating_margin",)),
+    ("net_margin", ("net_margin",)),
 )
 
 # Snapshot scalars we lift in addition to the latest period row. The snapshot

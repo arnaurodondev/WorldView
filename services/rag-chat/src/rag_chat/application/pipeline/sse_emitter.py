@@ -643,6 +643,10 @@ class SSEEmitter:
         # forward_pe, ebitda, free_cash_flow). Keep <= GROUNDING_MAX_FIELDS_PER_ROW
         # surviving per row (ticker + period + metrics; period rarely resolves so
         # the numeric metrics fit the cap of 8).
+        # NOTE: ``MAX_FIELDS_PER_ROW`` (8) bounds how many of these survive per
+        # row — for the multi-period rows the suffixed-key admission below packs
+        # additional periods. Margins were added 2026-06-26 (STEP A) so the
+        # percent-typed claim matcher (ru_tsla_margin_trend) has a value to match.
         "get_fundamentals_history": (
             "ticker",
             "period",
@@ -655,6 +659,9 @@ class SSEEmitter:
             "market_cap",
             "ebitda",
             "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
         ),
         "get_fundamentals_history_batch": (
             "ticker",
@@ -668,6 +675,30 @@ class SSEEmitter:
             "market_cap",
             "ebitda",
             "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
+        ),
+        # query_fundamentals (2026-06-26 STEP A): the confirmed routed-but-silent
+        # gap — its handler populates ``grounding_fields`` (raw numbers + covered
+        # margins) but the tool was absent here, so no sample reached the judge and
+        # coverage stayed ``presumed`` (ru_aapl_pe_simple, ru_tsla_margin_trend,
+        # ru_googl_pe_vs_history). Same field set as the history family.
+        "query_fundamentals": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
         ),
         "compare_entities": (
             "ticker",
@@ -681,6 +712,9 @@ class SSEEmitter:
             "market_cap",
             "ebitda",
             "free_cash_flow",
+            "gross_margin",
+            "operating_margin",
+            "net_margin",
         ),
         "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
         "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),

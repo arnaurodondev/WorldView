@@ -360,6 +360,34 @@ class TestBuildGroundingSampleReadsGroundingFields:
         # Suffixed keys whose base (revenue/ticker) is allow-listed are admitted.
         assert f["revenue_2"] == "7440000000"
 
+    def test_query_fundamentals_now_allowlisted_emits_values(self) -> None:
+        """STEP A (2026-06-26): query_fundamentals is allow-listed; sample carries
+        values (incl. margins), not just the ticker.
+
+        Before this fix query_fundamentals computed numbers + grounding_fields but
+        was absent from the allow-list → ``build_grounding_sample`` returned None
+        and coverage stayed ``presumed`` (ru_aapl_pe_simple, ru_tsla_margin_trend).
+        """
+        item = _fundamentals_item_with_grounding(
+            "TSLA",
+            (
+                ("ticker", "TSLA"),
+                ("revenue", "25500000000"),
+                ("gross_margin", "0.176"),
+                ("operating_margin", "0.104"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("query_fundamentals", [item])
+        assert sample is not None, "query_fundamentals must be allow-listed (STEP A)"
+        f = sample["fields"]
+        # Real values survive, not merely the ticker (the silent-tool symptom).
+        assert f["ticker"] == "TSLA"
+        assert f["revenue"] == "25500000000"
+        # Margins as RAW RATIOS so the percent-typed W1 matcher can match.
+        assert f["gross_margin"] == "0.176"
+        assert f["operating_margin"] == "0.104"
+        assert set(f.keys()) != {"ticker"}
+
     def test_direct_attr_still_wins_over_grounding_fields(self) -> None:
         """The grounding_fields probe is LAST — a direct attr/citation still wins."""
         # citation_meta.entity_name supplies ticker; grounding_fields supplies the
