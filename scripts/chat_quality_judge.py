@@ -1433,6 +1433,68 @@ def _is_yearlike(raw: str, suffix: str) -> bool:
     return 1900 <= v <= 2099 and len(raw) == 4
 
 
+# A "financial-format" marker means the number is presented AS a magnitude the
+# tools could have returned: a $ prefix, a decimal point, a thousands comma, a
+# percent, or a magnitude word/suffix (B/M/T/K, billion/...). A claim that has
+# ANY of these is a real numeric claim and is never structural.
+_FIN_FORMAT_RE = re.compile(r"[.,%$]|(?:bn|mn|tn|[kmbt]b?n?\b)|billion|million|trillion|thousand", re.IGNORECASE)
+
+# Structural-context tokens that immediately PRECEDE a bare integer when it is a
+# period label / enumeration / row index rather than a financial magnitude:
+#   Q4, FY2025, H1, "row 0", "period 3", "top 5", "last 4 quarters", "#2", list
+#   bullets ("3.") etc. Matched against the short window just before the number.
+_STRUCTURAL_PREFIX_RE = re.compile(
+    r"(?:"
+    r"\bq[1-4]?$|\bfy$|\bh[12]?$|\bquarter[s]?$|\bperiod[s]?$|\bfiscal$|"  # period labels
+    r"\brow$|\bindex$|\brank$|\btop$|\blast$|\bnext$|\bfirst$|\bpast$|"  # enumeration
+    r"\bover$|\bnumber$|#|\bn=$"  # counts
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# Structural-context tokens that immediately FOLLOW a bare integer ("4 quarters",
+# "3 periods", "5 results", "row 0", "2 years ago").
+_STRUCTURAL_SUFFIX_RE = re.compile(
+    r"^\s*(?:quarter[s]?|period[s]?|year[s]?|result[s]?|row[s]?|item[s]?|"
+    r"month[s]?|day[s]?|week[s]?|entit(?:y|ies)|compan(?:y|ies)|tool[s]?)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_structural_number(cleaned: str, span: tuple[int, int], raw: str, suffix: str) -> bool:
+    """True when a number is a STRUCTURAL token (period/index/count), not a claim.
+
+    Substantiation-matcher precision guard (2026-06-26). A bare small integer with
+    NO financial-format marker ($, decimal, comma, %, magnitude word) is structural
+    when it sits in a period-label / enumeration / count context — e.g. the ``4`` in
+    "Q4 FY2025", "periods = 4", "last 4 quarters", "row 0", "top 5". Such tokens
+    were being mis-parsed as EPS/PE claims and false-``contradicted`` against the
+    single sampled value (n=67/81 of the post-fix run's contradictions).
+
+    CRUCIAL: gate on FORMAT + CONTEXT, never magnitude alone. A claim with any
+    financial-format marker (EPS ``1.87`` → decimal; margin ``58.6%`` → percent;
+    ``0.586`` → decimal; ``$5``; ``46,093``) is NEVER structural and is kept. Only a
+    BARE integer (no marker) in a structural context is dropped.
+    """
+    # Any financial-format marker → a real magnitude claim, keep it.
+    if suffix or _FIN_FORMAT_RE.search(raw):
+        return False
+    try:
+        int(raw)
+    except ValueError:
+        return False
+    start, end = span
+    # Look at the immediate neighbourhood (short windows — structural cues hug the
+    # number; a 24-char window is enough for "last N quarters" / "FY" / "row").
+    before = cleaned[max(0, start - 24) : start].lower()
+    after = cleaned[end : end + 16].lower()
+    if _STRUCTURAL_PREFIX_RE.search(before):
+        return True
+    if _STRUCTURAL_SUFFIX_RE.search(after):
+        return True
+    return False
+
+
 def _coerce_number(raw: str, suffix: str) -> float | None:
     """Parse a claim token (mantissa + optional scale suffix) to a float.
 
@@ -1780,10 +1842,17 @@ def evaluate_substantiation(
         suffix = m.group("suffix") or ""
         if _is_yearlike(raw_num, suffix):
             continue
+        span = m.span()
+        # Structural-number guard (2026-06-26): skip bare integers that are period
+        # labels / enumeration / counts (no financial-format marker, structural
+        # context). Keeps real small claims (EPS 1.87, 58.6%, 0.586) which all carry
+        # a format marker. Prevents false ``contradicted`` from "Q4"/"periods = 4"
+        # being mis-associated to the nearest sampled metric field.
+        if _is_structural_number(cleaned, span, raw_num, suffix):
+            continue
         claim_val = _coerce_number(raw_num, suffix)
         if claim_val is None:
             continue
-        span = m.span()
 
         field_name = _nearest_field(cleaned_lower, span, field_names)
         if field_name is None:
