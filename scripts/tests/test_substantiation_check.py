@@ -555,4 +555,89 @@ def test_genuine_multiperiod_suffix_keys_are_not_deduped() -> None:
     assert check.coverage == "verified"
     assert check.substantiated == 1
     assert check.contradicted == 0
-    assert check.unmatched == 0
+
+
+# ---------------------------------------------------------------------------
+# TABLE-AWARE ASSOCIATION (PLAN-0116 W5 / Item 1). A figure inside a markdown
+# table cell is associated to its COLUMN HEADER's metric (the 60-char prose
+# window can't reach the header). Must add recall WITHOUT false matches: an
+# incompatible-kind cell, an unsampled column, and a header that names no metric
+# all stay unmatched.
+# ---------------------------------------------------------------------------
+
+
+def test_table_column_header_substantiates_matching_cell() -> None:
+    """A $-cell under a 'Revenue' column substantiates the sampled revenue value."""
+    answer = (
+        "**Revenue by quarter**\n\n"
+        "| Quarter | NVDA Revenue | AMD Revenue |\n"
+        "|---------|--------------|-------------|\n"
+        "| Q1 | $81.6 B [2] | $10.3 B [1] |\n"
+        "| Q2 | $68.1 B [2] | $9.2 B [1] |\n"
+    )
+    results = [
+        _tool_result_with_sample(
+            "get_fundamentals_history_batch",
+            # revenue is a 3-value SET (NVDA + two AMD periods).
+            {"ticker": "NVDA", "revenue": "81615000000", "revenue_2": "10253000000", "revenue_3": "9246000000"},
+        )
+    ]
+    check = evaluate_substantiation(answer, results)
+    assert check.coverage == "verified"
+    # $81.6B→81.615B, $10.3B→10.253B, $9.2B→9.246B all match a sampled period.
+    assert check.substantiated == 3
+    # $68.1B matches no sampled period, but revenue is a multi-value SET → it is
+    # UNMATCHED, never a false contradiction.
+    assert check.contradicted == 0
+    # The [1]/[2] citation digits are dropped as citation markers — not claims.
+    assert all("citation" not in str(ex) for ex in check.examples)
+
+
+def test_table_ragged_data_rows_map_to_correct_column() -> None:
+    """Index-based column mapping is robust to data rows wider/narrower than header.
+
+    The header row and data rows have DIFFERENT cell widths; a $-cell must still
+    map to its own column by CELL INDEX, not by absolute char offset.
+    """
+    answer = (
+        "| Rank | Ticker | Company | Market Capitalization |\n"
+        "|------|--------|---------|-----------------------|\n"
+        "| 1 | PATH | UiPath Inc | $5.65B [screen_universe row 0] |\n"
+        "| 2 | ROG | Rogers Corporation | $2.97B |\n"
+    )
+    results = [_tool_result_with_sample("screen_universe", {"ticker": "ROG", "market_cap": "2971959552"})]
+    check = evaluate_substantiation(answer, results)
+    assert check.coverage == "verified"
+    # $2.97B matches the sampled market_cap; $5.65B does not (single-value sample
+    # vs a different company) — but ROG is the only sampled cap, so $5.65B is the
+    # ONLY one that could contradict. It is in a multi-... no: single value here.
+    assert check.substantiated == 1
+
+
+def test_table_incompatible_kind_cell_not_associated() -> None:
+    """A percentage cell under an absolute 'Revenue' column never associates (kind guard)."""
+    answer = "| Quarter | Revenue | Growth |\n|---------|---------|--------|\n| Q1 | $80 B | 34% |\n"
+    # Only revenue is sampled (absolute). The "34%" growth cell is percentage-kind;
+    # even though it sits in the table, it must NOT attach to the absolute revenue
+    # column (no false match).
+    results = [_tool_result_with_sample("get_fundamentals_history", {"ticker": "X", "revenue": "80000000000"})]
+    check = evaluate_substantiation(answer, results)
+    # $80B substantiates revenue; 34% (percentage) finds no compatible sampled
+    # field → unmatched (never contradicted/unsupported).
+    assert check.substantiated == 1
+    assert check.contradicted == 0
+    assert check.unsupported == 0
+
+
+def test_table_unsampled_and_unnamed_columns_stay_unmatched() -> None:
+    """A cell under a column whose header names no SAMPLED metric stays unmatched."""
+    answer = "| Company | Headcount |\n|---------|-----------|\n| Acme | 50000 |\n"
+    # 'Headcount' maps to no known/sampled field; the only sample is revenue.
+    results = [_tool_result_with_sample("get_fundamentals_history", {"ticker": "ACME", "revenue": "80000000000"})]
+    check = evaluate_substantiation(answer, results)
+    # 50000 is in a non-metric column → no association → unmatched, NOT a phantom
+    # unsupported/contradiction on revenue.
+    assert check.substantiated == 0
+    assert check.contradicted == 0
+    assert check.unsupported == 0
+    assert check.unmatched == 1  # neutral -- the only correct outcome

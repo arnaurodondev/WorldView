@@ -48,6 +48,7 @@ Design notes
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -1649,6 +1650,14 @@ def _is_structural_number(cleaned: str, span: tuple[int, int], raw: str, suffix:
     except ValueError:
         return False
     start, end = span
+    # CITATION-MARKER guard (PLAN-0116 W5): a bare integer wrapped in square
+    # brackets — ``[1]``, ``[2]`` — is an inline citation reference, NOT a numeric
+    # claim. The table-aware association would otherwise attach these bracket
+    # digits (common in markdown table cells like "$81.6 B [2]") to the column's
+    # metric field. Drop them when immediately bracketed: ``[`` right before and
+    # ``]`` right after the integer.
+    if start > 0 and cleaned[start - 1] == "[" and end < len(cleaned) and cleaned[end] == "]":
+        return True
     # Look at the immediate neighbourhood (short windows — structural cues hug the
     # number; a 24-char window is enough for "last N quarters" / "FY" / "row").
     before = cleaned[max(0, start - 24) : start].lower()
@@ -1888,6 +1897,244 @@ def _nearest_field(
 
 
 # --------------------------------------------------------------------------
+# TABLE / STRUCTURE-AWARE association (PLAN-0116 W5 / Item 1)
+# --------------------------------------------------------------------------
+#
+# THE RECALL GAP. ``_nearest_field`` reads a ~60-char window around the number.
+# That works for prose ("revenue was $46.7B") but MISSES a figure inside a
+# MARKDOWN TABLE: a cell's metric label is the COLUMN HEADER (top of the column)
+# or the ROW LABEL (start of the row), both far outside the window. On the
+# subset this left the ru_nvda revenue table + the iter3 market-cap table cells
+# entirely ``unmatched`` (~57 claims across the run).
+#
+# THE FIX (precise, fallback-only). Detect markdown tables, map each numeric
+# CELL to (a) the metric its COLUMN HEADER names and (b) the ticker/period its
+# ROW LABEL names, then associate the cell to a SAMPLED field of COMPATIBLE KIND.
+# This runs ONLY as a fallback when prose association (``_nearest_field``)
+# returns None, so the proven prose path is never overridden. It fires ONLY
+# inside a real detected table, ONLY when the header maps to a known sampled
+# field, and ONLY when kinds are compatible — so it cannot manufacture a false
+# match (a wrong association would be worse than ``unmatched``).
+
+# A markdown separator row: ``|---|:--:|---|`` (pipes + dashes/colons only).
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+
+def _split_table_row(line: str) -> list[tuple[int, int, str]] | None:
+    """Split a ``| a | b | c |`` row into per-cell ``(start, end, text)`` spans.
+
+    Offsets are RELATIVE TO ``line``. Returns ``None`` when the line is not a
+    pipe-delimited row (no interior ``|``). Leading/trailing empty cells produced
+    by the bounding pipes are dropped, but each retained cell keeps its true char
+    span within the line so we can map a claim offset to a column.
+    """
+    if "|" not in line:
+        return None
+    cells: list[tuple[int, int, str]] = []
+    # Walk the pipe positions; a cell is the text BETWEEN two pipes (or between a
+    # line edge and a pipe). We keep edge cells only if non-empty so the common
+    # ``| a | b |`` form yields exactly [a, b].
+    pipe_positions = [i for i, ch in enumerate(line) if ch == "|"]
+    if not pipe_positions:
+        return None
+    bounds = [-1, *pipe_positions, len(line)]
+    for a, b in itertools.pairwise(bounds):
+        start, end = a + 1, b
+        if start >= end:
+            continue
+        text = line[start:end]
+        if not text.strip():
+            # An empty edge cell (outside the bounding pipes) -- skip; an empty
+            # INTERIOR cell (e.g. a "-" placeholder already stripped) we also skip
+            # because it carries no number/label.
+            continue
+        cells.append((start, end, text))
+    return cells or None
+
+
+@dataclass(frozen=True)
+class _TableCol:
+    """One column of a detected markdown table: its header + per-row data spans."""
+
+    header: str  # the (lowercased) header-cell text, e.g. "nvidia revenue"
+    field: str | None  # canonical sampled field the header names, or None
+
+
+def _header_to_field(header: str, sampled_fields: list[str]) -> str | None:
+    """Map a column-header cell to the canonical SAMPLED field it names, if any.
+
+    A header ("NVIDIA Revenue", "Market Capitalization", "P/E") names a metric
+    when one of that metric's name-forms (snake / spaced / alias) appears as a
+    SUBSTRING of the header text. We only ever return a field that is actually
+    SAMPLED (so an unsampled column never invents an association), and we pick the
+    LONGEST matching alias to avoid a short alias (``price`` inside
+    "price-to-earnings") shadowing the specific one (``pe_ratio``).
+    """
+    h = header.lower()
+    best: tuple[int, str] | None = None  # (alias_len, canonical)
+    for canonical in sampled_fields:
+        for form in _field_candidates(canonical):
+            # Require an alias of >=2 chars to avoid pathological 1-char hits.
+            if len(form) >= 2 and form in h and (best is None or len(form) > best[0]):
+                best = (len(form), canonical)
+    return best[1] if best is not None else None
+
+
+@dataclass(frozen=True)
+class _DetectedTable:
+    """One detected markdown table: data-row char region + per-INDEX columns.
+
+    ``columns[k]`` is the header→field mapping for the k-th column. A data cell is
+    associated to its column by its CELL INDEX within its own row (NOT by absolute
+    char offset) so ragged data rows — whose cell widths differ from the header
+    row — still map correctly (the iter3 market-cap table has this exact shape).
+    """
+
+    body_start: int
+    body_end: int
+    columns: list[_TableCol]
+
+
+def _row_pipe_positions(line: str) -> list[int]:
+    """The char offsets (within ``line``) of the ``|`` column separators."""
+    return [i for i, ch in enumerate(line) if ch == "|"]
+
+
+def _cell_index_for_offset(line: str, rel: int) -> int:
+    """Which COLUMN INDEX a char offset ``rel`` falls in, for a ``| a | b |`` row.
+
+    Markdown columns are the regions BETWEEN pipes. We count how many pipes sit
+    to the LEFT of ``rel``. A leading bounding pipe makes the first real column
+    index 0 (one pipe to its left), which matches the header indexing produced by
+    :func:`_split_table_row` (it likewise drops the empty pre-pipe edge cell).
+    Rows WITHOUT a leading bounding pipe (rare) are handled by the same count —
+    the first column then has zero pipes to its left → index 0.
+    """
+    pipes = _row_pipe_positions(line)
+    left = sum(1 for p in pipes if p < rel)
+    # With a leading bounding pipe, the first content column has exactly ONE pipe
+    # to its left → subtract it so the first column is index 0. Without one, the
+    # first column has zero pipes to its left → index 0 already.
+    has_leading_pipe = bool(pipes) and line[: pipes[0]].strip() == ""
+    return max(0, left - 1) if has_leading_pipe else left
+
+
+def _build_table_columns(
+    cleaned_text: str,
+    sampled_fields: list[str],
+) -> list[_DetectedTable]:
+    """Detect markdown tables; return their data region + per-column header→field.
+
+    A table is recognised as a HEADER line (``| … |``) immediately followed by a
+    SEPARATOR line (``|---|---|``); the data rows are every subsequent pipe row
+    until a blank line / non-row. Columns are indexed positionally from the header
+    row; a data cell is later matched to a column by its CELL INDEX (see
+    :func:`_table_field_for_span`), which is robust to ragged data-row widths.
+    """
+    tables: list[_DetectedTable] = []
+    # Pre-compute line offsets so a claim's absolute span maps to a line + column.
+    offset = 0
+    lines: list[tuple[int, str]] = []  # (line_start_offset, line_text)
+    for ln in cleaned_text.splitlines(keepends=True):
+        lines.append((offset, ln))
+        offset += len(ln)
+
+    i = 0
+    while i < len(lines) - 1:
+        _, h_line = lines[i]
+        _, sep_line = lines[i + 1]
+        header_cells = _split_table_row(h_line)
+        if header_cells is None or not _TABLE_SEPARATOR_RE.match(sep_line):
+            i += 1
+            continue
+        # Columns indexed positionally from the header cells.
+        columns = [
+            _TableCol(header=t.strip().lower(), field=_header_to_field(t, sampled_fields))
+            for (_s, _e, t) in header_cells
+        ]
+        # Data region begins after the separator line.
+        body_start = lines[i + 2][0] if i + 2 < len(lines) else len(cleaned_text)
+        j = i + 2
+        body_end = body_start
+        while j < len(lines):
+            l_off, l_line = lines[j]
+            if _split_table_row(l_line) is None or not l_line.strip():
+                break
+            body_end = l_off + len(l_line)
+            j += 1
+        tables.append(_DetectedTable(body_start=body_start, body_end=body_end, columns=columns))
+        i = j
+
+    return tables
+
+
+def _table_field_for_span(
+    table_cols: list[_DetectedTable],
+    cleaned_text: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str,
+) -> str | None:
+    """Associate a claim span to the SAMPLED field named by its table COLUMN HEADER.
+
+    Returns the canonical field iff the claim falls inside a detected table's data
+    region AND its column header maps to a sampled field AND that field's KIND is
+    compatible with ``claim_kind``. Otherwise None (the caller keeps the claim
+    ``unmatched``). The column is the cell INDEX the claim falls in WITHIN its own
+    data row (robust to ragged widths), mapped to the same-index header column.
+    """
+    start, _end = span
+    for tbl in table_cols:
+        if not (tbl.body_start <= start < tbl.body_end):
+            continue
+        # Find the claim's offset within its own line, then which cell index that
+        # offset lands in for THIS row (not the header row — widths differ).
+        line_start = cleaned_text.rfind("\n", 0, start) + 1
+        line_end = cleaned_text.find("\n", start)
+        if line_end == -1:
+            line_end = len(cleaned_text)
+        line = cleaned_text[line_start:line_end]
+        rel = start - line_start
+        idx = _cell_index_for_offset(line, rel)
+        if idx >= len(tbl.columns):
+            return None
+        field = tbl.columns[idx].field
+        if field is None or field not in sampled_fields:
+            return None
+        # KIND guard (same rule as _nearest_field): never associate an
+        # incompatible kind (a count/percentage claim to an absolute column).
+        if not _kinds_compatible(claim_kind, _field_kind(field)):
+            return None
+        return field
+    return None
+
+
+def _associate_claim(
+    cleaned_lower: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str,
+    table_cols: list[_DetectedTable],
+) -> str | None:
+    """Associate one claim to a sampled field: prose FIRST, table header as FALLBACK.
+
+    The single association entry point shared by ``_answer_multivalued_fields``,
+    ``cross_check_grounding`` and ``evaluate_substantiation`` (W1.1 — one source of
+    truth, so the veto and the rate can never diverge). Prose proximity
+    (``_nearest_field``) wins when it finds a field; only when it returns None do
+    we fall back to the table COLUMN-HEADER association — so the proven prose path
+    is never overridden and the table layer adds recall without changing any
+    existing association.
+    """
+    field = _nearest_field(cleaned_lower, span, sampled_fields, claim_kind)
+    if field is not None:
+        return field
+    if table_cols:
+        return _table_field_for_span(table_cols, cleaned_lower, span, sampled_fields, claim_kind)
+    return None
+
+
+# --------------------------------------------------------------------------
 # ONE shared claim pipeline (PLAN-0116 W1.1)
 # --------------------------------------------------------------------------
 #
@@ -1953,22 +2200,25 @@ def _answer_multivalued_fields(
     cleaned_lower: str,
     claims: list[_TypedClaim],
     field_names: list[str],
+    table_cols: list[_DetectedTable] | None = None,
 ) -> set[str]:
     """Fields to which the ANSWER associates >=2 DISTINCT claim values.
 
     A field the answer enumerates with multiple values (a trend / per-period
-    breakdown — "Revenue: Q2 $4.2B, Q3 $3.9B, Q4 $3.4B") is being treated as a
-    multi-period series. The captured grounding_sample is an INCOMPLETE row subset
-    (``sampled_rows`` is capped), so it cannot DISPROVE a period it did not
-    capture. We therefore NEVER fire a contradiction on such a field — a
-    non-matching claim there is ``unmatched`` (neutral), exactly like a field that
-    had >=2 SAMPLED values. This mirrors the W1.3 set rule from the ANSWER side and
-    removes the false multi-period GROUNDING_CONTRADICTED on
-    chain_top_mover_fundamentals (single net_income sample vs 4 enumerated quarters).
+    breakdown — "Revenue: Q2 $4.2B, Q3 $3.9B, Q4 $3.4B", or a multi-row table
+    column) is being treated as a multi-period series. The captured
+    grounding_sample is an INCOMPLETE row subset (``sampled_rows`` is capped), so
+    it cannot DISPROVE a period it did not capture. We therefore NEVER fire a
+    contradiction on such a field — a non-matching claim there is ``unmatched``
+    (neutral), exactly like a field that had >=2 SAMPLED values. This mirrors the
+    W1.3 set rule from the ANSWER side and removes the false multi-period
+    GROUNDING_CONTRADICTED on chain_top_mover_fundamentals (single net_income
+    sample vs 4 enumerated quarters). The same association (prose + table header)
+    is used here so a multi-row table column counts as multi-valued too.
     """
     seen: dict[str, set[float]] = {}
     for claim in claims:
-        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols or [])
         if field_name is None:
             continue
         seen.setdefault(field_name, set()).add(round(claim.value, 6))
@@ -2005,9 +2255,12 @@ def cross_check_grounding(
 
     cleaned_lower, claims = _iter_typed_claims(answer_text)
     field_names = list(grounding_fields)
+    # Detect markdown tables ONCE; their column headers give the association a
+    # fallback for figures inside table cells (PLAN-0116 W5 / Item 1).
+    table_cols = _build_table_columns(cleaned_lower, field_names)
     # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
     # contradicted (the sample is an incomplete row capture). See W1.3.
-    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names)
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
     matched = 0
     unmatched = 0
     contradicted = 0
@@ -2016,8 +2269,9 @@ def cross_check_grounding(
     for claim in claims:
         # Which SINGLE sampled field does the prose associate with this number?
         # The association is KIND-aware: a percentage/ratio claim can never attach
-        # to an incompatible absolute field (PLAN-0116 W1.2).
-        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
+        # to an incompatible absolute field (PLAN-0116 W1.2). Table cells fall back
+        # to their column header (Item 1).
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols)
         if field_name is None:
             unmatched += 1
             continue
@@ -2151,9 +2405,12 @@ def evaluate_substantiation(
     # set (value-less fields included) so a claim can attach to a named-but-empty
     # field and be classed ``unsupported`` rather than silently ``unmatched``.
     field_names = list(all_field_names)
+    # Detect markdown tables ONCE; column headers give table-cell figures a field
+    # association (PLAN-0116 W5 / Item 1). Shared with the veto (W1.1).
+    table_cols = _build_table_columns(cleaned_lower, field_names)
     # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
     # contradicted (the sample is an incomplete row capture). Shared with the veto.
-    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names)
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
     substantiated = 0
     unsupported = 0
     contradicted = 0
@@ -2162,8 +2419,9 @@ def evaluate_substantiation(
 
     for claim in claims:
         # KIND-aware association (W1.2): a percentage/ratio claim never attaches to
-        # an incompatible absolute field.
-        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
+        # an incompatible absolute field. Table cells fall back to their column
+        # header (Item 1).
+        field_name = _associate_claim(cleaned_lower, claim.span, field_names, claim.kind, table_cols)
         if field_name is None:
             unmatched += 1
             continue
