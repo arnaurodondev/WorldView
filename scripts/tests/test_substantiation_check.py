@@ -30,6 +30,7 @@ from chat_quality_judge import (  # — sys.path mutation must precede the impor
     JudgeInput,
     Rubric,
     SubstantiationCheck,
+    _collect_series_sourced_fields,
     cross_check_grounding,
     evaluate_invariants,
     evaluate_substantiation,
@@ -101,8 +102,14 @@ def test_field_present_value_absent_is_unsupported() -> None:
 
 
 def test_out_of_tolerance_claim_is_contradicted() -> None:
-    """A claim outside tolerance of every sampled value is ``contradicted``."""
-    results = [_tool_result_with_sample("get_fundamentals_history", {"revenue": "46.7B"})]
+    """A claim outside tolerance of a SINGLE-POINT tool's value is ``contradicted``.
+
+    Uses ``query_fundamentals`` (a single-point/latest-snapshot tool) — NOT a
+    time-series tool. A non-matching claim against a series tool (W5 da_msft rule)
+    is ``unmatched``, not contradicted; only a single-point authoritative value
+    contradicts.
+    """
+    results = [_tool_result_with_sample("query_fundamentals", {"revenue": "46.7B"})]
     check = evaluate_substantiation("Apple's revenue was $5.4B last year.", results)
     assert check.coverage == "verified"
     assert check.contradicted == 1
@@ -424,10 +431,14 @@ def test_raw_value_fields_substantiate_scaled_prose_claims() -> None:
 
 
 def test_raw_value_field_contradiction() -> None:
-    """A "$200B" revenue claim against a raw 81.6B sample → contradicted==1."""
+    """A "$200B" revenue claim against a raw 81.6B single-point sample → contradicted==1.
+
+    Single-point tool (``query_fundamentals``); a time-series tool would make this
+    ``unmatched`` per the W5 series rule.
+    """
     results = [
         _tool_result_with_sample(
-            "get_fundamentals_history",
+            "query_fundamentals",
             {"ticker": "NVDA", "revenue": "81600000000"},
         )
     ]
@@ -505,26 +516,28 @@ def test_ticker_only_sample_leaves_numeric_claim_unmatched() -> None:
 # ---------------------------------------------------------------------------
 # DUPLICATE-SAMPLE GUARD (PLAN-0116 W5). A value tool re-invoked in one turn
 # yields TWO byte-identical grounding_samples; a naive scan inflates each
-# single-period field into a phantom 2-value SET, which the W1.3 set rule then
+# single-value field into a phantom 2-value SET, which the W1.3 set rule then
 # uses to SUPPRESS a genuine contradiction. De-duplicating identical field maps
-# restores the single-valued field so a fabrication is correctly contradicted.
-# Regression for the da_msft case (claimed net_income $22.0B / EPS $2.95 vs
-# sampled $31.778B / $4.27 — escaped as unmatched before the guard).
+# restores the single value so a fabrication against a SINGLE-POINT tool is still
+# contradicted. (For a TIME-SERIES tool the W5 series rule supersedes — a
+# non-match there is always ``unmatched`` regardless of de-dup.)
 # ---------------------------------------------------------------------------
 
 
 def test_duplicate_identical_samples_do_not_suppress_contradiction() -> None:
-    """Two identical single-period samples contradict a fabricated figure (not unmatched).
+    """Two identical single-point samples contradict a fabricated figure (not unmatched).
 
-    The SAME tool is recorded twice with a byte-identical sample (a re-fetch).
-    Without de-dup, ``eps`` would hold ``[4.27, 4.27]`` → a 2-value "set" → the
-    multi-period rule marks a wrong EPS claim ``unmatched``. With de-dup it is a
-    single authoritative value and the wrong claim is ``contradicted``.
+    The SAME single-point tool (``query_fundamentals``) is recorded twice with a
+    byte-identical sample (a re-fetch). Without de-dup, ``eps`` would hold
+    ``[4.27, 4.27]`` → a 2-value "set" → the multi-period rule marks a wrong EPS
+    claim ``unmatched``. With de-dup it is a single authoritative value and the
+    wrong claim is ``contradicted``. (A time-series tool would be ``unmatched`` by
+    the W5 series rule — that is covered separately below.)
     """
     sample = {"ticker": "MSFT", "eps": "4.27", "net_income": "31778000000"}
     results = [
-        _tool_result_with_sample("get_fundamentals_history", dict(sample)),
-        _tool_result_with_sample("get_fundamentals_history", dict(sample)),
+        _tool_result_with_sample("query_fundamentals", dict(sample)),
+        _tool_result_with_sample("query_fundamentals", dict(sample)),
     ]
     check = evaluate_substantiation("MSFT reported EPS of $2.95.", results)
     assert check.coverage == "verified"
@@ -533,6 +546,41 @@ def test_duplicate_identical_samples_do_not_suppress_contradiction() -> None:
     assert check.unmatched == 0
     # And the shared pipeline (W1.1): the veto agrees on the contradiction count.
     assert cross_check_grounding("MSFT reported EPS of $2.95.", results).contradicted == 1
+
+
+def test_series_tool_single_period_claim_is_unmatched_not_contradicted() -> None:
+    """A non-matching claim against a TIME-SERIES tool field is ``unmatched`` (W5 da_msft).
+
+    ``get_fundamentals_history`` returns a SERIES; the captured period(s) cannot
+    disprove a claim about a DIFFERENT, unsampled quarter. Even with a single
+    de-duplicated EPS value, a wrong EPS claim must be ``unmatched``, NOT
+    ``contradicted`` — the honest "series can't disprove an unsampled period" rule.
+    This is the exact da_msft regression (real Q4-FY2024 figures vs a differently
+    dated sample).
+    """
+    sample = {"ticker": "MSFT", "eps": "4.27", "net_income": "31778000000"}
+    results = [_tool_result_with_sample("get_fundamentals_history", dict(sample))]
+    check = evaluate_substantiation("MSFT reported EPS of $2.95.", results)
+    assert check.coverage == "verified"
+    assert check.contradicted == 0
+    assert check.unmatched == 1
+    assert check.substantiated == 0
+    # W1.1 parity: the veto agrees there is no contradiction.
+    assert cross_check_grounding("MSFT reported EPS of $2.95.", results).contradicted == 0
+
+
+def test_collect_series_sourced_fields_classifies_by_tool() -> None:
+    """Only fields from a TIME-SERIES tool are flagged series-sourced (suffix-stripped)."""
+    results = [
+        _tool_result_with_sample("get_fundamentals_history", {"eps": "4.27", "revenue_2": "81273000000"}),
+        _tool_result_with_sample("query_fundamentals", {"pe_ratio": "29.0"}),  # single-point — NOT series
+    ]
+    series = _collect_series_sourced_fields(results)
+    # History-tool fields (base names, ``_2`` stripped) are series-sourced.
+    assert "eps" in series
+    assert "revenue" in series  # from revenue_2
+    # The single-point tool's field is NOT series-sourced.
+    assert "pe_ratio" not in series
 
 
 def test_genuine_multiperiod_suffix_keys_are_not_deduped() -> None:

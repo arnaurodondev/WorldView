@@ -25,7 +25,7 @@
     "  * coverage=presumed when NO grounding_sample is present on any tool_result",
     "    (then all counts are 0 by invariant).",
     "",
-    "PLAN-0116 W5 additions: ru_nvda_amd_revenue_4q_tablecells + da_msft_fy2024q4_fabricated_figures are REAL cases from run_20260626T202833Z exercising table-aware column-header association (Item 1) and duplicate-sample dedup (Item 1b)."
+    "PLAN-0116 W5 additions: ru_nvda_amd_revenue_4q_tablecells (table-aware column-header association, Item 1) + da_msft_fy2024q4_period_mismatch (TIME-SERIES tool fields are never hard-contradicted on a non-match — the captured periods cannot disprove an unsampled quarter; the dedup of Item 1b still prevents phantom multi-value sets for single-point tools) are REAL cases from run_20260626T202833Z."
   ],
   "run": "run_20260626T185654Z",
   "cases": [
@@ -211,7 +211,7 @@
       "derivation": "REAL table case from run_20260626T202833Z (Item 1 table-aware recall). The answer presents an NVIDIA/AMD revenue trend as a MARKDOWN TABLE ('NVIDIA Revenue' | 'AMD Revenue' columns). revenue is a multi-period SET {81.615B, 10.253B, 9.246B}. Each $-cell associates to `revenue` via its COLUMN HEADER (the 60-char prose window could not reach it). substantiated==6: the 6 cells matching a sampled period ($81.6B->81.615B, $10.3B x3 -> 10.253B, $9.2B->9.246B). The non-matching cells ($68.1B/$57.0B/$46.7B/$7.7B) -> UNMATCHED (a >=2-value SET cannot disprove an unsampled period -> NEVER contradicted). The '74 %'/'34 %' growth claims are PERCENTAGE-typed -> never attach to the absolute revenue field -> unmatched. [1]/[2] citation digits are dropped as citation markers. contradicted MUST be 0."
     },
     {
-      "id": "da_msft_fy2024q4_fabricated_figures",
+      "id": "da_msft_fy2024q4_period_mismatch",
       "answer_text": "Microsoft reported revenue of **$64.7 billion**, net income of **$22.0 billion**, and earnings per share of **$2.95** for fiscal Q4 2024 (quarter ended June 30 2024)【N1】【N2】【N3】\n\n⚠ Some figures could not be verified against retrieved data.",
       "tool_results": [
         {
@@ -257,10 +257,10 @@
         "coverage": "verified",
         "substantiated": 0,
         "unsupported": 0,
-        "contradicted": 2,
+        "contradicted": 0,
         "unmatched": "ANY"
       },
-      "derivation": "REAL case from run_20260626T202833Z (Item 1b duplicate-sample dedup). The agent ASSERTS fabricated Q4-2024 figures ('revenue of $64.7 billion, net income of $22.0 billion, EPS of $2.95') while the sample shows revenue {82.886B, 81.273B}, net_income 31.778B, eps 4.27. The get_fundamentals_history tool was recorded TWICE with byte-identical samples; without de-dup each single-period field inflated to a 2-value set and the multi-period rule SUPPRESSED the contradiction (escaped as unmatched). After de-dup: net_income (single 31.778B) and eps (single 4.27) are authoritative -> $22.0B and $2.95 are CONTRADICTED (2). revenue is a genuine 2-value SET {82.886B, 81.273B} -> the $64.7B claim is UNMATCHED (set cannot disprove). substantiated==0; contradicted==2."
+      "derivation": "REAL case from run_20260626T202833Z (PLAN-0116 W5 da_msft fix). The answer cites MSFT's ACTUAL fiscal Q4-2024 figures (revenue $64.7B, net income $22.0B, EPS $2.95) while the get_fundamentals_history sample holds a DIFFERENT, more-recent quarter (revenue {82.886B, 81.273B}, net_income 31.778B, eps 4.27). This is a PERIOD MISMATCH, not a fabrication: the captured periods cannot disprove a claim about an unsampled quarter. revenue is a 2-value SET -> $64.7B UNMATCHED. net_income/eps are single captured values, BUT get_fundamentals_history is a TIME-SERIES tool, so the W5 series rule makes a non-matching claim UNMATCHED (not contradicted) even for a single captured period. contradicted MUST be 0; every numeric claim is UNMATCHED. (Earlier W5 iterations contradicted these 2 via the dedup making the fields single-valued; the series rule corrects that — a fundamentals-history series cannot disprove an unsampled period. Hard contradiction is reserved for single-point tools like query_fundamentals.)"
     }
   ]
 }

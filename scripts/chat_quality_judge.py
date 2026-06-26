@@ -1888,6 +1888,54 @@ def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict
     return fields
 
 
+# Tools that return a TIME SERIES / multi-period set of values (PLAN-0116 W5
+# da_msft fix). A field whose sample came from one of these is, by its nature, an
+# INCOMPLETE capture of a series — the few captured periods cannot DISPROVE a
+# claim about a DIFFERENT (unsampled) period. So a non-matching claim against such
+# a field is ``unmatched`` (neutral), NEVER ``contradicted`` — the same principle
+# the multi-period SET rule (W1.3) applies to multi-VALUED fields, extended to the
+# single-captured-period case. This is the honest "the series can't disprove an
+# unsampled quarter" rule: da_msft cited MSFT's real Q4-FY2024 net_income/eps
+# while the sample held a DIFFERENT, more-recent quarter — a period mismatch, not
+# a fabrication. Hard contradiction remains reserved for genuinely single-point
+# tools (a current quote / latest snapshot), where the one returned value IS
+# authoritative for the claim's implied "current" period.
+_SERIES_SOURCED_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_fundamentals_history",
+        "get_fundamentals_history_batch",
+        "get_price_history",
+    }
+)
+
+
+def _collect_series_sourced_fields(tool_results: list[dict[str, Any]] | None) -> set[str]:
+    """Return base field names whose grounding sample came from a TIME-SERIES tool.
+
+    A claim associated to one of these fields is never ``contradicted`` on a
+    non-match (only ``unmatched``) — the captured periods are an incomplete subset
+    of a series and cannot disprove an unsampled period (PLAN-0116 W5 da_msft fix).
+    Identifier fields are irrelevant here (they are excluded from association), but
+    we keep the mapping field-name-based and tool-scoped so a metric sampled by
+    BOTH a series tool and a point tool is treated conservatively (series wins —
+    if ANY source is a series, the field could be period-ambiguous).
+    """
+    series_fields: set[str] = set()
+    for tr in tool_results or []:
+        tool = str(tr.get("tool") or tr.get("name") or "")
+        if tool not in _SERIES_SOURCED_TOOLS:
+            continue
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        raw_fields = sample.get("fields")
+        if not isinstance(raw_fields, dict):
+            continue
+        for fname in raw_fields:
+            series_fields.add(re.sub(r"_\d+$", "", str(fname)))
+    return series_fields
+
+
 def _field_candidates(field: str) -> set[str]:
     """The lowercased name-forms (snake, spaced, aliases) that name ``field``."""
     candidates = {field.lower(), field.replace("_", " ").lower()}
@@ -2340,6 +2388,9 @@ def cross_check_grounding(
     # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
     # contradicted (the sample is an incomplete row capture). See W1.3.
     answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
+    # Fields whose sample came from a TIME-SERIES tool — never contradicted on a
+    # non-match (the captured periods cannot disprove an unsampled period). W5.
+    series_fields = _collect_series_sourced_fields(tool_results)
     matched = 0
     unmatched = 0
     contradicted = 0
@@ -2362,12 +2413,16 @@ def cross_check_grounding(
 
         # Outside tolerance of EVERY sample for this field. MULTI-PERIOD SET rule
         # (W1.3): a non-matching claim is ``unmatched`` (neutral), NOT a
-        # contradiction, when EITHER the field has >=2 SAMPLED values OR the ANSWER
-        # enumerates >=2 distinct values for it — both mean the sample is an
-        # incomplete period/entity subset that cannot disprove an unsampled period.
-        # Only a single-valued (authoritative) sample vs a single-valued claim
-        # yields a contradiction.
-        if len(samples) >= 2 or field_name in answer_multivalued:
+        # contradiction, when ANY of:
+        #   * the field has >=2 SAMPLED values, OR
+        #   * the ANSWER enumerates >=2 distinct values for it, OR
+        #   * the field's sample came from a TIME-SERIES tool (W5 da_msft fix) —
+        #     even a single captured period is one of a series and cannot disprove
+        #     a claim about a DIFFERENT (unsampled) period.
+        # All three mean the sample is an incomplete period/entity subset. Only a
+        # single-valued sample from a genuinely single-point tool yields a
+        # contradiction.
+        if len(samples) >= 2 or field_name in answer_multivalued or field_name in series_fields:
             unmatched += 1
             continue
         nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
@@ -2490,6 +2545,10 @@ def evaluate_substantiation(
     # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
     # contradicted (the sample is an incomplete row capture). Shared with the veto.
     answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names, table_cols)
+    # Fields whose sample came from a TIME-SERIES tool — never contradicted on a
+    # non-match (the captured periods cannot disprove an unsampled period). Shared
+    # with the veto (W1.1). W5 da_msft fix.
+    series_fields = _collect_series_sourced_fields(tool_results)
     substantiated = 0
     unsupported = 0
     contradicted = 0
@@ -2526,11 +2585,13 @@ def evaluate_substantiation(
 
         # Outside tolerance of EVERY sampled value. MULTI-PERIOD SET rule (W1.3): a
         # non-matching claim is ``unmatched`` (neutral), not a contradiction, when
-        # EITHER the field has >=2 SAMPLED values OR the ANSWER enumerates >=2
-        # distinct values for it — both mean the sample is an incomplete period
-        # subset that cannot disprove an unsampled period. Only a single-valued
-        # authoritative field contradicts.
-        if len(samples) >= 2 or field_name in answer_multivalued:
+        # ANY of: the field has >=2 SAMPLED values, the ANSWER enumerates >=2
+        # distinct values for it, OR the field's sample came from a TIME-SERIES tool
+        # (W5 da_msft fix — even a single captured period is one of a series and
+        # cannot disprove a claim about a DIFFERENT, unsampled period). All mean the
+        # sample is an incomplete period subset. Only a single-valued sample from a
+        # genuinely single-point tool contradicts.
+        if len(samples) >= 2 or field_name in answer_multivalued or field_name in series_fields:
             unmatched += 1
             continue
         nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
