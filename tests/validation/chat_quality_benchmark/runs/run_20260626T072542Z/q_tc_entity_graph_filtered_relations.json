@@ -1,0 +1,478 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ]
+  },
+  "heuristics": {
+    "char_count": 164,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 24.65,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_graph"
+    ],
+    "output_tokens": 41,
+    "phase_timings_ms": {
+      "check_cache": 2.55145801929757,
+      "entity_resolution": 99.24295800738037,
+      "grounding_validation": 1.1214999831281602,
+      "llm_direct_text_generation": 7230.924128991319,
+      "llm_tool_planning": 22997.58376099635,
+      "load_history": 38.729207997675985,
+      "persist_and_cache": 22.719333006534725,
+      "tool_execution": 540.1332500041462,
+      "validate_input": 566.7134170071222
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_entity_relations"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 0.66,
+    "word_count": 23
+  },
+  "id": "tc_entity_graph_filtered_relations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Concise refusal appropriate for a lookup that returned empty; depth matches the simple factual question.",
+        "reason": "Concise refusal appropriate for a lookup that returned empty; depth matches the simple factual question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Answer correctly states no supplier entries were returned, matching the tool result (status=ok items=1 but no supplier rows). No fabricated names.",
+        "reason": "Answer correctly states no supplier entries were returned, matching the tool result (status=ok items=1 but no supplier rows). No fabricated names.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'no supplier entries' but rubric.appropriate_refusal_ok=true and tool returned no supplier data; correct refusal.",
+        "reason": "Contains refusal phrase 'no supplier entries' but rubric.appropriate_refusal_ok=true and tool returned no supplier data; correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations, which is one of the expected tools (equivalence set).",
+        "reason": "Called search_entity_relations, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to search_entity_relations, found no supplier entries for Apple, and honestly reported the empty result. All dimensions score full marks because the refusal is appropriate given the data gap. The only potential improvement is to confirm the entity name and relation type were exactly as intended, but the trace shows they were. No changes needed.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer correctly states no supplier entries were returned, matching the tool result (status=ok items=1 but no supplier rows). No fabricated names.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Concise refusal appropriate for a lookup that returned empty; depth matches the simple factual question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Contains refusal phrase 'no supplier entries' but rubric.appropriate_refusal_ok=true and tool returned no supplier data; correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to search_entity_relations, found no supplier entries for Apple, and honestly reported the empty result. All dimensions score full marks because the refusal is appropriate given the data gap. The only potential improvement is to confirm the entity name and relation type were exactly as intended, but the trace shows they were. No changes needed.\"\n}",
+    "reviewer_summary": "The agent correctly routed to search_entity_relations, found no supplier entries for Apple, and honestly reported the empty result. All dimensions score full marks because the refusal is appropriate given the data gap. The only potential improvement is to confirm the entity name and relation type were exactly as intended, but the trace shows they were. No changes needed.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me companies that are suppliers to Apple.",
+  "reasons": [],
+  "result": {
+    "answer_text": "I wasn\u2019t able to locate any \u201csupplies\u201d relationships for Apple in the knowledge\u2011graph data. The\u202fsearch_entity_relations\u202fcall returned no supplier entries for Apple.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        659836
+      ],
+      [
+        "status",
+        673002
+      ],
+      [
+        "thinking",
+        774446
+      ],
+      [
+        "agent_iteration",
+        774474
+      ],
+      [
+        "status",
+        16542482
+      ],
+      [
+        "tool_call",
+        16542645
+      ],
+      [
+        "tool_result",
+        17082509
+      ],
+      [
+        "agent_iteration",
+        17377397
+      ],
+      [
+        "token",
+        24614929
+      ],
+      [
+        "token",
+        24615037
+      ],
+      [
+        "token",
+        24618139
+      ],
+      [
+        "status",
+        24618264
+      ],
+      [
+        "final_answer",
+        24618552
+      ],
+      [
+        "citations",
+        24618752
+      ],
+      [
+        "contradictions",
+        24625137
+      ],
+      [
+        "suggestions",
+        24625266
+      ],
+      [
+        "metadata",
+        24644098
+      ],
+      [
+        "done",
+        24644344
+      ]
+    ],
+    "latency_s": 24.65,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 24564,
+      "message_id": "019f02f1-cfb6-79e8-a54e-2130f8baf1dd",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "110eec15-f3b2-42f4-9ecd-5c7181e91d69"
+    },
+    "output_tokens": 41,
+    "phase_timings_ms": {
+      "check_cache": 2.55145801929757,
+      "entity_resolution": 99.24295800738037,
+      "grounding_validation": 1.1214999831281602,
+      "llm_direct_text_generation": 7230.924128991319,
+      "llm_tool_planning": 22997.58376099635,
+      "load_history": 38.729207997675985,
+      "persist_and_cache": 22.719333006534725,
+      "tool_execution": 540.1332500041462,
+      "validate_input": 566.7134170071222
+    },
+    "question": "Show me companies that are suppliers to Apple.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": "supplies"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 539,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16601,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I wasn\u2019t able to locate any \u201csupplies\u201d relationships "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Apple in the knowledge\u2011graph data. The\u202fsearch_entity_relations\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "call returned no supplier entries for Apple."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I wasn\u2019t able to locate any \u201csupplies\u201d relationships for Apple in the knowledge\u2011graph data. The\u202fsearch_entity_relations\u202fcall returned no supplier entries for Apple."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 24564,
+          "message_id": "019f02f1-cfb6-79e8-a54e-2130f8baf1dd",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "110eec15-f3b2-42f4-9ecd-5c7181e91d69"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.55145801929757,
+            "entity_resolution": 99.24295800738037,
+            "grounding_validation": 1.1214999831281602,
+            "llm_direct_text_generation": 7230.924128991319,
+            "llm_tool_planning": 22997.58376099635,
+            "load_history": 38.729207997675985,
+            "persist_and_cache": 22.719333006534725,
+            "tool_execution": 540.1332500041462,
+            "validate_input": 566.7134170071222
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": "supplies"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 1.709,
+    "tps_streaming": 5.67,
+    "ttft_s": 0.66
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_graph",
+      "search_entity_relations"
+    ],
+    "forbidden_facts": [
+      "fabricated_supplier_names"
+    ],
+    "required_facts": [
+      "apple_identified",
+      "supplier_relation_type",
+      "supplier_list_or_empty"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_graph"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for a relation lookup and made a single, appropriate call to search_entity_relations with the right entity and relation type. The call returned a result (items=1), so the agent had data to work with. The trajectory is clean, minimal, and perfectly aligned with the question's intent. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call is the minimal sensible step for this question.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call with no dependencies \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls to recover from (status=ok, items=1).",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses search_entity_relations with relation_type=supplies, which directly matches the intent of finding suppliers to Apple.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

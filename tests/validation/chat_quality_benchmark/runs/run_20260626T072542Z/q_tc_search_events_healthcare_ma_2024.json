@@ -1,0 +1,509 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events"
+    ]
+  },
+  "heuristics": {
+    "char_count": 282,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 12.313,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 9.002207982121035,
+      "entity_resolution": 122.8736249904614,
+      "grounding_validation": 0.2987500047311187,
+      "llm_direct_text_generation": 887.848042009864,
+      "llm_tool_planning": 10707.022213027813,
+      "load_history": 13.386500009801239,
+      "persist_and_cache": 9.68729198211804,
+      "tool_execution": 553.3943329937756,
+      "validate_input": 472.2607499861624
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.56,
+    "word_count": 50
+  },
+  "id": "tc_search_events_healthcare_ma_2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Refusal is concise and appropriate for a data-missing scenario, but could have briefly explained why search_events was needed.",
+        "reason": "Refusal is concise and appropriate for a data-missing scenario, but could have briefly explained why search_events was needed.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer honestly refuses to report unverifiable numbers, consistent with empty tool results.",
+        "reason": "No grounding sample provided; answer honestly refuses to report unverifiable numbers, consistent with empty tool results.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Answer contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool results are empty; correct refusal.",
+        "reason": "Answer contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool results are empty; correct refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Expected tool 'search_events' was never called; only 'search_documents' was used, which is not the correct tool for M&A event queries.",
+        "reason": "Expected tool 'search_events' was never called; only 'search_documents' was used, which is not the correct tool for M&A event queries.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly refused to fabricate data when no results were returned, which is the right behaviour. However, it used the wrong tool (search_documents) instead of search_events, which is the designated tool for M&A event queries. The single most impactful change is to route healthcare M&A questions to search_events first, and only fall back to search_documents if search_events returns empty. The refusal itself is appropriate and well-calibrated to the empty data scenario.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tool 'search_events' was never called; only 'search_documents' was used, which is not the correct tool for M&A event queries.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer honestly refuses to report unverifiable numbers, consistent with empty tool results.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Refusal is concise and appropriate for a data-missing scenario, but could have briefly explained why search_events was needed.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"Answer contains refusal phrase 'couldn't retrieve any data' but rubric.appropriate_refusal_ok=true and tool results are empty; correct refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly refused to fabricate data when no results were returned, which is the right behaviour. However, it used the wrong tool (search_documents) instead of search_events, which is the designated tool for M&A event queries. The single most impactful change is to route healthcare M&A questions to search_events first, and only fall back to search_documents if search_events returns empty. The refusal itself is appropriate and well-calibrated to the empty data scenario.\"\n}",
+    "reviewer_summary": "The agent correctly refused to fabricate data when no results were returned, which is the right behaviour. However, it used the wrong tool (search_documents) instead of search_events, which is the designated tool for M&A event queries. The single most impactful change is to route healthcare M&A questions to search_events first, and only fall back to search_documents if search_events returns empty. The refusal itself is appropriate and well-calibrated to the empty data scenario.",
+    "score": 70,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 70,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "Show me M&A events involving healthcare companies in 2024.",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        560051
+      ],
+      [
+        "status",
+        560184
+      ],
+      [
+        "thinking",
+        683527
+      ],
+      [
+        "agent_iteration",
+        683576
+      ],
+      [
+        "status",
+        10506197
+      ],
+      [
+        "tool_call",
+        10506242
+      ],
+      [
+        "tool_result",
+        11059399
+      ],
+      [
+        "tool_call",
+        11397910
+      ],
+      [
+        "tool_result",
+        11398201
+      ],
+      [
+        "agent_iteration",
+        11399070
+      ],
+      [
+        "token",
+        12286630
+      ],
+      [
+        "token",
+        12286686
+      ],
+      [
+        "token",
+        12291043
+      ],
+      [
+        "status",
+        12291096
+      ],
+      [
+        "final_answer",
+        12291156
+      ],
+      [
+        "citations",
+        12291263
+      ],
+      [
+        "contradictions",
+        12291848
+      ],
+      [
+        "suggestions",
+        12291958
+      ],
+      [
+        "metadata",
+        12301903
+      ],
+      [
+        "done",
+        12302024
+      ]
+    ],
+    "latency_s": 12.313,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 12234,
+      "message_id": "019f0302-3a82-77a1-a6ed-fb336c904f7f",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "8ac7c3f6-4061-4db2-94e7-83a62619efe2"
+    },
+    "output_tokens": 71,
+    "phase_timings_ms": {
+      "check_cache": 9.002207982121035,
+      "entity_resolution": 122.8736249904614,
+      "grounding_validation": 0.2987500047311187,
+      "llm_direct_text_generation": 887.848042009864,
+      "llm_tool_planning": 10707.022213027813,
+      "load_history": 13.386500009801239,
+      "persist_and_cache": 9.68729198211804,
+      "tool_execution": 553.3943329937756,
+      "validate_input": 472.2607499861624
+    },
+    "question": "Show me M&A events involving healthcare companies in 2024.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 553,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 337,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10714,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I could not find any M&A events involving "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "healthcare companies in 2024. No matching rows were "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned by the search."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn't retrieve any data to support the specific figures for this question, so I won't report numbers I cannot verify. The data source may be unavailable or hold no records for this request \u2014 please try again, or narrow the question to a specific ticker, metric, or time period."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 12234,
+          "message_id": "019f0302-3a82-77a1-a6ed-fb336c904f7f",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "8ac7c3f6-4061-4db2-94e7-83a62619efe2"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 9.002207982121035,
+            "entity_resolution": 122.8736249904614,
+            "grounding_validation": 0.2987500047311187,
+            "llm_direct_text_generation": 887.848042009864,
+            "llm_tool_planning": 10707.022213027813,
+            "load_history": 13.386500009801239,
+            "persist_and_cache": 9.68729198211804,
+            "tool_execution": 553.3943329937756,
+            "validate_input": 472.2607499861624
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 6.041,
+    "tps_streaming": 79.969,
+    "ttft_s": 0.56
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events"
+    ],
+    "forbidden_facts": [
+      "fabricated_events",
+      "non_ma_events_returned"
+    ],
+    "required_facts": [
+      "event_list_or_empty",
+      "ma_event_type",
+      "year_2024_window",
+      "healthcare_sector"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent misrouted the question: M&A events require a structured event-search tool, not a general document search. It compounded the error by calling the wrong tool twice with identical empty arguments, never recovering. The fix is to route to search_events with sector='healthcare' and year=2024, and if that returns empty, issue an appropriate refusal rather than looping the same failing call.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two identical search_documents calls with no tickers and no date/sector filters are redundant and wasted. A single call to the correct tool (search_events) would have been minimal.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only two calls were made, both independent and identical; there is no dependency chain to evaluate, so ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After the first search_documents returned empty, the agent repeated the same call with the same arguments (call 2) instead of changing tool or parameters. This is a loop, not a recovery.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for M&A events (a structured event search), but the agent called search_documents (a text-search tool) twice with empty ticker lists. It should have used a dedicated events/calendar tool (e.g. search_events) with sector and year filters.",
+        "score": 5
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

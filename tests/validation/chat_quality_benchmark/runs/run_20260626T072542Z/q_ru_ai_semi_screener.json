@@ -1,0 +1,496 @@
+{
+  "bucket": "PASS",
+  "category": "screener",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "screen_universe"
+    ]
+  },
+  "heuristics": {
+    "char_count": 285,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "screen_universe"
+    ],
+    "error": null,
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 53.059,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 72,
+    "phase_timings_ms": {
+      "check_cache": 16.40729200153146,
+      "entity_resolution": 352.57712499878835,
+      "grounding_validation": 18893.274091999047,
+      "llm_direct_text_generation": 14545.991756996955,
+      "llm_tool_planning": 30288.798722001957,
+      "load_history": 33.317000008537434,
+      "persist_and_cache": 37.69266699964646,
+      "tool_execution": 629.8373750032624,
+      "validate_input": 1873.6823349900078
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "industry",
+          "limit",
+          "market_cap_min",
+          "revenue_growth_yoy_min",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "screen_universe"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "ttft_s": 1.966,
+    "word_count": 45
+  },
+  "id": "ru_ai_semi_screener",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for AI semiconductor companies with market cap >$50B and positive YoY growth; answer only notes C3.ai is absent, ignoring the actual results (MCHP, MPWR, etc.) that match the criteria.",
+        "reason": "Question asks for AI semiconductor companies with market cap >$50B and positive YoY growth; answer only notes C3.ai is absent, ignoring the actual results (MCHP, MPWR, etc.) that match the criteria.",
+        "score": 10
+      },
+      "grounding": {
+        "feedback": "Answer correctly states no entry for C3.ai; cites tool results. No grounding sample to verify further, but no scope violations.",
+        "reason": "Answer correctly states no entry for C3.ai; cites tool results. No grounding sample to verify further, but no scope violations.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data (list of returned tickers) and a transparency banner.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data (list of returned tickers) and a transparency banner.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called screen_universe, which is the expected tool for this screening question.",
+        "reason": "Called screen_universe, which is the expected tool for this screening question.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to screen_universe and the tool returned 7 matching companies, but the answer fixated on C3.ai (ticker AI) being absent rather than reporting the actual screen results. The user asked for a screen of AI semiconductor companies meeting financial criteria; the answer should have listed the returned tickers (MCHP, MPWR, NXPI, ADI, MRVL, TXN, ARM) and their relevant metrics. The single most impactful change is to have the LLM summarise the tool output as the primary answer, not treat a non-match as the headline.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called screen_universe, which is the expected tool for this screening question.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Answer correctly states no entry for C3.ai; cites tool results. No grounding sample to verify further, but no scope violations.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks for AI semiconductor companies with market cap >$50B and positive YoY growth; answer only notes C3.ai is absent, ignoring the actual results (MCHP, MPWR, etc.) that match the criteria.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data (list of returned tickers) and a transparency banner.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to screen_universe and the tool returned 7 matching companies, but the answer fixated on C3.ai (ticker AI) being absent rather than reporting the actual screen results. The user asked for a screen of AI semiconductor companies meeting financial criteria; the answer should have listed the returned tickers (MCHP, MPWR, NXPI, ADI, MRVL, TXN, ARM) and their relevant metrics. The single most impactful change is to have the LLM summarise the tool output as the primary answer, not treat a non-match as the headline.\"\n}",
+    "reviewer_summary": "The agent correctly routed to screen_universe and the tool returned 7 matching companies, but the answer fixated on C3.ai (ticker AI) being absent rather than reporting the actual screen results. The user asked for a screen of AI semiconductor companies meeting financial criteria; the answer should have listed the returned tickers (MCHP, MPWR, NXPI, ADI, MRVL, TXN, ARM) and their relevant metrics. The single most impactful change is to have the LLM summarise the tool output as the primary answer, not treat a non-match as the headline.",
+    "score": 80,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 10,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 80,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth.",
+  "reasons": [],
+  "result": {
+    "answer_text": "The screener results returned no entry for C3.ai (ticker\u202fAI).  \nAll companies listed in the results\u2014MCHP, MPWR, NXPI, ADI, MRVL, TXN, ARM\u2014are not C3.ai, so no market\u2011cap or revenue\u2011growth figures can be attributed to C3.ai.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1966387
+      ],
+      [
+        "status",
+        1992972
+      ],
+      [
+        "thinking",
+        2360605
+      ],
+      [
+        "agent_iteration",
+        2360636
+      ],
+      [
+        "status",
+        18108062
+      ],
+      [
+        "tool_call",
+        18109264
+      ],
+      [
+        "tool_result",
+        18735692
+      ],
+      [
+        "agent_iteration",
+        19534798
+      ],
+      [
+        "token",
+        34081711
+      ],
+      [
+        "token",
+        34081807
+      ],
+      [
+        "token",
+        34081829
+      ],
+      [
+        "token",
+        34081873
+      ],
+      [
+        "token",
+        34081928
+      ],
+      [
+        "token",
+        34081977
+      ],
+      [
+        "token",
+        34113554
+      ],
+      [
+        "status",
+        34117191
+      ],
+      [
+        "final_answer",
+        52997855
+      ],
+      [
+        "citations",
+        52997927
+      ],
+      [
+        "contradictions",
+        53001399
+      ],
+      [
+        "suggestions",
+        53001417
+      ],
+      [
+        "metadata",
+        53032616
+      ],
+      [
+        "done",
+        53033087
+      ]
+    ],
+    "latency_s": 53.059,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 52937,
+      "message_id": "019f02d4-0f08-766f-a664-792db0434884",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "0d452cd7-b371-4c87-ae6f-7478bbbec018"
+    },
+    "output_tokens": 72,
+    "phase_timings_ms": {
+      "check_cache": 16.40729200153146,
+      "entity_resolution": 352.57712499878835,
+      "grounding_validation": 18893.274091999047,
+      "llm_direct_text_generation": 14545.991756996955,
+      "llm_tool_planning": 30288.798722001957,
+      "load_history": 33.317000008537434,
+      "persist_and_cache": 37.69266699964646,
+      "tool_execution": 629.8373750032624,
+      "validate_input": 1873.6823349900078
+    },
+    "question": "Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading screen_universe\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "industry": "Semiconductors",
+            "limit": 20,
+            "market_cap_min": 50000000000,
+            "revenue_growth_yoy_min": 0.0,
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 629,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17178,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "| Ticker | Company | Market Cap | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "YoY Revenue Growth |\n|--------|---------|------------|--------------------|\n| MRVL | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Marvell Technology Group Ltd | $244.10B | 0.276 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| ARM | Arm Holdings plc American "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Depositary Shares | $435.48B | N/A \u2014 not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "provided in screener output |\n\n*Sources: MRVL row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from `screen_universe` result; ARM row from `screen_universe` result.*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The screener results returned no entry for C3.ai (ticker\u202fAI).  \nAll companies listed in the results\u2014MCHP, MPWR, NXPI, ADI, MRVL, TXN, ARM\u2014are not C3.ai, so no market\u2011cap or revenue\u2011growth figures can be attributed to C3.ai.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on C3.ai, Inc.?",
+          "How has AI performed recently?",
+          "Who are C3.ai, Inc.'s main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 52937,
+          "message_id": "019f02d4-0f08-766f-a664-792db0434884",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "0d452cd7-b371-4c87-ae6f-7478bbbec018"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 16.40729200153146,
+            "entity_resolution": 352.57712499878835,
+            "grounding_validation": 18893.274091999047,
+            "llm_direct_text_generation": 14545.991756996955,
+            "llm_tool_planning": 30288.798722001957,
+            "load_history": 33.317000008537434,
+            "persist_and_cache": 37.69266699964646,
+            "tool_execution": 629.8373750032624,
+            "validate_input": 1873.6823349900078
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "industry": "Semiconductors",
+          "limit": 20,
+          "market_cap_min": 50000000000,
+          "revenue_growth_yoy_min": 0.0,
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "tps": 1.409,
+    "tps_streaming": 4.95,
+    "ttft_s": 1.966
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "screener",
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly used screen_universe with the required filters (market cap >$50B, positive YoY revenue growth, semiconductor industry). The trace is a single, appropriate call \u2014 no wasted steps, no ordering issues, no recovery needed. The only oddity is the answer's focus on C3.ai (ticker AI), which was not in the screener results; the agent should have reported the actual matching companies instead of fixating on a ticker that didn't appear. Process-wise, the tool selection and execution are flawless.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call for a screening question \u2014 no redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 screen_universe is exactly the right tool for a screening question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

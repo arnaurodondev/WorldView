@@ -1,0 +1,517 @@
+{
+  "bucket": "PASS",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_morning_brief"
+    ]
+  },
+  "heuristics": {
+    "char_count": 605,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_morning_brief"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 33.18,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 152,
+    "phase_timings_ms": {
+      "check_cache": 3.5248330095782876,
+      "entity_resolution": 72.0431660010945,
+      "grounding_validation": 25324.773804022698,
+      "llm_direct_text_generation": 4421.294044004753,
+      "llm_tool_planning": 6683.945919998223,
+      "load_history": 30.444166011875495,
+      "persist_and_cache": 16.442666994407773,
+      "tool_execution": 79.17487499071285,
+      "validate_input": 626.1894589988515
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          ""
+        ],
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_morning_brief"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "ttft_s": 0.698,
+    "word_count": 89
+  },
+  "id": "tc_morning_brief_today",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for morning brief; answer provides structured sections (Market Snapshot, Your Portfolio Today) with specific figures \u2014 appropriate depth for a 'medium' expected depth rubric.",
+        "reason": "Question asks for morning brief; answer provides structured sections (Market Snapshot, Your Portfolio Today) with specific figures \u2014 appropriate depth for a 'medium' expected depth rubric.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Attribution is present (SPY, QQQ, VIX, META, AMZN figures) but the '\u26a0 Some figures could not be verified' banner suggests some claims may lack direct tool support. No scope/coverage violations detected.",
+        "reason": "No grounding sample provided \u2014 presumed band. Attribution is present (SPY, QQQ, VIX, META, AMZN figures) but the '\u26a0 Some figures could not be verified' banner suggests some claims may lack direct tool support. No scope/coverage violations detected.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_morning_brief, which is the expected tool.",
+        "reason": "Called get_morning_brief, which is the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_morning_brief and returned a structured brief with market snapshot and portfolio-specific commentary, matching the expected depth. The main improvement area is grounding: the '\u26a0 Some figures could not be verified' banner indicates the LLM flagged uncertainty, but ideally every numeric claim should be traceable to a specific tool row. Next step: ensure the morning brief tool returns explicit row-level citations so the LLM can attribute each figure (e.g., 'SPY 727.53 [get_morning_brief row 0]') and eliminate the unverified banner.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_morning_brief, which is the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Attribution is present (SPY, QQQ, VIX, META, AMZN figures) but the '\u26a0 Some figures could not be verified' banner suggests some claims may lack direct tool support. No scope/coverage violations detected.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for morning brief; answer provides structured sections (Market Snapshot, Your Portfolio Today) with specific figures \u2014 appropriate depth for a 'medium' expected depth rubric.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_morning_brief and returned a structured brief with market snapshot and portfolio-specific commentary, matching the expected depth. The main improvement area is grounding: the '\u26a0 Some figures could not be verified' banner indicates the LLM flagged uncertainty, but ideally every numeric claim should be traceable to a specific tool row. Next step: ensure the morning brief tool returns explicit row-level citations so the LLM can attribute each figure (e.g., 'SPY 727.53 [get_morning_brief row 0]') and eliminate the unverified banner.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_morning_brief and returned a structured brief with market snapshot and portfolio-specific commentary, matching the expected depth. The main improvement area is grounding: the '\u26a0 Some figures could not be verified' banner indicates the LLM flagged uncertainty, but ideally every numeric claim should be traceable to a specific tool row. Next step: ensure the morning brief tool returns explicit row-level citations so the LLM can attribute each figure (e.g., 'SPY 727.53 [get_morning_brief row 0]') and eliminate the unverified banner.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's in my morning brief today?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Here\u2019s your latest morning brief:\n\n**Market Snapshot**  \n- SPY\u202f727.53, QQQ\u202f697.97, VIX\u202f16.9 \u2013 a risk\u2011off tone in pre\u2011market trading.\n\n**Your Portfolio Today**  \n- **META**\u202f+5.06% pre\u2011market \u2013 the Oklo story is neutral/irrelevant and the Centrus surge is unrelated; the stock rose despite a \u20131.18% decline in the Communication Services sector, indicating an idiosyncratic driver.  \n- **AMZN**\u202f+3.97% pre\u2011market \u2013 the SpaceX\u2011Cursor deal is unrelated to Amazon; sector underperformance makes sector drag unlikely, so the move appears driver\u2011less.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        698437
+      ],
+      [
+        "status",
+        707085
+      ],
+      [
+        "thinking",
+        780521
+      ],
+      [
+        "agent_iteration",
+        780588
+      ],
+      [
+        "status",
+        3051651
+      ],
+      [
+        "tool_call",
+        3081237
+      ],
+      [
+        "tool_result",
+        3124854
+      ],
+      [
+        "agent_iteration",
+        3401808
+      ],
+      [
+        "token",
+        7823292
+      ],
+      [
+        "token",
+        7823345
+      ],
+      [
+        "token",
+        7823659
+      ],
+      [
+        "token",
+        7823928
+      ],
+      [
+        "token",
+        7824138
+      ],
+      [
+        "token",
+        7824414
+      ],
+      [
+        "token",
+        7824487
+      ],
+      [
+        "token",
+        7824602
+      ],
+      [
+        "token",
+        7824675
+      ],
+      [
+        "token",
+        7824722
+      ],
+      [
+        "status",
+        7827535
+      ],
+      [
+        "final_answer",
+        33152628
+      ],
+      [
+        "citations",
+        33152662
+      ],
+      [
+        "contradictions",
+        33156065
+      ],
+      [
+        "suggestions",
+        33156153
+      ],
+      [
+        "metadata",
+        33171051
+      ],
+      [
+        "done",
+        33171285
+      ]
+    ],
+    "latency_s": 33.18,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 33113,
+      "message_id": "019f02f9-08e2-749a-b157-e396bcdd9c1a",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "cdfb1dd0-2f00-4837-abba-67701db27f6e"
+    },
+    "output_tokens": 152,
+    "phase_timings_ms": {
+      "check_cache": 3.5248330095782876,
+      "entity_resolution": 72.0431660010945,
+      "grounding_validation": 25324.773804022698,
+      "llm_direct_text_generation": 4421.294044004753,
+      "llm_tool_planning": 6683.945919998223,
+      "load_history": 30.444166011875495,
+      "persist_and_cache": 16.442666994407773,
+      "tool_execution": 79.17487499071285,
+      "validate_input": 626.1894589988515
+    },
+    "question": "What's in my morning brief today?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_morning_brief\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "": {}
+          },
+          "label": "Loading morning brief...",
+          "status": "running",
+          "tool": "get_morning_brief",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 78,
+          "item_count": 1,
+          "label": "Loading morning brief...",
+          "result_preview": [
+            {
+              "id": "tool:brief:019eec19-1d79-7ac7-9d2d-351ad43ceb30",
+              "title": "## Details  \n**Market Snapshot**  \n- SPY 727.53, QQQ 697.97, VIX 16.9 \u2014 risk-off"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_morning_brief",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2621,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Here\u2019s your latest morning brief:\n\n**Market Snapshot**  \n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "SPY\u202f727.53, QQQ\u202f697.97, VIX\u202f16.9 \u2013 a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "risk\u2011off tone in pre\u2011market trading.\n\n**Your Portfolio Today**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- **META**\u202f+5.06% pre\u2011market \u2013 the Oklo story "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is neutral/irrelevant and the Centrus surge is unrelated; "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the stock rose despite a \u20131.18% decline in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the Communication Services sector, indicating an idiosyncratic driver.  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- **AMZN**\u202f+3.97% pre\u2011market \u2013 the SpaceX\u2011Cursor deal "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is unrelated to Amazon; sector underperformance makes sector "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "drag unlikely, so the move appears driver\u2011less."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Here\u2019s your latest morning brief:\n\n**Market Snapshot**  \n- SPY\u202f727.53, QQQ\u202f697.97, VIX\u202f16.9 \u2013 a risk\u2011off tone in pre\u2011market trading.\n\n**Your Portfolio Today**  \n- **META**\u202f+5.06% pre\u2011market \u2013 the Oklo story is neutral/irrelevant and the Centrus surge is unrelated; the stock rose despite a \u20131.18% decline in the Communication Services sector, indicating an idiosyncratic driver.  \n- **AMZN**\u202f+3.97% pre\u2011market \u2013 the SpaceX\u2011Cursor deal is unrelated to Amazon; sector underperformance makes sector drag unlikely, so the move appears driver\u2011less.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 33113,
+          "message_id": "019f02f9-08e2-749a-b157-e396bcdd9c1a",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "cdfb1dd0-2f00-4837-abba-67701db27f6e"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.5248330095782876,
+            "entity_resolution": 72.0431660010945,
+            "grounding_validation": 25324.773804022698,
+            "llm_direct_text_generation": 4421.294044004753,
+            "llm_tool_planning": 6683.945919998223,
+            "load_history": 30.444166011875495,
+            "persist_and_cache": 16.442666994407773,
+            "tool_execution": 79.17487499071285,
+            "validate_input": 626.1894589988515
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "": {}
+        },
+        "name": "get_morning_brief"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tps": 4.68,
+    "tps_streaming": 34.379,
+    "ttft_s": 0.698
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "forbidden_facts": [
+      "generic_market_summary_not_user_specific"
+    ],
+    "required_facts": [
+      "brief_headline_or_lead",
+      "at_least_one_section"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_morning_brief"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the user's intent and made a single, well-chosen call to get_morning_brief, which returned the needed data. The trajectory is clean, with no wasted steps, no ordering issues, and no recovery needed. The only process improvement would be to ensure the tool's output is fully verified before presenting figures, but that is a post-processing concern, not a tool-use issue.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One call, no redundancy \u2014 maximally efficient.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraints \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_morning_brief is exactly the right tool for a 'morning brief' question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

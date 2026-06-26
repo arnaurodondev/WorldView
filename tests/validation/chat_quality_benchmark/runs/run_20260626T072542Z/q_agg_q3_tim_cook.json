@@ -1,0 +1,718 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ]
+  },
+  "heuristics": {
+    "char_count": 744,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_documents",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 32.385,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "traverse_graph"
+    ],
+    "output_tokens": 186,
+    "phase_timings_ms": {
+      "check_cache": 3.4157500049332157,
+      "entity_resolution": 119.41204199683852,
+      "grounding_validation": 5479.7526269976515,
+      "llm_direct_text_generation": 4869.593876996078,
+      "llm_tool_planning": 22778.74517797318,
+      "load_history": 10.39366600161884,
+      "persist_and_cache": 28.556584002217278,
+      "tool_execution": 1164.948085017386,
+      "validate_input": 1830.735042996821
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 1.891,
+    "word_count": 119
+  },
+  "id": "agg_q3_tim_cook",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a brief history; answer provides a concise table with periods, companies, and roles \u2014 appropriate depth for a factual lookup.",
+        "reason": "Question asks for a brief history; answer provides a concise table with periods, companies, and roles \u2014 appropriate depth for a factual lookup.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims are attributed to entity intelligence bundle; no grounding sample provided, but the answer stays within scope and cites a tool row. The transparency banner is neutral.",
+        "reason": "Claims are attributed to entity intelligence bundle; no grounding sample provided, but the answer stays within scope and cites a tool row. The transparency banner is neutral.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence (expected tool) and search_entity_relations; the latter returned empty but the former provided the data.",
+        "reason": "Called get_entity_intelligence (expected tool) and search_entity_relations; the latter returned empty but the former provided the data.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_intelligence and presented a clean, well-structured table answering the user's request for Tim Cook's pre-Apple career. The tool_use is solid (one expected tool called), grounding is acceptable given the absence of a grounding sample, and framing matches the question's simplicity. The only minor issue is the citation to search_entity_relations row 0 when that tool returned empty; the data likely came from the entity intelligence bundle. Next time, ensure the citation references the actual source tool that returned the data.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence (expected tool) and search_entity_relations; the latter returned empty but the former provided the data.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims are attributed to entity intelligence bundle; no grounding sample provided, but the answer stays within scope and cites a tool row. The transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a brief history; answer provides a concise table with periods, companies, and roles \u2014 appropriate depth for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data with citations.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_intelligence and presented a clean, well-structured table answering the user's request for Tim Cook's pre-Apple career. The tool_use is solid (one expected tool called), grounding is acceptable given the absence of a grounding sample, and framing matches the question's simplicity. The only minor issue is the citation to search_entity_relations row 0 when that tool returned empty; the data likely came from the entity intelligence bundle. Next time, ensure the citation references the actual source tool that returned the data.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_intelligence and presented a clean, well-structured table answering the user's request for Tim Cook's pre-Apple career. The tool_use is solid (one expected tool called), grounding is acceptable given the absence of a grounding sample, and framing matches the question's simplicity. The only minor issue is the citation to search_entity_relations row 0 when that tool returned empty; the data likely came from the entity intelligence bundle. Next time, ensure the citation references the actual source tool that returned the data.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Give me a brief history of Tim Cook \u2014 where did he work before Apple?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Tim\u202fCook\u2019s career before joining Apple\u202fInc. includes senior roles at two major companies:\n\n| Period | Company | Role |\n|--------|---------|------|\n| 1994\u202f\u2013\u202f1997 | **IBM** | Director of North\u2011America Fulfillment & Procurement |\n| 1997\u202f\u2013\u202f1998 | **Intelligent Electronics** (a subsidiary of **Compaq**) | Vice President of Corporate Materials |\n| 1998\u202f\u2013\u202f2005 | **Compaq** (later merged with HP) | Vice President of Corporate Materials |\n| 2005\u202f\u2013\u202f2011 | **Apple** | Senior Vice President of Worldwide Operations (later COO) |\n\nThese positions are documented in Tim\u202fCook\u2019s entity intelligence bundle, which lists his employment history prior to Apple\u202fInc.\u202f[search_entity_relations\u202frow\u202f0]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1890674
+      ],
+      [
+        "status",
+        1894667
+      ],
+      [
+        "thinking",
+        2015052
+      ],
+      [
+        "agent_iteration",
+        2015130
+      ],
+      [
+        "status",
+        9045862
+      ],
+      [
+        "tool_call",
+        9047386
+      ],
+      [
+        "tool_result",
+        9152544
+      ],
+      [
+        "agent_iteration",
+        9489621
+      ],
+      [
+        "tool_call",
+        15130161
+      ],
+      [
+        "tool_result",
+        15583456
+      ],
+      [
+        "agent_iteration",
+        15875689
+      ],
+      [
+        "tool_call",
+        21133577
+      ],
+      [
+        "tool_result",
+        21721889
+      ],
+      [
+        "agent_iteration",
+        21986189
+      ],
+      [
+        "token",
+        26863351
+      ],
+      [
+        "token",
+        26863512
+      ],
+      [
+        "token",
+        26863812
+      ],
+      [
+        "token",
+        26863837
+      ],
+      [
+        "token",
+        26863859
+      ],
+      [
+        "token",
+        26863879
+      ],
+      [
+        "token",
+        26863900
+      ],
+      [
+        "token",
+        26863947
+      ],
+      [
+        "token",
+        26863969
+      ],
+      [
+        "token",
+        26863989
+      ],
+      [
+        "token",
+        26864009
+      ],
+      [
+        "token",
+        26864039
+      ],
+      [
+        "token",
+        26864060
+      ],
+      [
+        "token",
+        26864081
+      ],
+      [
+        "status",
+        26869146
+      ],
+      [
+        "final_answer",
+        32348725
+      ],
+      [
+        "citations",
+        32348921
+      ],
+      [
+        "contradictions",
+        32363412
+      ],
+      [
+        "suggestions",
+        32363500
+      ],
+      [
+        "metadata",
+        32378321
+      ],
+      [
+        "done",
+        32378451
+      ]
+    ],
+    "latency_s": 32.385,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 32309,
+      "message_id": "019f02d9-c664-70f7-a4d0-be9976d7c77d",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "20bb7a05-bfbb-47f3-93c1-1ff9b8d881ae"
+    },
+    "output_tokens": 186,
+    "phase_timings_ms": {
+      "check_cache": 3.4157500049332157,
+      "entity_resolution": 119.41204199683852,
+      "grounding_validation": 5479.7526269976515,
+      "llm_direct_text_generation": 4869.593876996078,
+      "llm_tool_planning": 22778.74517797318,
+      "load_history": 10.39366600161884,
+      "persist_and_cache": 28.556584002217278,
+      "tool_execution": 1164.948085017386,
+      "validate_input": 1830.735042996821
+    },
+    "question": "Give me a brief history of Tim Cook \u2014 where did he work before Apple?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "0195daad-c008-7000-8000-00000000000f"
+          },
+          "label": "Loading intelligence for 0195daad-c008-7000-8000-00000000000f",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 107,
+          "item_count": 1,
+          "label": "Loading intelligence for 0195daad-c008-7000-8000-00000000000f",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:0195daad-c008-7000-8000-00000000000f",
+              "title": "Intelligence: Tim Cook"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7472,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Tim Cook",
+            "limit": 10,
+            "min_confidence": 0.6,
+            "relation_type": "employment"
+          },
+          "label": "Mapping relationships for Tim Cook",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 454,
+          "item_count": 0,
+          "label": "Mapping relationships for Tim Cook",
+          "status": "empty",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 13856,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": null,
+            "date_to": null,
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "sec_filing",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 601,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 19970,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Tim\u202fCook\u2019s career before joining Apple\u202fInc. includes "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "senior roles at two major companies:\n\n| Period "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Company | Role |\n|--------|---------|------|\n| 1994\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013\u202f1997 | **IBM** | Director of North\u2011America "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Fulfillment & Procurement |\n| 1997\u202f\u2013\u202f1998 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| **Intelligent Electronics** (a subsidiary of **Compaq**) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Vice President of Corporate Materials |\n| 1998\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013\u202f2005 | **Compaq** (later merged with HP) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Vice President of Corporate Materials |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2005\u202f\u2013\u202f2011 | **Apple** | Senior Vice "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "President of Worldwide Operations (later COO) |\n\nThese "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "positions are documented in Tim\u202fCook\u2019s entity intelligence "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "bundle, which lists his employment history prior to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple\u202fInc.\u202f[search_entity_relations\u202frow\u202f0]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Tim\u202fCook\u2019s career before joining Apple\u202fInc. includes senior roles at two major companies:\n\n| Period | Company | Role |\n|--------|---------|------|\n| 1994\u202f\u2013\u202f1997 | **IBM** | Director of North\u2011America Fulfillment & Procurement |\n| 1997\u202f\u2013\u202f1998 | **Intelligent Electronics** (a subsidiary of **Compaq**) | Vice President of Corporate Materials |\n| 1998\u202f\u2013\u202f2005 | **Compaq** (later merged with HP) | Vice President of Corporate Materials |\n| 2005\u202f\u2013\u202f2011 | **Apple** | Senior Vice President of Worldwide Operations (later COO) |\n\nThese positions are documented in Tim\u202fCook\u2019s entity intelligence bundle, which lists his employment history prior to Apple\u202fInc.\u202f[search_entity_relations\u202frow\u202f0]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has Tim Cook performed recently?",
+          "How do Tim Cook's fundamentals look?",
+          "What are the biggest risks for Tim Cook right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 32309,
+          "message_id": "019f02d9-c664-70f7-a4d0-be9976d7c77d",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "20bb7a05-bfbb-47f3-93c1-1ff9b8d881ae"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.4157500049332157,
+            "entity_resolution": 119.41204199683852,
+            "grounding_validation": 5479.7526269976515,
+            "llm_direct_text_generation": 4869.593876996078,
+            "llm_tool_planning": 22778.74517797318,
+            "load_history": 10.39366600161884,
+            "persist_and_cache": 28.556584002217278,
+            "tool_execution": 1164.948085017386,
+            "validate_input": 1830.735042996821
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "0195daad-c008-7000-8000-00000000000f"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_name": "Tim Cook",
+          "limit": 10,
+          "min_confidence": 0.6,
+          "relation_type": "employment"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "sec_filing",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 6.1,
+    "tps_streaming": 38.196,
+    "ttft_s": 1.891
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified get_entity_intelligence as the primary tool for a biographical query and obtained the needed employment history from call 1. However, it then made two unnecessary calls (search_entity_relations and search_documents) that both returned empty, wasting time and adding no information. The agent should have stopped after call 1 or, if it wanted to supplement, used a targeted tool like traverse_graph with the correct entity ID rather than a generic search. The empty calls also lacked any recovery attempt \u2014 no retry with adjusted parameters. The core data was retrieved, but the process was inefficient and poorly routed after the first call.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 1 was necessary and sufficient. Call 2 and call 3 were wasted \u2014 they returned no data and added no value. The chain could have stopped after call 1.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "Only one data-producing call (call 1) was used; call 2 and call 3 returned empty. There is no dependency ordering issue to penalize.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 2 returned empty, the agent did not retry with corrected arguments (e.g., a different relation type or entity name) and instead made a generic search_documents call (call 3) that also returned empty. No effective recovery was attempted.",
+        "score": 10
+      },
+      "routing": {
+        "feedback": "Call 1 get_entity_intelligence is appropriate for a biography question. Call 2 search_entity_relations is a reasonable alternative to traverse_graph. Call 3 search_documents with empty entity_tickers and no date range is a poor fit \u2014 it cannot retrieve targeted career history.",
+        "score": 15
+      }
+    },
+    "trajectory_score": 65,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

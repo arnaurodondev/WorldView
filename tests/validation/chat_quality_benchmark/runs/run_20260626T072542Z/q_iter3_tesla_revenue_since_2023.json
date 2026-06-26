@@ -1,0 +1,705 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 381,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 58.523,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 96,
+    "phase_timings_ms": {
+      "check_cache": 5.065375007688999,
+      "entity_resolution": 170.3071249939967,
+      "grounding_validation": 15996.10925700108,
+      "llm_direct_text_generation": 22935.582218997297,
+      "llm_tool_planning": 41129.21843500226,
+      "load_history": 53.08650100778323,
+      "persist_and_cache": 61.95608300913591,
+      "tool_execution": 84.91929099545814,
+      "validate_input": 632.1954169980017
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.711,
+    "word_count": 86
+  },
+  "id": "iter3_tesla_revenue_since_2023",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for year-by-year trajectory since 2023; answer provides a structured table with all quarters, matching expected depth perfectly.",
+        "reason": "Question asks for year-by-year trajectory since 2023; answer provides a structured table with all quarters, matching expected depth perfectly.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; trace shows only 1 item returned (status=ok items=1) but answer lists 13 quarterly revenue figures. The tool was called with periods=20, yet the answer spans 2023-2026 with specific values. Without a sample, cannot verify any figure; the volume of unverifiable claims is",
+        "reason": "No grounding sample provided; trace shows only 1 item returned (status=ok items=1) but answer lists 13 quarterly revenue figures. The tool was called with periods=20, yet the answer spans 2023-2026 with specific values. Without a sample, cannot verify any figure; the volume of unverifiable claims is",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides full data table.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides full data table.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Expected tool was get_fundamentals_history, but only query_fundamentals was called. Neither is in the equivalence set? Actually expected_tools = [get_fundamentals_history] \u2014 a single-element set. The agent called query_fundamentals, which is NOT in the set. Score 0.",
+        "reason": "Expected tool was get_fundamentals_history, but only query_fundamentals was called. Neither is in the equivalence set? Actually expected_tools = [get_fundamentals_history] \u2014 a single-element set. The agent called query_fundamentals, which is NOT in the set. Score 0.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=50 would otherwise have been FAIL). The agent used query_fundamentals instead of the required get_fundamentals_history tool, scoring 0 on tool_use. The grounding is also critically weak: the trace returned only 1 item but the answer fabricates 13 quarterly revenue figures with no verifiable source. The framing is appropriate for the question. The single most impactful fix is to route to get_fundamentals_history and ensure the answer only includes values actually returned by the tool, not extrapolated or invented data.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tool was get_fundamentals_history, but only query_fundamentals was called. Neither is in the equivalence set? Actually expected_tools = [get_fundamentals_history] \u2014 a single-element set. The agent called query_fundamentals, which is NOT in the set. Score 0.\"\n  },\n  \"grounding\": {\n    \"score\": 0,\n    \"feedback\": \"No grounding sample provided; trace shows only 1 item returned (status=ok items=1) but answer lists 13 quarterly revenue figures. The tool was called with periods=20, yet the answer spans 2023-2026 with specific values. Without a sample, cannot verify any figure; the volume of unverifiable claims is a clear grounding violation.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for year-by-year trajectory since 2023; answer provides a structured table with all quarters, matching expected depth perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides full data table.\"\n  },\n  \"reviewer_summary\": \"The agent used query_fundamentals instead of the required get_fundamentals_history tool, scoring 0 on tool_use. The grounding is also critically weak: the trace returned only 1 item but the answer fabricates 13 quarterly revenue figures with no verifiable source. The framing is appropriate for the question. The single most impactful fix is to route to get_fundamentals_history and ensure the answer only includes values actually returned by the tool, not extrapolated or invented data.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=50 would otherwise have been FAIL). The agent used query_fundamentals instead of the required get_fundamentals_history tool, scoring 0 on tool_use. The grounding is also critically weak: the trace returned only 1 item but the answer fabricates 13 quarterly revenue figures with no verifiable source. The framing is appropriate for the question. The single most impactful fix is to route to get_fundamentals_history and ensure the answer only includes values actually returned by the tool, not extrapolated or invented data.",
+    "score": 50,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 0,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 50,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=0 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=50 would otherwise have been FAIL).",
+      "floor": 12,
+      "grounding": 0,
+      "pre_veto_verdict": "FAIL",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "How has Tesla's quarterly revenue changed since 2023? Give the trajectory year by year.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Tesla (TSLA) quarterly revenue trajectory (2023\u20112026)**  \n\n| Year | Q1 | Q2 | Q3 | Q4 |\n|------|----|----|----|----|\n| 2023 | $23.33\u202fB\u202f | $24.93\u202fB\u202f | $23.35\u202fB\u202f | $25.17\u202fB\u202f |\n| 2024 | $21.30\u202fB\u202f | $25.50\u202fB\u202f | $25.18\u202fB\u202f | $25.71\u202fB\u202f |\n| 2025 | $19.34\u202fB\u202f | $22.50\u202fB\u202f | $28.09\u202fB\u202f | $24.90\u202fB\u202f |\n| 2026* | $22.39\u202fB\u202f | \u2013 | \u2013 | \u2013 |\n\n\\*Only Q1 2026 data is available up to the current date.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        710675
+      ],
+      [
+        "status",
+        754112
+      ],
+      [
+        "thinking",
+        928088
+      ],
+      [
+        "agent_iteration",
+        929309
+      ],
+      [
+        "status",
+        19123980
+      ],
+      [
+        "tool_call",
+        19124861
+      ],
+      [
+        "tool_result",
+        19209159
+      ],
+      [
+        "agent_iteration",
+        19493148
+      ],
+      [
+        "token",
+        42432436
+      ],
+      [
+        "token",
+        42432474
+      ],
+      [
+        "token",
+        42432587
+      ],
+      [
+        "token",
+        42432606
+      ],
+      [
+        "token",
+        42432624
+      ],
+      [
+        "token",
+        42432645
+      ],
+      [
+        "token",
+        42432689
+      ],
+      [
+        "token",
+        42432706
+      ],
+      [
+        "token",
+        42432758
+      ],
+      [
+        "token",
+        42432879
+      ],
+      [
+        "token",
+        42433018
+      ],
+      [
+        "token",
+        42433191
+      ],
+      [
+        "token",
+        42433453
+      ],
+      [
+        "token",
+        42433521
+      ],
+      [
+        "token",
+        42433674
+      ],
+      [
+        "token",
+        42433783
+      ],
+      [
+        "token",
+        42433904
+      ],
+      [
+        "token",
+        42434036
+      ],
+      [
+        "token",
+        42434158
+      ],
+      [
+        "token",
+        42434212
+      ],
+      [
+        "token",
+        42434261
+      ],
+      [
+        "token",
+        42434443
+      ],
+      [
+        "token",
+        42434496
+      ],
+      [
+        "token",
+        42434542
+      ],
+      [
+        "token",
+        42434728
+      ],
+      [
+        "token",
+        42434751
+      ],
+      [
+        "token",
+        42455733
+      ],
+      [
+        "status",
+        42455796
+      ],
+      [
+        "final_answer",
+        58456355
+      ],
+      [
+        "citations",
+        58456426
+      ],
+      [
+        "contradictions",
+        58476014
+      ],
+      [
+        "suggestions",
+        58476124
+      ],
+      [
+        "metadata",
+        58516378
+      ],
+      [
+        "done",
+        58516523
+      ]
+    ],
+    "latency_s": 58.523,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 58392,
+      "message_id": "019f02e1-77b4-7088-9600-8fdf721057bc",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "c567b9c9-d3fd-45ef-9cb9-9baab980d4ea"
+    },
+    "output_tokens": 96,
+    "phase_timings_ms": {
+      "check_cache": 5.065375007688999,
+      "entity_resolution": 170.3071249939967,
+      "grounding_validation": 15996.10925700108,
+      "llm_direct_text_generation": 22935.582218997297,
+      "llm_tool_planning": 41129.21843500226,
+      "load_history": 53.08650100778323,
+      "persist_and_cache": 61.95608300913591,
+      "tool_execution": 84.91929099545814,
+      "validate_input": 632.1954169980017
+    },
+    "question": "How has Tesla's quarterly revenue changed since 2023? Give the trajectory year by year.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue"
+            ],
+            "period_type": "quarterly",
+            "periods": 20,
+            "ticker": "TSLA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 84,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals query: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18566,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Tesla (TSLA) \u2013 Quarterly Revenue Trajectory (2023\u202f\u2013\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026)**  \n\n| Year | Q1 | Q2 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q3 | Q4 | Comment |\n|------|----|----|----|----|---------|\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2023 | $23.33\u202fB [query_fundamentals row\u202f7] | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$24.93\u202fB [query_fundamentals row\u202f8] | $23.35\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[query_fundamentals row\u202f9] | $25.17\u202fB [query_fundamentals row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "10] | Revenue hovered around the low\u2011$20\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "range, ending the year modestly higher than it "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "started. |\n| 2024 | $21.30\u202fB [query_fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f11] | $25.50\u202fB [query_fundamentals row\u202f12] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $25.18\u202fB [query_fundamentals row\u202f13] | $25.71\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B [query_fundamentals row\u202f14] | After a dip "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in Q1, the year showed a clear upward "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trend, with Q4 the highest quarterly revenue to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "date. |\n| 2025 | $19.34\u202fB [query_fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f15] | $22.50\u202fB [query_fundamentals row\u202f16] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $28.09\u202fB [query_fundamentals row\u202f17] | $24.90\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B [query_fundamentals row\u202f18] | Q1 was the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "lowest of the year, but Q3 peaked at "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$28.09\u202fB, indicating strong mid\u2011year growth before a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "slight pull\u2011back in Q4. |\n| 2026* | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$22.39\u202fB [query_fundamentals row\u202f19] | \u2013 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 | \u2013 | Q1 2026 shows a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "rebound toward the $22\u202fB\u2011plus level; later quarters "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "are not yet available. |\n\n\\*Data are reported "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "as\u2011is for the most recent quarter (Q1\u202f2026). "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "No forward\u2011looking forecasts are provided."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Tesla (TSLA) quarterly revenue trajectory (2023\u20112026)**  \n\n| Year | Q1 | Q2 | Q3 | Q4 |\n|------|----|----|----|----|\n| 2023 | $23.33\u202fB\u202f | $24.93\u202fB\u202f | $23.35\u202fB\u202f | $25.17\u202fB\u202f |\n| 2024 | $21.30\u202fB\u202f | $25.50\u202fB\u202f | $25.18\u202fB\u202f | $25.71\u202fB\u202f |\n| 2025 | $19.34\u202fB\u202f | $22.50\u202fB\u202f | $28.09\u202fB\u202f | $24.90\u202fB\u202f |\n| 2026* | $22.39\u202fB\u202f | \u2013 | \u2013 | \u2013 |\n\n\\*Only Q1 2026 data is available up to the current date."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 58392,
+          "message_id": "019f02e1-77b4-7088-9600-8fdf721057bc",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "c567b9c9-d3fd-45ef-9cb9-9baab980d4ea"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.065375007688999,
+            "entity_resolution": 170.3071249939967,
+            "grounding_validation": 15996.10925700108,
+            "llm_direct_text_generation": 22935.582218997297,
+            "llm_tool_planning": 41129.21843500226,
+            "load_history": 53.08650100778323,
+            "persist_and_cache": 61.95608300913591,
+            "tool_execution": 84.91929099545814,
+            "validate_input": 632.1954169980017
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue"
+          ],
+          "period_type": "quarterly",
+          "periods": 20,
+          "ticker": "TSLA"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 1.661,
+    "tps_streaming": 4.186,
+    "ttft_s": 0.711
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, perfectly-targeted call to query_fundamentals with the correct ticker, metric, period type, and sufficient lookback. This is the ideal trajectory for a straightforward fundamentals-history question: minimal steps, no wasted calls, no ordering issues, and no recovery needed. The only minor observation is that the answer includes 2025 and 2026 data, which the user didn't explicitly ask for (only 'since 2023'), but that is a prose/scope choice, not a process flaw. The process itself is exemplary.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call with periods=20 covers all needed quarters \u2014 no redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no dependencies to order \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Call 1 uses query_fundamentals with TSLA, revenue, quarterly \u2014 exactly the right tool for a fundamentals history question.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

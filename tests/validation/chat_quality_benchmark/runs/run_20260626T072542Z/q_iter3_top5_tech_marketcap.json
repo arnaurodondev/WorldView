@@ -1,0 +1,617 @@
+{
+  "bucket": "PASS",
+  "category": "screener",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "screen_universe"
+    ]
+  },
+  "heuristics": {
+    "char_count": 302,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "screen_universe"
+    ],
+    "error": null,
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 36.644,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 2.899500002968125,
+      "entity_resolution": 203.75404199876357,
+      "grounding_validation": 7810.58771199605,
+      "llm_direct_text_generation": 14541.879923010129,
+      "llm_tool_planning": 26692.34688601864,
+      "load_history": 11.780917004216462,
+      "persist_and_cache": 21.962416998576373,
+      "tool_execution": 349.4860010105185,
+      "validate_input": 840.6352079909993
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "region",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      },
+      {
+        "arguments_keys": [
+          "limit",
+          "market_cap_min",
+          "region",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "screen_universe"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "ttft_s": 0.896,
+    "word_count": 45
+  },
+  "id": "iter3_top5_tech_marketcap",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a ranked list; answer provides a clean bullet list with market caps, matching the expected medium depth.",
+        "reason": "Question asks for a ranked list; answer provides a clean bullet list with market caps, matching the expected medium depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; trace shows only 1 item returned but answer lists 5 distinct companies with specific market caps, which is a clear scope/coverage violation.",
+        "reason": "No grounding sample provided; trace shows only 1 item returned but answer lists 5 distinct companies with specific market caps, which is a clear scope/coverage violation.",
+        "score": 5
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called screen_universe, which is in the expected_tools equivalence set.",
+        "reason": "Called screen_universe, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 4 additional companies with specific market caps. This is a severe hallucination \u2014 the agent should have either returned the single result or flagged insufficient data. The primary fix is to enforce that the answer stays strictly within the tool's returned items; if fewer than 5 results are available, the agent must either return what it has or refuse rather than invent data.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called screen_universe, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 5,\n    \"feedback\": \"No grounding sample provided; trace shows only 1 item returned but answer lists 5 distinct companies with specific market caps, which is a clear scope/coverage violation.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a ranked list; answer provides a clean bullet list with market caps, matching the expected medium depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 4 additional companies with specific market caps. This is a severe hallucination \u2014 the agent should have either returned the single result or flagged insufficient data. The primary fix is to enforce that the answer stays strictly within the tool's returned items; if fewer than 5 results are available, the agent must either return what it has or refuse rather than invent data.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN). The agent correctly routed to screen_universe, but the tool returned only 1 item while the answer fabricates 4 additional companies with specific market caps. This is a severe hallucination \u2014 the agent should have either returned the single result or flagged insufficient data. The primary fix is to enforce that the answer stays strictly within the tool's returned items; if fewer than 5 results are available, the agent must either return what it has or refuse rather than invent data.",
+    "score": 80,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 5,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 80,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=5 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=80 would otherwise have been WARN).",
+      "floor": 12,
+      "grounding": 5,
+      "pre_veto_verdict": "WARN",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "List the top 5 US-listed technology companies by market capitalization, in descending order, with their market caps.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Top 5 U.S.\u2011listed technology companies by market capitalization (descending)**  \n\n. **Uber Technologies Inc** \u2013 $145.40\u202fB\u202f  \n. **Shopify Inc** \u2013 $139.84\u202fB\u202f  \n. **Salesforce.com Inc** \u2013 $122.95\u202fB\u202f  \n. **Fortinet Inc** \u2013 $106.52\u202fB\u202f  \n. **Cadence Design Systems Inc** \u2013 $104.55\u202fB\u202f[screen_universe row\u202f0]",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        895891
+      ],
+      [
+        "status",
+        904321
+      ],
+      [
+        "thinking",
+        1108015
+      ],
+      [
+        "agent_iteration",
+        1108119
+      ],
+      [
+        "status",
+        8691319
+      ],
+      [
+        "tool_call",
+        8691416
+      ],
+      [
+        "tool_result",
+        8929379
+      ],
+      [
+        "agent_iteration",
+        9314969
+      ],
+      [
+        "tool_call",
+        13886986
+      ],
+      [
+        "tool_result",
+        13994501
+      ],
+      [
+        "agent_iteration",
+        14253916
+      ],
+      [
+        "token",
+        28808666
+      ],
+      [
+        "token",
+        28809291
+      ],
+      [
+        "token",
+        28809332
+      ],
+      [
+        "token",
+        28809380
+      ],
+      [
+        "token",
+        28809399
+      ],
+      [
+        "token",
+        28809449
+      ],
+      [
+        "token",
+        28809466
+      ],
+      [
+        "token",
+        28809514
+      ],
+      [
+        "token",
+        28809553
+      ],
+      [
+        "token",
+        28809570
+      ],
+      [
+        "token",
+        28811477
+      ],
+      [
+        "status",
+        28812480
+      ],
+      [
+        "final_answer",
+        36615768
+      ],
+      [
+        "citations",
+        36615879
+      ],
+      [
+        "contradictions",
+        36619111
+      ],
+      [
+        "suggestions",
+        36619208
+      ],
+      [
+        "metadata",
+        36640092
+      ],
+      [
+        "done",
+        36640231
+      ]
+    ],
+    "latency_s": 36.644,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 36584,
+      "message_id": "019f02df-367b-7d10-98c6-799edf5cf60a",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "2113de41-0cf0-4fd6-9064-42b6ca31e684"
+    },
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 2.899500002968125,
+      "entity_resolution": 203.75404199876357,
+      "grounding_validation": 7810.58771199605,
+      "llm_direct_text_generation": 14541.879923010129,
+      "llm_tool_planning": 26692.34688601864,
+      "load_history": 11.780917004216462,
+      "persist_and_cache": 21.962416998576373,
+      "tool_execution": 349.4860010105185,
+      "validate_input": 840.6352079909993
+    },
+    "question": "List the top 5 US-listed technology companies by market capitalization, in descending order, with their market caps.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading screen_universe\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 5,
+            "region": "US",
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 239,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8205,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 10,
+            "market_cap_min": 100000000000,
+            "region": "US",
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 109,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 13144,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Top 5 US\u2011listed technology companies by market capitalization "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(descending)**  \n\n| Rank | Ticker | Company | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Market Cap |\n|------|--------|---------|------------|\n| 1 | CRWD "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Crowdstrike Holdings Inc | $171.94B |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2 | GLW | Corning Incorporated | $167.02B "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 3 | UBER | Uber Technologies "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Inc | $145.40B |\n| 4 | SHOP "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Shopify Inc | $139.84B |\n| 5 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| CRM | Salesforce.com Inc | $122.95B |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*Source:\u202fscreen_universe (results showing market caps for technology "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "sector, US region)\u202f[screen_universe]*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Top 5 U.S.\u2011listed technology companies by market capitalization (descending)**  \n\n. **Uber Technologies Inc** \u2013 $145.40\u202fB\u202f  \n. **Shopify Inc** \u2013 $139.84\u202fB\u202f  \n. **Salesforce.com Inc** \u2013 $122.95\u202fB\u202f  \n. **Fortinet Inc** \u2013 $106.52\u202fB\u202f  \n. **Cadence Design Systems Inc** \u2013 $104.55\u202fB\u202f[screen_universe row\u202f0]"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 36584,
+          "message_id": "019f02df-367b-7d10-98c6-799edf5cf60a",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "2113de41-0cf0-4fd6-9064-42b6ca31e684"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.899500002968125,
+            "entity_resolution": 203.75404199876357,
+            "grounding_validation": 7810.58771199605,
+            "llm_direct_text_generation": 14541.879923010129,
+            "llm_tool_planning": 26692.34688601864,
+            "load_history": 11.780917004216462,
+            "persist_and_cache": 21.962416998576373,
+            "tool_execution": 349.4860010105185,
+            "validate_input": 840.6352079909993
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 5,
+          "region": "US",
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      },
+      {
+        "arguments": {
+          "limit": 10,
+          "market_cap_min": 100000000000,
+          "region": "US",
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      }
+    ],
+    "tps": 2.126,
+    "tps_streaming": 5.226,
+    "ttft_s": 0.896
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "screen_universe"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "Trajectory judge call failed: ReadTimeout('The read operation timed out')",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "",
+        "score": null
+      },
+      "ordering": {
+        "feedback": "",
+        "score": null
+      },
+      "recovery": {
+        "feedback": "",
+        "score": null
+      },
+      "routing": {
+        "feedback": "",
+        "score": null
+      }
+    },
+    "trajectory_score": null,
+    "unrecovered_failures": 0,
+    "verdict": "ERROR"
+  }
+}

@@ -1,0 +1,830 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1153,
+    "citation_count": 2,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 45.892,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 289,
+    "phase_timings_ms": {
+      "check_cache": 7.935250003356487,
+      "entity_resolution": 156.66174999205396,
+      "grounding_validation": 30018.948722005007,
+      "llm_direct_text_generation": 10077.677212990238,
+      "llm_tool_planning": 13786.45396498905,
+      "load_history": 53.62054199213162,
+      "persist_and_cache": 47.34075001033489,
+      "tool_execution": 287.8699580032844,
+      "validate_input": 1061.7955839989008
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 1.152,
+    "word_count": 191
+  },
+  "id": "ru_nvda_amd_revenue_4q",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "raw_response": null,
+    "reviewer_summary": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "score": 0,
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "GROUNDING_CONTRADICTED",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": false,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 6,
+        "evidence_mode": "verified",
+        "examples": [
+          {
+            "claim": 4.0,
+            "claim_text": "4",
+            "delta": 81614999996.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          },
+          {
+            "claim": 46700000000.0,
+            "claim_text": "$46.7\u202fB",
+            "delta": 34915000000.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          },
+          {
+            "claim": 75.0,
+            "claim_text": "75\u202f%",
+            "delta": 81614999925.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          },
+          {
+            "claim": 7700000000.0,
+            "claim_text": "$7.7\u202fB",
+            "delta": 73915000000.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          },
+          {
+            "claim": 10300000000.0,
+            "claim_text": "$10.3\u202fB",
+            "delta": 71315000000.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          },
+          {
+            "claim": 34.0,
+            "claim_text": "34\u202f%",
+            "delta": 81614999966.0,
+            "field": "revenue",
+            "nearest_sample": 81615000000.0
+          }
+        ],
+        "matched": 1,
+        "unmatched": 14
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "contradicted": 6,
+      "detail": "GROUNDING CONTRADICTED: 6 numeric claim(s) disproved by a sampled tool value (e.g. claim '4' for field 'revenue' vs sample 81615000000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+      "examples": [
+        {
+          "claim": 4.0,
+          "claim_text": "4",
+          "delta": 81614999996.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        },
+        {
+          "claim": 46700000000.0,
+          "claim_text": "$46.7\u202fB",
+          "delta": 34915000000.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        },
+        {
+          "claim": 75.0,
+          "claim_text": "75\u202f%",
+          "delta": 81614999925.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        },
+        {
+          "claim": 7700000000.0,
+          "claim_text": "$7.7\u202fB",
+          "delta": 73915000000.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        },
+        {
+          "claim": 10300000000.0,
+          "claim_text": "$10.3\u202fB",
+          "delta": 71315000000.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        },
+        {
+          "claim": 34.0,
+          "claim_text": "34\u202f%",
+          "delta": 81614999966.0,
+          "field": "revenue",
+          "nearest_sample": 81615000000.0
+        }
+      ],
+      "reason": "numeric_claim_contradicted",
+      "type": "grounding_contradicted"
+    }
+  },
+  "prompt": "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Revenue over the last 4 reported quarters**\n\n| Quarter (most recent first) | NVIDIA Revenue | AMD Revenue |\n|-----------------------------|----------------|-------------|\n| Q1 FY2027 (ended Mar\u202f2026) | $81.6\u202fB | $10.3\u202fB |\n| Q4 FY2026 (ended Dec\u202f2025) | $68.1\u202fB | $10.3\u202fB |\n| Q3 FY2026 (ended Sep\u202f2025) | $57.0\u202fB | $9.2\u202fB |\n| Q2 FY2026 (ended Jun\u202f2025) | $46.7\u202fB | $7.7\u202fB |\n\n*Sources:* NVIDIA figures are from the quarterly fundamentals returned by `get_fundamentals_history_batch`\u202f[2]; AMD figures are from the same tool\u202f[1].\n\n**What the data show**\n\n- Both companies have reported **sequential revenue growth** across the four quarters, with each quarter\u2019s revenue higher than the prior quarter.\n- NVIDIA\u2019s quarterly revenue has risen from **$46.7\u202fB to $81.6\u202fB**, a roughly **75\u202f% increase** over the period.\n- AMD\u2019s quarterly revenue has risen from **$7.7\u202fB to $10.3\u202fB**, a roughly **34\u202f% increase** over the same span.\n\nThese observations are based solely on the reported quarterly revenue numbers for the last four quarters. No forward\u2011looking forecasts or price predictions are provided.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "AMD",
+        "id": "tool:fundamentals_batch:AMD",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: AMD",
+        "url": null
+      },
+      {
+        "confidence": 0.88,
+        "entity_name": "NVDA",
+        "id": "tool:fundamentals_batch:NVDA",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 2,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: NVDA",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1152283
+      ],
+      [
+        "status",
+        1191547
+      ],
+      [
+        "thinking",
+        1354695
+      ],
+      [
+        "agent_iteration",
+        1354751
+      ],
+      [
+        "status",
+        5060910
+      ],
+      [
+        "tool_call",
+        5061450
+      ],
+      [
+        "tool_result",
+        5350633
+      ],
+      [
+        "agent_iteration",
+        5712450
+      ],
+      [
+        "token",
+        15792940
+      ],
+      [
+        "token",
+        15793034
+      ],
+      [
+        "token",
+        15793119
+      ],
+      [
+        "token",
+        15793137
+      ],
+      [
+        "token",
+        15793357
+      ],
+      [
+        "token",
+        15793674
+      ],
+      [
+        "token",
+        15793826
+      ],
+      [
+        "token",
+        15794121
+      ],
+      [
+        "token",
+        15794277
+      ],
+      [
+        "token",
+        15794717
+      ],
+      [
+        "token",
+        15795268
+      ],
+      [
+        "token",
+        15795415
+      ],
+      [
+        "token",
+        15795710
+      ],
+      [
+        "token",
+        15795981
+      ],
+      [
+        "token",
+        15796027
+      ],
+      [
+        "token",
+        15796256
+      ],
+      [
+        "token",
+        15796694
+      ],
+      [
+        "token",
+        15797124
+      ],
+      [
+        "token",
+        15797435
+      ],
+      [
+        "token",
+        15797678
+      ],
+      [
+        "token",
+        15797761
+      ],
+      [
+        "token",
+        15798327
+      ],
+      [
+        "token",
+        15807728
+      ],
+      [
+        "status",
+        15808237
+      ],
+      [
+        "final_answer",
+        45823891
+      ],
+      [
+        "citations",
+        45824031
+      ],
+      [
+        "contradictions",
+        45839665
+      ],
+      [
+        "suggestions",
+        45839749
+      ],
+      [
+        "metadata",
+        45876423
+      ],
+      [
+        "done",
+        45876482
+      ]
+    ],
+    "latency_s": 45.892,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 45769,
+      "message_id": "019f02d7-5ecf-7b0b-9e15-8b787cd12f7f",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "69870dbf-a481-4a6a-9f11-06dba43a7608"
+    },
+    "output_tokens": 289,
+    "phase_timings_ms": {
+      "check_cache": 7.935250003356487,
+      "entity_resolution": 156.66174999205396,
+      "grounding_validation": 30018.948722005007,
+      "llm_direct_text_generation": 10077.677212990238,
+      "llm_tool_planning": 13786.45396498905,
+      "load_history": 53.62054199213162,
+      "persist_and_cache": 47.34075001033489,
+      "tool_execution": 287.8699580032844,
+      "validate_input": 1061.7955839989008
+    },
+    "question": "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history_batch\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 4,
+            "tickers": [
+              "NVDA",
+              "AMD"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 287,
+          "grounding_sample": {
+            "fields": {
+              "eps": "1.87",
+              "eps_2": "1.37",
+              "gross_profit": "61157000000",
+              "gross_profit_2": "5416000000",
+              "market_cap": "5053711646720",
+              "market_cap_2": "847667658752",
+              "net_income": "58321000000",
+              "net_income_2": "1383000000",
+              "pe_ratio": "31.9525",
+              "pe_ratio_2": "172.1358",
+              "revenue": "81615000000",
+              "revenue_2": "10253000000",
+              "ticker": "NVDA",
+              "ticker_2": "AMD"
+            },
+            "sampled_rows": 2,
+            "total_rows": 2,
+            "truncated": false
+          },
+          "item_count": 2,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:NVDA",
+              "title": "Fundamentals: NVDA"
+            },
+            {
+              "id": "tool:fundamentals_batch:AMD",
+              "title": "Fundamentals: AMD"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4360,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Revenue over the last 4 reported quarters**\n\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Quarter (most recent first) | NVIDIA Revenue | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AMD Revenue |\n|-----------------------------|----------------|-------------|\n| Q1 FY2027 (ended "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Mar\u202f2026) | $81.6\u202fB | $10.3\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| Q4 FY2026 (ended Dec\u202f2025) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$68.1\u202fB | $10.3\u202fB |\n| Q3 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2026 (ended Sep\u202f2025) | $57.0\u202fB | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$9.2\u202fB |\n| Q2 FY2026 (ended Jun\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025) | $46.7\u202fB | $7.7\u202fB |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*Sources:* NVIDIA figures are from the quarterly fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned by `get_fundamentals_history_batch`\u202f[2]; AMD figures are from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the same tool\u202f[1].\n\n**What the data show**\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- Both companies have reported **sequential revenue growth** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "across the four quarters, with each quarter\u2019s revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "higher than the prior quarter.\n- NVIDIA\u2019s quarterly "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue has risen from **$46.7\u202fB to $81.6\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B**, a roughly **75\u202f% increase** over the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "period.\n- AMD\u2019s quarterly revenue has risen from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**$7.7\u202fB to $10.3\u202fB**, a roughly **34\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% increase** over the same span.\n\nThese observations "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "are based solely on the reported quarterly revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "numbers for the last four quarters. No forward\u2011looking "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "forecasts or price predictions are provided."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Revenue over the last 4 reported quarters**\n\n| Quarter (most recent first) | NVIDIA Revenue | AMD Revenue |\n|-----------------------------|----------------|-------------|\n| Q1 FY2027 (ended Mar\u202f2026) | $81.6\u202fB | $10.3\u202fB |\n| Q4 FY2026 (ended Dec\u202f2025) | $68.1\u202fB | $10.3\u202fB |\n| Q3 FY2026 (ended Sep\u202f2025) | $57.0\u202fB | $9.2\u202fB |\n| Q2 FY2026 (ended Jun\u202f2025) | $46.7\u202fB | $7.7\u202fB |\n\n*Sources:* NVIDIA figures are from the quarterly fundamentals returned by `get_fundamentals_history_batch`\u202f[2]; AMD figures are from the same tool\u202f[1].\n\n**What the data show**\n\n- Both companies have reported **sequential revenue growth** across the four quarters, with each quarter\u2019s revenue higher than the prior quarter.\n- NVIDIA\u2019s quarterly revenue has risen from **$46.7\u202fB to $81.6\u202fB**, a roughly **75\u202f% increase** over the period.\n- AMD\u2019s quarterly revenue has risen from **$7.7\u202fB to $10.3\u202fB**, a roughly **34\u202f% increase** over the same span.\n\nThese observations are based solely on the reported quarterly revenue numbers for the last four quarters. No forward\u2011looking forecasts or price predictions are provided.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "AMD",
+            "id": "tool:fundamentals_batch:AMD",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: AMD",
+            "url": null
+          },
+          {
+            "confidence": 0.88,
+            "entity_name": "NVDA",
+            "id": "tool:fundamentals_batch:NVDA",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 2,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: NVDA",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Advanced Micro Devices Inc?",
+          "How has AMD performed recently?",
+          "Who are Advanced Micro Devices Inc's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 45769,
+          "message_id": "019f02d7-5ecf-7b0b-9e15-8b787cd12f7f",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "69870dbf-a481-4a6a-9f11-06dba43a7608"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 7.935250003356487,
+            "entity_resolution": 156.66174999205396,
+            "grounding_validation": 30018.948722005007,
+            "llm_direct_text_generation": 10077.677212990238,
+            "llm_tool_planning": 13786.45396498905,
+            "load_history": 53.62054199213162,
+            "persist_and_cache": 47.34075001033489,
+            "tool_execution": 287.8699580032844,
+            "validate_input": 1061.7955839989008
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 4,
+          "tickers": [
+            "NVDA",
+            "AMD"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "1.87",
+            "eps_2": "1.37",
+            "gross_profit": "61157000000",
+            "gross_profit_2": "5416000000",
+            "market_cap": "5053711646720",
+            "market_cap_2": "847667658752",
+            "net_income": "58321000000",
+            "net_income_2": "1383000000",
+            "pe_ratio": "31.9525",
+            "pe_ratio_2": "172.1358",
+            "revenue": "81615000000",
+            "revenue_2": "10253000000",
+            "ticker": "NVDA",
+            "ticker_2": "AMD"
+          },
+          "sampled_rows": 2,
+          "total_rows": 2,
+          "truncated": false
+        },
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 6.46,
+    "tps_streaming": 28.677,
+    "ttft_s": 1.152
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "financials",
+    "aggregate",
+    "q4_original"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, well-chosen tool call (get_fundamentals_history_batch with both tickers and periods=4) that directly answers the revenue-trajectory comparison. No wasted steps, no redundant calls, and no recovery needed. The only process improvement would be to verify that the returned data covers exactly four quarters (the answer lists four rows, which matches the request). Overall a clean, efficient trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one batch call fetching both tickers' 4-quarter history is the minimal, non-redundant way to answer the question.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call with both tickers and periods=4 \u2014 no dependency ordering needed; all data obtained in one step.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_fundamentals_history_batch is exactly the right tool for a revenue-trajectory comparison; perfect tool\u2013intent match.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

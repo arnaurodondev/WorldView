@@ -1,0 +1,1591 @@
+{
+  "bucket": "PASS",
+  "category": "reasoning",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 400,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_health",
+      "get_entity_intelligence",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_intelligence",
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 94.895,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "output_tokens": 100,
+    "phase_timings_ms": {
+      "check_cache": 3.800207981839776,
+      "entity_resolution": 193.7797499995213,
+      "grounding_validation": 25261.04917799239,
+      "llm_synthesis_streaming": 6655.168085999321,
+      "llm_tool_planning": 59256.80023498717,
+      "load_history": 32.57495802245103,
+      "persist_and_cache": 23.75583301181905,
+      "tool_execution": 1056.4468339725863,
+      "validate_input": 1375.0653339957353
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_health"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_health",
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 1.415,
+    "word_count": 55
+  },
+  "id": "chain_unhealthy_entity_investigation",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a deep synthesis about a poorly-covered entity; answer concisely identifies SNDL, reports the health score, and transparently states data limitations \u2014 appropriate depth for the available data.",
+        "reason": "Question asks for a deep synthesis about a poorly-covered entity; answer concisely identifies SNDL, reports the health score, and transparently states data limitations \u2014 appropriate depth for the available data.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Health score 0.40 and confidence range 0.88-0.90 are grounded in tool_results; no grounding sample contradicts them. The 'no further company-specific information' claim is supported by empty search_documents results.",
+        "reason": "Health score 0.40 and confidence range 0.88-0.90 are grounded in tool_results; no grounding sample contradicts them. The 'no further company-specific information' claim is supported by empty search_documents results.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides substantive data (health score, confidence range) and transparently flags missing data without refusing.",
+        "reason": "No refusal phrase present \u2014 answer provides substantive data (health score, confidence range) and transparently flags missing data without refusing.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.",
+        "reason": "Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified SNDL as a poorly-covered entity using get_entity_health and get_entity_intelligence, and honestly reported the data limitations when search_documents returned empty. The health score and confidence range are grounded in tool results. The main improvement would be to attempt query_fundamentals as an additional expected tool to see if any financial data exists, rather than relying solely on search_documents. The answer is appropriately concise for the sparse data available.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Health score 0.40 and confidence range 0.88-0.90 are grounded in tool_results; no grounding sample contradicts them. The 'no further company-specific information' claim is supported by empty search_documents results.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a deep synthesis about a poorly-covered entity; answer concisely identifies SNDL, reports the health score, and transparently states data limitations \u2014 appropriate depth for the available data.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides substantive data (health score, confidence range) and transparently flags missing data without refusing.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified SNDL as a poorly-covered entity using get_entity_health and get_entity_intelligence, and honestly reported the data limitations when search_documents returned empty. The health score and confidence range are grounded in tool results. The main improvement would be to attempt query_fundamentals as an additional expected tool to see if any financial data exists, rather than relying solely on search_documents. The answer is appropriately concise for the sparse data available.\"\n}",
+    "reviewer_summary": "The agent correctly identified SNDL as a poorly-covered entity using get_entity_health and get_entity_intelligence, and honestly reported the data limitations when search_documents returned empty. The health score and confidence range are grounded in tool results. The main improvement would be to attempt query_fundamentals as an additional expected tool to see if any financial data exists, rather than relying solely on search_documents. The answer is appropriately concise for the sparse data available.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+  "reasons": [],
+  "result": {
+    "answer_text": "SNDL (Sundial\u202fGrowers) shows a poor data\u2011quality health score of **0.40**\u3010get_entity_health row 1\u3011. The score comes from a narrative source of unknown date and carries a confidence of roughly\u202f0.88\u20130.90\u3010get_entity_intelligence row 2\u3011. No further company\u2011specific information (e.g., financials, operations) is present in the retrieved data.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1414993
+      ],
+      [
+        "status",
+        1443083
+      ],
+      [
+        "thinking",
+        1638833
+      ],
+      [
+        "agent_iteration",
+        1638862
+      ],
+      [
+        "status",
+        16274884
+      ],
+      [
+        "tool_call",
+        16274971
+      ],
+      [
+        "tool_result",
+        16404305
+      ],
+      [
+        "agent_iteration",
+        16668108
+      ],
+      [
+        "tool_call",
+        20238807
+      ],
+      [
+        "tool_result",
+        20264102
+      ],
+      [
+        "agent_iteration",
+        20419931
+      ],
+      [
+        "agent_iteration",
+        29437608
+      ],
+      [
+        "tool_call",
+        46066352
+      ],
+      [
+        "tool_result",
+        46534121
+      ],
+      [
+        "agent_iteration",
+        46796533
+      ],
+      [
+        "tool_call",
+        62493007
+      ],
+      [
+        "tool_result",
+        62916215
+      ],
+      [
+        "agent_iteration",
+        62916310
+      ],
+      [
+        "token",
+        69560644
+      ],
+      [
+        "token",
+        69560869
+      ],
+      [
+        "token",
+        69560916
+      ],
+      [
+        "token",
+        69560973
+      ],
+      [
+        "token",
+        69561030
+      ],
+      [
+        "token",
+        69561147
+      ],
+      [
+        "token",
+        69561227
+      ],
+      [
+        "token",
+        69561277
+      ],
+      [
+        "token",
+        69561400
+      ],
+      [
+        "token",
+        69561440
+      ],
+      [
+        "token",
+        69561476
+      ],
+      [
+        "token",
+        69561511
+      ],
+      [
+        "token",
+        69561601
+      ],
+      [
+        "token",
+        69561636
+      ],
+      [
+        "token",
+        69561671
+      ],
+      [
+        "token",
+        69561754
+      ],
+      [
+        "token",
+        69561883
+      ],
+      [
+        "token",
+        69561987
+      ],
+      [
+        "token",
+        69562129
+      ],
+      [
+        "token",
+        69562207
+      ],
+      [
+        "token",
+        69562346
+      ],
+      [
+        "token",
+        69562685
+      ],
+      [
+        "token",
+        69563040
+      ],
+      [
+        "token",
+        69563175
+      ],
+      [
+        "token",
+        69563342
+      ],
+      [
+        "token",
+        69563504
+      ],
+      [
+        "token",
+        69563740
+      ],
+      [
+        "token",
+        69563962
+      ],
+      [
+        "token",
+        69564326
+      ],
+      [
+        "token",
+        69564562
+      ],
+      [
+        "token",
+        69564740
+      ],
+      [
+        "token",
+        69564838
+      ],
+      [
+        "token",
+        69565096
+      ],
+      [
+        "token",
+        69565304
+      ],
+      [
+        "token",
+        69565617
+      ],
+      [
+        "token",
+        69565756
+      ],
+      [
+        "token",
+        69566020
+      ],
+      [
+        "token",
+        69566414
+      ],
+      [
+        "token",
+        69566588
+      ],
+      [
+        "token",
+        69567076
+      ],
+      [
+        "token",
+        69567601
+      ],
+      [
+        "token",
+        69567858
+      ],
+      [
+        "token",
+        69568251
+      ],
+      [
+        "token",
+        69568409
+      ],
+      [
+        "token",
+        69568845
+      ],
+      [
+        "token",
+        69568990
+      ],
+      [
+        "token",
+        69569170
+      ],
+      [
+        "token",
+        69569253
+      ],
+      [
+        "token",
+        69569325
+      ],
+      [
+        "token",
+        69569400
+      ],
+      [
+        "token",
+        69569478
+      ],
+      [
+        "token",
+        69569617
+      ],
+      [
+        "token",
+        69569794
+      ],
+      [
+        "token",
+        69569969
+      ],
+      [
+        "token",
+        69570235
+      ],
+      [
+        "token",
+        69574738
+      ],
+      [
+        "token",
+        69574809
+      ],
+      [
+        "token",
+        69574826
+      ],
+      [
+        "token",
+        69574844
+      ],
+      [
+        "token",
+        69574861
+      ],
+      [
+        "token",
+        69574877
+      ],
+      [
+        "token",
+        69574893
+      ],
+      [
+        "token",
+        69574908
+      ],
+      [
+        "token",
+        69574924
+      ],
+      [
+        "token",
+        69574940
+      ],
+      [
+        "token",
+        69574956
+      ],
+      [
+        "token",
+        69574971
+      ],
+      [
+        "token",
+        69574986
+      ],
+      [
+        "token",
+        69575001
+      ],
+      [
+        "token",
+        69575016
+      ],
+      [
+        "token",
+        69575031
+      ],
+      [
+        "token",
+        69575051
+      ],
+      [
+        "token",
+        69575066
+      ],
+      [
+        "token",
+        69575082
+      ],
+      [
+        "token",
+        69575098
+      ],
+      [
+        "token",
+        69575113
+      ],
+      [
+        "token",
+        69575128
+      ],
+      [
+        "token",
+        69575151
+      ],
+      [
+        "token",
+        69575177
+      ],
+      [
+        "token",
+        69575193
+      ],
+      [
+        "token",
+        69575209
+      ],
+      [
+        "token",
+        69575224
+      ],
+      [
+        "token",
+        69575241
+      ],
+      [
+        "token",
+        69575257
+      ],
+      [
+        "token",
+        69575272
+      ],
+      [
+        "token",
+        69575288
+      ],
+      [
+        "token",
+        69575326
+      ],
+      [
+        "token",
+        69575342
+      ],
+      [
+        "token",
+        69575357
+      ],
+      [
+        "token",
+        69575372
+      ],
+      [
+        "status",
+        69577991
+      ],
+      [
+        "final_answer",
+        94840198
+      ],
+      [
+        "citations",
+        94840484
+      ],
+      [
+        "contradictions",
+        94855105
+      ],
+      [
+        "suggestions",
+        94855330
+      ],
+      [
+        "metadata",
+        94870202
+      ],
+      [
+        "done",
+        94871011
+      ]
+    ],
+    "latency_s": 94.895,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 94812,
+      "message_id": "019f0310-9983-7dbb-8e1f-058209bce7cd",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "5a57f394-d0dd-4937-b992-178304f50429"
+    },
+    "output_tokens": 100,
+    "phase_timings_ms": {
+      "check_cache": 3.800207981839776,
+      "entity_resolution": 193.7797499995213,
+      "grounding_validation": 25261.04917799239,
+      "llm_synthesis_streaming": 6655.168085999321,
+      "llm_tool_planning": 59256.80023498717,
+      "load_history": 32.57495802245103,
+      "persist_and_cache": 23.75583301181905,
+      "tool_execution": 1056.4468339725863,
+      "validate_input": 1375.0653339957353
+    },
+    "question": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_health\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "SNDL"
+          },
+          "label": "Computing health score for SNDL",
+          "status": "running",
+          "tool": "get_entity_health",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 133,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "data"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Computing health score for SNDL",
+          "result_preview": [
+            {
+              "id": "tool:health:4fb31483-33cf-4799-ab9b-fe8202dd6339",
+              "title": "Health: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_health",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15027,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "SNDL"
+          },
+          "label": "Loading intelligence for SNDL",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 27,
+          "item_count": 1,
+          "label": "Loading intelligence for SNDL",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:4fb31483-33cf-4799-ab9b-fe8202dd6339",
+              "title": "Intelligence: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18781,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 27796,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "sec_filing",
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 470,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 45157,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 423,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 61277,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ND"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "L"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "S"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "und"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ial"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Grow"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " shows"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " poor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " data"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "quality"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " health"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " score"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "40"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3010"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "get"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_entity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_health"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " score"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " comes"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " from"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " narrative"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " source"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " unknown"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " date"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " carries"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " confidence"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " roughly"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "88"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "90"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3010"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "get"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_entity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_int"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "elligence"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " No"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " further"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " company"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "specific"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " information"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "e"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".g"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".,"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " financial"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " operations"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " is"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " present"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " data"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "SNDL (Sundial\u202fGrowers) shows a poor data\u2011quality health score of **0.40**\u3010get_entity_health row 1\u3011. The score comes from a narrative source of unknown date and carries a confidence of roughly\u202f0.88\u20130.90\u3010get_entity_intelligence row 2\u3011. No further company\u2011specific information (e.g., financials, operations) is present in the retrieved data.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has data performed recently?",
+          "How do data's fundamentals look?",
+          "What are the biggest risks for data right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 94812,
+          "message_id": "019f0310-9983-7dbb-8e1f-058209bce7cd",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "5a57f394-d0dd-4937-b992-178304f50429"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.800207981839776,
+            "entity_resolution": 193.7797499995213,
+            "grounding_validation": 25261.04917799239,
+            "llm_synthesis_streaming": 6655.168085999321,
+            "llm_tool_planning": 59256.80023498717,
+            "load_history": 32.57495802245103,
+            "persist_and_cache": 23.75583301181905,
+            "tool_execution": 1056.4468339725863,
+            "validate_input": 1375.0653339957353
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "SNDL"
+        },
+        "name": "get_entity_health"
+      },
+      {
+        "arguments": {
+          "entity_id": "SNDL"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "sec_filing",
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "data"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 1.07,
+    "tps_streaming": 15.026,
+    "ttft_s": 1.415
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "Claims every entity in coverage is fully healthy"
+    ],
+    "required_facts": [
+      "Names a specific entity flagged with a health concern (low score, missing field, stale data, etc.)",
+      "Summarises whatever data IS available for that entity (description, recent metric, recent news)"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "reasoning",
+    "signal"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified SNDL's poor health score using get_entity_health and supplemented with get_entity_intelligence. However, it then wasted two calls on search_documents with empty tickers, which could never return entity-specific data. The process would be improved by either omitting those calls entirely or passing the resolved entity ticker from call 1 into the search. The recovery from the empty results was ineffective because the same flawed approach was repeated.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 3 and 4 are redundant and wasted \u2014 both used empty tickers and returned nothing. The needed data was already obtained in calls 1 and 2.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "No dependency constraints exist among the calls; the order is arbitrary but not incorrect. Single-fact resolution after call 1 is fine.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 3 returned empty, the agent retried with a slightly different filter (call 4) but still with empty tickers, which was bound to fail again. No meaningful recovery was attempted.",
+        "score": 10
+      },
+      "routing": {
+        "feedback": "The agent correctly used get_entity_health and get_entity_intelligence for a data-quality question, but then called search_documents with empty tickers twice, which is mismatched to the intent of retrieving entity-specific data.",
+        "score": 15
+      }
+    },
+    "trajectory_score": 65,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

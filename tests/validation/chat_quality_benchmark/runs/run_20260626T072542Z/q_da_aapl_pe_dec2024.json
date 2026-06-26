@@ -1,0 +1,810 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 512,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 59.543,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 128,
+    "phase_timings_ms": {
+      "check_cache": 1.2597089807968587,
+      "entity_resolution": 80.95324999885634,
+      "grounding_validation": 30006.143722013803,
+      "llm_direct_text_generation": 8453.136211988749,
+      "llm_tool_planning": 27672.11263801437,
+      "load_history": 2.5082499778363854,
+      "persist_and_cache": 50.023250019876286,
+      "tool_execution": 96.71945802983828,
+      "validate_input": 607.6210000028368
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.644,
+    "word_count": 87
+  },
+  "id": "da_aapl_pe_dec2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup; answer is appropriately concise and cites the available data. Depth matches complexity.",
+        "reason": "Question is a factual lookup; answer is appropriately concise and cites the available data. Depth matches complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims the tool returned a snapshot P/E of 35.96x; no grounding sample to verify, but the answer stays within tool scope and flags uncertainty. Minor deduction for not citing a specific row.",
+        "reason": "Claims the tool returned a snapshot P/E of 35.96x; no grounding sample to verify, but the answer stays within tool scope and flags uncertainty. Minor deduction for not citing a specific row.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I cannot find' and does not provide the requested data. Tool results show status=ok items=1, so data was available; refusal is inappropriate.",
+        "reason": "Contains refusal phrase 'I cannot find' and does not provide the requested data. Tool results show status=ok items=1, so data was available; refusal is inappropriate.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals and produced a concise, well-framed answer. However, it refused to answer the specific question about the P/E ratio as of Dec 31, 2024, despite the tool returning data. The tool was called with periods=5 and period_type=quarterly, which should have included the Q4 FY2024 period ending Dec 28, 2024. The agent should have extracted the P/E for that period from the tool results rather than defaulting to a refusal. Next time, ensure the agent inspects all returned periods before concluding data is missing.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims the tool returned a snapshot P/E of 35.96x; no grounding sample to verify, but the answer stays within tool scope and flags uncertainty. Minor deduction for not citing a specific row.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup; answer is appropriately concise and cites the available data. Depth matches complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I cannot find' and does not provide the requested data. Tool results show status=ok items=1, so data was available; refusal is inappropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and produced a concise, well-framed answer. However, it refused to answer the specific question about the P/E ratio as of Dec 31, 2024, despite the tool returning data. The tool was called with periods=5 and period_type=quarterly, which should have included the Q4 FY2024 period ending Dec 28, 2024. The agent should have extracted the P/E for that period from the tool results rather than defaulting to a refusal. Next time, ensure the agent inspects all returned periods before concluding data is missing.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals and produced a concise, well-framed answer. However, it refused to answer the specific question about the P/E ratio as of Dec 31, 2024, despite the tool returning data. The tool was called with periods=5 and period_type=quarterly, which should have included the Q4 FY2024 period ending Dec 28, 2024. The agent should have extracted the P/E for that period from the tool results rather than defaulting to a refusal. Next time, ensure the agent inspects all returned periods before concluding data is missing.",
+    "score": 70,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 70,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "What was AAPL's P/E ratio as of December 31, 2024?",
+  "reasons": [
+    "slow latency_s=59.543"
+  ],
+  "result": {
+    "answer_text": "I cannot find evidence that Apple\u202fInc. (AAPL) had a specific P/E ratio on\u202fDecember\u202f31\u202f2024. The\u202f`query_fundamentals`\u202ftool returned only a current\u2011snapshot P/E ratio of\u202f35.96\u00d7 (source: fundamentals, date\u202funknown) and did not include a historical value for the end of\u202f2024.  \n\nIf helpful, I can share the most recent P/E ratio that the system has (35.96\u00d7) or look for the P/E reported in the latest quarterly filing. Let me know how you\u2019d like to proceed.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        643943
+      ],
+      [
+        "status",
+        645695
+      ],
+      [
+        "thinking",
+        728298
+      ],
+      [
+        "agent_iteration",
+        728325
+      ],
+      [
+        "status",
+        6010339
+      ],
+      [
+        "tool_call",
+        6010454
+      ],
+      [
+        "tool_result",
+        6085593
+      ],
+      [
+        "agent_iteration",
+        6436655
+      ],
+      [
+        "tool_call",
+        12435610
+      ],
+      [
+        "tool_result",
+        12455729
+      ],
+      [
+        "agent_iteration",
+        12724923
+      ],
+      [
+        "tool_call",
+        16596032
+      ],
+      [
+        "tool_result",
+        16596167
+      ],
+      [
+        "agent_iteration",
+        16768649
+      ],
+      [
+        "tool_call",
+        20835524
+      ],
+      [
+        "tool_result",
+        20835600
+      ],
+      [
+        "agent_iteration",
+        21016965
+      ],
+      [
+        "token",
+        29469544
+      ],
+      [
+        "token",
+        29469704
+      ],
+      [
+        "token",
+        29469765
+      ],
+      [
+        "token",
+        29469873
+      ],
+      [
+        "token",
+        29470250
+      ],
+      [
+        "token",
+        29470561
+      ],
+      [
+        "token",
+        29470751
+      ],
+      [
+        "token",
+        29470962
+      ],
+      [
+        "token",
+        29471256
+      ],
+      [
+        "token",
+        29471380
+      ],
+      [
+        "status",
+        29475842
+      ],
+      [
+        "final_answer",
+        59484047
+      ],
+      [
+        "citations",
+        59484134
+      ],
+      [
+        "contradictions",
+        59497195
+      ],
+      [
+        "suggestions",
+        59497498
+      ],
+      [
+        "metadata",
+        59537247
+      ],
+      [
+        "done",
+        59537428
+      ]
+    ],
+    "latency_s": 59.543,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 59452,
+      "message_id": "019f0314-fdfb-7c3f-8be9-851a15363c22",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "dfc865c4-e77e-4348-b996-1e5a0a580a06"
+    },
+    "output_tokens": 128,
+    "phase_timings_ms": {
+      "check_cache": 1.2597089807968587,
+      "entity_resolution": 80.95324999885634,
+      "grounding_validation": 30006.143722013803,
+      "llm_direct_text_generation": 8453.136211988749,
+      "llm_tool_planning": 27672.11263801437,
+      "load_history": 2.5082499778363854,
+      "persist_and_cache": 50.023250019876286,
+      "tool_execution": 96.71945802983828,
+      "validate_input": 607.6210000028368
+    },
+    "question": "What was AAPL's P/E ratio as of December 31, 2024?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 74,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5708,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 21,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11996,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16035,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 20287,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Apple\u202fInc. (AAPL) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "had a specific P/E ratio on\u202fDecember\u202f31\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2024. The\u202f`query_fundamentals`\u202ftool returned only a current\u2011snapshot "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "P/E ratio of\u202f35.96\u00d7 (source: fundamentals, date\u202funknown) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and did not include a historical value for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the end of\u202f2024.  \n\nIf helpful, I can "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "share the most recent P/E ratio that the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "system has (35.96\u00d7) or look for the P/E "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reported in the latest quarterly filing. Let me "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "know how you\u2019d like to proceed."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Apple\u202fInc. (AAPL) had a specific P/E ratio on\u202fDecember\u202f31\u202f2024. The\u202f`query_fundamentals`\u202ftool returned only a current\u2011snapshot P/E ratio of\u202f35.96\u00d7 (source: fundamentals, date\u202funknown) and did not include a historical value for the end of\u202f2024.  \n\nIf helpful, I can share the most recent P/E ratio that the system has (35.96\u00d7) or look for the P/E reported in the latest quarterly filing. Let me know how you\u2019d like to proceed.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 59452,
+          "message_id": "019f0314-fdfb-7c3f-8be9-851a15363c22",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "dfc865c4-e77e-4348-b996-1e5a0a580a06"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.2597089807968587,
+            "entity_resolution": 80.95324999885634,
+            "grounding_validation": 30006.143722013803,
+            "llm_direct_text_generation": 8453.136211988749,
+            "llm_tool_planning": 27672.11263801437,
+            "load_history": 2.5082499778363854,
+            "persist_and_cache": 50.023250019876286,
+            "tool_execution": 96.71945802983828,
+            "validate_input": 607.6210000028368
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 2.173,
+    "tps_streaming": 15.142,
+    "ttft_s": 0.644
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "pe_from_2025_or_2026",
+      "single_quarter_passed_off_as_ttm",
+      "unanchored_pe_value"
+    ],
+    "required_facts": [
+      "pe_value_as_of_2024_12_31",
+      "period_anchor_acknowledged"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "ratio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent correctly identified query_fundamentals as the right tool for a P/E question, but then failed to recover when the first call returned only a snapshot instead of the requested Dec 31, 2024 value. Rather than switching to get_fundamentals_history (the tool designed for historical point-in-time data), it repeated the identical call three more times, wasting 3/4 of the budget. The core process flaw is a lack of adaptive recovery: after the first call's output didn't contain the needed date-anchored value, the agent should have tried a different tool or parameterization instead of looping on the same failing pattern.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 1, 3, and 4 are identical (same tool, same args, same result). This is pure redundancy \u2014 three wasted calls that returned no new information. The agent should have made one call, then pivoted to a different tool or parameters.",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "All calls are independent and parallel; there is no data dependency to order. No ordering issue.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "The first call returned only a snapshot, not the Dec 31, 2024 value. Instead of retrying with get_fundamentals_history (the expected tool for a historical date), the agent repeated the same query_fundamentals call three more times with no change in arguments, never recovering the needed data.",
+        "score": 10
+      },
+      "routing": {
+        "feedback": "call 1-4 all use query_fundamentals, which is exactly the right tool for a P/E ratio question. The intent is fully matched.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 65,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

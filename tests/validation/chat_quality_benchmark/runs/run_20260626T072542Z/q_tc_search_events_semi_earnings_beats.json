@@ -1,0 +1,1886 @@
+{
+  "bucket": "WARN",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "search_events",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 253,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "get_entity_news",
+      "screen_universe",
+      "search_claims",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "search_documents",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 61.76,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 64,
+    "phase_timings_ms": {
+      "check_cache": 2.5666670117061585,
+      "entity_resolution": 97.3758329928387,
+      "grounding_validation": 4985.508251993451,
+      "llm_synthesis_streaming": 6379.632253025193,
+      "llm_tool_planning": 44458.381435018964,
+      "load_history": 41.85737497755326,
+      "persist_and_cache": 27.307167008984834,
+      "tool_execution": 2179.9823350156657,
+      "validate_input": 596.000332996482
+    },
+    "status_code": 200,
+    "tool_call_count": 9,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_name"
+        ],
+        "tool": "search_claims"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "industry",
+          "limit",
+          "sector"
+        ],
+        "tool": "screen_universe"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "days_back",
+          "max_results",
+          "ticker"
+        ],
+        "tool": "get_entity_news"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_documents"
+    ],
+    "tool_result_count": 9,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_entity_news"
+      }
+    ],
+    "ttft_s": 0.646,
+    "word_count": 38
+  },
+  "id": "tc_search_events_semi_earnings_beats",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a factual lookup (any recent beats?). Answer is concise, directly addresses the query, and appropriately refuses when data is missing.",
+        "reason": "Question is a factual lookup (any recent beats?). Answer is concise, directly addresses the query, and appropriately refuses when data is missing.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided (presumed band). Answer stays within scope: correctly reports no earnings-beat data found, cites tool results (status=empty, narrative-only bundle).",
+        "reason": "No grounding sample provided (presumed band). Answer stays within scope: correctly reports no earnings-beat data found, cites tool results (status=empty, narrative-only bundle).",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides a clear, data-supported statement that no earnings-beat reports were found.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides a clear, data-supported statement that no earnings-beat reports were found.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Agent called search_documents (expected tool) multiple times; also used get_entity_intelligence and get_entity_news as supporting tools.",
+        "reason": "Agent called search_documents (expected tool) multiple times; also used get_entity_intelligence and get_entity_news as supporting tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the question to search_documents (expected tool) and supplemented with entity intelligence and news tools. All tool calls returned empty or narrative-only data, and the answer honestly reports that no earnings-beat information was found \u2014 an appropriate refusal given the missing data (rubric.appropriate_refusal_ok=true). The answer is concise, well-grounded in the tool results, and avoids fabrication. The only improvement would be to try a broader search (e.g., screen_universe for semiconductor companies then check each) to increase coverage, but the current approach is acceptable for the given data constraints.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Agent called search_documents (expected tool) multiple times; also used get_entity_intelligence and get_entity_news as supporting tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided (presumed band). Answer stays within scope: correctly reports no earnings-beat data found, cites tool results (status=empty, narrative-only bundle).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup (any recent beats?). Answer is concise, directly addresses the query, and appropriately refuses when data is missing.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides a clear, data-supported statement that no earnings-beat reports were found.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the question to search_documents (expected tool) and supplemented with entity intelligence and news tools. All tool calls returned empty or narrative-only data, and the answer honestly reports that no earnings-beat information was found \u2014 an appropriate refusal given the missing data (rubric.appropriate_refusal_ok=true). The answer is concise, well-grounded in the tool results, and avoids fabrication. The only improvement would be to try a broader search (e.g., screen_universe for semiconductor companies then check each) to increase coverage, but the current approach is acceptable for the given data constraints.\"\n}",
+    "reviewer_summary": "The agent correctly routed the question to search_documents (expected tool) and supplemented with entity intelligence and news tools. All tool calls returned empty or narrative-only data, and the answer honestly reports that no earnings-beat information was found \u2014 an appropriate refusal given the missing data (rubric.appropriate_refusal_ok=true). The answer is concise, well-grounded in the tool results, and avoids fabrication. The only improvement would be to try a broader search (e.g., screen_universe for semiconductor companies then check each) to increase coverage, but the current approach is acceptable for the given data constraints.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Any recent earnings beats in the semiconductor space?",
+  "reasons": [
+    "slow latency_s=61.76"
+  ],
+  "result": {
+    "answer_text": "No earnings\u2011beat reports for SJ\u202fSemiconductor have been identified in the recent data. The available intelligence bundle for SJ\u202fSemiconductor contains only a narrative about its operations and funding, with no mention of earnings results or beat status.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        645964
+      ],
+      [
+        "status",
+        678615
+      ],
+      [
+        "thinking",
+        783374
+      ],
+      [
+        "agent_iteration",
+        783453
+      ],
+      [
+        "status",
+        6448140
+      ],
+      [
+        "tool_call",
+        6448428
+      ],
+      [
+        "tool_result",
+        7209326
+      ],
+      [
+        "tool_call",
+        7601124
+      ],
+      [
+        "tool_result",
+        7601202
+      ],
+      [
+        "tool_call",
+        7601225
+      ],
+      [
+        "tool_result",
+        7601375
+      ],
+      [
+        "tool_call",
+        7601797
+      ],
+      [
+        "tool_result",
+        7601879
+      ],
+      [
+        "agent_iteration",
+        8538791
+      ],
+      [
+        "tool_call",
+        15560013
+      ],
+      [
+        "tool_result",
+        15912161
+      ],
+      [
+        "agent_iteration",
+        16196202
+      ],
+      [
+        "tool_call",
+        20907384
+      ],
+      [
+        "tool_result",
+        21284585
+      ],
+      [
+        "agent_iteration",
+        21549344
+      ],
+      [
+        "tool_call",
+        25838349
+      ],
+      [
+        "tool_result",
+        26169426
+      ],
+      [
+        "agent_iteration",
+        26375902
+      ],
+      [
+        "agent_iteration",
+        30362999
+      ],
+      [
+        "tool_call",
+        35025991
+      ],
+      [
+        "tool_result",
+        35151230
+      ],
+      [
+        "agent_iteration",
+        35317819
+      ],
+      [
+        "tool_call",
+        45795115
+      ],
+      [
+        "tool_result",
+        46005875
+      ],
+      [
+        "agent_iteration",
+        46343024
+      ],
+      [
+        "agent_iteration",
+        50358491
+      ],
+      [
+        "token",
+        56719192
+      ],
+      [
+        "token",
+        56719735
+      ],
+      [
+        "token",
+        56719771
+      ],
+      [
+        "token",
+        56720578
+      ],
+      [
+        "token",
+        56720987
+      ],
+      [
+        "token",
+        56721276
+      ],
+      [
+        "token",
+        56721592
+      ],
+      [
+        "token",
+        56721709
+      ],
+      [
+        "token",
+        56722026
+      ],
+      [
+        "token",
+        56722450
+      ],
+      [
+        "token",
+        56722971
+      ],
+      [
+        "token",
+        56723255
+      ],
+      [
+        "token",
+        56723556
+      ],
+      [
+        "token",
+        56723755
+      ],
+      [
+        "token",
+        56723963
+      ],
+      [
+        "token",
+        56724240
+      ],
+      [
+        "token",
+        56724551
+      ],
+      [
+        "token",
+        56724821
+      ],
+      [
+        "token",
+        56725138
+      ],
+      [
+        "token",
+        56725311
+      ],
+      [
+        "token",
+        56725594
+      ],
+      [
+        "token",
+        56725975
+      ],
+      [
+        "token",
+        56726333
+      ],
+      [
+        "token",
+        56726581
+      ],
+      [
+        "token",
+        56726817
+      ],
+      [
+        "token",
+        56726980
+      ],
+      [
+        "token",
+        56727224
+      ],
+      [
+        "token",
+        56727429
+      ],
+      [
+        "token",
+        56727909
+      ],
+      [
+        "token",
+        56728210
+      ],
+      [
+        "token",
+        56728630
+      ],
+      [
+        "token",
+        56728790
+      ],
+      [
+        "token",
+        56729138
+      ],
+      [
+        "token",
+        56729560
+      ],
+      [
+        "token",
+        56730110
+      ],
+      [
+        "token",
+        56730151
+      ],
+      [
+        "token",
+        56730342
+      ],
+      [
+        "token",
+        56730537
+      ],
+      [
+        "token",
+        56730822
+      ],
+      [
+        "token",
+        56731013
+      ],
+      [
+        "token",
+        56731338
+      ],
+      [
+        "token",
+        56731735
+      ],
+      [
+        "token",
+        56732172
+      ],
+      [
+        "token",
+        56732481
+      ],
+      [
+        "token",
+        56733129
+      ],
+      [
+        "token",
+        56733700
+      ],
+      [
+        "token",
+        56734168
+      ],
+      [
+        "token",
+        56734474
+      ],
+      [
+        "token",
+        56734669
+      ],
+      [
+        "token",
+        56734781
+      ],
+      [
+        "token",
+        56735000
+      ],
+      [
+        "token",
+        56735229
+      ],
+      [
+        "token",
+        56735462
+      ],
+      [
+        "token",
+        56735879
+      ],
+      [
+        "token",
+        56736214
+      ],
+      [
+        "token",
+        56736291
+      ],
+      [
+        "token",
+        56736510
+      ],
+      [
+        "token",
+        56736756
+      ],
+      [
+        "token",
+        56737006
+      ],
+      [
+        "token",
+        56737302
+      ],
+      [
+        "token",
+        56737477
+      ],
+      [
+        "token",
+        56737604
+      ],
+      [
+        "token",
+        56737913
+      ],
+      [
+        "token",
+        56738165
+      ],
+      [
+        "token",
+        56738343
+      ],
+      [
+        "token",
+        56738498
+      ],
+      [
+        "token",
+        56738680
+      ],
+      [
+        "token",
+        56738777
+      ],
+      [
+        "token",
+        56738949
+      ],
+      [
+        "token",
+        56739152
+      ],
+      [
+        "token",
+        56739453
+      ],
+      [
+        "token",
+        56739661
+      ],
+      [
+        "token",
+        56739913
+      ],
+      [
+        "token",
+        56740047
+      ],
+      [
+        "token",
+        56740371
+      ],
+      [
+        "token",
+        56740563
+      ],
+      [
+        "token",
+        56740790
+      ],
+      [
+        "token",
+        56740998
+      ],
+      [
+        "token",
+        56741211
+      ],
+      [
+        "token",
+        56741367
+      ],
+      [
+        "token",
+        56741567
+      ],
+      [
+        "token",
+        56741925
+      ],
+      [
+        "token",
+        56742129
+      ],
+      [
+        "token",
+        56742272
+      ],
+      [
+        "status",
+        56742787
+      ],
+      [
+        "final_answer",
+        61727258
+      ],
+      [
+        "citations",
+        61727525
+      ],
+      [
+        "contradictions",
+        61730580
+      ],
+      [
+        "suggestions",
+        61730810
+      ],
+      [
+        "metadata",
+        61752734
+      ],
+      [
+        "done",
+        61753311
+      ]
+    ],
+    "latency_s": 61.76,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 61699,
+      "message_id": "019f0303-d3a1-7ed2-8965-47c37cb2067f",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "903175c1-c599-45a0-8b09-3195c1e6dd96"
+    },
+    "output_tokens": 64,
+    "phase_timings_ms": {
+      "check_cache": 2.5666670117061585,
+      "entity_resolution": 97.3758329928387,
+      "grounding_validation": 4985.508251993451,
+      "llm_synthesis_streaming": 6379.632253025193,
+      "llm_tool_planning": 44458.381435018964,
+      "load_history": 41.85737497755326,
+      "persist_and_cache": 27.307167008984834,
+      "tool_execution": 2179.9823350156657,
+      "validate_input": 596.000332996482
+    },
+    "question": "Any recent earnings beats in the semiconductor space?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 761,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2026-01-31",
+            "date_to": "2026-09-24",
+            "entity_tickers": []
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 190,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_name": "SJ Semiconductor"
+          },
+          "is_fallback": true,
+          "label": "Checking analyst claims on SJ Semiconductor",
+          "status": "running",
+          "tool": "search_claims",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 115,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_claims",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+          },
+          "is_fallback": true,
+          "label": "Loading intelligence for e90caaac-b550-4698-8909-8d19cf034ee6",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 85,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:intelligence:e90caaac-b550-4698-8909-8d19cf034ee6",
+              "title": "Intelligence: SJ Semiconductor"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7755,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 353,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15413,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-05-01",
+            "date_to": "2026-06-26",
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 383,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 20766,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "industry": "Semiconductors",
+            "limit": 20,
+            "sector": "Technology"
+          },
+          "label": "Screening universe...",
+          "status": "running",
+          "tool": "screen_universe",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 328,
+          "item_count": 1,
+          "label": "Screening universe...",
+          "result_preview": [
+            {
+              "id": "tool:screener:results",
+              "title": "Screener results"
+            }
+          ],
+          "status": "ok",
+          "tool": "screen_universe",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 25593,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 29580,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "news",
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 128,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 34533,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 5
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "days_back": 30,
+            "max_results": 5,
+            "ticker": "NVDA"
+          },
+          "label": "Searching news for NVIDIA",
+          "status": "running",
+          "tool": "get_entity_news",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 223,
+          "item_count": 5,
+          "label": "Searching news for NVIDIA",
+          "result_preview": [
+            {
+              "id": "tool:entity_news:019efd2b-d193-7e10-9543-2b004db84a9e",
+              "title": "Could a $25,000 Investment in Nvidia Stock Make You a Millionaire?"
+            },
+            {
+              "id": "tool:entity_news:019efc55-1820-7d28-b8f0-707cd0c3e42f",
+              "title": "Netflix Stock Is Trading Near a 52-Week Low. Is It Finally a Buy?"
+            },
+            {
+              "id": "tool:entity_news:019efbee-df36-7367-8a2e-cbe3bd061206",
+              "title": "Qualcomm jumps as it looks beyond smartphones to cash in on the AI boom"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_news",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 45558,
+          "iteration": 7,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 6
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 49570,
+          "iteration": 8,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 6
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " wasn"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019t"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " able"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " to"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " locate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " any"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " reports"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " recent"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " earnings"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "beat"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " announcements"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " semiconductor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " companies"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " documents"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " that"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " were"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " semiconductor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "related"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " material"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " returned"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "e"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".g"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".,"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " SJ"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Sem"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "iconductor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " narrative"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ")"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " does"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " mention"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " earnings"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " results"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " news"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " items"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " returned"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Nvidia"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " and"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " other"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " chip"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " makers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " focus"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " on"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " other"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " topics"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rather"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " than"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " beat"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " earnings"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " estimates"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3010"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "search"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_documents"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3011\u3010"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "get"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_entity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_news"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u3011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "No earnings\u2011beat reports for SJ\u202fSemiconductor have been identified in the recent data. The available intelligence bundle for SJ\u202fSemiconductor contains only a narrative about its operations and funding, with no mention of earnings results or beat status."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has SJ Semiconductor performed recently?",
+          "Who are SJ Semiconductor's main competitors and partners?",
+          "What are the biggest risks for SJ Semiconductor right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 61699,
+          "message_id": "019f0303-d3a1-7ed2-8965-47c37cb2067f",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "903175c1-c599-45a0-8b09-3195c1e6dd96"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.5666670117061585,
+            "entity_resolution": 97.3758329928387,
+            "grounding_validation": 4985.508251993451,
+            "llm_synthesis_streaming": 6379.632253025193,
+            "llm_tool_planning": 44458.381435018964,
+            "load_history": 41.85737497755326,
+            "persist_and_cache": 27.307167008984834,
+            "tool_execution": 2179.9823350156657,
+            "validate_input": 596.000332996482
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-05-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-01-31",
+          "date_to": "2026-09-24",
+          "entity_tickers": []
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_name": "SJ Semiconductor"
+        },
+        "name": "search_claims"
+      },
+      {
+        "arguments": {
+          "entity_id": "e90caaac-b550-4698-8909-8d19cf034ee6"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-05-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-05-01",
+          "date_to": "2026-06-26",
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "industry": "Semiconductors",
+          "limit": 20,
+          "sector": "Technology"
+        },
+        "name": "screen_universe"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "news",
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "days_back": 30,
+          "max_results": 5,
+          "ticker": "NVDA"
+        },
+        "name": "get_entity_news"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_claims"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "screen_universe"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_entity_news"
+      }
+    ],
+    "tps": 1.047,
+    "tps_streaming": 10.032,
+    "ttft_s": 0.646
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "search_events",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_numbers",
+      "generic_sector_commentary"
+    ],
+    "required_facts": [
+      "recent_events_returned",
+      "earnings_or_beat_topic"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "search_events"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "Trajectory judge call failed: ReadTimeout('The read operation timed out')",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "",
+        "score": null
+      },
+      "ordering": {
+        "feedback": "",
+        "score": null
+      },
+      "recovery": {
+        "feedback": "",
+        "score": null
+      },
+      "routing": {
+        "feedback": "",
+        "score": null
+      }
+    },
+    "trajectory_score": null,
+    "unrecovered_failures": 6,
+    "verdict": "ERROR"
+  }
+}

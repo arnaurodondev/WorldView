@@ -1,0 +1,527 @@
+{
+  "bucket": "WARN",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 233,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_economic_calendar",
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": true,
+    "latency_s": 14.127,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 3.9817920041969046,
+      "entity_resolution": 215.68033400399145,
+      "grounding_validation": 1683.3545839908766,
+      "llm_direct_text_generation": 4517.496583997854,
+      "llm_tool_planning": 10703.370795003138,
+      "load_history": 52.154707998852246,
+      "persist_and_cache": 18.890167004428804,
+      "tool_execution": 80.36116701259743,
+      "validate_input": 763.1303340021987
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "region",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_economic_calendar"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.861,
+    "word_count": 40
+  },
+  "id": "agg_q5_tsla_macro",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks about Tesla (TSLA) but answer discusses Alexandria Real Estate Equities (ARE). This is a severe entity mismatch; the depth is irrelevant when the wrong entity is addressed.",
+        "reason": "Question asks about Tesla (TSLA) but answer discusses Alexandria Real Estate Equities (ARE). This is a severe entity mismatch; the depth is irrelevant when the wrong entity is addressed.",
+        "score": 10
+      },
+      "grounding": {
+        "feedback": "Answer correctly states no data was returned, consistent with both tool calls returning status=empty items=0. No fabricated numbers.",
+        "reason": "Answer correctly states no data was returned, consistent with both tool calls returning status=empty items=0. No fabricated numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer states data not found, which is consistent with empty tool results.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer states data not found, which is consistent with empty tool results.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_economic_calendar and search_documents, but neither is in the expected_tools equivalence set (get_economic_calendar, search_events, get_entity_intelligence). search_documents is not an expected alternative.",
+        "reason": "Called get_economic_calendar and search_documents, but neither is in the expected_tools equivalence set (get_economic_calendar, search_events, get_entity_intelligence). search_documents is not an expected alternative.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent answered about the wrong entity (ARE instead of TSLA) and used an unexpected tool (search_documents). The economic calendar call was correct but returned empty; the agent should have tried an expected alternative like search_events or get_entity_intelligence. The framing score is low because the entity mismatch makes the answer irrelevant to the user's question. Fix: route to the correct entity and use one of the expected tools.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Called get_economic_calendar and search_documents, but neither is in the expected_tools equivalence set (get_economic_calendar, search_events, get_entity_intelligence). search_documents is not an expected alternative.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer correctly states no data was returned, consistent with both tool calls returning status=empty items=0. No fabricated numbers.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks about Tesla (TSLA) but answer discusses Alexandria Real Estate Equities (ARE). This is a severe entity mismatch; the depth is irrelevant when the wrong entity is addressed.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer states data not found, which is consistent with empty tool results.\"\n  },\n  \"reviewer_summary\": \"The agent answered about the wrong entity (ARE instead of TSLA) and used an unexpected tool (search_documents). The economic calendar call was correct but returned empty; the agent should have tried an expected alternative like search_events or get_entity_intelligence. The framing score is low because the entity mismatch makes the answer irrelevant to the user's question. Fix: route to the correct entity and use one of the expected tools.\"\n}",
+    "reviewer_summary": "The agent answered about the wrong entity (ARE instead of TSLA) and used an unexpected tool (search_documents). The economic calendar call was correct but returned empty; the agent should have tried an expected alternative like search_events or get_entity_intelligence. The framing score is low because the entity mismatch makes the answer irrelevant to the user's question. Fix: route to the correct entity and use one of the expected tools.",
+    "score": 60,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 10,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 60,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+  "reasons": [
+    "answer_classified_as_refusal"
+  ],
+  "result": {
+    "answer_text": "I could not find any macroeconomic events in the economic calendar that are linked to Alexandria Real Estate Equities Inc (ARE) for the next 30 days. No data was returned.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        860978
+      ],
+      [
+        "status",
+        900987
+      ],
+      [
+        "thinking",
+        1118728
+      ],
+      [
+        "agent_iteration",
+        1118796
+      ],
+      [
+        "status",
+        7309799
+      ],
+      [
+        "tool_call",
+        7310590
+      ],
+      [
+        "tool_result",
+        7388043
+      ],
+      [
+        "tool_call",
+        7880582
+      ],
+      [
+        "tool_result",
+        7880633
+      ],
+      [
+        "agent_iteration",
+        7880768
+      ],
+      [
+        "token",
+        12400153
+      ],
+      [
+        "token",
+        12400206
+      ],
+      [
+        "token",
+        12400294
+      ],
+      [
+        "token",
+        12400335
+      ],
+      [
+        "status",
+        12413891
+      ],
+      [
+        "final_answer",
+        14100889
+      ],
+      [
+        "citations",
+        14101228
+      ],
+      [
+        "contradictions",
+        14101344
+      ],
+      [
+        "suggestions",
+        14101456
+      ],
+      [
+        "metadata",
+        14120988
+      ],
+      [
+        "done",
+        14121081
+      ]
+    ],
+    "latency_s": 14.127,
+    "metadata": {
+      "intent": "MACRO",
+      "latency_ms": 14023,
+      "message_id": "019f02da-d13d-7f19-9ffd-4ac473662000",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "e16a3ac6-3c62-445d-9310-463395886c44"
+    },
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 3.9817920041969046,
+      "entity_resolution": 215.68033400399145,
+      "grounding_validation": 1683.3545839908766,
+      "llm_direct_text_generation": 4517.496583997854,
+      "llm_tool_planning": 10703.370795003138,
+      "load_history": 52.154707998852246,
+      "persist_and_cache": 18.890167004428804,
+      "tool_execution": 80.36116701259743,
+      "validate_input": 763.1303340021987
+    },
+    "question": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_economic_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-26",
+            "region": "global",
+            "to_date": "2026-07-26"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 79,
+          "item_count": 0,
+          "label": "Loading economic calendar...",
+          "status": "empty",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "get_economic_calendar",
+          "input": {
+            "date_from": "2026-06-26",
+            "date_to": "2026-07-26",
+            "entity_tickers": [
+              "ARE"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 492,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6763,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I could not find any macroeconomic events in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the economic calendar that are linked to Alexandria "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Real Estate Equities Inc (ARE) for the next "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "30 days. No data was returned."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not find any macroeconomic events in the economic calendar that are linked to Alexandria Real Estate Equities Inc (ARE) for the next 30 days. No data was returned.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Alexandria Real Estate Equities Inc?",
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "MACRO",
+          "latency_ms": 14023,
+          "message_id": "019f02da-d13d-7f19-9ffd-4ac473662000",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "e16a3ac6-3c62-445d-9310-463395886c44"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.9817920041969046,
+            "entity_resolution": 215.68033400399145,
+            "grounding_validation": 1683.3545839908766,
+            "llm_direct_text_generation": 4517.496583997854,
+            "llm_tool_planning": 10703.370795003138,
+            "load_history": 52.154707998852246,
+            "persist_and_cache": 18.890167004428804,
+            "tool_execution": 80.36116701259743,
+            "validate_input": 763.1303340021987
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-26",
+          "region": "global",
+          "to_date": "2026-07-26"
+        },
+        "name": "get_economic_calendar"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-26",
+          "date_to": "2026-07-26",
+          "entity_tickers": [
+            "ARE"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 4.447,
+    "tps_streaming": 13.06,
+    "ttft_s": 0.861
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent fundamentally misidentified the target entity: the question is about Tesla (TSLA), but the tool calls used 'ARE' (Alexandria Real Estate). This is a critical routing error that rendered both calls useless. The recovery was also poor\u2014after an empty economic calendar, the agent should have corrected the ticker or used a broader macro search rather than repeating the same mistake. The most impactful fix is to ensure the entity ticker matches the question's subject (TSLA) before making any tool calls.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The chain is short but wasted: call 2 searched for the wrong entity (ARE) and returned empty, providing no useful data. A single correct call targeting TSLA would have been more efficient.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only two calls were made with no data dependencies between them; ordering is not a concern here.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent attempted a different tool (search_documents) but used the wrong ticker (ARE instead of TSLA). It did not retry with corrected arguments or substitute an appropriate tool for the intended entity, effectively giving up on the correct entity.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks about macroeconomic events affecting Tesla (TSLA), but call 1 used region=global (acceptable) and call 2 searched for entity_tickers=['ARE'] (Alexandria Real Estate, not Tesla). The tools are mismatched to the intent: the agent should have used TSLA, not ARE, and should have consid",
+        "score": 5
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

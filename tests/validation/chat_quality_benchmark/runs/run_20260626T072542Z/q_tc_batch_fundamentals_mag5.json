@@ -1,0 +1,738 @@
+{
+  "bucket": "PASS",
+  "category": "comparison",
+  "expected": {
+    "max_latency_s": 90,
+    "tools": [
+      "get_fundamentals_history_batch"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1556,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history_batch"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 61.914,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 389,
+    "phase_timings_ms": {
+      "check_cache": 5.646500008879229,
+      "entity_resolution": 120.88562501594424,
+      "grounding_validation": 30009.31113900151,
+      "llm_direct_text_generation": 22675.97355300677,
+      "llm_tool_planning": 30433.516348013654,
+      "load_history": 7.709458004683256,
+      "persist_and_cache": 21.050249983090907,
+      "tool_execution": 267.30533299269155,
+      "validate_input": 674.9846670136321
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_fundamentals_history_batch"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.733,
+    "word_count": 199
+  },
+  "id": "tc_batch_fundamentals_mag5",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Multi-entity comparison answered with a structured table per ticker \u2014 appropriate depth for a deep comparison question.",
+        "reason": "Multi-entity comparison answered with a structured table per ticker \u2014 appropriate depth for a deep comparison question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Most claims cite tool rows; MSFT, GOOGL, META values match GROUNDING SAMPLE. AAPL and AMZN values not in sample but status=ok items=5 \u2014 presumed band. Transparency banner is neutral.",
+        "reason": "Most claims cite tool rows; MSFT, GOOGL, META values match GROUNDING SAMPLE. AAPL and AMZN values not in sample but status=ok items=5 \u2014 presumed band. Transparency banner is neutral.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides full substantive data.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides full substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history_batch with all five tickers in a single call, exactly matching expected_tools.",
+        "reason": "Called get_fundamentals_history_batch with all five tickers in a single call, exactly matching expected_tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid single-call batch routing and a clean comparative table. The main gap is that AAPL and AMZN figures are not verifiable from the provided GROUNDING SAMPLE \u2014 either expand the sample to cover all five tickers or add a note that those values were returned by the tool but not captured in the sample. Otherwise the answer is well-structured, correctly cited, and appropriately deep for the comparison question.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history_batch with all five tickers in a single call, exactly matching expected_tools.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Most claims cite tool rows; MSFT, GOOGL, META values match GROUNDING SAMPLE. AAPL and AMZN values not in sample but status=ok items=5 \u2014 presumed band. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Multi-entity comparison answered with a structured table per ticker \u2014 appropriate depth for a deep comparison question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides full substantive data.\"\n  },\n  \"reviewer_summary\": \"Solid single-call batch routing and a clean comparative table. The main gap is that AAPL and AMZN figures are not verifiable from the provided GROUNDING SAMPLE \u2014 either expand the sample to cover all five tickers or add a note that those values were returned by the tool but not captured in the sample. Otherwise the answer is well-structured, correctly cited, and appropriately deep for the comparison question.\"\n}",
+    "reviewer_summary": "Solid single-call batch routing and a clean comparative table. The main gap is that AAPL and AMZN figures are not verifiable from the provided GROUNDING SAMPLE \u2014 either expand the sample to cover all five tickers or add a note that those values were returned by the tool but not captured in the sample. Otherwise the answer is well-structured, correctly cited, and appropriately deep for the comparison question.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 45,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 45
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Compare quarterly fundamentals for MSFT, GOOGL, META, AMZN, and AAPL.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Quarterly fundamentals (most recent quarter)**  \n\n| Ticker | Quarter (most recent) | Revenue | Net Income | EPS (basic) | P/E (TTM) |\n|--------|----------------------|---------|------------|-------------|-----------|\n| META | Q1\u202fFY2026 | $56.3\u202fB [get_fundamentals_history_batch row\u202f0] | $26.8\u202fB [get_fundamentals_history_batch row\u202f0] | $7.31 [get_fundamentals_history_batch row\u202f0] | 20.49\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f0] |\n| MSFT | Q3\u202fFY2026 | $82.9\u202fB [get_fundamentals_history_batch row\u202f1] | $31.8\u202fB [get_fundamentals_history_batch row\u202f1] | $4.27 [get_fundamentals_history_batch row\u202f1] | 21.88\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f1] |\n| AAPL | Q2\u202fFY2026 | $111.2\u202fB [get_fundamentals_history_batch row\u202f2] | $29.6\u202fB [get_fundamentals_history_batch row\u202f2] | $2.01 [get_fundamentals_history_batch row\u202f2] | 35.96\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f2] |\n| AMZN | Q1\u202f2026 | $181.5\u202fB [get_fundamentals_history_batch row\u202f3] | $30.3\u202fB [get_fundamentals_history_batch row\u202f3] | $2.78 [get_fundamentals_history_batch row\u202f3] | 31.63\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f3] |\n| GOOGL | Q1\u202fFY2026 | $109.9\u202fB [get_fundamentals_history_batch row\u202f4] | $62.6\u202fB [get_fundamentals_history_batch row\u202f4] | $5.11 [get_fundamentals_history_batch row\u202f4] | 26.67\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f4] |\n\n*All figures are taken directly from the quarterly fundamentals returned by the data source; no estimates or forward\u2011looking statements are included.*\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        733446
+      ],
+      [
+        "status",
+        738940
+      ],
+      [
+        "thinking",
+        864550
+      ],
+      [
+        "agent_iteration",
+        864626
+      ],
+      [
+        "status",
+        8623704
+      ],
+      [
+        "tool_call",
+        8624224
+      ],
+      [
+        "tool_result",
+        8889506
+      ],
+      [
+        "agent_iteration",
+        9180934
+      ],
+      [
+        "token",
+        31857912
+      ],
+      [
+        "token",
+        31857991
+      ],
+      [
+        "token",
+        31858103
+      ],
+      [
+        "token",
+        31858146
+      ],
+      [
+        "token",
+        31858256
+      ],
+      [
+        "token",
+        31858595
+      ],
+      [
+        "token",
+        31858735
+      ],
+      [
+        "token",
+        31858831
+      ],
+      [
+        "token",
+        31859218
+      ],
+      [
+        "token",
+        31859479
+      ],
+      [
+        "token",
+        31859782
+      ],
+      [
+        "token",
+        31860019
+      ],
+      [
+        "token",
+        31868388
+      ],
+      [
+        "token",
+        31868511
+      ],
+      [
+        "token",
+        31868529
+      ],
+      [
+        "token",
+        31868544
+      ],
+      [
+        "token",
+        31868560
+      ],
+      [
+        "token",
+        31868575
+      ],
+      [
+        "token",
+        31868590
+      ],
+      [
+        "token",
+        31868604
+      ],
+      [
+        "token",
+        31868619
+      ],
+      [
+        "token",
+        31868634
+      ],
+      [
+        "token",
+        31868648
+      ],
+      [
+        "token",
+        31868663
+      ],
+      [
+        "status",
+        31870670
+      ],
+      [
+        "final_answer",
+        61873695
+      ],
+      [
+        "citations",
+        61873824
+      ],
+      [
+        "contradictions",
+        61881323
+      ],
+      [
+        "suggestions",
+        61881491
+      ],
+      [
+        "metadata",
+        61897883
+      ],
+      [
+        "done",
+        61898008
+      ]
+    ],
+    "latency_s": 61.914,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 61828,
+      "message_id": "019f02f6-9282-7397-88ab-9524aae4ddf9",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "79458077-e160-403e-b47c-b36c59b2d4df"
+    },
+    "output_tokens": 389,
+    "phase_timings_ms": {
+      "check_cache": 5.646500008879229,
+      "entity_resolution": 120.88562501594424,
+      "grounding_validation": 30009.31113900151,
+      "llm_direct_text_generation": 22675.97355300677,
+      "llm_tool_planning": 30433.516348013654,
+      "load_history": 7.709458004683256,
+      "persist_and_cache": 21.050249983090907,
+      "tool_execution": 267.30533299269155,
+      "validate_input": 674.9846670136321
+    },
+    "question": "Compare quarterly fundamentals for MSFT, GOOGL, META, AMZN, and AAPL.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history_batch\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 4,
+            "tickers": [
+              "MSFT",
+              "GOOGL",
+              "META",
+              "AMZN",
+              "AAPL"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 266,
+          "grounding_sample": {
+            "fields": {
+              "eps": "4.27",
+              "eps_2": "5.11",
+              "eps_3": "7.31",
+              "gross_profit": "56058000000",
+              "gross_profit_2": "68625000000",
+              "gross_profit_3": "46093000000",
+              "market_cap": "2728761229312",
+              "market_cap_2": "4266995482624",
+              "market_cap_3": "1431289856000",
+              "net_income": "31778000000",
+              "net_income_2": "62578000000",
+              "net_income_3": "26773000000",
+              "pe_ratio": "21.8785",
+              "pe_ratio_2": "26.6728",
+              "pe_ratio_3": "20.4887",
+              "revenue": "82886000000",
+              "revenue_2": "109896000000",
+              "revenue_3": "56311000000",
+              "ticker": "MSFT",
+              "ticker_2": "GOOGL",
+              "ticker_3": "META"
+            },
+            "sampled_rows": 3,
+            "total_rows": 5,
+            "truncated": false
+          },
+          "item_count": 5,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:MSFT",
+              "title": "Fundamentals: MSFT"
+            },
+            {
+              "id": "tool:fundamentals_batch:GOOGL",
+              "title": "Fundamentals: GOOGL"
+            },
+            {
+              "id": "tool:fundamentals_batch:META",
+              "title": "Fundamentals: META"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8319,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Quarterly fundamentals (most recent quarter)**  \n\n| Ticker | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Quarter (most recent) | Revenue | Net Income "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| EPS (basic) | P/E (TTM) |\n|--------|----------------------|---------|------------|-------------|-----------|\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| META | Q1\u202fFY2026 | $56.3\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history_batch row\u202f0] | $26.8\u202fB [get_fundamentals_history_batch row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0] | $7.31 [get_fundamentals_history_batch row\u202f0] | 20.49\u00d7 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(snapshot) [get_fundamentals_history_batch row\u202f0] |\n| MSFT | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q3\u202fFY2026 | $82.9\u202fB [get_fundamentals_history_batch row\u202f1] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $31.8\u202fB [get_fundamentals_history_batch row\u202f1] | $4.27 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history_batch row\u202f1] | 21.88\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1] |\n| AAPL | Q2\u202fFY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$111.2\u202fB [get_fundamentals_history_batch row\u202f2] | $29.6\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history_batch row\u202f2] | $2.01 [get_fundamentals_history_batch row\u202f2] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 35.96\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f2] |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AMZN | Q1\u202f2026 | $181.5\u202fB [get_fundamentals_history_batch "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f3] | $30.3\u202fB [get_fundamentals_history_batch row\u202f3] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $2.78 [get_fundamentals_history_batch row\u202f3] | 31.63\u00d7 (snapshot) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history_batch row\u202f3] |\n| GOOGL | Q1\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2026 | $109.9\u202fB [get_fundamentals_history_batch row\u202f4] | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$62.6\u202fB [get_fundamentals_history_batch row\u202f4] | $5.11 [get_fundamentals_history_batch "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f4] | 26.67\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f4] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n\n*All figures are taken directly from the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "quarterly fundamentals returned by the data source; no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "estimates or forward\u2011looking statements are included.*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Quarterly fundamentals (most recent quarter)**  \n\n| Ticker | Quarter (most recent) | Revenue | Net Income | EPS (basic) | P/E (TTM) |\n|--------|----------------------|---------|------------|-------------|-----------|\n| META | Q1\u202fFY2026 | $56.3\u202fB [get_fundamentals_history_batch row\u202f0] | $26.8\u202fB [get_fundamentals_history_batch row\u202f0] | $7.31 [get_fundamentals_history_batch row\u202f0] | 20.49\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f0] |\n| MSFT | Q3\u202fFY2026 | $82.9\u202fB [get_fundamentals_history_batch row\u202f1] | $31.8\u202fB [get_fundamentals_history_batch row\u202f1] | $4.27 [get_fundamentals_history_batch row\u202f1] | 21.88\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f1] |\n| AAPL | Q2\u202fFY2026 | $111.2\u202fB [get_fundamentals_history_batch row\u202f2] | $29.6\u202fB [get_fundamentals_history_batch row\u202f2] | $2.01 [get_fundamentals_history_batch row\u202f2] | 35.96\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f2] |\n| AMZN | Q1\u202f2026 | $181.5\u202fB [get_fundamentals_history_batch row\u202f3] | $30.3\u202fB [get_fundamentals_history_batch row\u202f3] | $2.78 [get_fundamentals_history_batch row\u202f3] | 31.63\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f3] |\n| GOOGL | Q1\u202fFY2026 | $109.9\u202fB [get_fundamentals_history_batch row\u202f4] | $62.6\u202fB [get_fundamentals_history_batch row\u202f4] | $5.11 [get_fundamentals_history_batch row\u202f4] | 26.67\u00d7 (snapshot) [get_fundamentals_history_batch row\u202f4] |\n\n*All figures are taken directly from the quarterly fundamentals returned by the data source; no estimates or forward\u2011looking statements are included.*\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Amazon.com Inc?",
+          "How has AMZN performed recently?",
+          "Who are Amazon.com Inc's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 61828,
+          "message_id": "019f02f6-9282-7397-88ab-9524aae4ddf9",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "79458077-e160-403e-b47c-b36c59b2d4df"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.646500008879229,
+            "entity_resolution": 120.88562501594424,
+            "grounding_validation": 30009.31113900151,
+            "llm_direct_text_generation": 22675.97355300677,
+            "llm_tool_planning": 30433.516348013654,
+            "load_history": 7.709458004683256,
+            "persist_and_cache": 21.050249983090907,
+            "tool_execution": 267.30533299269155,
+            "validate_input": 674.9846670136321
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 4,
+          "tickers": [
+            "MSFT",
+            "GOOGL",
+            "META",
+            "AMZN",
+            "AAPL"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "4.27",
+            "eps_2": "5.11",
+            "eps_3": "7.31",
+            "gross_profit": "56058000000",
+            "gross_profit_2": "68625000000",
+            "gross_profit_3": "46093000000",
+            "market_cap": "2728761229312",
+            "market_cap_2": "4266995482624",
+            "market_cap_3": "1431289856000",
+            "net_income": "31778000000",
+            "net_income_2": "62578000000",
+            "net_income_3": "26773000000",
+            "pe_ratio": "21.8785",
+            "pe_ratio_2": "26.6728",
+            "pe_ratio_3": "20.4887",
+            "revenue": "82886000000",
+            "revenue_2": "109896000000",
+            "revenue_3": "56311000000",
+            "ticker": "MSFT",
+            "ticker_2": "GOOGL",
+            "ticker_3": "META"
+          },
+          "sampled_rows": 3,
+          "total_rows": 5,
+          "truncated": false
+        },
+        "item_count": 5,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 6.358,
+    "tps_streaming": 17.155,
+    "ttft_s": 0.733
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_fundamentals_history_batch"
+    ],
+    "forbidden_facts": [
+      "serial_singleton_calls_loop",
+      "missing_tickers_silently"
+    ],
+    "required_facts": [
+      "all_five_tickers_covered",
+      "per_ticker_metrics",
+      "quarterly_periods"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_fundamentals_history_batch"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, well-chosen batch call that exactly matches the question's intent: compare quarterly fundamentals for MSFT, GOOGL, META, AMZN, and AAPL. The tool get_fundamentals_history_batch with all five tickers and periods=4 is the ideal route \u2014 no wasted calls, no serial loops, no missing tickers. The trajectory is a textbook example of efficient, correct tool use. The only process improvement would be to ensure the answer explicitly labels which quarter each row corresponds to (the answer does so, but the trace doesn't show the raw period labels; that's a presentation concern, not a process flaw).",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one batch call covers all five tickers and multiple periods \u2014 minimal and non-redundant.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraints \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_fundamentals_history_batch with all five tickers is exactly the right tool for a quarterly fundamentals comparison \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,615 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 658,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 52.909,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities"
+    ],
+    "output_tokens": 165,
+    "phase_timings_ms": {
+      "check_cache": 10.245290992315859,
+      "entity_resolution": 133.56758399459068,
+      "grounding_validation": 30006.986473003053,
+      "llm_direct_text_generation": 10758.863045994076,
+      "llm_tool_planning": 19727.760924986796,
+      "load_history": 7.998333006980829,
+      "persist_and_cache": 60.70204099523835,
+      "tool_execution": 937.590250003268,
+      "validate_input": 1408.5330840025563
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 1.52,
+    "word_count": 85
+  },
+  "id": "agg_q1_apple_competitors",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for competitors; answer provides a concise table with two main competitors and a note on lower-confidence relations \u2014 appropriate depth.",
+        "reason": "Question asks for competitors; answer provides a concise table with two main competitors and a note on lower-confidence relations \u2014 appropriate depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims cite tool rows; competitor names match returned data. Minor: 'Devon Energy' mention not in provided sample but plausible from search_entity_relations.",
+        "reason": "Claims cite tool rows; competitor names match returned data. Minor: 'Devon Energy' mention not in provided sample but plausible from search_entity_relations.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_intelligence and search_entity_relations, both in expected_tools equivalence set.",
+        "reason": "Called get_entity_intelligence and search_entity_relations, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid routing: both expected tools were called. Grounding is good \u2014 competitor names are attributed to tool rows. The framing is appropriate for a factual lookup: a short table with relationship evidence. The '\u26a0 Some figures could not be verified' banner is a transparency feature, not a refusal. One minor improvement: the Devon Energy mention could be omitted or more clearly flagged as low-confidence if the tool returned it with very low score, but overall this is a clean, well-grounded answer.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_intelligence and search_entity_relations, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims cite tool rows; competitor names match returned data. Minor: 'Devon Energy' mention not in provided sample but plausible from search_entity_relations.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for competitors; answer provides a concise table with two main competitors and a note on lower-confidence relations \u2014 appropriate depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data.\"\n  },\n  \"reviewer_summary\": \"Solid routing: both expected tools were called. Grounding is good \u2014 competitor names are attributed to tool rows. The framing is appropriate for a factual lookup: a short table with relationship evidence. The '\u26a0 Some figures could not be verified' banner is a transparency feature, not a refusal. One minor improvement: the Devon Energy mention could be omitted or more clearly flagged as low-confidence if the tool returned it with very low score, but overall this is a clean, well-grounded answer.\"\n}",
+    "reviewer_summary": "Solid routing: both expected tools were called. Grounding is good \u2014 competitor names are attributed to tool rows. The framing is appropriate for a factual lookup: a short table with relationship evidence. The '\u26a0 Some figures could not be verified' banner is a transparency feature, not a refusal. One minor improvement: the Devon Energy mention could be omitted or more clearly flagged as low-confidence if the tool returned it with very low score, but overall this is a clean, well-grounded answer.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Who are Apple's main competitors?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Apple\u2019s primary competitors, according to the platform\u2019s intelligence data, are:\n\n| Competitor | Relationship evidence |\n|------------|-----------------------|\n| Microsoft Corp. | Mentioned in Apple\u2019s narrative as a direct competitor in personal computers and software\u30101\u2020get_entity_intelligence\u3011 |\n| Alphabet (Google) | Listed in the knowledge\u2011graph as a company Apple \u201ccompetes_with\u201d\u30101\u2020search_entity_relations\u3011 |\n\n(Other lower\u2011confidence relations, such as a \u201ccompetes_with\u201d link to Devon Energy Corp., appear in the graph but are not typical industry competitors and have lower confidence scores.)\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1520348
+      ],
+      [
+        "status",
+        1525917
+      ],
+      [
+        "thinking",
+        1662285
+      ],
+      [
+        "agent_iteration",
+        1662314
+      ],
+      [
+        "status",
+        6640564
+      ],
+      [
+        "tool_call",
+        6640674
+      ],
+      [
+        "tool_result",
+        6895901
+      ],
+      [
+        "agent_iteration",
+        7170791
+      ],
+      [
+        "tool_call",
+        11166335
+      ],
+      [
+        "tool_result",
+        11846982
+      ],
+      [
+        "agent_iteration",
+        12034030
+      ],
+      [
+        "token",
+        22800944
+      ],
+      [
+        "token",
+        22801020
+      ],
+      [
+        "token",
+        22801202
+      ],
+      [
+        "token",
+        22801219
+      ],
+      [
+        "token",
+        22801247
+      ],
+      [
+        "token",
+        22801281
+      ],
+      [
+        "token",
+        22801297
+      ],
+      [
+        "token",
+        22801314
+      ],
+      [
+        "token",
+        22801329
+      ],
+      [
+        "token",
+        22801343
+      ],
+      [
+        "status",
+        22807910
+      ],
+      [
+        "final_answer",
+        52828384
+      ],
+      [
+        "citations",
+        52828585
+      ],
+      [
+        "contradictions",
+        52836142
+      ],
+      [
+        "suggestions",
+        52836227
+      ],
+      [
+        "metadata",
+        52896314
+      ],
+      [
+        "done",
+        52896436
+      ]
+    ],
+    "latency_s": 52.909,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 52719,
+      "message_id": "019f02d8-759f-7966-9482-d652841fcddb",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "2c8f1f77-18f5-4feb-9128-da6599beb6a0"
+    },
+    "output_tokens": 165,
+    "phase_timings_ms": {
+      "check_cache": 10.245290992315859,
+      "entity_resolution": 133.56758399459068,
+      "grounding_validation": 30006.986473003053,
+      "llm_direct_text_generation": 10758.863045994076,
+      "llm_tool_planning": 19727.760924986796,
+      "load_history": 7.998333006980829,
+      "persist_and_cache": 60.70204099523835,
+      "tool_execution": 937.590250003268,
+      "validate_input": 1408.5330840025563
+    },
+    "question": "Who are Apple's main competitors?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 254,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5509,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 10,
+            "min_confidence": 0.6,
+            "relation_type": "competitor_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 682,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 10370,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s primary competitors, according to the platform\u2019s intelligence "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data, are:\n\n| Competitor | Relationship evidence |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|------------|-----------------------|\n| Microsoft Corp. | Mentioned in Apple\u2019s "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "narrative as a direct competitor in personal computers "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and software\u30101\u2020get_entity_intelligence\u3011 |\n| Alphabet (Google) | Listed "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in the knowledge\u2011graph as a company Apple \u201ccompetes_with\u201d\u30101\u2020search_entity_relations\u3011 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n\n(Other lower\u2011confidence relations, such as a \u201ccompetes_with\u201d "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "link to Devon Energy Corp., appear in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "graph but are not typical industry competitors and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "have lower confidence scores.)"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s primary competitors, according to the platform\u2019s intelligence data, are:\n\n| Competitor | Relationship evidence |\n|------------|-----------------------|\n| Microsoft Corp. | Mentioned in Apple\u2019s narrative as a direct competitor in personal computers and software\u30101\u2020get_entity_intelligence\u3011 |\n| Alphabet (Google) | Listed in the knowledge\u2011graph as a company Apple \u201ccompetes_with\u201d\u30101\u2020search_entity_relations\u3011 |\n\n(Other lower\u2011confidence relations, such as a \u201ccompetes_with\u201d link to Devon Energy Corp., appear in the graph but are not typical industry competitors and have lower confidence scores.)\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 52719,
+          "message_id": "019f02d8-759f-7966-9482-d652841fcddb",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "2c8f1f77-18f5-4feb-9128-da6599beb6a0"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 10.245290992315859,
+            "entity_resolution": 133.56758399459068,
+            "grounding_validation": 30006.986473003053,
+            "llm_direct_text_generation": 10758.863045994076,
+            "llm_tool_planning": 19727.760924986796,
+            "load_history": 7.998333006980829,
+            "persist_and_cache": 60.70204099523835,
+            "tool_execution": 937.590250003268,
+            "validate_input": 1408.5330840025563
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 10,
+          "min_confidence": 0.6,
+          "relation_type": "competitor_of"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 3.211,
+    "tps_streaming": 15.336,
+    "ttft_s": 1.52
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent ('main competitors') and used the appropriate tools in the right order: first get_entity_intelligence to resolve the entity, then search_entity_relations to fetch competitor-of relations. The chain is minimal, dependency-aware, and contains no redundant or failed calls. The only improvement opportunity would be to consider a follow-up call to get_entity_intelligence for each competitor to enrich the answer, but the current two-call trajectory is already sufficient for the stated depth.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls, both necessary and non-redundant: one to get entity context, one to fetch competitor relations. No wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "call 1 resolves the entity (AAPL) first; call 2 then chains on that entity to fetch competitor relations \u2014 dependency order is correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_entity_intelligence and call 2 search_entity_relations are exactly the right tools for a 'main competitors' question \u2014 routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,464 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_market_movers"
+    ]
+  },
+  "heuristics": {
+    "char_count": 79,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_market_movers"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_market_movers"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 16.846,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 20,
+    "phase_timings_ms": {
+      "check_cache": 3.1481249898206443,
+      "entity_resolution": 59.978417004458606,
+      "grounding_validation": 10356.279337982414,
+      "llm_direct_text_generation": 2554.2952510004397,
+      "llm_tool_planning": 5159.358709992375,
+      "load_history": 25.073333003092557,
+      "persist_and_cache": 16.596750007010996,
+      "tool_execution": 348.6544170009438,
+      "validate_input": 500.06625000969507
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "mover_type",
+          "period"
+        ],
+        "tool": "get_market_movers"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_market_movers"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      }
+    ],
+    "ttft_s": 0.579,
+    "word_count": 14
+  },
+  "id": "tc_movers_today_gainers",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question is a simple factual lookup; answer is appropriately concise \u2014 a clean list of tickers with no unnecessary elaboration.",
+        "reason": "Question is a simple factual lookup; answer is appropriately concise \u2014 a clean list of tickers with no unnecessary elaboration.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer lists tickers consistent with a gainers query; no scope/coverage violations detected. Attribution absent (no row citations) but acceptable for a shallow list.",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer lists tickers consistent with a gainers query; no scope/coverage violations detected. Attribution absent (no row citations) but acceptable for a shallow list.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides the requested list of gainers.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides the requested list of gainers.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_market_movers with correct parameters (gainers, 1D) \u2014 exactly the expected tool.",
+        "reason": "Called get_market_movers with correct parameters (gainers, 1D) \u2014 exactly the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_market_movers and returned a clean, concise list of today's top gainers \u2014 exactly what the shallow question required. The only minor gap is the lack of percent-change values alongside the tickers, which would make the answer more informative. Next iteration should include the change column from the tool result (e.g. '+5.2%') to give users the full picture without extra effort.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_market_movers with correct parameters (gainers, 1D) \u2014 exactly the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer lists tickers consistent with a gainers query; no scope/coverage violations detected. Attribution absent (no row citations) but acceptable for a shallow list.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a simple factual lookup; answer is appropriately concise \u2014 a clean list of tickers with no unnecessary elaboration.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides the requested list of gainers.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_market_movers and returned a clean, concise list of today's top gainers \u2014 exactly what the shallow question required. The only minor gap is the lack of percent-change values alongside the tickers, which would make the answer more informative. Next iteration should include the change column from the tool result (e.g. '+5.2%') to give users the full picture without extra effort.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_market_movers and returned a clean, concise list of today's top gainers \u2014 exactly what the shallow question required. The only minor gap is the lack of percent-change values alongside the tickers, which would make the answer more informative. Next iteration should include the change column from the tool result (e.g. '+5.2%') to give users the full picture without extra effort.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Who were today's biggest gainers?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Today's biggest gainers are: BLDR, RH, MHK, IQV, CRL, AAL, WHG, UAL, BKNG, PHM.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        579269
+      ],
+      [
+        "status",
+        593932
+      ],
+      [
+        "thinking",
+        660856
+      ],
+      [
+        "agent_iteration",
+        660885
+      ],
+      [
+        "status",
+        3268947
+      ],
+      [
+        "tool_call",
+        3269674
+      ],
+      [
+        "tool_result",
+        3614534
+      ],
+      [
+        "agent_iteration",
+        3905152
+      ],
+      [
+        "token",
+        6459833
+      ],
+      [
+        "token",
+        6459908
+      ],
+      [
+        "token",
+        6460092
+      ],
+      [
+        "token",
+        6460152
+      ],
+      [
+        "status",
+        6463924
+      ],
+      [
+        "final_answer",
+        16822038
+      ],
+      [
+        "citations",
+        16822081
+      ],
+      [
+        "contradictions",
+        16823749
+      ],
+      [
+        "suggestions",
+        16823795
+      ],
+      [
+        "metadata",
+        16838544
+      ],
+      [
+        "done",
+        16838650
+      ]
+    ],
+    "latency_s": 16.846,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 16760,
+      "message_id": "019f02f7-470d-7260-a07e-caa63fb32161",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "f3bbc8a8-f521-4345-a7f0-02bf502a10e3"
+    },
+    "output_tokens": 20,
+    "phase_timings_ms": {
+      "check_cache": 3.1481249898206443,
+      "entity_resolution": 59.978417004458606,
+      "grounding_validation": 10356.279337982414,
+      "llm_direct_text_generation": 2554.2952510004397,
+      "llm_tool_planning": 5159.358709992375,
+      "load_history": 25.073333003092557,
+      "persist_and_cache": 16.596750007010996,
+      "tool_execution": 348.6544170009438,
+      "validate_input": 500.06625000969507
+    },
+    "question": "Who were today's biggest gainers?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_market_movers\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 10,
+            "mover_type": "gainers",
+            "period": "1D"
+          },
+          "label": "Fetching market movers...",
+          "status": "running",
+          "tool": "get_market_movers",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 348,
+          "item_count": 1,
+          "label": "Fetching market movers...",
+          "result_preview": [
+            {
+              "id": "tool:movers:gainers:1D",
+              "title": "Market movers: gainers (1D)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_market_movers",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 3246,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Today's biggest gainers (top 10) are:\n\n- BLDR  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- RH  \n- MHK  \n- IQV  \n- CRL  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- AAL  \n- WHG  \n- UAL  \n- BKNG  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- PHM  \n\n[1]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Today's biggest gainers are: BLDR, RH, MHK, IQV, CRL, AAL, WHG, UAL, BKNG, PHM."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 16760,
+          "message_id": "019f02f7-470d-7260-a07e-caa63fb32161",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "f3bbc8a8-f521-4345-a7f0-02bf502a10e3"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.1481249898206443,
+            "entity_resolution": 59.978417004458606,
+            "grounding_validation": 10356.279337982414,
+            "llm_direct_text_generation": 2554.2952510004397,
+            "llm_tool_planning": 5159.358709992375,
+            "load_history": 25.073333003092557,
+            "persist_and_cache": 16.596750007010996,
+            "tool_execution": 348.6544170009438,
+            "validate_input": 500.06625000969507
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 10,
+          "mover_type": "gainers",
+          "period": "1D"
+        },
+        "name": "get_market_movers"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      }
+    ],
+    "tps": 1.23,
+    "tps_streaming": 7.83,
+    "ttft_s": 0.579
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_market_movers"
+    ],
+    "forbidden_facts": [
+      "yesterdays_data_passed_off_as_today",
+      "fabricated_movers_list"
+    ],
+    "required_facts": [
+      "list_of_tickers",
+      "percent_change_or_price_change"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_market_movers"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (top gainers today) and made a single, appropriate tool call (get_market_movers with gainers, limit=10, period=1D) that returned the needed data. No redundant or misdirected calls, no ordering issues, and no recovery needed. The trajectory is minimal and perfectly aligned with the question.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call returns the required list of tickers and change data; no wasted calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraints to violate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls, nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_market_movers with gainers and 1D period, exactly the right tool for 'today's biggest gainers'.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

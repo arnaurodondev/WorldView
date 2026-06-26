@@ -1,0 +1,564 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_price_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 135,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_price_history"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_price_history"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 42.549,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "output_tokens": 34,
+    "phase_timings_ms": {
+      "check_cache": 11.80341700091958,
+      "entity_resolution": 72.37016700673848,
+      "grounding_validation": 17736.98600800708,
+      "llm_direct_text_generation": 16714.76142501342,
+      "llm_tool_planning": 20555.886927002575,
+      "load_history": 51.848000002792105,
+      "persist_and_cache": 36.19091599830426,
+      "tool_execution": 117.48945899307728,
+      "validate_input": 868.1751670083031
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "interval",
+          "ticker",
+          "to_date"
+        ],
+        "tool": "get_price_history"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_price_history"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_price_history"
+      }
+    ],
+    "ttft_s": 0.965,
+    "word_count": 21
+  },
+  "id": "tc_price_history_msft_ytd_range",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Concise factual answer appropriate for shallow YTD high/low question.",
+        "reason": "Concise factual answer appropriate for shallow YTD high/low question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample for high/low values; answer cites specific dates and prices not verifiable from trace. Date '2026-01-' is incomplete.",
+        "reason": "No grounding sample for high/low values; answer cites specific dates and prices not verifiable from trace. Date '2026-01-' is incomplete.",
+        "score": 10
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_price_history with correct ticker and YTD window.",
+        "reason": "Called get_price_history with correct ticker and YTD window.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly routed to get_price_history and provided a concise answer matching the shallow question. However, the grounding is weak: the trace shows only a single item with no price values, and the answer includes an incomplete date ('2026-01-') and specific prices that cannot be verified from the compact trace. The most impactful fix is to ensure the tool returns the actual high/low values (e.g., via a summary endpoint or by extracting from the full result set) and that the LLM cites the specific row or field. Also, validate date formatting to avoid truncated strings.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_price_history with correct ticker and YTD window.\"\n  },\n  \"grounding\": {\n    \"score\": 10,\n    \"feedback\": \"No grounding sample for high/low values; answer cites specific dates and prices not verifiable from trace. Date '2026-01-' is incomplete.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Concise factual answer appropriate for shallow YTD high/low question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_price_history and provided a concise answer matching the shallow question. However, the grounding is weak: the trace shows only a single item with no price values, and the answer includes an incomplete date ('2026-01-') and specific prices that cannot be verified from the compact trace. The most impactful fix is to ensure the tool returns the actual high/low values (e.g., via a summary endpoint or by extracting from the full result set) and that the LLM cites the specific row or field. Also, validate date formatting to avoid truncated strings.\"\n}",
+    "reviewer_summary": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly routed to get_price_history and provided a concise answer matching the shallow question. However, the grounding is weak: the trace shows only a single item with no price values, and the answer includes an incomplete date ('2026-01-') and specific prices that cannot be verified from the compact trace. The most impactful fix is to ensure the tool returns the actual high/low values (e.g., via a summary endpoint or by extracting from the full result set) and that the LLM cites the specific row or field. Also, validate date formatting to avoid truncated strings.",
+    "score": 85,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 10,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": "GROUNDING_FLOOR",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": false,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 85,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS).",
+      "floor": 12,
+      "grounding": 10,
+      "pre_veto_verdict": "PASS",
+      "reason": "grounding_below_floor",
+      "type": "grounding"
+    }
+  },
+  "prompt": "What's MSFT's high and low so far this year?",
+  "reasons": [
+    "slow latency_s=42.549"
+  ],
+  "result": {
+    "answer_text": "MSFT\u2019s highest closing price so far this year was **$481.63** on\u202f2026\u201101\u2011, and its lowest closing price was **$411.21** on\u202f2026\u201102\u201103. ",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        965130
+      ],
+      [
+        "status",
+        995032
+      ],
+      [
+        "thinking",
+        1072980
+      ],
+      [
+        "agent_iteration",
+        1073041
+      ],
+      [
+        "status",
+        4913476
+      ],
+      [
+        "tool_call",
+        4914315
+      ],
+      [
+        "tool_result",
+        5030024
+      ],
+      [
+        "agent_iteration",
+        8046754
+      ],
+      [
+        "token",
+        24762746
+      ],
+      [
+        "token",
+        24762854
+      ],
+      [
+        "token",
+        24762879
+      ],
+      [
+        "token",
+        24762910
+      ],
+      [
+        "token",
+        24762932
+      ],
+      [
+        "token",
+        24762984
+      ],
+      [
+        "token",
+        24763153
+      ],
+      [
+        "token",
+        24763248
+      ],
+      [
+        "token",
+        24763387
+      ],
+      [
+        "token",
+        24763458
+      ],
+      [
+        "token",
+        24773499
+      ],
+      [
+        "status",
+        24773842
+      ],
+      [
+        "final_answer",
+        42508076
+      ],
+      [
+        "citations",
+        42508224
+      ],
+      [
+        "contradictions",
+        42509914
+      ],
+      [
+        "suggestions",
+        42510039
+      ],
+      [
+        "metadata",
+        42542098
+      ],
+      [
+        "done",
+        42542230
+      ]
+    ],
+    "latency_s": 42.549,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 42465,
+      "message_id": "019f02fe-e7be-71af-a730-235901fcba68",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "7cc06592-bc21-419b-8cb7-6c6d2d894cbf"
+    },
+    "output_tokens": 34,
+    "phase_timings_ms": {
+      "check_cache": 11.80341700091958,
+      "entity_resolution": 72.37016700673848,
+      "grounding_validation": 17736.98600800708,
+      "llm_direct_text_generation": 16714.76142501342,
+      "llm_tool_planning": 20555.886927002575,
+      "load_history": 51.848000002792105,
+      "persist_and_cache": 36.19091599830426,
+      "tool_execution": 117.48945899307728,
+      "validate_input": 868.1751670083031
+    },
+    "question": "What's MSFT's high and low so far this year?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_price_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-01-01",
+            "interval": "day",
+            "ticker": "MSFT",
+            "to_date": "2026-06-26"
+          },
+          "label": "Fetching price history for Microsoft",
+          "status": "running",
+          "tool": "get_price_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 117,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MSFT"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching price history for Microsoft",
+          "result_preview": [
+            {
+              "id": "tool:price_history:MSFT",
+              "title": "MSFT price history (day)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_price_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6973,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Microsoft (MSFT) \u2013 Year\u2011to\u2011Date price range (based on "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "daily close prices)**  \n\n| Metric | Value | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Source |\n|--------|-------|--------|\n| Highest close so far "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in 2026 | **$483.47** (2026\u201101\u201107) | [get_price_history row\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "3] |\n| Lowest  close so far in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026 | **$411.21** (2026\u201102\u201103) | [get_price_history row\u202f21] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n\n*The data returned by the price\u2011history tool "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "includes only daily closing prices; high and low "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "intraday values are not available. The figures above "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "represent the highest and lowest closing prices observed "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from 1\u202fJan\u202f2026 through 26\u202fJun\u202f2026.*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "MSFT\u2019s highest closing price so far this year was **$481.63** on\u202f2026\u201101\u2011, and its lowest closing price was **$411.21** on\u202f2026\u201102\u201103. "
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 42465,
+          "message_id": "019f02fe-e7be-71af-a730-235901fcba68",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "7cc06592-bc21-419b-8cb7-6c6d2d894cbf"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 11.80341700091958,
+            "entity_resolution": 72.37016700673848,
+            "grounding_validation": 17736.98600800708,
+            "llm_direct_text_generation": 16714.76142501342,
+            "llm_tool_planning": 20555.886927002575,
+            "load_history": 51.848000002792105,
+            "persist_and_cache": 36.19091599830426,
+            "tool_execution": 117.48945899307728,
+            "validate_input": 868.1751670083031
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-01-01",
+          "interval": "day",
+          "ticker": "MSFT",
+          "to_date": "2026-06-26"
+        },
+        "name": "get_price_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MSFT"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_price_history"
+      }
+    ],
+    "tps": 0.818,
+    "tps_streaming": 2.034,
+    "ttft_s": 0.965
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_price_history"
+    ],
+    "forbidden_facts": [
+      "fabricated_high_low",
+      "all_time_high_passed_off_as_ytd"
+    ],
+    "required_facts": [
+      "msft_identified",
+      "ytd_window",
+      "high_value",
+      "low_value"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_price_history"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the required tool (get_price_history) and issued a single call with the proper ticker and a YTD date window. No wasted steps, no redundant calls, and no recovery needed. The trajectory is clean and directly addresses the question intent.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call is the minimal sensible set for this single-fact question.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraint to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls, nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_price_history is exactly the right tool for a YTD high/low question about MSFT.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

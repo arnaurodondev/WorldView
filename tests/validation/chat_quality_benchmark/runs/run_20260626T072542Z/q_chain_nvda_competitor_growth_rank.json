@@ -1,0 +1,979 @@
+{
+  "bucket": "PASS",
+  "category": "comparison",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_entity_intelligence",
+      "traverse_graph",
+      "search_entity_relations",
+      "get_fundamentals_history_batch",
+      "compare_entities"
+    ]
+  },
+  "heuristics": {
+    "char_count": 235,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence",
+      "get_fundamentals_history_batch",
+      "search_entity_relations",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 34.433,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence",
+      "get_fundamentals_history_batch",
+      "traverse_graph"
+    ],
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 6.232541985809803,
+      "entity_resolution": 139.83199998619966,
+      "grounding_validation": 1.2724999978672713,
+      "llm_synthesis_streaming": 5665.003336005611,
+      "llm_tool_planning": 26705.98080396303,
+      "load_history": 28.712166007608175,
+      "persist_and_cache": 20.399041997734457,
+      "tool_execution": 520.1284590002615,
+      "validate_input": 737.2207499865908
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "search_entity_relations"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "ttft_s": 0.794,
+    "word_count": 33
+  },
+  "id": "chain_nvda_competitor_growth_rank",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a comparison of competitors' revenue growth; answer identifies only one competitor and cannot compare, but depth is appropriate given data limitation.",
+        "reason": "Question asks for a comparison of competitors' revenue growth; answer identifies only one competitor and cannot compare, but depth is appropriate given data limitation.",
+        "score": 10
+      },
+      "grounding": {
+        "feedback": "No grounding sample for revenue figures; the answer correctly states data is unavailable and does not fabricate numbers.",
+        "reason": "No grounding sample for revenue figures; the answer correctly states data is unavailable and does not fabricate numbers.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present; answer provides available data and transparently notes missing figures.",
+        "reason": "No refusal phrase present; answer provides available data and transparently notes missing figures.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called search_entity_relations, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to search_entity_relations and identified Cerebras Systems as a competitor. However, the tool returned only one competitor (likely due to min_confidence=0.6 or limit=15), which is insufficient for a comparison question. The answer honestly reports the limitation, but the agent should have used a lower confidence threshold or additional relation types to surface more competitors (e.g., AMD, Intel). The single most impactful change: broaden the competitor search to ensure the question can be fully answered.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample for revenue figures; the answer correctly states data is unavailable and does not fabricate numbers.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks for a comparison of competitors' revenue growth; answer identifies only one competitor and cannot compare, but depth is appropriate given data limitation.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present; answer provides available data and transparently notes missing figures.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to search_entity_relations and identified Cerebras Systems as a competitor. However, the tool returned only one competitor (likely due to min_confidence=0.6 or limit=15), which is insufficient for a comparison question. The answer honestly reports the limitation, but the agent should have used a lower confidence threshold or additional relation types to surface more competitors (e.g., AMD, Intel). The single most impactful change: broaden the competitor search to ensure the question can be fully answered.\"\n}",
+    "reviewer_summary": "The agent correctly routed to search_entity_relations and identified Cerebras Systems as a competitor. However, the tool returned only one competitor (likely due to min_confidence=0.6 or limit=15), which is insufficient for a comparison question. The answer honestly reports the limitation, but the agent should have used a lower confidence threshold or additional relation types to surface more competitors (e.g., AMD, Intel). The single most impactful change: broaden the competitor search to ensure the question can be fully answered.",
+    "score": 85,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 10,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 85,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Among NVIDIA's main competitors, which one has had the best revenue growth over the past four quarters?",
+  "reasons": [],
+  "result": {
+    "answer_text": "The only competitor of NVIDIA identified in the retrieved data is **Cerebras Systems**\u202f[search_entity_relations row\u202f0].\u202fRevenue\u2011growth figures for Cerebras Systems over the past four quarters are not available in the retrieved context.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        794243
+      ],
+      [
+        "status",
+        816622
+      ],
+      [
+        "thinking",
+        963913
+      ],
+      [
+        "agent_iteration",
+        963970
+      ],
+      [
+        "status",
+        16570852
+      ],
+      [
+        "tool_call",
+        16571356
+      ],
+      [
+        "tool_result",
+        17094928
+      ],
+      [
+        "agent_iteration",
+        17376886
+      ],
+      [
+        "agent_iteration",
+        23114331
+      ],
+      [
+        "agent_iteration",
+        28728642
+      ],
+      [
+        "token",
+        34377446
+      ],
+      [
+        "token",
+        34377567
+      ],
+      [
+        "token",
+        34377690
+      ],
+      [
+        "token",
+        34377955
+      ],
+      [
+        "token",
+        34378072
+      ],
+      [
+        "token",
+        34378163
+      ],
+      [
+        "token",
+        34378380
+      ],
+      [
+        "token",
+        34378475
+      ],
+      [
+        "token",
+        34378559
+      ],
+      [
+        "token",
+        34378913
+      ],
+      [
+        "token",
+        34379169
+      ],
+      [
+        "token",
+        34379330
+      ],
+      [
+        "token",
+        34379476
+      ],
+      [
+        "token",
+        34379648
+      ],
+      [
+        "token",
+        34379841
+      ],
+      [
+        "token",
+        34380034
+      ],
+      [
+        "token",
+        34380317
+      ],
+      [
+        "token",
+        34380534
+      ],
+      [
+        "token",
+        34380648
+      ],
+      [
+        "token",
+        34380748
+      ],
+      [
+        "token",
+        34380990
+      ],
+      [
+        "token",
+        34381581
+      ],
+      [
+        "token",
+        34382324
+      ],
+      [
+        "token",
+        34382740
+      ],
+      [
+        "token",
+        34383319
+      ],
+      [
+        "token",
+        34383492
+      ],
+      [
+        "token",
+        34383912
+      ],
+      [
+        "token",
+        34384344
+      ],
+      [
+        "token",
+        34385062
+      ],
+      [
+        "token",
+        34385296
+      ],
+      [
+        "token",
+        34385456
+      ],
+      [
+        "token",
+        34385716
+      ],
+      [
+        "token",
+        34386011
+      ],
+      [
+        "token",
+        34386222
+      ],
+      [
+        "token",
+        34386437
+      ],
+      [
+        "token",
+        34386789
+      ],
+      [
+        "token",
+        34387178
+      ],
+      [
+        "token",
+        34387370
+      ],
+      [
+        "token",
+        34387758
+      ],
+      [
+        "token",
+        34388115
+      ],
+      [
+        "token",
+        34388599
+      ],
+      [
+        "token",
+        34389082
+      ],
+      [
+        "token",
+        34389651
+      ],
+      [
+        "token",
+        34389891
+      ],
+      [
+        "token",
+        34390347
+      ],
+      [
+        "token",
+        34390868
+      ],
+      [
+        "token",
+        34391406
+      ],
+      [
+        "token",
+        34391756
+      ],
+      [
+        "token",
+        34391969
+      ],
+      [
+        "status",
+        34395492
+      ],
+      [
+        "final_answer",
+        34395800
+      ],
+      [
+        "citations",
+        34395885
+      ],
+      [
+        "contradictions",
+        34396131
+      ],
+      [
+        "suggestions",
+        34400520
+      ],
+      [
+        "metadata",
+        34418670
+      ],
+      [
+        "done",
+        34419019
+      ]
+    ],
+    "latency_s": 34.433,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 34355,
+      "message_id": "019f030a-ccb2-7b88-8a2d-17cea9290490",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "cf5782a5-b7b4-4f10-b7ad-df55de377332"
+    },
+    "output_tokens": 59,
+    "phase_timings_ms": {
+      "check_cache": 6.232541985809803,
+      "entity_resolution": 139.83199998619966,
+      "grounding_validation": 1.2724999978672713,
+      "llm_synthesis_streaming": 5665.003336005611,
+      "llm_tool_planning": 26705.98080396303,
+      "load_history": 28.712166007608175,
+      "persist_and_cache": 20.399041997734457,
+      "tool_execution": 520.1284590002615,
+      "validate_input": 737.2207499865908
+    },
+    "question": "Among NVIDIA's main competitors, which one has had the best revenue growth over the past four quarters?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "NVIDIA",
+            "limit": 15,
+            "min_confidence": 0.6,
+            "relation_type": "competitor_of"
+          },
+          "label": "Mapping relationships for NVIDIA",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 519,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "NVIDIA"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for NVIDIA",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001006",
+              "title": "Relations: NVIDIA"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16413,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 22149,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 27760,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " only"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " competitor"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " NVIDIA"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " identified"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " data"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " is"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " **"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "C"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ere"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "bras"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Systems"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "["
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "search"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_entity"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_rel"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ations"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Revenue"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " figures"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " for"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Cere"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "bras"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Systems"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " over"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " past"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " four"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " quarters"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " are"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The only competitor of NVIDIA identified in the retrieved data is **Cerebras Systems**\u202f[search_entity_relations row\u202f0].\u202fRevenue\u2011growth figures for Cerebras Systems over the past four quarters are not available in the retrieved context."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Shift4 Payments?",
+          "How has FOUR performed recently?",
+          "How do Shift4 Payments's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 34355,
+          "message_id": "019f030a-ccb2-7b88-8a2d-17cea9290490",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "cf5782a5-b7b4-4f10-b7ad-df55de377332"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.232541985809803,
+            "entity_resolution": 139.83199998619966,
+            "grounding_validation": 1.2724999978672713,
+            "llm_synthesis_streaming": 5665.003336005611,
+            "llm_tool_planning": 26705.98080396303,
+            "load_history": 28.712166007608175,
+            "persist_and_cache": 20.399041997734457,
+            "tool_execution": 520.1284590002615,
+            "validate_input": 737.2207499865908
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "NVIDIA",
+          "limit": 15,
+          "min_confidence": 0.6,
+          "relation_type": "competitor_of"
+        },
+        "name": "search_entity_relations"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "NVIDIA"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      }
+    ],
+    "tps": 1.754,
+    "tps_streaming": 10.415,
+    "ttft_s": 0.794
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph",
+      "search_entity_relations",
+      "get_fundamentals_history_batch",
+      "compare_entities"
+    ],
+    "forbidden_facts": [
+      "Includes NVIDIA itself in the competitor ranking"
+    ],
+    "required_facts": [
+      "Names at least two competitors of NVIDIA",
+      "Reports a revenue-growth figure (YoY% or QoQ%) for the winning competitor"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "comparison",
+    "relationship"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made only one tool call (search_entity_relations for NVIDIA competitors) which returned a single competitor (Cerebras Systems). This is insufficient to answer the question, which requires comparing multiple competitors' revenue growth. The agent should have retried with lower min_confidence or different relation types, or used get_entity_intelligence / traverse_graph to find more competitors. The process is incomplete \u2014 the agent gave up after one sparse result instead of iterating to gather the required data.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call is not redundant, but it is insufficient \u2014 the agent stopped too early. Efficiency is about waste, not about call count; here the call was necessary but incomplete, so a minor deduction for not following up.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there is no ordering constraint to evaluate. The single call is correctly placed as the first step.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned only 1 competitor (items=1), the agent did not retry with different parameters (e.g., lower min_confidence, different relation_type) nor substitute another tool (e.g., get_entity_intelligence or traverse_graph) to find more competitors. It gave up immediately.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "call 1 used search_entity_relations, which is appropriate for finding competitors. However, the tool returned only 1 competitor (Cerebras Systems), which is insufficient to answer 'among competitors, which one has had the best revenue growth' \u2014 the agent should have tried alternative relation types ",
+        "score": 10
+      }
+    },
+    "trajectory_score": 60,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

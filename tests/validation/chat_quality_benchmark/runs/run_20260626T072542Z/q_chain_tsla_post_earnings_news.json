@@ -1,0 +1,704 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_earnings_calendar",
+      "search_documents",
+      "get_entity_news"
+    ]
+  },
+  "heuristics": {
+    "char_count": 246,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_earnings_calendar",
+      "search_events"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_earnings_calendar",
+      "get_entity_news",
+      "search_documents"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 40.955,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news",
+      "search_documents"
+    ],
+    "output_tokens": 62,
+    "phase_timings_ms": {
+      "check_cache": 2.439917006995529,
+      "entity_resolution": 106.6371250199154,
+      "grounding_validation": 0.37349999183788896,
+      "llm_direct_text_generation": 11916.851214016788,
+      "llm_tool_planning": 37981.49456002284,
+      "load_history": 39.97508401516825,
+      "persist_and_cache": 16.115916980197653,
+      "tool_execution": 194.36846001190133,
+      "validate_input": 946.53341700905
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "event_type"
+        ],
+        "tool": "search_events"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_earnings_calendar"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "ttft_s": 1.0,
+    "word_count": 40
+  },
+  "id": "chain_tsla_post_earnings_news",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Answer is appropriately concise for a data-unavailable scenario; depth matches the factual limitation.",
+        "reason": "Answer is appropriately concise for a data-unavailable scenario; depth matches the factual limitation.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer correctly reports tool returned no matching entries (status=ok items=1 but no earnings event found).",
+        "reason": "No grounding sample provided; answer correctly reports tool returned no matching entries (status=ok items=1 but no earnings event found).",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I cannot find' and 'I'm unable to'; rubric.appropriate_refusal_ok=false and tool_results show status=ok items=1 (earnings calendar returned data), so refusal is inappropriate.",
+        "reason": "Contains refusal phrase 'I cannot find' and 'I'm unable to'; rubric.appropriate_refusal_ok=false and tool_results show status=ok items=1 (earnings calendar returned data), so refusal is inappropriate.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called get_earnings_calendar (expected tool) multiple times; routing was appropriate.",
+        "reason": "Called get_earnings_calendar (expected tool) multiple times; routing was appropriate.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_earnings_calendar but then refused to answer despite the tool returning a result (status=ok items=1). The refusal is unwarranted because the earnings calendar did return data; the agent should have extracted the most recent earnings date from that result and then called get_entity_news or search_documents for the post-earnings window. The single most impactful fix is to stop treating 'items=1' as 'no data' and instead parse the returned earnings date to drive the next tool call.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_earnings_calendar (expected tool) multiple times; routing was appropriate.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided; answer correctly reports tool returned no matching entries (status=ok items=1 but no earnings event found).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Answer is appropriately concise for a data-unavailable scenario; depth matches the factual limitation.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I cannot find' and 'I'm unable to'; rubric.appropriate_refusal_ok=false and tool_results show status=ok items=1 (earnings calendar returned data), so refusal is inappropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_earnings_calendar but then refused to answer despite the tool returning a result (status=ok items=1). The refusal is unwarranted because the earnings calendar did return data; the agent should have extracted the most recent earnings date from that result and then called get_entity_news or search_documents for the post-earnings window. The single most impactful fix is to stop treating 'items=1' as 'no data' and instead parse the returned earnings date to drive the next tool call.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_earnings_calendar but then refused to answer despite the tool returning a result (status=ok items=1). The refusal is unwarranted because the earnings calendar did return data; the agent should have extracted the most recent earnings date from that result and then called get_entity_news or search_documents for the post-earnings window. The single most impactful fix is to stop treating 'items=1' as 'no data' and instead parse the returned earnings date to drive the next tool call.",
+    "score": 75,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 75,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "What did the news say about Tesla in the week after their most recent earnings report?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I cannot find evidence that Tesla has had a recent earnings report. The earnings\u2011calendar tool returned no matching entries, so I\u2019m unable to identify a \u201cmost recent\u201d earnings date and therefore cannot provide news coverage for the week after it.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        999561
+      ],
+      [
+        "status",
+        1022168
+      ],
+      [
+        "thinking",
+        1138328
+      ],
+      [
+        "agent_iteration",
+        1138384
+      ],
+      [
+        "status",
+        9580594
+      ],
+      [
+        "tool_call",
+        9581290
+      ],
+      [
+        "tool_result",
+        9636592
+      ],
+      [
+        "agent_iteration",
+        10021261
+      ],
+      [
+        "tool_call",
+        12686641
+      ],
+      [
+        "tool_result",
+        12715501
+      ],
+      [
+        "agent_iteration",
+        12885549
+      ],
+      [
+        "tool_call",
+        20568754
+      ],
+      [
+        "tool_result",
+        20593810
+      ],
+      [
+        "agent_iteration",
+        21387129
+      ],
+      [
+        "tool_call",
+        28671134
+      ],
+      [
+        "tool_result",
+        28742305
+      ],
+      [
+        "agent_iteration",
+        29004968
+      ],
+      [
+        "token",
+        40930888
+      ],
+      [
+        "token",
+        40931295
+      ],
+      [
+        "token",
+        40931345
+      ],
+      [
+        "token",
+        40931385
+      ],
+      [
+        "token",
+        40931423
+      ],
+      [
+        "status",
+        40931473
+      ],
+      [
+        "final_answer",
+        40931589
+      ],
+      [
+        "citations",
+        40931636
+      ],
+      [
+        "contradictions",
+        40933281
+      ],
+      [
+        "suggestions",
+        40933399
+      ],
+      [
+        "metadata",
+        40946507
+      ],
+      [
+        "done",
+        40946729
+      ]
+    ],
+    "latency_s": 40.955,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 40903,
+      "message_id": "019f030c-61b4-7d31-847a-00f261df8308",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "a98f3c6e-c726-4bc0-a70f-3b7c4d3db132"
+    },
+    "output_tokens": 62,
+    "phase_timings_ms": {
+      "check_cache": 2.439917006995529,
+      "entity_resolution": 106.6371250199154,
+      "grounding_validation": 0.37349999183788896,
+      "llm_direct_text_generation": 11916.851214016788,
+      "llm_tool_planning": 37981.49456002284,
+      "load_history": 39.97508401516825,
+      "persist_and_cache": 16.115916980197653,
+      "tool_execution": 194.36846001190133,
+      "validate_input": 946.53341700905
+    },
+    "question": "What did the news say about Tesla in the week after their most recent earnings report?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_earnings_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": null,
+            "to_date": null
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 55,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8881,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-05-01",
+            "to_date": "2026-06-26"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 38,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11748,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2025-01-01",
+            "to_date": "2026-06-26"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 26,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 20250,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Tesla",
+            "event_type": "earnings"
+          },
+          "label": "Looking up corporate events...",
+          "status": "running",
+          "tool": "search_events",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 73,
+          "item_count": 0,
+          "label": "Looking up corporate events...",
+          "status": "empty",
+          "tool": "search_events",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 27868,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Tesla has had "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a recent earnings report. The earnings\u2011calendar tool returned "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "no matching entries, so I\u2019m unable to identify "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a \u201cmost recent\u201d earnings date and therefore cannot "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "provide news coverage for the week after it."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I cannot find evidence that Tesla has had a recent earnings report. The earnings\u2011calendar tool returned no matching entries, so I\u2019m unable to identify a \u201cmost recent\u201d earnings date and therefore cannot provide news coverage for the week after it."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 40903,
+          "message_id": "019f030c-61b4-7d31-847a-00f261df8308",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "a98f3c6e-c726-4bc0-a70f-3b7c4d3db132"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.439917006995529,
+            "entity_resolution": 106.6371250199154,
+            "grounding_validation": 0.37349999183788896,
+            "llm_direct_text_generation": 11916.851214016788,
+            "llm_tool_planning": 37981.49456002284,
+            "load_history": 39.97508401516825,
+            "persist_and_cache": 16.115916980197653,
+            "tool_execution": 194.36846001190133,
+            "validate_input": 946.53341700905
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": null,
+          "to_date": null
+        },
+        "name": "get_earnings_calendar"
+      },
+      {
+        "arguments": {
+          "from_date": "2026-05-01",
+          "to_date": "2026-06-26"
+        },
+        "name": "get_earnings_calendar"
+      },
+      {
+        "arguments": {
+          "from_date": "2025-01-01",
+          "to_date": "2026-06-26"
+        },
+        "name": "get_earnings_calendar"
+      },
+      {
+        "arguments": {
+          "entity_name": "Tesla",
+          "event_type": "earnings"
+        },
+        "name": "search_events"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_events"
+      }
+    ],
+    "tps": 1.552,
+    "tps_streaming": 5.203,
+    "ttft_s": 1.0
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_earnings_calendar",
+      "search_documents",
+      "get_entity_news"
+    ],
+    "forbidden_facts": [
+      "Discusses news from a window unrelated to earnings (e.g. random date)"
+    ],
+    "required_facts": [
+      "Cites Tesla's most recent earnings date (ISO or month-day form)",
+      "Summarises at least one news theme from the post-earnings window"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "news",
+    "signal"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need to find Tesla's earnings date first, but the execution was inefficient (three redundant calendar calls) and incomplete: after failing to find the earnings date via search_events, it gave up without ever calling a news tool. The core process gap is that the agent never attempted to fetch news at all, even though the question's primary ask is about news content. The agent should have either (a) used the earnings date from the calendar calls to query news, or (b) tried a broader search for Tesla earnings news. The recovery is the weakest dimension\u2014zero attempts to salvage the answer after the empty result.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 1-3 are redundant: three get_earnings_calendar calls with different date ranges, all returning the same single item. This is wasteful. A single well-parameterized call would have sufficed.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "No ordering issues: the calls are independent or sequential without data dependencies that were violated. The agent attempted to find the earnings date first, which is a sensible order.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 4 (search_events returned empty), the agent gave up entirely instead of trying alternative tools or broader date ranges. No recovery attempt was made to still obtain the news.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for news after Tesla's most recent earnings. The agent called get_earnings_calendar and search_events, which are relevant, but never called any news tool (search_documents or get_entity_news) to actually fetch the news. The routing is incomplete.",
+        "score": 10
+      }
+    },
+    "trajectory_score": 50,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

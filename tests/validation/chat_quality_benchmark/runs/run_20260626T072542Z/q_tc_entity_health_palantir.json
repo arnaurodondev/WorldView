@@ -1,0 +1,566 @@
+{
+  "bucket": "WARN",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_entity_health"
+    ]
+  },
+  "heuristics": {
+    "char_count": 304,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_health"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 40.191,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 1.6017500020097941,
+      "entity_resolution": 108.55866697966121,
+      "grounding_validation": 22327.207302005263,
+      "llm_direct_text_generation": 10936.657297017518,
+      "llm_tool_planning": 16207.221341028344,
+      "load_history": 16.50116700329818,
+      "persist_and_cache": 19.467957987217233,
+      "tool_execution": 156.03170901886187,
+      "validate_input": 949.0217090060469
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_health"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_health"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "ttft_s": 0.992,
+    "word_count": 43
+  },
+  "id": "tc_entity_health_palantir",
+  "judge": {
+    "dimensions": {
+      "framing": null,
+      "grounding": null,
+      "refusal_judgment": null,
+      "tool_use": null
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "raw_response": null,
+    "reviewer_summary": "Judge call failed: ReadTimeout('The read operation timed out')",
+    "score": null,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "ERROR",
+    "verdict_decision": null
+  },
+  "prompt": "How comprehensive is your data coverage for Palantir?",
+  "reasons": [
+    "slow latency_s=40.191"
+  ],
+  "result": {
+    "answer_text": "Our coverage assessment for Palantir (ticker\u202fPLTR) is summarized in the entity\u2011health report:\n\n- **Health score:**\u202f0.40\u202f[1]  \n- **Source distribution:**\u202feodhd_ticker_news\u202f0.4035,\u202feodhd\u202f0.2105\u202f[1]  \n- **Confidence in the assessment:**\u202f0.88\u202f[1]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "data",
+        "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "narrative",
+        "title": "Health: data",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        992150
+      ],
+      [
+        "status",
+        1003862
+      ],
+      [
+        "thinking",
+        1115001
+      ],
+      [
+        "agent_iteration",
+        1115070
+      ],
+      [
+        "status",
+        6387042
+      ],
+      [
+        "tool_call",
+        6387343
+      ],
+      [
+        "tool_result",
+        6543521
+      ],
+      [
+        "agent_iteration",
+        6890832
+      ],
+      [
+        "token",
+        17830454
+      ],
+      [
+        "token",
+        17830527
+      ],
+      [
+        "token",
+        17830543
+      ],
+      [
+        "token",
+        17830562
+      ],
+      [
+        "token",
+        17830948
+      ],
+      [
+        "token",
+        17831172
+      ],
+      [
+        "token",
+        17831308
+      ],
+      [
+        "token",
+        17831395
+      ],
+      [
+        "token",
+        17831731
+      ],
+      [
+        "token",
+        17831896
+      ],
+      [
+        "token",
+        17832126
+      ],
+      [
+        "token",
+        17832277
+      ],
+      [
+        "token",
+        17832358
+      ],
+      [
+        "token",
+        17832417
+      ],
+      [
+        "token",
+        17838644
+      ],
+      [
+        "status",
+        17838761
+      ],
+      [
+        "final_answer",
+        40165246
+      ],
+      [
+        "citations",
+        40165375
+      ],
+      [
+        "contradictions",
+        40169618
+      ],
+      [
+        "suggestions",
+        40169777
+      ],
+      [
+        "metadata",
+        40185283
+      ],
+      [
+        "done",
+        40185407
+      ]
+    ],
+    "latency_s": 40.191,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 40131,
+      "message_id": "019f02f2-d38a-78a9-b493-25f9caf7fa06",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "51db0e81-72ae-41a3-b83b-e66391537516"
+    },
+    "output_tokens": 76,
+    "phase_timings_ms": {
+      "check_cache": 1.6017500020097941,
+      "entity_resolution": 108.55866697966121,
+      "grounding_validation": 22327.207302005263,
+      "llm_direct_text_generation": 10936.657297017518,
+      "llm_tool_planning": 16207.221341028344,
+      "load_history": 16.50116700329818,
+      "persist_and_cache": 19.467957987217233,
+      "tool_execution": 156.03170901886187,
+      "validate_input": 949.0217090060469
+    },
+    "question": "How comprehensive is your data coverage for Palantir?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_health\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "PLTR"
+          },
+          "label": "Computing health score for PLTR",
+          "status": "running",
+          "tool": "get_entity_health",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 155,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "data"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Computing health score for PLTR",
+          "result_preview": [
+            {
+              "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+              "title": "Health: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_health",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5776,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Palantir\u2019s data coverage is relatively limited. The health "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "score for the PLTR entity is **0.40**\u202f\u2014 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a low\u2011to\u2011moderate rating that reflects modest confidence in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the completeness and reliability of the underlying data\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[\u200bget_entity_health row\u202f0]. The available information comes primarily "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from two sources:\n\n| Source | Share of "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data |\n|--------|---------------|\n| eodhd_ticker_news | 40.35\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| eodhd | 21.05\u202f% |\n\nThese "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "two sources together account for just over 60\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% of the coverage, with the remaining portion "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "coming from a narrative source of unknown date. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The low health score suggests that many data "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "points (e.g., detailed fundamentals, corporate events, or analyst "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "commentary) may be missing or less reliable for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Palantir at this time."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Our coverage assessment for Palantir (ticker\u202fPLTR) is summarized in the entity\u2011health report:\n\n- **Health score:**\u202f0.40\u202f[1]  \n- **Source distribution:**\u202feodhd_ticker_news\u202f0.4035,\u202feodhd\u202f0.2105\u202f[1]  \n- **Confidence in the assessment:**\u202f0.88\u202f[1]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "data",
+            "id": "tool:health:5d4df4c3-32b6-4e19-b668-2858820d9203",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "narrative",
+            "title": "Health: data",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on data?",
+          "How has data performed recently?",
+          "How do data's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 40131,
+          "message_id": "019f02f2-d38a-78a9-b493-25f9caf7fa06",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "51db0e81-72ae-41a3-b83b-e66391537516"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.6017500020097941,
+            "entity_resolution": 108.55866697966121,
+            "grounding_validation": 22327.207302005263,
+            "llm_direct_text_generation": 10936.657297017518,
+            "llm_tool_planning": 16207.221341028344,
+            "load_history": 16.50116700329818,
+            "persist_and_cache": 19.467957987217233,
+            "tool_execution": 156.03170901886187,
+            "validate_input": 949.0217090060469
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "PLTR"
+        },
+        "name": "get_entity_health"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "data"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      }
+    ],
+    "tps": 1.939,
+    "tps_streaming": 6.949,
+    "ttft_s": 0.992
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_entity_health"
+    ],
+    "forbidden_facts": [
+      "generic_palantir_summary_no_health_data"
+    ],
+    "required_facts": [
+      "palantir_identified",
+      "health_or_coverage_score",
+      "source_distribution_or_trend"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_health"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (coverage assessment for Palantir) and made a single, precise call to get_entity_health(PLTR), which returned the health score, source distribution, and confidence. No wasted steps, no ordering issues, and no recovery needed. The trajectory is a model of efficient, focused tool use.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call returns all needed data \u2014 minimal and non-redundant.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraints \u2014 perfect.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_entity_health is exactly the right tool for a coverage/health question about Palantir.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

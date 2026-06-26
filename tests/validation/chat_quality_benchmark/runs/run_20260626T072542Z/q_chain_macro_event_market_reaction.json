@@ -1,0 +1,519 @@
+{
+  "bucket": "WARN",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_economic_calendar",
+      "search_events",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 123,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_documents",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": true,
+    "latency_s": 9.467,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 31,
+    "phase_timings_ms": {
+      "check_cache": 11.167499993462116,
+      "entity_resolution": 178.38962498353794,
+      "grounding_validation": 0.28487498639151454,
+      "llm_direct_text_generation": 811.9968740211334,
+      "llm_tool_planning": 7782.266085036099,
+      "load_history": 9.863292012596503,
+      "persist_and_cache": 25.576334010111168,
+      "tool_execution": 27.55191599135287,
+      "validate_input": 1186.852333979914
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "region",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 1.248,
+    "word_count": 21
+  },
+  "id": "chain_macro_event_market_reaction",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for news coverage of a rate decision; answer is a bare refusal with no attempt to summarise or explain why no data exists.",
+        "reason": "Question asks for news coverage of a rate decision; answer is a bare refusal with no attempt to summarise or explain why no data exists.",
+        "score": 10
+      },
+      "grounding": {
+        "feedback": "Answer truthfully reflects empty tool results; no fabricated data.",
+        "reason": "Answer truthfully reflects empty tool results; no fabricated data.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'I could not find' and 'No matching rows were returned'; rubric.appropriate_refusal_ok=false, so this is a wrongful refusal.",
+        "reason": "Contains refusal phrase 'I could not find' and 'No matching rows were returned'; rubric.appropriate_refusal_ok=false, so this is a wrongful refusal.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Called get_economic_calendar and search_documents, both in expected_tools equivalence set.",
+        "reason": "Called get_economic_calendar and search_documents, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to the expected tools and truthfully reported empty results, but the answer fails the user's request for news coverage. The question expects a deep synthesis of a known event; when the calendar and document search return nothing, the agent should either broaden the date range, try alternative queries (e.g. 'FOMC June 2026'), or explain that the data source may not cover the requested period. A bare 'no data' refusal is inappropriate here because the rubric does not allow refusal and the user likely expects a substantive attempt. Next time, add fallback logic: if the primary tool returns empty, retry with a wider window or a different search strategy before concluding.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_economic_calendar and search_documents, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer truthfully reflects empty tool results; no fabricated data.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks for news coverage of a rate decision; answer is a bare refusal with no attempt to summarise or explain why no data exists.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I could not find' and 'No matching rows were returned'; rubric.appropriate_refusal_ok=false, so this is a wrongful refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to the expected tools and truthfully reported empty results, but the answer fails the user's request for news coverage. The question expects a deep synthesis of a known event; when the calendar and document search return nothing, the agent should either broaden the date range, try alternative queries (e.g. 'FOMC June 2026'), or explain that the data source may not cover the requested period. A bare 'no data' refusal is inappropriate here because the rubric does not allow refusal and the user likely expects a substantive attempt. Next time, add fallback logic: if the primary tool returns empty, retry with a wider window or a different search strategy before concluding.\"\n}",
+    "reviewer_summary": "The agent correctly routed to the expected tools and truthfully reported empty results, but the answer fails the user's request for news coverage. The question expects a deep synthesis of a known event; when the calendar and document search return nothing, the agent should either broaden the date range, try alternative queries (e.g. 'FOMC June 2026'), or explain that the data source may not cover the requested period. A bare 'no data' refusal is inappropriate here because the rubric does not allow refusal and the user likely expects a substantive attempt. Next time, add fallback logic: if the primary tool returns empty, retry with a wider window or a different search strategy before concluding.",
+    "score": 60,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 10,
+        "grounding": 25,
+        "refusal_judgment": 0,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 60,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about it.",
+  "reasons": [
+    "answer_classified_as_refusal"
+  ],
+  "result": {
+    "answer_text": "I could not find any economic calendar entries for the requested FOMC or ECB rate decision. No matching rows were returned.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1248208
+      ],
+      [
+        "status",
+        1251296
+      ],
+      [
+        "thinking",
+        1435576
+      ],
+      [
+        "agent_iteration",
+        1435640
+      ],
+      [
+        "status",
+        8409248
+      ],
+      [
+        "tool_call",
+        8410917
+      ],
+      [
+        "tool_result",
+        8435208
+      ],
+      [
+        "tool_call",
+        8615989
+      ],
+      [
+        "tool_result",
+        8616057
+      ],
+      [
+        "agent_iteration",
+        8616577
+      ],
+      [
+        "token",
+        9430349
+      ],
+      [
+        "token",
+        9430429
+      ],
+      [
+        "token",
+        9436293
+      ],
+      [
+        "status",
+        9449198
+      ],
+      [
+        "final_answer",
+        9449437
+      ],
+      [
+        "citations",
+        9449452
+      ],
+      [
+        "contradictions",
+        9449463
+      ],
+      [
+        "suggestions",
+        9449473
+      ],
+      [
+        "metadata",
+        9463642
+      ],
+      [
+        "done",
+        9463710
+      ]
+    ],
+    "latency_s": 9.467,
+    "metadata": {
+      "intent": "MACRO",
+      "latency_ms": 9401,
+      "message_id": "019f030d-18fe-76a3-92cf-50a04a7f5680",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "59e5e26f-b383-456a-9141-3cf0fd976cff"
+    },
+    "output_tokens": 31,
+    "phase_timings_ms": {
+      "check_cache": 11.167499993462116,
+      "entity_resolution": 178.38962498353794,
+      "grounding_validation": 0.28487498639151454,
+      "llm_direct_text_generation": 811.9968740211334,
+      "llm_tool_planning": 7782.266085036099,
+      "load_history": 9.863292012596503,
+      "persist_and_cache": 25.576334010111168,
+      "tool_execution": 27.55191599135287,
+      "validate_input": 1186.852333979914
+    },
+    "question": "Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about it.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_economic_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-01",
+            "region": "global",
+            "to_date": "2026-06-26"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 27,
+          "item_count": 0,
+          "label": "Loading economic calendar...",
+          "status": "empty",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "get_economic_calendar",
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-26"
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 182,
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7182,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I could not find any economic calendar entries "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for the requested FOMC or ECB rate decision. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "No matching rows were returned."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I could not find any economic calendar entries for the requested FOMC or ECB rate decision. No matching rows were returned."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "MACRO",
+          "latency_ms": 9401,
+          "message_id": "019f030d-18fe-76a3-92cf-50a04a7f5680",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "59e5e26f-b383-456a-9141-3cf0fd976cff"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 11.167499993462116,
+            "entity_resolution": 178.38962498353794,
+            "grounding_validation": 0.28487498639151454,
+            "llm_direct_text_generation": 811.9968740211334,
+            "llm_tool_planning": 7782.266085036099,
+            "load_history": 9.863292012596503,
+            "persist_and_cache": 25.576334010111168,
+            "tool_execution": 27.55191599135287,
+            "validate_input": 1186.852333979914
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-01",
+          "region": "global",
+          "to_date": "2026-06-26"
+        },
+        "name": "get_economic_calendar"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-06-26"
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 3.772,
+    "tps_streaming": 38.177,
+    "ttft_s": 1.248
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_events",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "Cites a rate decision date in the future as if it already happened"
+    ],
+    "required_facts": [
+      "Names the specific event (FOMC meeting, ECB decision, or similar) and its date",
+      "Summarises at least one news angle on the decision (hawkish/dovish/surprise/expected/etc.)"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "news",
+    "signal",
+    "macro"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for an economic calendar tool but failed to recover after it returned empty. The second call (search_documents) was a poor substitute \u2014 it used the same broad date range and did not target the specific events (FOMC/ECB). The agent should have tried a more specific search (e.g. search_events with 'FOMC' or 'ECB') or adjusted the date range. The main process improvement is to chain a targeted event/news search after a calendar miss, rather than repeating a generic search with the same parameters.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls is not excessive, but call 2 was redundant in approach \u2014 it used the same date range and a tool unlikely to return news coverage. A single targeted call (e.g. search_events with 'FOMC' or 'ECB') would have been more efficient and likely more productive.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "Only two calls with no data dependency between them; ordering is not a concern here.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent made one more attempt (call 2) but with the same date range and a generic tool, which also returned empty. The agent then gave up without trying a targeted search (e.g. search_events with 'FOMC' or 'ECB') or adjusting the date range. No effective recovery was a",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "call 1 get_economic_calendar is a reasonable first tool for a rate-decision question, but call 2 search_documents with the same date range is too generic and does not target news coverage of a specific event. The agent should have tried a more specific news/events tool (e.g. search_events with 'FOMC",
+        "score": 10
+      }
+    },
+    "trajectory_score": 55,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

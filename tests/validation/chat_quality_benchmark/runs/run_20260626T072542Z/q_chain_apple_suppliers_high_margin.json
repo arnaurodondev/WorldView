@@ -1,0 +1,921 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "traverse_graph",
+      "search_entity_relations",
+      "screen_universe",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 590,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals",
+      "search_documents",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "query_fundamentals",
+      "screen_universe",
+      "search_entity_relations",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 69.828,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "screen_universe",
+      "traverse_graph"
+    ],
+    "output_tokens": 148,
+    "phase_timings_ms": {
+      "check_cache": 4.11895799334161,
+      "entity_resolution": 136.7781250155531,
+      "grounding_validation": 30027.540431008674,
+      "llm_direct_text_generation": 8913.732753979275,
+      "llm_tool_planning": 34997.18734997441,
+      "load_history": 45.366540987743065,
+      "persist_and_cache": 33.281999989412725,
+      "tool_execution": 2112.8480420156848,
+      "validate_input": 674.6857920079492
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals",
+      "search_entity_relations"
+    ],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.73,
+    "word_count": 87
+  },
+  "id": "chain_apple_suppliers_high_margin",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Deep question answered with structured reasoning: identifies supplier, reports data gap, transparent conclusion.",
+        "reason": "Deep question answered with structured reasoning: identifies supplier, reports data gap, transparent conclusion.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample for gross_margin; answer correctly reports missing coverage. Attribution is clear.",
+        "reason": "No grounding sample for gross_margin; answer correctly reports missing coverage. Attribution is clear.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides substantive analysis and cites tool results.",
+        "reason": "No refusal phrase present \u2014 answer provides substantive analysis and cites tool results.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called search_entity_relations and query_fundamentals, both in expected_tools equivalence set.",
+        "reason": "Called search_entity_relations and query_fundamentals, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified TSMC as Apple's sole supplier via search_entity_relations and attempted query_fundamentals for gross margin. The answer transparently reports that the metric is missing rather than fabricating a number, which is appropriate given the data gap. The main improvement would be to try alternative metrics (e.g., gross_profit_margin) or a broader supplier search (e.g., lower confidence threshold) before concluding no data exists. Overall solid routing and honest reporting.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called search_entity_relations and query_fundamentals, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"No grounding sample for gross_margin; answer correctly reports missing coverage. Attribution is clear.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Deep question answered with structured reasoning: identifies supplier, reports data gap, transparent conclusion.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides substantive analysis and cites tool results.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified TSMC as Apple's sole supplier via search_entity_relations and attempted query_fundamentals for gross margin. The answer transparently reports that the metric is missing rather than fabricating a number, which is appropriate given the data gap. The main improvement would be to try alternative metrics (e.g., gross_profit_margin) or a broader supplier search (e.g., lower confidence threshold) before concluding no data exists. Overall solid routing and honest reporting.\"\n}",
+    "reviewer_summary": "The agent correctly identified TSMC as Apple's sole supplier via search_entity_relations and attempted query_fundamentals for gross margin. The answer transparently reports that the metric is missing rather than fabricating a number, which is appropriate given the data gap. The main improvement would be to try alternative metrics (e.g., gross_profit_margin) or a broader supplier search (e.g., lower confidence threshold) before concluding no data exists. Overall solid routing and honest reporting.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Find a supplier in Apple's value chain that has a gross margin above 40%.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Based on the current knowledge graph, Apple\u2019s only identified supplier is **Taiwan Semiconductor Manufacturing Co. (TSMC)**\u202f\u2013\u202fApple\u202f\u2190\u202fsupplier_of\u202f\u2190\u202fTSMC\u202f[search_entity_relations\u202frow\u202f0].\n\nA fundamentals query for TSMC shows that its gross\u2011margin metric is not available in the data source\u202f[query_fundamentals\u202frow\u202f2\u202f(coverage\u202fgross_margin=missing)].\n\nBecause the gross\u2011margin figure for TSMC (or any other Apple supplier) is missing, I cannot confirm that any Apple supplier has a gross margin above\u202f40\u202f% with the available evidence.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        729840
+      ],
+      [
+        "status",
+        765767
+      ],
+      [
+        "thinking",
+        906022
+      ],
+      [
+        "agent_iteration",
+        906081
+      ],
+      [
+        "status",
+        8593400
+      ],
+      [
+        "tool_call",
+        8593907
+      ],
+      [
+        "tool_result",
+        9049710
+      ],
+      [
+        "agent_iteration",
+        9342401
+      ],
+      [
+        "tool_call",
+        12662425
+      ],
+      [
+        "tool_result",
+        13321272
+      ],
+      [
+        "agent_iteration",
+        13483055
+      ],
+      [
+        "tool_call",
+        16805697
+      ],
+      [
+        "tool_result",
+        16942810
+      ],
+      [
+        "agent_iteration",
+        17125509
+      ],
+      [
+        "tool_call",
+        24270691
+      ],
+      [
+        "tool_result",
+        24669802
+      ],
+      [
+        "agent_iteration",
+        25488353
+      ],
+      [
+        "tool_call",
+        30103411
+      ],
+      [
+        "tool_result",
+        30555646
+      ],
+      [
+        "agent_iteration",
+        30821314
+      ],
+      [
+        "token",
+        39738698
+      ],
+      [
+        "token",
+        39738798
+      ],
+      [
+        "token",
+        39738997
+      ],
+      [
+        "token",
+        39739320
+      ],
+      [
+        "token",
+        39739701
+      ],
+      [
+        "token",
+        39739974
+      ],
+      [
+        "token",
+        39740057
+      ],
+      [
+        "token",
+        39740246
+      ],
+      [
+        "token",
+        39740409
+      ],
+      [
+        "token",
+        39740510
+      ],
+      [
+        "status",
+        39745570
+      ],
+      [
+        "final_answer",
+        69782192
+      ],
+      [
+        "citations",
+        69782445
+      ],
+      [
+        "contradictions",
+        69796133
+      ],
+      [
+        "suggestions",
+        69796202
+      ],
+      [
+        "metadata",
+        69819363
+      ],
+      [
+        "done",
+        69820775
+      ]
+    ],
+    "latency_s": 69.828,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 69746,
+      "message_id": "019f0309-8abb-7117-8a1e-ee95c9d38d78",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "5a47f292-88bb-4af0-8733-d44c3c633ad6"
+    },
+    "output_tokens": 148,
+    "phase_timings_ms": {
+      "check_cache": 4.11895799334161,
+      "entity_resolution": 136.7781250155531,
+      "grounding_validation": 30027.540431008674,
+      "llm_direct_text_generation": 8913.732753979275,
+      "llm_tool_planning": 34997.18734997441,
+      "load_history": 45.366540987743065,
+      "persist_and_cache": 33.281999989412725,
+      "tool_execution": 2112.8480420156848,
+      "validate_input": 674.6857920079492
+    },
+    "question": "Find a supplier in Apple's value chain that has a gross margin above 40%.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": null
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 456,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8437,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": "supplier_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 661,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12577,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "gross_margin"
+            ],
+            "periods": 0,
+            "ticker": "TSM"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 139,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSM",
+              "title": "Fundamentals query: TSM"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16217,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 50,
+            "min_confidence": 0.6,
+            "relation_type": "supplier_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 401,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 24580,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "sec_filing"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 453,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 29916,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 5
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Based on the current knowledge graph, Apple\u2019s only "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "identified supplier is **Taiwan Semiconductor Manufacturing Co. (TSMC)**\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013\u202fApple\u202f\u2190\u202fsupplier_of\u202f\u2190\u202fTSMC\u202f[search_entity_relations\u202frow\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0].\n\nA fundamentals query for TSMC shows that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "its gross\u2011margin metric is not available in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data source\u202f[query_fundamentals\u202frow\u202f2\u202f(coverage\u202fgross_margin=missing)].\n\nBecause "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the gross\u2011margin figure for TSMC (or any other "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple supplier) is missing, I cannot confirm that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "any Apple supplier has a gross margin above\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "40\u202f% with the available evidence."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Based on the current knowledge graph, Apple\u2019s only identified supplier is **Taiwan Semiconductor Manufacturing Co. (TSMC)**\u202f\u2013\u202fApple\u202f\u2190\u202fsupplier_of\u202f\u2190\u202fTSMC\u202f[search_entity_relations\u202frow\u202f0].\n\nA fundamentals query for TSMC shows that its gross\u2011margin metric is not available in the data source\u202f[query_fundamentals\u202frow\u202f2\u202f(coverage\u202fgross_margin=missing)].\n\nBecause the gross\u2011margin figure for TSMC (or any other Apple supplier) is missing, I cannot confirm that any Apple supplier has a gross margin above\u202f40\u202f% with the available evidence.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 69746,
+          "message_id": "019f0309-8abb-7117-8a1e-ee95c9d38d78",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "5a47f292-88bb-4af0-8733-d44c3c633ad6"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.11895799334161,
+            "entity_resolution": 136.7781250155531,
+            "grounding_validation": 30027.540431008674,
+            "llm_direct_text_generation": 8913.732753979275,
+            "llm_tool_planning": 34997.18734997441,
+            "load_history": 45.366540987743065,
+            "persist_and_cache": 33.281999989412725,
+            "tool_execution": 2112.8480420156848,
+            "validate_input": 674.6857920079492
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": null
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": "supplier_of"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "gross_margin"
+          ],
+          "periods": 0,
+          "ticker": "TSM"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 50,
+          "min_confidence": 0.6,
+          "relation_type": "supplier_of"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "sec_filing"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 2.142,
+    "tps_streaming": 16.604,
+    "ttft_s": 0.73
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "traverse_graph",
+      "search_entity_relations",
+      "screen_universe",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "Claims Apple has no suppliers in the graph"
+    ],
+    "required_facts": [
+      "Names a specific supplier entity (company name or ticker) linked to Apple",
+      "Cites a gross margin value above 40% for the named supplier"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "relationship",
+    "screener"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified TSMC as Apple's supplier and used query_fundamentals for gross margin, but the chain is inefficient: three near-identical relation searches (calls 1,2,4) and an irrelevant document search (call 5) add no value. The critical gap is that when gross_margin returned missing, the agent did not attempt an alternative metric name (e.g. 'gross_profit_margin') or a different data source. The process would be stronger by dropping redundant calls and adding a fallback strategy for missing fundamentals.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1 and call 2 are redundant (both search_entity_relations on Apple with different relation_type, but call 2's result is identical to call 1's). call 4 repeats call 2 with limit=50 but still returns 1 item. call 5 is wasted (unrelated to supplier margin).",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "No dependency violations: call 1-2 resolve the supplier entity, call 3 queries its fundamentals, call 4 repeats a prior call (no new dependency). Order is fine.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 3 returned missing gross_margin, the agent did not retry with a different ticker or alternative metric. Call 4 repeats the same relation search, call 5 is an unrelated document search. No effective recovery for the missing margin.",
+        "score": 20
+      },
+      "routing": {
+        "feedback": "call 1-2,4 search_entity_relations correctly targets Apple's suppliers; call 3 query_fundamentals is the right tool for gross margin. However call 5 search_documents on AAPL is irrelevant to finding a supplier's margin.",
+        "score": 20
+      }
+    },
+    "trajectory_score": 80,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

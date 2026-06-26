@@ -1,0 +1,690 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 205,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 26.918,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 52,
+    "phase_timings_ms": {
+      "check_cache": 4.079209000337869,
+      "entity_resolution": 140.29437498538755,
+      "grounding_validation": 2.7101660089101642,
+      "llm_direct_text_generation": 9460.266295995098,
+      "llm_tool_planning": 25265.11155400658,
+      "load_history": 7.28649998200126,
+      "persist_and_cache": 16.93441701354459,
+      "tool_execution": 92.99983302480541,
+      "validate_input": 618.7443759990856
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.672,
+    "word_count": 42
+  },
+  "id": "da_tsla_revenue_2024_full_year",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for four quarterly revenue figures; answer provides a clean table with all four quarters. Depth matches complexity perfectly.",
+        "reason": "Question asks for four quarterly revenue figures; answer provides a clean table with all four quarters. Depth matches complexity perfectly.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Q1 figure cites tool row 0; Q2\u2013Q4 lack citations. No grounding sample provided \u2014 presumed band. Attribution discipline is partial.",
+        "reason": "Q1 figure cites tool row 0; Q2\u2013Q4 lack citations. No grounding sample provided \u2014 presumed band. Attribution discipline is partial.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals and produced a well-structured table answering the question. The main gap is grounding: only Q1 has an explicit citation; Q2\u2013Q4 figures lack row references. Add citations for each row or a single note explaining all values come from the same tool result. Also, three separate calls with increasing periods suggest the agent was searching for the right window \u2014 a single call with periods=4 and a start date would be cleaner. Otherwise, framing and refusal handling are fine.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Q1 figure cites tool row 0; Q2\u2013Q4 lack citations. No grounding sample provided \u2014 presumed band. Attribution discipline is partial.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for four quarterly revenue figures; answer provides a clean table with all four quarters. Depth matches complexity perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and produced a well-structured table answering the question. The main gap is grounding: only Q1 has an explicit citation; Q2\u2013Q4 figures lack row references. Add citations for each row or a single note explaining all values come from the same tool result. Also, three separate calls with increasing periods suggest the agent was searching for the right window \u2014 a single call with periods=4 and a start date would be cleaner. Otherwise, framing and refusal handling are fine.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals and produced a well-structured table answering the question. The main gap is grounding: only Q1 has an explicit citation; Q2\u2013Q4 figures lack row references. Add citations for each row or a single note explaining all values come from the same tool result. Also, three separate calls with increasing periods suggest the agent was searching for the right window \u2014 a single call with periods=4 and a start date would be cleaner. Otherwise, framing and refusal handling are fine.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024).",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Tesla \u2013 Quarterly Revenue (2024)**  \n\n| Quarter | Revenue |\n|---------|---------|\n| Q1\u202f2024 | $21.30\u202fB\u202f[query_fundamentals row\u202f0] |\n| Q2\u202f2024 | $25.50\u202fB\u202f |\n| Q3\u202f2024 | $25.18\u202fB\u202f |\n| Q4\u202f2024 | $25.71\u202fB\u202f |",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        672137
+      ],
+      [
+        "status",
+        674211
+      ],
+      [
+        "thinking",
+        815914
+      ],
+      [
+        "agent_iteration",
+        815989
+      ],
+      [
+        "status",
+        8012336
+      ],
+      [
+        "tool_call",
+        8012573
+      ],
+      [
+        "tool_result",
+        8059722
+      ],
+      [
+        "agent_iteration",
+        8415352
+      ],
+      [
+        "tool_call",
+        12407711
+      ],
+      [
+        "tool_result",
+        12430648
+      ],
+      [
+        "agent_iteration",
+        12606182
+      ],
+      [
+        "tool_call",
+        17226903
+      ],
+      [
+        "tool_result",
+        17242159
+      ],
+      [
+        "agent_iteration",
+        17420803
+      ],
+      [
+        "token",
+        26882933
+      ],
+      [
+        "token",
+        26883008
+      ],
+      [
+        "token",
+        26883143
+      ],
+      [
+        "token",
+        26883272
+      ],
+      [
+        "token",
+        26883520
+      ],
+      [
+        "token",
+        26883698
+      ],
+      [
+        "token",
+        26891607
+      ],
+      [
+        "status",
+        26891743
+      ],
+      [
+        "final_answer",
+        26891932
+      ],
+      [
+        "citations",
+        26892051
+      ],
+      [
+        "contradictions",
+        26897047
+      ],
+      [
+        "suggestions",
+        26897187
+      ],
+      [
+        "metadata",
+        26910289
+      ],
+      [
+        "done",
+        26910398
+      ]
+    ],
+    "latency_s": 26.918,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 26853,
+      "message_id": "019f0316-0a00-7400-954e-62c640c2bdf0",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "5ff791cf-d38d-417d-9042-7b6a2c79a23d"
+    },
+    "output_tokens": 52,
+    "phase_timings_ms": {
+      "check_cache": 4.079209000337869,
+      "entity_resolution": 140.29437498538755,
+      "grounding_validation": 2.7101660089101642,
+      "llm_direct_text_generation": 9460.266295995098,
+      "llm_tool_planning": 25265.11155400658,
+      "load_history": 7.28649998200126,
+      "persist_and_cache": 16.93441701354459,
+      "tool_execution": 92.99983302480541,
+      "validate_input": 618.7443759990856
+    },
+    "question": "Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024).",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue"
+            ],
+            "period_type": "quarterly",
+            "periods": 4,
+            "ticker": "TSLA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 47,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals query: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 7596,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue"
+            ],
+            "period_type": "quarterly",
+            "periods": 8,
+            "ticker": "TSLA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 26,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals query: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11787,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "revenue"
+            ],
+            "period_type": "quarterly",
+            "periods": 9,
+            "ticker": "TSLA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 17,
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:TSLA",
+              "title": "Fundamentals query: TSLA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16604,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Tesla \u2013 Quarterly Revenue (2024)**  \n\n| Quarter | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Revenue |\n|---------|---------|\n| Q1\u202f2024 | $21.30\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B\u202f[query_fundamentals row\u202f0] |\n| Q2\u202f2024 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $25.50\u202fB\u202f[query_fundamentals row\u202f1] |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q3\u202f2024 | $25.18\u202fB\u202f[query_fundamentals row\u202f2] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| Q4\u202f2024 | $25.71\u202fB\u202f[query_fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row\u202f3] |"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Tesla \u2013 Quarterly Revenue (2024)**  \n\n| Quarter | Revenue |\n|---------|---------|\n| Q1\u202f2024 | $21.30\u202fB\u202f[query_fundamentals row\u202f0] |\n| Q2\u202f2024 | $25.50\u202fB\u202f |\n| Q3\u202f2024 | $25.18\u202fB\u202f |\n| Q4\u202f2024 | $25.71\u202fB\u202f |"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 26853,
+          "message_id": "019f0316-0a00-7400-954e-62c640c2bdf0",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "5ff791cf-d38d-417d-9042-7b6a2c79a23d"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.079209000337869,
+            "entity_resolution": 140.29437498538755,
+            "grounding_validation": 2.7101660089101642,
+            "llm_direct_text_generation": 9460.266295995098,
+            "llm_tool_planning": 25265.11155400658,
+            "load_history": 7.28649998200126,
+            "persist_and_cache": 16.93441701354459,
+            "tool_execution": 92.99983302480541,
+            "validate_input": 618.7443759990856
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue"
+          ],
+          "period_type": "quarterly",
+          "periods": 4,
+          "ticker": "TSLA"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue"
+          ],
+          "period_type": "quarterly",
+          "periods": 8,
+          "ticker": "TSLA"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "revenue"
+          ],
+          "period_type": "quarterly",
+          "periods": 9,
+          "ticker": "TSLA"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 1.981,
+    "tps_streaming": 5.497,
+    "ttft_s": 0.672
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "quarters_outside_2024",
+      "fewer_than_4_quarters_returned_without_explanation"
+    ],
+    "required_facts": [
+      "four_quarters_of_2024",
+      "revenue_value_per_quarter",
+      "tesla_or_tsla_referenced"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "financials",
+    "trend"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly selected query_fundamentals for TSLA quarterly revenue, which is appropriate routing. However, the trajectory is inefficient: three calls with periods=4, 8, and 9 all return the same data for 2024 quarters. A single call with periods=4 would have been sufficient. The ordering and recovery dimensions are fine because there are no dependencies or failures. The key process improvement is to avoid redundant calls that fetch overlapping data without incremental value.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Three nearly identical calls (periods=4,8,9) are redundant; a single call with periods=4 would have sufficed for the four quarters of 2024. Calls 2 and 3 returned no new information.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "All three calls are independent and parallel; no data dependency exists between them, so ordering is not a concern.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred; recovery is not applicable.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "query_fundamentals is exactly the right tool for quarterly revenue data; the agent correctly targeted TSLA and the revenue metric.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,1066 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_market_movers",
+      "query_fundamentals",
+      "get_entity_news"
+    ]
+  },
+  "heuristics": {
+    "char_count": 893,
+    "citation_count": 2,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch",
+      "get_market_movers"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "get_market_movers",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 51.946,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news",
+      "query_fundamentals"
+    ],
+    "output_tokens": 224,
+    "phase_timings_ms": {
+      "check_cache": 4.780666000442579,
+      "entity_resolution": 113.94158401526511,
+      "grounding_validation": 30002.370514004724,
+      "llm_direct_text_generation": 11450.066338991746,
+      "llm_tool_planning": 20302.505217987346,
+      "load_history": 45.22312499466352,
+      "persist_and_cache": 17.304500011960045,
+      "tool_execution": 340.13837500242516,
+      "validate_input": 489.3667500000447
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "mover_type",
+          "period"
+        ],
+        "tool": "get_market_movers"
+      },
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_market_movers"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.539,
+    "word_count": 156
+  },
+  "id": "chain_top_mover_fundamentals",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "raw_response": null,
+    "reviewer_summary": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "score": 0,
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "GROUNDING_CONTRADICTED",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": false,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 14,
+        "evidence_mode": "verified",
+        "examples": [
+          {
+            "claim": 1.0,
+            "claim_text": "1",
+            "delta": 3287076999.0,
+            "field": "revenue",
+            "nearest_sample": 3287077000.0
+          },
+          {
+            "claim": 4200000000.0,
+            "claim_text": "$4.2\u202fB",
+            "delta": 912923000.0,
+            "field": "revenue",
+            "nearest_sample": 3287077000.0
+          },
+          {
+            "claim": 3900000000.0,
+            "claim_text": "$3.9\u202fB",
+            "delta": 612923000.0,
+            "field": "revenue",
+            "nearest_sample": 3287077000.0
+          },
+          {
+            "claim": 200000000.0,
+            "claim_text": "$0.2\u202fB",
+            "delta": 152586000.0,
+            "field": "net_income",
+            "nearest_sample": 47414000.0
+          },
+          {
+            "claim": 100000000.0,
+            "claim_text": "$0.1\u202fB",
+            "delta": 52586000.0,
+            "field": "net_income",
+            "nearest_sample": 47414000.0
+          },
+          {
+            "claim": 0.0,
+            "claim_text": "$0.0\u202fB",
+            "delta": 47414000.0,
+            "field": "net_income",
+            "nearest_sample": 47414000.0
+          },
+          {
+            "claim": 0.0,
+            "claim_text": "0.0\u202fB",
+            "delta": 47414000.0,
+            "field": "net_income",
+            "nearest_sample": 47414000.0
+          },
+          {
+            "claim": 2.38,
+            "claim_text": "$2.38",
+            "delta": 2.11,
+            "field": "eps",
+            "nearest_sample": 0.27
+          },
+          {
+            "claim": 1.1,
+            "claim_text": "$1.10",
+            "delta": 0.8300000000000001,
+            "field": "eps",
+            "nearest_sample": 0.27
+          },
+          {
+            "claim": 1.12,
+            "claim_text": "$1.12",
+            "delta": 0.8500000000000001,
+            "field": "eps",
+            "nearest_sample": 0.27
+          },
+          {
+            "claim": 2.02,
+            "claim_text": "2.02",
+            "delta": 8364931069.98,
+            "field": "market_cap",
+            "nearest_sample": 8364931072.0
+          },
+          {
+            "claim": 2.0,
+            "claim_text": "2",
+            "delta": 8364931070.0,
+            "field": "market_cap",
+            "nearest_sample": 8364931072.0
+          },
+          {
+            "claim": 2.38,
+            "claim_text": "$2.38",
+            "delta": 2.11,
+            "field": "eps",
+            "nearest_sample": 0.27
+          },
+          {
+            "claim": 2.02,
+            "claim_text": "2.02",
+            "delta": 27.6632,
+            "field": "pe_ratio",
+            "nearest_sample": 29.6832
+          }
+        ],
+        "matched": 7,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "contradicted": 14,
+      "detail": "GROUNDING CONTRADICTED: 14 numeric claim(s) disproved by a sampled tool value (e.g. claim '1' for field 'revenue' vs sample 3287077000.0). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+      "examples": [
+        {
+          "claim": 1.0,
+          "claim_text": "1",
+          "delta": 3287076999.0,
+          "field": "revenue",
+          "nearest_sample": 3287077000.0
+        },
+        {
+          "claim": 4200000000.0,
+          "claim_text": "$4.2\u202fB",
+          "delta": 912923000.0,
+          "field": "revenue",
+          "nearest_sample": 3287077000.0
+        },
+        {
+          "claim": 3900000000.0,
+          "claim_text": "$3.9\u202fB",
+          "delta": 612923000.0,
+          "field": "revenue",
+          "nearest_sample": 3287077000.0
+        },
+        {
+          "claim": 200000000.0,
+          "claim_text": "$0.2\u202fB",
+          "delta": 152586000.0,
+          "field": "net_income",
+          "nearest_sample": 47414000.0
+        },
+        {
+          "claim": 100000000.0,
+          "claim_text": "$0.1\u202fB",
+          "delta": 52586000.0,
+          "field": "net_income",
+          "nearest_sample": 47414000.0
+        },
+        {
+          "claim": 0.0,
+          "claim_text": "$0.0\u202fB",
+          "delta": 47414000.0,
+          "field": "net_income",
+          "nearest_sample": 47414000.0
+        },
+        {
+          "claim": 0.0,
+          "claim_text": "0.0\u202fB",
+          "delta": 47414000.0,
+          "field": "net_income",
+          "nearest_sample": 47414000.0
+        },
+        {
+          "claim": 2.38,
+          "claim_text": "$2.38",
+          "delta": 2.11,
+          "field": "eps",
+          "nearest_sample": 0.27
+        },
+        {
+          "claim": 1.1,
+          "claim_text": "$1.10",
+          "delta": 0.8300000000000001,
+          "field": "eps",
+          "nearest_sample": 0.27
+        },
+        {
+          "claim": 1.12,
+          "claim_text": "$1.12",
+          "delta": 0.8500000000000001,
+          "field": "eps",
+          "nearest_sample": 0.27
+        },
+        {
+          "claim": 2.02,
+          "claim_text": "2.02",
+          "delta": 8364931069.98,
+          "field": "market_cap",
+          "nearest_sample": 8364931072.0
+        },
+        {
+          "claim": 2.0,
+          "claim_text": "2",
+          "delta": 8364931070.0,
+          "field": "market_cap",
+          "nearest_sample": 8364931072.0
+        },
+        {
+          "claim": 2.38,
+          "claim_text": "$2.38",
+          "delta": 2.11,
+          "field": "eps",
+          "nearest_sample": 0.27
+        },
+        {
+          "claim": 2.02,
+          "claim_text": "2.02",
+          "delta": 27.6632,
+          "field": "pe_ratio",
+          "nearest_sample": 29.6832
+        }
+      ],
+      "reason": "numeric_claim_contradicted",
+      "type": "grounding_contradicted"
+    }
+  },
+  "prompt": "What's today's top market mover, and does its fundamentals justify the move?",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Top market mover today:** BLDR\u202f[1]  \n**Fundamental snapshot (latest available):**  \n- Revenue: $4.2\u202fB \u2192 $3.9\u202fB \u2192 $3.4\u202fB \u2192 $3.3\u202fB (last four quarters)  \n- Net income: $0.2\u202fB \u2192 $0.1\u202fB \u2192 $0.0\u202fB \u2192 $-0.0\u202fB  \n- EPS: $2.38 \u2192 $1.10 \u2192 $1.12 \u2192 $0.27  \n- P/E (TTM): 29.68\u00d7  \n- Market cap: $8.36\u202fB  \n- PEG ratio: 2.02\u202f[2]  \n\n**Assessment:**  \nThe company\u2019s revenue and earnings have been declining over the past year, with EPS falling from $2.38 to $0.27 and net income hovering near zero. The high P/E of 29.68\u00d7 and PEG of 2.02 suggest the stock is priced on future growth expectations that are not yet reflected in current earnings. These fundamentals do not provide strong support for the recent price rally, indicating that the move may be driven more by market sentiment or short\u2011term catalysts than by underlying financial performance.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.85,
+        "entity_name": null,
+        "id": "tool:movers:gainers:1D",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "market_data",
+        "title": "Market movers: gainers (1D)",
+        "url": null
+      },
+      {
+        "confidence": 0.88,
+        "entity_name": "BLDR",
+        "id": "tool:fundamentals_batch:BLDR",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 2,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: BLDR",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        539417
+      ],
+      [
+        "status",
+        573829
+      ],
+      [
+        "thinking",
+        690658
+      ],
+      [
+        "agent_iteration",
+        690718
+      ],
+      [
+        "status",
+        4534104
+      ],
+      [
+        "tool_call",
+        4534817
+      ],
+      [
+        "tool_result",
+        4782777
+      ],
+      [
+        "agent_iteration",
+        5044920
+      ],
+      [
+        "tool_call",
+        10060696
+      ],
+      [
+        "tool_result",
+        10146845
+      ],
+      [
+        "agent_iteration",
+        10439036
+      ],
+      [
+        "token",
+        21892741
+      ],
+      [
+        "token",
+        21892931
+      ],
+      [
+        "token",
+        21892970
+      ],
+      [
+        "token",
+        21892999
+      ],
+      [
+        "token",
+        21893042
+      ],
+      [
+        "token",
+        21893074
+      ],
+      [
+        "token",
+        21893103
+      ],
+      [
+        "token",
+        21893183
+      ],
+      [
+        "token",
+        21893211
+      ],
+      [
+        "token",
+        21893275
+      ],
+      [
+        "token",
+        21893365
+      ],
+      [
+        "token",
+        21893609
+      ],
+      [
+        "token",
+        21893741
+      ],
+      [
+        "token",
+        21893940
+      ],
+      [
+        "token",
+        21894009
+      ],
+      [
+        "token",
+        21894290
+      ],
+      [
+        "token",
+        21894482
+      ],
+      [
+        "token",
+        21894787
+      ],
+      [
+        "token",
+        21894967
+      ],
+      [
+        "token",
+        21895112
+      ],
+      [
+        "token",
+        21895251
+      ],
+      [
+        "token",
+        21895374
+      ],
+      [
+        "token",
+        21895442
+      ],
+      [
+        "token",
+        21895572
+      ],
+      [
+        "token",
+        21895713
+      ],
+      [
+        "token",
+        21895772
+      ],
+      [
+        "token",
+        21895831
+      ],
+      [
+        "token",
+        21895965
+      ],
+      [
+        "status",
+        21900440
+      ],
+      [
+        "final_answer",
+        51901689
+      ],
+      [
+        "citations",
+        51901966
+      ],
+      [
+        "contradictions",
+        51904504
+      ],
+      [
+        "suggestions",
+        51904660
+      ],
+      [
+        "metadata",
+        51923578
+      ],
+      [
+        "done",
+        51923779
+      ]
+    ],
+    "latency_s": 51.946,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 51873,
+      "message_id": "019f030e-d267-7dc4-ae99-bc6bdcaedadc",
+      "protocol_version": 2,
+      "provider": "",
+      "thread_id": "14222bd5-59da-44fe-809f-ad18bf2d180c"
+    },
+    "output_tokens": 224,
+    "phase_timings_ms": {
+      "check_cache": 4.780666000442579,
+      "entity_resolution": 113.94158401526511,
+      "grounding_validation": 30002.370514004724,
+      "llm_direct_text_generation": 11450.066338991746,
+      "llm_tool_planning": 20302.505217987346,
+      "load_history": 45.22312499466352,
+      "persist_and_cache": 17.304500011960045,
+      "tool_execution": 340.13837500242516,
+      "validate_input": 489.3667500000447
+    },
+    "question": "What's today's top market mover, and does its fundamentals justify the move?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_market_movers\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 1,
+            "mover_type": "gainers",
+            "period": "1D"
+          },
+          "label": "Fetching market movers...",
+          "status": "running",
+          "tool": "get_market_movers",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 248,
+          "item_count": 1,
+          "label": "Fetching market movers...",
+          "result_preview": [
+            {
+              "id": "tool:movers:gainers:1D",
+              "title": "Market movers: gainers (1D)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_market_movers",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4353,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 4,
+            "tickers": [
+              "BLDR"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 90,
+          "grounding_sample": {
+            "fields": {
+              "eps": "0.27",
+              "gross_profit": "928966000",
+              "market_cap": "8364931072",
+              "net_income": "-47414000",
+              "pe_ratio": "29.6832",
+              "revenue": "3287077000",
+              "ticker": "BLDR"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:BLDR",
+              "title": "Fundamentals: BLDR"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9748,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Top mover today (1\u2011day gainers)**  \n- **Ticker:** **BLDR**\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2014 identified as the leading gain\u2011er in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1\u2011day market\u2011movers list\u30101\u3011.\n\n**Fundamental snapshot (quarterly data, most "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent 4 quarters)**  \n\n| Quarter | Revenue | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Net Income | EPS |\n|---------|---------|------------|-----|\n| Q2\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025 | $4.2\u202fB | $0.2\u202fB | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$2.38 |\n| Q3\u202f2025 | $3.9\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $0.1\u202fB | $1.10 |\n| Q4\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025 | $3.4\u202fB | $0.0\u202fB | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$1.12 |\n| Q1\u202f2026 | $3.3\u202fB "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $\u20110.0\u202fB | $0.27 |\n\n*Additional metrics* "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 P/E (TTM)\u202f\u2248\u202f29.7\u00d7, Market\u202fCap\u202f\u2248\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$8.36\u202fB, PEG\u202f\u2248\u202f2.02\u30102\u3011.\n\n**Does the fundamentals "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "justify the move?**  \n\n- **Revenue trend:** Down\u202f\u2248\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "21\u202f% over the last year (from $4.2\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B to $3.3\u202fB).  \n- **Earnings trend:** EPS "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "fell sharply, from $2.38 to $0.27, and net "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "income turned slightly negative in the most recent "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "quarter.  \n- **Valuation:** A TTM P/E near 30\u00d7 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is high for a company with declining earnings, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and a PEG above 2 suggests the stock "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "may be over\u2011valued relative to its growth prospects.  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Overall, the recent fundamentals show weakening top\u2011line and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "bottom\u2011line performance while the valuation remains elevated. This "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "pattern does **not** provide a clear fundamental rationale "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for a strong price gain, implying the move "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "may be driven by non\u2011fundamental factors (e.g., news, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "short\u2011cover, market sentiment)."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Top market mover today:** BLDR\u202f[1]  \n**Fundamental snapshot (latest available):**  \n- Revenue: $4.2\u202fB \u2192 $3.9\u202fB \u2192 $3.4\u202fB \u2192 $3.3\u202fB (last four quarters)  \n- Net income: $0.2\u202fB \u2192 $0.1\u202fB \u2192 $0.0\u202fB \u2192 $-0.0\u202fB  \n- EPS: $2.38 \u2192 $1.10 \u2192 $1.12 \u2192 $0.27  \n- P/E (TTM): 29.68\u00d7  \n- Market cap: $8.36\u202fB  \n- PEG ratio: 2.02\u202f[2]  \n\n**Assessment:**  \nThe company\u2019s revenue and earnings have been declining over the past year, with EPS falling from $2.38 to $0.27 and net income hovering near zero. The high P/E of 29.68\u00d7 and PEG of 2.02 suggest the stock is priced on future growth expectations that are not yet reflected in current earnings. These fundamentals do not provide strong support for the recent price rally, indicating that the move may be driven more by market sentiment or short\u2011term catalysts than by underlying financial performance.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.85,
+            "entity_name": null,
+            "id": "tool:movers:gainers:1D",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "market_data",
+            "title": "Market movers: gainers (1D)",
+            "url": null
+          },
+          {
+            "confidence": 0.88,
+            "entity_name": "BLDR",
+            "id": "tool:fundamentals_batch:BLDR",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 2,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: BLDR",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 51873,
+          "message_id": "019f030e-d267-7dc4-ae99-bc6bdcaedadc",
+          "protocol_version": 2,
+          "provider": "",
+          "thread_id": "14222bd5-59da-44fe-809f-ad18bf2d180c"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.780666000442579,
+            "entity_resolution": 113.94158401526511,
+            "grounding_validation": 30002.370514004724,
+            "llm_direct_text_generation": 11450.066338991746,
+            "llm_tool_planning": 20302.505217987346,
+            "load_history": 45.22312499466352,
+            "persist_and_cache": 17.304500011960045,
+            "tool_execution": 340.13837500242516,
+            "validate_input": 489.3667500000447
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 1,
+          "mover_type": "gainers",
+          "period": "1D"
+        },
+        "name": "get_market_movers"
+      },
+      {
+        "arguments": {
+          "periods": 4,
+          "tickers": [
+            "BLDR"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "0.27",
+            "gross_profit": "928966000",
+            "market_cap": "8364931072",
+            "net_income": "-47414000",
+            "pe_ratio": "29.6832",
+            "revenue": "3287077000",
+            "ticker": "BLDR"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 4.357,
+    "tps_streaming": 19.563,
+    "ttft_s": 0.539
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_market_movers",
+      "query_fundamentals",
+      "get_entity_news"
+    ],
+    "forbidden_facts": [
+      "Picks a different stock than the actual top mover returned by the tool"
+    ],
+    "required_facts": [
+      "Names the top mover (ticker and % move)",
+      "Cites at least one fundamental metric (P/E, revenue growth, margin, etc.) for that mover",
+      "Offers a reasoned verdict on whether the move is fundamentally supported"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "signal",
+    "financial_data"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly chains get_market_movers to get_fundamentals_history_batch, resolving the top mover before pulling its fundamentals. The trajectory is lean and well-ordered. The only process issue is that the answer includes a PEG ratio not present in the tool outputs, suggesting either hallucination or an untracked source \u2014 the agent should either call a tool that provides PEG or omit it. Otherwise, the chain is sound and matches the question's intent.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls are minimal for the ask. However, the answer cites a PEG ratio (2.02) that was not returned by any tool call \u2014 the agent may have hallucinated or used an external source, which is a minor efficiency concern (unnecessary extra data not from the trace).",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "call 1 resolves the top mover ticker; call 2 uses that ticker as input \u2014 dependency order is correct. No ordering issues.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_market_movers correctly identifies the top mover; call 2 get_fundamentals_history_batch fetches fundamentals for that mover \u2014 both tools match the question's intent perfectly.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}
