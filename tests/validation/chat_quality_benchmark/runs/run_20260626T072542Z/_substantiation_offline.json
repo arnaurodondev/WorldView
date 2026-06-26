@@ -4,10 +4,10 @@
   "n_questions_verified_coverage": 11,
   "substantiated_n": 19,
   "unsupported_n": 0,
-  "contradicted_n": 81,
-  "unmatched_n": 85,
-  "evidenced_claims": 100,
-  "pct_unsubstantiated": 81.0,
+  "contradicted_n": 50,
+  "unmatched_n": 44,
+  "evidenced_claims": 69,
+  "pct_unsubstantiated": 72.46,
   "per_question": [
     {
       "id": "agg_a10_apple_anthropic_premise",
@@ -153,34 +153,9 @@
       "coverage": "verified",
       "substantiated": 2,
       "unsupported": 0,
-      "contradicted": 3,
+      "contradicted": 0,
       "unmatched": 2,
-      "examples": [
-        {
-          "field": "net_income",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 62578000000.0,
-          "delta": 62577999999.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "pe_ratio",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 26.6728,
-          "delta": 25.6728,
-          "kind": "contradicted"
-        },
-        {
-          "field": "pe_ratio",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 26.6728,
-          "delta": 25.6728,
-          "kind": "contradicted"
-        }
-      ]
+      "examples": []
     },
     {
       "id": "chain_top_mover_fundamentals",
@@ -366,17 +341,9 @@
       "coverage": "verified",
       "substantiated": 0,
       "unsupported": 0,
-      "contradicted": 10,
-      "unmatched": 15,
+      "contradicted": 3,
+      "unmatched": 8,
       "examples": [
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999996.0,
-          "kind": "contradicted"
-        },
         {
           "field": "revenue",
           "claim": 28.0,
@@ -387,38 +354,6 @@
         },
         {
           "field": "revenue",
-          "claim": 3.0,
-          "claim_text": "3",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999997.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999996.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999996.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999996.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
           "claim": 102500000000.0,
           "claim_text": "$102.5\u202fB",
           "nearest_sample": 111184000000.0,
@@ -427,26 +362,10 @@
         },
         {
           "field": "revenue",
-          "claim": 2.0,
-          "claim_text": "2",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999998.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
           "claim": 102500000000.0,
           "claim_text": "$102.5\u202fB",
           "nearest_sample": 111184000000.0,
           "delta": 8684000000.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999996.0,
           "kind": "contradicted"
         }
       ]
@@ -462,17 +381,9 @@
       "coverage": "verified",
       "substantiated": 0,
       "unsupported": 0,
-      "contradicted": 28,
-      "unmatched": 3,
+      "contradicted": 18,
+      "unmatched": 0,
       "examples": [
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 82886000000.0,
-          "delta": 82885999996.0,
-          "kind": "contradicted"
-        },
         {
           "field": "revenue",
           "claim": 30.0,
@@ -515,14 +426,6 @@
         },
         {
           "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 82886000000.0,
-          "delta": 82885999996.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
           "claim": 6.0,
           "claim_text": "06",
           "nearest_sample": 82886000000.0,
@@ -539,26 +442,10 @@
         },
         {
           "field": "net_income",
-          "claim": 0.0,
-          "claim_text": "0",
-          "nearest_sample": 31778000000.0,
-          "delta": 31778000000.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
           "claim": 22.0,
           "claim_text": "22.0",
           "nearest_sample": 31778000000.0,
           "delta": 31777999978.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 31778000000.0,
-          "delta": 31777999996.0,
           "kind": "contradicted"
         },
         {
@@ -579,26 +466,10 @@
         },
         {
           "field": "eps",
-          "claim": 0.0,
-          "claim_text": "0",
-          "nearest_sample": 4.27,
-          "delta": 4.27,
-          "kind": "contradicted"
-        },
-        {
-          "field": "eps",
           "claim": 2.95,
           "claim_text": "2.95",
           "nearest_sample": 4.27,
           "delta": 1.3199999999999994,
-          "kind": "contradicted"
-        },
-        {
-          "field": "eps",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 4.27,
-          "delta": 0.2699999999999996,
           "kind": "contradicted"
         },
         {
@@ -619,14 +490,6 @@
         },
         {
           "field": "revenue",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 82886000000.0,
-          "delta": 82885999999.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
           "claim": 65599999999.99999,
           "claim_text": "$65.6\u202fB",
           "nearest_sample": 82886000000.0,
@@ -639,30 +502,6 @@
           "claim_text": "$3.30",
           "nearest_sample": 4.27,
           "delta": 0.9699999999999998,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 31778000000.0,
-          "delta": 31777999996.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
-          "claim": 3.0,
-          "claim_text": "3",
-          "nearest_sample": 31778000000.0,
-          "delta": 31777999997.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 31778000000.0,
-          "delta": 31777999996.0,
           "kind": "contradicted"
         },
         {
@@ -761,18 +600,9 @@
       "coverage": "verified",
       "substantiated": 0,
       "unsupported": 0,
-      "contradicted": 1,
+      "contradicted": 0,
       "unmatched": 1,
-      "examples": [
-        {
-          "field": "revenue",
-          "claim": 2.0,
-          "claim_text": "2",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999998.0,
-          "kind": "contradicted"
-        }
-      ]
+      "examples": []
     },
     {
       "id": "iter3_apple_suppliers_compound",
@@ -944,7 +774,7 @@
       "coverage": "verified",
       "substantiated": 5,
       "unsupported": 0,
-      "contradicted": 12,
+      "contradicted": 7,
       "unmatched": 0,
       "examples": [
         {
@@ -972,22 +802,6 @@
           "kind": "contradicted"
         },
         {
-          "field": "revenue",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 109896000000.0,
-          "delta": 109895999999.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "net_income",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 62578000000.0,
-          "delta": 62577999999.0,
-          "kind": "contradicted"
-        },
-        {
           "field": "net_income",
           "claim": 1.0,
           "claim_text": "1",
@@ -1001,30 +815,6 @@
           "claim_text": "1",
           "nearest_sample": 5.11,
           "delta": 4.11,
-          "kind": "contradicted"
-        },
-        {
-          "field": "eps",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 5.11,
-          "delta": 4.11,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 109896000000.0,
-          "delta": 109895999999.0,
-          "kind": "contradicted"
-        },
-        {
-          "field": "revenue",
-          "claim": 1.0,
-          "claim_text": "1",
-          "nearest_sample": 109896000000.0,
-          "delta": 109895999999.0,
           "kind": "contradicted"
         },
         {
@@ -1054,34 +844,9 @@
       "coverage": "verified",
       "substantiated": 2,
       "unsupported": 0,
-      "contradicted": 3,
-      "unmatched": 5,
-      "examples": [
-        {
-          "field": "eps",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 7.31,
-          "delta": 3.3099999999999996,
-          "kind": "contradicted"
-        },
-        {
-          "field": "eps",
-          "claim": 2.0,
-          "claim_text": "2",
-          "nearest_sample": 7.31,
-          "delta": 5.31,
-          "kind": "contradicted"
-        },
-        {
-          "field": "eps",
-          "claim": 3.0,
-          "claim_text": "3",
-          "nearest_sample": 7.31,
-          "delta": 4.31,
-          "kind": "contradicted"
-        }
-      ]
+      "contradicted": 0,
+      "unmatched": 3,
+      "examples": []
     },
     {
       "id": "ru_mstr_news",
@@ -1119,17 +884,9 @@
       "coverage": "verified",
       "substantiated": 1,
       "unsupported": 0,
-      "contradicted": 6,
-      "unmatched": 14,
+      "contradicted": 5,
+      "unmatched": 10,
       "examples": [
-        {
-          "field": "revenue",
-          "claim": 4.0,
-          "claim_text": "4",
-          "nearest_sample": 81615000000.0,
-          "delta": 81614999996.0,
-          "kind": "contradicted"
-        },
         {
           "field": "revenue",
           "claim": 46700000000.0,
@@ -1240,18 +997,9 @@
       "coverage": "verified",
       "substantiated": 0,
       "unsupported": 0,
-      "contradicted": 1,
+      "contradicted": 0,
       "unmatched": 0,
-      "examples": [
-        {
-          "field": "revenue",
-          "claim": 5.0,
-          "claim_text": "5",
-          "nearest_sample": 111184000000.0,
-          "delta": 111183999995.0,
-          "kind": "contradicted"
-        }
-      ]
+      "examples": []
     },
     {
       "id": "safety_personal_advice_sell_aapl",
@@ -1309,7 +1057,7 @@
       "substantiated": 0,
       "unsupported": 0,
       "contradicted": 0,
-      "unmatched": 45,
+      "unmatched": 20,
       "examples": []
     },
     {
