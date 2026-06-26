@@ -1359,6 +1359,146 @@ _IDENTIFIER_FIELDS: frozenset[str] = frozenset(
     {"ticker", "symbol", "entity_name", "entity", "name", "company", "company_name"}
 )
 
+# --------------------------------------------------------------------------
+# CLAIM TYPING (PLAN-0116 W1.2)
+# --------------------------------------------------------------------------
+#
+# A numeric claim and a sampled field each have a KIND. A claim may associate to a
+# field ONLY when the two kinds are COMPATIBLE. This kills the exact false
+# contradiction observed in run_20260626T185654Z: a "34 % growth" PERCENTAGE claim
+# was associated to the ``revenue`` ABSOLUTE-VALUE field and flagged contradicted.
+#
+# Kinds:
+#   * ``absolute_value`` — a dollar/level figure: ``$5``, ``46.7B``, ``46,742``,
+#     a decimal level (EPS ``4.27``). Fields: revenue/eps/net_income/market_cap/...
+#   * ``percentage``     — a percent: ``34 %``, or a level stated as a margin/
+#     growth (``58.6 %``). Fields: *_margin, dividend_yield.
+#   * ``ratio``          — a multiple: ``26.67x``, a P/E. Fields: pe_ratio, forward_pe.
+#   * ``count``          — a bare small integer multiplier/enumeration (``6x``,
+#     "3-4 times"). Has no metric field; never associates to a $-level.
+#
+# COMPATIBILITY RULE (deliberately ASYMMETRIC + permissive on the unknown side):
+#   - same kind                                  → compatible.
+#   - either side is UNKNOWN (a field/claim we
+#     cannot type, e.g. a bespoke ``confidence``
+#     field, or a bare decimal with no $/pct/x)    → compatible (don't over-block;
+#     the proximity + tolerance checks still gate it).
+#   - two DIFFERENT KNOWN kinds                   → INCOMPATIBLE (block association).
+# So a ``%`` claim never attaches to a KNOWN absolute field (revenue), but still
+# attaches to an untyped field (``confidence=92`` → ``92 %`` stays substantiated).
+
+# Canonical field → kind. Anything not listed is UNKNOWN (compatible with all),
+# which keeps brand-new sampled fields working with no code change (R11 spirit).
+_FIELD_KINDS: dict[str, str] = {
+    "revenue": "absolute_value",
+    "eps": "absolute_value",
+    "gross_profit": "absolute_value",
+    "net_income": "absolute_value",
+    "market_cap": "absolute_value",
+    "ebitda": "absolute_value",
+    "operating_income": "absolute_value",
+    "free_cash_flow": "absolute_value",
+    "price": "absolute_value",
+    "pe_ratio": "ratio",
+    "forward_pe": "ratio",
+    "gross_margin": "percentage",
+    "net_margin": "percentage",
+    "operating_margin": "percentage",
+    "dividend_yield": "percentage",
+}
+
+# Context words that, when they HUG a number, mark it as a relative quantity even
+# without a ``%``/``x`` token: a growth/margin/change figure (→ percentage) or a
+# multiplier (→ count). Matched against the short window immediately BEFORE/AFTER
+# the number, lowercased + unicode-normalised.
+_PERCENT_CONTEXT_RE = re.compile(
+    r"\b(growth|grew|grow|rose|rise|risen|increase|increased|gain|gained|"
+    r"decline|declined|drop|dropped|fell|fall|fallen|decrease|decreased|"
+    r"margin|yoy|year[- ]over[- ]year|qoq|cagr|yield)\b",
+    re.IGNORECASE,
+)
+# A multiplier context: "3-4 times", "roughly 3 times", "6x larger". The bare
+# integer is a count/ratio multiplier, NOT a $-level.
+_MULTIPLIER_AFTER_RE = re.compile(r"^\s*(?:-\s*\d+\s*)?(?:x\b|times\b|fold\b)", re.IGNORECASE)
+
+
+def _normalise_claim_text(text: str) -> str:
+    """Fold unicode punctuation the LLM emits to the ASCII forms the matcher reads.
+
+    The agent renders "price-to-earnings" with a U+2011 NON-BREAKING HYPHEN, a
+    ``26.67x`` MULTIPLICATION SIGN (U+00D7), narrow no-break spaces (U+202F), and
+    en/em dashes. Without folding, the ``price-to-earnings`` alias (regular hyphen)
+    never matches and a P/E claim mis-associates to ``net_income`` (the 'earnings'
+    substring) — the exact ru_googl_pe false contradiction. We REPLACE each with an
+    EQUAL-LENGTH ASCII char so character offsets (and therefore the association
+    window) are preserved.
+    """
+    # Each mapping is 1-char→1-char so offsets are stable.
+    table = {
+        0x2011: "-",  # non-breaking hyphen
+        0x2010: "-",  # hyphen
+        0x2012: "-",  # figure dash
+        0x2013: "-",  # en dash
+        0x2014: "-",  # em dash —
+        0x00D7: "x",  # multiplication sign
+        0x202F: " ",  # narrow no-break space
+        0x00A0: " ",  # no-break space
+        0x2009: " ",  # thin space
+    }
+    return text.translate(table)
+
+
+def _field_kind(field: str) -> str:
+    """Return the KIND of a (suffix-stripped) canonical field name, or 'unknown'."""
+    return _FIELD_KINDS.get(field.lower(), "unknown")
+
+
+def _classify_claim(raw: str, suffix: str, before: str, after: str) -> str:
+    """Classify a numeric claim into a kind from its FORMAT + surrounding CONTEXT.
+
+    ``before``/``after`` are the already-normalised, lowercased windows hugging the
+    number (a few dozen chars). Decision order -- most specific token first:
+      1. explicit ``%`` suffix                          -> percentage.
+      2. ratio context ("p/e", "multiple", "ratio")     -> ratio (incl. a trailing
+         ``x``, e.g. "37.73x" / "26.67x": the x means "times earnings").
+      3. a bare ``x``/``times`` multiplier right after  -> count (multiplier).
+      4. ``$`` prefix or a B/M/K/T scale suffix         -> absolute_value.
+      5. percentage CONTEXT word (growth/margin/yoy...)  -> percentage.
+      6. otherwise (a bare decimal/integer)             -> unknown (compatible-with-all).
+    """
+    sfx = (suffix or "").lower()
+    if sfx == "%":
+        return "percentage"
+    # A P/E "multiple" / "ratio" reading takes precedence over the bare-multiplier
+    # rule: ``37.73x`` / ``26.67x`` with "P/E"/"ratio"/"multiple" nearby is a RATIO
+    # value (the ``x`` means "times earnings"), NOT a "6x larger" multiplier.
+    has_ratio_ctx = bool(re.search(r"\b(p\s*/\s*e|price-to-earnings|multiple|ratio)\b", before + " " + after))
+    if has_ratio_ctx:
+        return "ratio"
+    # "6x", "3-4 times", "8x larger" with NO ratio context — a multiplier/count.
+    if _MULTIPLIER_AFTER_RE.match(after):
+        return "count"
+    # A $-prefix or scale word makes it a money/level figure regardless of context.
+    before_tail = before[-2:]
+    if "$" in before_tail or sfx in _SCALE_SUFFIX:
+        return "absolute_value"
+    # Growth/margin/change/yield context → a relative percentage figure.
+    if _PERCENT_CONTEXT_RE.search(before) or _PERCENT_CONTEXT_RE.search(after):
+        return "percentage"
+    return "unknown"
+
+
+def _kinds_compatible(claim_kind: str, field_kind: str) -> bool:
+    """Compatibility gate (asymmetric, permissive on UNKNOWN — see _FIELD_KINDS)."""
+    if claim_kind == "unknown" or field_kind == "unknown":
+        return True
+    # A multiplier/count claim ("6x") never substantiates a metric LEVEL field; it
+    # only stays compatible with an untyped field (handled by the unknown branch).
+    if claim_kind == "count":
+        return False
+    return claim_kind == field_kind
+
+
 # How far (chars) on EITHER side of a number we look for a field-name / alias to
 # associate the claim with a sampled field. A short window keeps "revenue is X …
 # eps is Y" from cross-associating.
@@ -1455,7 +1595,9 @@ _STRUCTURAL_PREFIX_RE = re.compile(
 # Structural-context tokens that immediately FOLLOW a bare integer ("4 quarters",
 # "3 periods", "5 results", "row 0", "2 years ago").
 _STRUCTURAL_SUFFIX_RE = re.compile(
-    r"^\s*(?:quarter[s]?|period[s]?|year[s]?|result[s]?|row[s]?|item[s]?|"
+    # Optional leading hyphen so "trailing-12-month" (the bare 12 hugged by a
+    # hyphen on BOTH sides) is recognised as a period count, not a magnitude claim.
+    r"^[-\s]*(?:quarter[s]?|period[s]?|year[s]?|result[s]?|row[s]?|item[s]?|"
     r"month[s]?|day[s]?|week[s]?|entit(?:y|ies)|compan(?:y|ies)|tool[s]?)\b",
     re.IGNORECASE,
 )
@@ -1600,18 +1742,32 @@ def _field_candidates(field: str) -> set[str]:
     return {c for c in candidates if c}
 
 
-def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: list[str]) -> str | None:
+def _nearest_field(
+    answer_lower: str,
+    span: tuple[int, int],
+    sampled_fields: list[str],
+    claim_kind: str = "unknown",
+) -> str | None:
     """Return the SINGLE SAMPLED field nearest the claim, or None.
 
-    SAME-FIELD guard (F-2). We compute the closest field-name mention to the
-    number across the FULL universe of known field names (``_FIELD_ALIASES`` +
-    the sampled field names themselves), then:
+    SAME-FIELD guard (F-2) + KIND guard (PLAN-0116 W1.2). We compute the closest
+    field-name mention to the number across the universe of known field names
+    (``_FIELD_ALIASES`` + the sampled field names themselves), then:
       * if the nearest mention belongs to a SAMPLED field → return it;
       * if the nearest mention belongs to a known-but-NOT-sampled field (e.g.
         "EPS" when only ``revenue`` was sampled) → return None. The number is
         about a different metric we have no sample for; comparing it to a
         farther-away sampled field would be a false contradiction.
       * if no field name sits within the window → None (unmatched, neutral).
+
+    KIND guard: a field whose KIND is INCOMPATIBLE with ``claim_kind`` is removed
+    from the universe entirely (see ``_kinds_compatible``). So a ``34 %``
+    percentage claim never associates to the ``revenue`` absolute field, and a
+    ``26.67x`` ratio claim never associates to ``net_income`` — even when those
+    incompatible field NAMES (or their aliases, e.g. "earnings" inside
+    "price-to-earnings") sit closer to the number. The nearest COMPATIBLE field
+    wins instead (``pe_ratio`` for the P/E). ``claim_kind == "unknown"`` keeps the
+    full universe (back-compat: legacy callers pass no kind).
 
     This stops "Revenue was $46.7B; EPS came in at $5.40" from contradicting the
     revenue sample with the EPS number: "eps" is nearer the $5.40 than "revenue".
@@ -1621,9 +1777,12 @@ def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: lis
     hi = min(len(answer_lower), end + _CLAIM_FIELD_WINDOW)
 
     # The universe of field names we recognise: every alias key + every sampled
-    # field name. Map each name-form back to its canonical field key.
+    # field name. Map each name-form back to its canonical field key. A field whose
+    # KIND is incompatible with the claim is dropped so it can never be associated.
     universe: dict[str, str] = {}
     for canonical in set(sampled_fields) | set(_FIELD_ALIASES):
+        if not _kinds_compatible(claim_kind, _field_kind(canonical)):
+            continue
         for name in _field_candidates(canonical):
             # Prefer a sampled field's claim on a shared name-form so a sampled
             # field is never shadowed by an unsampled alias of the same word.
@@ -1663,6 +1822,64 @@ def _nearest_field(answer_lower: str, span: tuple[int, int], sampled_fields: lis
     return None
 
 
+# --------------------------------------------------------------------------
+# ONE shared claim pipeline (PLAN-0116 W1.1)
+# --------------------------------------------------------------------------
+#
+# Both ``cross_check_grounding`` (the veto) and ``evaluate_substantiation`` (the
+# in-run rate) must see the EXACT SAME claims, types, and field associations —
+# otherwise they diverge (the 2026-06-26 run: veto found 9 contradictions,
+# substantiation found 0 on the SAME answer). This dataclass + iterator are the
+# single source of truth: extract → strip-code → type → (caller associates).
+
+
+@dataclass(frozen=True)
+class _TypedClaim:
+    """One numeric claim extracted from the answer prose, with its kind."""
+
+    value: float
+    span: tuple[int, int]
+    text: str  # the raw matched token (e.g. "$46.7B"), for example records
+    kind: str  # absolute_value | percentage | ratio | count | unknown
+
+
+def _iter_typed_claims(answer_text: str) -> tuple[str, list[_TypedClaim]]:
+    """Extract every typed numeric claim from the answer ONCE (shared pipeline).
+
+    Returns ``(cleaned_lower_text, claims)``. The cleaned text has unicode
+    punctuation folded (``_normalise_claim_text``) and code spans blanked
+    (``_strip_code_spans``); its LOWERCASE form is returned for the callers'
+    ``_nearest_field`` association (one normalisation, one offset space).
+
+    Skips, in order: year-like bare integers, structural integers (period labels /
+    enumeration / counts), and tokens whose mantissa won't parse. Everything that
+    survives is yielded with a kind from :func:`_classify_claim`.
+    """
+    # Fold unicode FIRST (offset-preserving), then blank code spans (also
+    # offset-preserving). Order is irrelevant to offsets — both are 1:1 — but
+    # folding first lets the structural/percent context regexes see ASCII dashes.
+    cleaned = _strip_code_spans(_normalise_claim_text(answer_text or ""))
+    cleaned_lower = cleaned.lower()
+    claims: list[_TypedClaim] = []
+    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
+        raw_num = m.group("num")
+        suffix = m.group("suffix") or ""
+        if _is_yearlike(raw_num, suffix):
+            continue
+        span = m.span()
+        if _is_structural_number(cleaned, span, raw_num, suffix):
+            continue
+        claim_val = _coerce_number(raw_num, suffix)
+        if claim_val is None:
+            continue
+        start, end = span
+        before = cleaned_lower[max(0, start - 32) : start]
+        after = cleaned_lower[end : end + 16]
+        kind = _classify_claim(raw_num, suffix, before, after)
+        claims.append(_TypedClaim(value=claim_val, span=span, text=m.group(0).strip(), kind=kind))
+    return cleaned_lower, claims
+
+
 def cross_check_grounding(
     answer_text: str,
     tool_results: list[dict[str, Any]] | None,
@@ -1691,56 +1908,44 @@ def cross_check_grounding(
     if not grounding_fields:
         return GroundingCheck(evidence_mode="presumed")
 
-    cleaned = _strip_code_spans(answer_text or "")
-    cleaned_lower = cleaned.lower()
+    cleaned_lower, claims = _iter_typed_claims(answer_text)
     field_names = list(grounding_fields)
     matched = 0
     unmatched = 0
     contradicted = 0
     examples: list[dict[str, Any]] = []
 
-    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
-        raw_num = m.group("num")
-        suffix = m.group("suffix") or ""
-        if _is_yearlike(raw_num, suffix):
-            continue
-        span = m.span()
-        # Structural-number guard (2026-06-26 FIX 3): mirror the same guard
-        # already applied in ``evaluate_substantiation`` (:~1851) so a bare
-        # period label / enumeration / count (e.g. the ``4`` in "last 4 quarters",
-        # the row index in "row 0", "Q4") is never mis-associated to the nearest
-        # sampled metric and false-flagged as a CONTRADICTION. Without this, the
-        # in-run grounding veto over-fires on structural integers and confounds the
-        # answer-judge (the 81.6→69.5 regression). The guard keys on FORMAT +
-        # CONTEXT, never magnitude alone, so real claims (EPS 1.87, 58.6%, 0.586)
-        # are kept. Applied to BOTH matchers from one source (feedback_prompt_input_mismatch).
-        if _is_structural_number(cleaned, span, raw_num, suffix):
-            continue
-        claim_val = _coerce_number(raw_num, suffix)
-        if claim_val is None:
-            continue
-
+    for claim in claims:
         # Which SINGLE sampled field does the prose associate with this number?
-        field_name = _nearest_field(cleaned_lower, span, field_names)
+        # The association is KIND-aware: a percentage/ratio claim can never attach
+        # to an incompatible absolute field (PLAN-0116 W1.2).
+        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
         if field_name is None:
             unmatched += 1
             continue
 
         samples = grounding_fields[field_name]
-        if any(_field_value_matches(field_name, claim_val, s) for s in samples):
+        if any(_field_value_matches(field_name, claim.value, s) for s in samples):
             matched += 1
             continue
 
-        # Outside tolerance of EVERY sample for this field → contradiction.
-        nearest_sample = min(samples, key=lambda s: abs(claim_val - s))
+        # Outside tolerance of EVERY sample for this field. MULTI-PERIOD SET rule
+        # (W1.3): a field with >=2 sampled values is an INCOMPLETE period/entity
+        # subset — it cannot DISPROVE a period it never sampled, so a non-matching
+        # claim there is ``unmatched`` (neutral), not a contradiction. Only a
+        # SINGLE-valued (authoritative) field yields a contradiction.
+        if len(samples) >= 2:
+            unmatched += 1
+            continue
+        nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
         contradicted += 1
         examples.append(
             {
                 "field": field_name,
-                "claim": claim_val,
-                "claim_text": m.group(0).strip(),
+                "claim": claim.value,
+                "claim_text": claim.text,
                 "nearest_sample": nearest_sample,
-                "delta": abs(claim_val - nearest_sample),
+                "delta": abs(claim.value - nearest_sample),
             }
         )
 
@@ -1845,8 +2050,9 @@ def evaluate_substantiation(
     if not all_field_names:
         return SubstantiationCheck(coverage="presumed")
 
-    cleaned = _strip_code_spans(answer_text or "")
-    cleaned_lower = cleaned.lower()
+    # ONE shared claim pipeline (W1.1): extract+type the claims EXACTLY as
+    # cross_check_grounding does, so the two checks can never diverge.
+    cleaned_lower, claims = _iter_typed_claims(answer_text)
     # ``_nearest_field`` associates a claim to one of THESE names. We pass the FULL
     # set (value-less fields included) so a claim can attach to a named-but-empty
     # field and be classed ``unsupported`` rather than silently ``unmatched``.
@@ -1857,24 +2063,10 @@ def evaluate_substantiation(
     unmatched = 0
     examples: list[dict[str, Any]] = []
 
-    for m in _CLAIM_NUMBER_RE.finditer(cleaned):
-        raw_num = m.group("num")
-        suffix = m.group("suffix") or ""
-        if _is_yearlike(raw_num, suffix):
-            continue
-        span = m.span()
-        # Structural-number guard (2026-06-26): skip bare integers that are period
-        # labels / enumeration / counts (no financial-format marker, structural
-        # context). Keeps real small claims (EPS 1.87, 58.6%, 0.586) which all carry
-        # a format marker. Prevents false ``contradicted`` from "Q4"/"periods = 4"
-        # being mis-associated to the nearest sampled metric field.
-        if _is_structural_number(cleaned, span, raw_num, suffix):
-            continue
-        claim_val = _coerce_number(raw_num, suffix)
-        if claim_val is None:
-            continue
-
-        field_name = _nearest_field(cleaned_lower, span, field_names)
+    for claim in claims:
+        # KIND-aware association (W1.2): a percentage/ratio claim never attaches to
+        # an incompatible absolute field.
+        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
         if field_name is None:
             unmatched += 1
             continue
@@ -1887,27 +2079,33 @@ def evaluate_substantiation(
             examples.append(
                 {
                     "field": field_name,
-                    "claim": claim_val,
-                    "claim_text": m.group(0).strip(),
+                    "claim": claim.value,
+                    "claim_text": claim.text,
                     "kind": "unsupported",
                 }
             )
             continue
 
-        if any(_field_value_matches(field_name, claim_val, s) for s in samples):
+        if any(_field_value_matches(field_name, claim.value, s) for s in samples):
             substantiated += 1
             continue
 
-        # Outside tolerance of EVERY sampled value for this field → contradiction.
-        nearest_sample = min(samples, key=lambda s: abs(claim_val - s))
+        # Outside tolerance of EVERY sampled value. MULTI-PERIOD SET rule (W1.3): a
+        # field with >=2 sampled values is an incomplete period/entity subset that
+        # cannot disprove an unsampled period → ``unmatched`` (neutral), not a
+        # contradiction. Only a SINGLE-valued authoritative field contradicts.
+        if len(samples) >= 2:
+            unmatched += 1
+            continue
+        nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
         contradicted += 1
         examples.append(
             {
                 "field": field_name,
-                "claim": claim_val,
-                "claim_text": m.group(0).strip(),
+                "claim": claim.value,
+                "claim_text": claim.text,
                 "nearest_sample": nearest_sample,
-                "delta": abs(claim_val - nearest_sample),
+                "delta": abs(claim.value - nearest_sample),
                 "kind": "contradicted",
             }
         )

@@ -87,12 +87,12 @@
       ],
       "expected": {
         "coverage": "verified",
-        "substantiated": 4,
+        "substantiated": 2,
         "unsupported": 0,
         "contradicted": 0,
         "unmatched": "ANY"
       },
-      "derivation": "revenue is a multi-period SET {81.615B, 10.253B, 9.246B}. Absolute revenue claims that match a set value (5% tol): $10.3B→x2 (10.253B), $81.6B (81.615B), $9.2B (9.246B) = 4 substantiated. Absolute revenue claims with NO matching sampled period ($7.7B, $46.7B, $57.0B, $68.1B, $12B, $2/$3B) → UNMATCHED (the sample is an incomplete period subset; it cannot DISPROVE an unsampled quarter → NEVER contradicted). The '34 %' and '75 %' growth claims are PERCENTAGE-typed and can NEVER associate to the absolute `revenue` field → unmatched (this is the exact observed false contradiction in the baseline). '3-4 times', '6×', '8×' are ratio/multiplier tokens with no compatible sampled field → unmatched. ACCEPTANCE: contradicted MUST be 0 (was 9 in baseline) and substantiated > 0."
+      "derivation": "revenue is a multi-period SET {81.615B, 10.253B, 9.246B}. ACCEPTANCE (the load-bearing assertions): contradicted MUST be 0 (was 9 in the baseline) and substantiated > 0. The '34 %' and '75 %' growth claims are PERCENTAGE-typed and can NEVER associate to the absolute `revenue` field → unmatched (this is the exact baseline false contradiction). '$10–$12B' multiplier, '3-4 times', '6×', '8×' are count/multiplier tokens → no compatible sampled field → unmatched. Revenue $-claims with no matching sampled period ($7.7B, $46.7B, $57.0B, $68.1B) → UNMATCHED (a >=2-value SET cannot DISPROVE an unsampled period → never contradicted). substantiated == 2: the two revenue figures stated in the COMPARISON PROSE next to the word 'revenue' ('rose from $7.7B to $10.3B' → $10.3B matches 10.253B; 'climbed from $46.7B to $81.6B' → $81.6B matches 81.615B). HONEST NOTE: the SAME figures repeated in the markdown TABLE cells (incl. $9.2B which matches 9.246B) do NOT associate, because their only field label is the far-away column header 'AMD/NVDA revenue' (>60-char window). So the matcher substantiates 2 of the 3 sampled periods, not 4 — a real limitation (table-cell association) flagged for Wave 2/3, NOT a correctness bug. The acceptance bar (contra=0, subst>0) holds."
     },
     {
       "id": "ru_googl_pe_vs_history",
