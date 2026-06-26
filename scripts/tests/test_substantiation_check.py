@@ -453,3 +453,51 @@ def test_margin_ratio_sample_substantiates_percent_claim() -> None:
     assert check.coverage == "verified"
     assert check.substantiated == 1
     assert check.contradicted == 0
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-26 failure-analysis #4: numeric claims must never associate to an
+# identifier field (ticker / symbol / name). Regression for the false
+# SUBSTANTIATION_UNSUPPORTED FAIL on tc_entity_health_palantir, where a "40%"
+# margin claim attached to field ``ticker`` and was mis-classed unsupported.
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_claim_associates_to_metric_not_ticker() -> None:
+    """A "40%" margin claim near the ticker token attaches to gross_margin, not ticker.
+
+    The sample carries BOTH a non-numeric identifier (``ticker``) and the real
+    numeric field (``gross_margin`` as a ratio). The identifier must be excluded
+    from the association universe so the claim substantiates against the margin
+    rather than being mis-flagged ``unsupported`` on ``ticker``.
+    """
+    results = [
+        _tool_result_with_sample(
+            "get_entity_health",
+            {"ticker": "NVDA", "gross_margin": "0.40"},
+        )
+    ]
+    check = evaluate_substantiation("NVDA gross margin was 40%.", results)
+    assert check.coverage == "verified"
+    assert check.substantiated == 1
+    # Critically: NOT unsupported-on-ticker (the pre-fix false-FAIL).
+    assert check.unsupported == 0
+    assert all(ex.get("field") != "ticker" for ex in check.examples)
+
+
+def test_ticker_only_sample_leaves_numeric_claim_unmatched() -> None:
+    """With ONLY an identifier field sampled, a numeric claim is unmatched — never unsupported.
+
+    ``ticker`` is excluded from the association universe, so there is no field to
+    attach the "40%" claim to. It must fall through to ``unmatched`` (neutral),
+    not ``unsupported`` (which would be a false FAIL on a label field).
+    """
+    results = [_tool_result_with_sample("get_entity_health", {"ticker": "NVDA"})]
+    check = evaluate_substantiation("Its gross margin was 40%.", results)
+    # The only sampled field name is an identifier → excluded → no field names
+    # remain → presumed mode (all counts 0, never a failure).
+    assert check.coverage == "presumed"
+    assert check.unsupported == 0
+    assert check.substantiated == 0
+    assert check.contradicted == 0
+    assert check.unmatched == 0

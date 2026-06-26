@@ -1345,6 +1345,20 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 # docs/audits/2026-06-26-substantiation-eval-design.md (margin-as-ratio note).
 _PERCENT_VALUED_FIELDS: frozenset[str] = frozenset({"gross_margin", "net_margin", "operating_margin"})
 
+# 2026-06-26 failure-analysis #4: IDENTIFIER fields are non-numeric labels
+# (ticker, symbol, entity/company name). A grounding_sample for a comparison
+# carries them alongside the metrics (e.g. ``{"ticker": "NVDA", "gross_margin":
+# "0.40"}``). They have no parseable numeric value, so the substantiation matcher
+# must NEVER associate a numeric claim (e.g. "40%") to one of them — doing so
+# classed a legitimate margin claim as ``unsupported`` on field ``ticker`` and
+# produced a false SUBSTANTIATION_UNSUPPORTED FAIL (``tc_entity_health_palantir``).
+# We exclude these names from the association universe so the claim attaches to
+# the real numeric field (or stays ``unmatched``) instead. Matched against the
+# ``_<digits>``-stripped base name, so ``ticker_2`` is covered too.
+_IDENTIFIER_FIELDS: frozenset[str] = frozenset(
+    {"ticker", "symbol", "entity_name", "entity", "name", "company", "company_name"}
+)
+
 # How far (chars) on EITHER side of a number we look for a field-name / alias to
 # associate the claim with a sampled field. A short window keeps "revenue is X …
 # eps is Y" from cross-associating.
@@ -1706,6 +1720,13 @@ def _collect_grounding_field_names(tool_results: list[dict[str, Any]] | None) ->
             # (``revenue``, ``revenue_2``). Strip a trailing ``_<digits>`` so the
             # claim associates to the same canonical field name the value map uses.
             base = re.sub(r"_\d+$", "", str(fname))
+            # 2026-06-26 #4: skip identifier/label fields (ticker, symbol, name).
+            # They are non-numeric and must never own a numeric claim — otherwise
+            # a metric figure attaches to ``ticker`` and is mis-flagged
+            # ``unsupported``. Excluding them here keeps the association universe
+            # numeric-only without touching the generic ``_nearest_field`` logic.
+            if base.lower() in _IDENTIFIER_FIELDS:
+                continue
             names.add(base)
     return names
 
