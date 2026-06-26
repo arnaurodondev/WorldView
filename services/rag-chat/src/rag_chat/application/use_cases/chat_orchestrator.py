@@ -913,6 +913,40 @@ _PLAN_ONLY_REFUSAL = (
     "company, metric, or comparison) and I'll answer directly."
 )
 
+# 2026-06-26 failure-analysis #2: hallucinated-refusal phrases. The synthesis
+# model sometimes emits a flat, wholesale refusal ("Not available in retrieved
+# context") even when the tools DID return usable rows — a confident refusal on
+# an answerable question. These short markers (English + the Spanish variant
+# seen in #6) let a defence-in-depth guard detect that case so the answer can
+# fail OPEN to a hedged, data-backed reply instead of discarding the tool data.
+_WHOLESALE_REFUSAL_MARKERS: tuple[str, ...] = (
+    "not available in retrieved context",
+    "no disponible en el contexto recuperado",
+)
+# A refusal is only "wholesale" when it is SHORT — a long answer that merely
+# mentions one missing sub-fact in passing must not trip the guard. 240 chars is
+# comfortably above the refusal templates yet well below a real multi-fact
+# answer.
+_WHOLESALE_REFUSAL_MAX_LEN = 240
+
+
+def _is_wholesale_refusal(text: str) -> bool:
+    """True when ``text`` is a short, flat refusal that names no real data.
+
+    Used by the #2 fail-open guard: if the synthesis output is a wholesale
+    refusal BUT the turn retrieved non-empty tool data, we replace it with a
+    hedged answer rather than serve the refusal. Kept deliberately narrow
+    (marker phrase + short length) so substantive answers that merely caveat a
+    single missing figure are never rewritten.
+    """
+    if not text:
+        return False
+    _stripped = text.strip()
+    if len(_stripped) > _WHOLESALE_REFUSAL_MAX_LEN:
+        return False
+    _low = _stripped.lower()
+    return any(_marker in _low for _marker in _WHOLESALE_REFUSAL_MARKERS)
+
 
 # ── Theme F (2026-06-12 root-cause audit) — false write-action claim guard ───
 #
@@ -3599,6 +3633,32 @@ class ChatOrchestratorUseCase:
             # generic message that would replay for any future failure.
             grounding_passed = False
 
+        # ── 2026-06-26 #2: fail-OPEN on a hallucinated wholesale refusal ──────
+        # The synthesis model occasionally returns a flat "Not available in
+        # retrieved context" refusal even though the tools DID return rows
+        # (tc_price_history_nvda_90d, chain_portfolio_upcoming_earnings). That is
+        # the most reputationally damaging failure: a confident refusal on an
+        # answerable question. When the answer is a short wholesale refusal BUT
+        # we retrieved non-empty tool data this turn, swap in a hedged,
+        # data-backed reply built from the retrieved items (no LLM-invented
+        # numbers, so the downstream validators do not false-positive). We do
+        # NOT touch the legitimate ``_grounded is False`` refusals above (phantom
+        # citation / empty pool / plan-only) — those fire precisely because the
+        # data was NOT usable; this guard is gated on ``non_none_items`` being
+        # non-empty AND ``grounded`` still True.
+        if grounded and non_none_items and _is_wholesale_refusal(full_text):
+            log.warning(  # type: ignore[no-any-return]
+                "hallucinated_refusal_failed_open",
+                retrieved_item_count=len(non_none_items),
+                executed_tools=sorted(set(_executed_tool_names)),
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+            full_text = _build_second_turn_fallback_answer(
+                question=request.message,
+                tool_names=_executed_tool_names,
+                retrieved_items=reranked or non_none_items,
+            )
+
         # ── BP-674 defense-in-depth: post-grounding narration scrub ───────────
         # The grounding rewrites (above) replace ``full_text`` with their own
         # stream_chat output, which BYPASSES the pre-grounding
@@ -4090,7 +4150,10 @@ class ChatOrchestratorUseCase:
         try:
             _rewrite_timeout = _RagChatSettings().entity_grounding_rewrite_timeout_seconds  # type: ignore[call-arg]
         except Exception:
-            _rewrite_timeout = 15.0
+            # 2026-06-26 #2: keep the hard-coded fallback in lock-step with the
+            # config default (raised 15s -> 30s) so a settings-load failure does
+            # not silently re-introduce the premature-timeout banner.
+            _rewrite_timeout = 30.0
 
         async def _drain_rewrite() -> str:
             buf = ""
