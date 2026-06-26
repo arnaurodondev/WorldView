@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
@@ -637,17 +638,50 @@ class SSEEmitter:
     # survive into the sample; the builder never raises on a missing field.
     _GROUNDING_FIELD_ALLOWLIST: ClassVar[dict[str, tuple[str, ...]]] = {
         # Market / fundamentals tools — numeric financial fields + identifiers.
-        "get_fundamentals_history": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        # Value-substantiation (2026-06-26): widened to the full metric set the
+        # fundamentals handlers now emit on ``grounding_fields`` (net_income,
+        # forward_pe, ebitda, free_cash_flow). Keep <= GROUNDING_MAX_FIELDS_PER_ROW
+        # surviving per row (ticker + period + metrics; period rarely resolves so
+        # the numeric metrics fit the cap of 8).
+        "get_fundamentals_history": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+        ),
         "get_fundamentals_history_batch": (
             "ticker",
             "period",
             "revenue",
             "eps",
             "gross_profit",
+            "net_income",
             "pe_ratio",
+            "forward_pe",
             "market_cap",
+            "ebitda",
+            "free_cash_flow",
         ),
-        "compare_entities": ("ticker", "period", "revenue", "eps", "gross_profit", "pe_ratio", "market_cap"),
+        "compare_entities": (
+            "ticker",
+            "period",
+            "revenue",
+            "eps",
+            "gross_profit",
+            "net_income",
+            "pe_ratio",
+            "forward_pe",
+            "market_cap",
+            "ebitda",
+            "free_cash_flow",
+        ),
         "get_price_history": ("ticker", "period", "open", "high", "low", "close", "volume"),
         "screen_universe": ("ticker", "pe_ratio", "market_cap", "revenue"),
         "get_market_movers": ("ticker", "change_pct", "price"),
@@ -701,6 +735,16 @@ class SSEEmitter:
         # 3. dict-style item (some handlers return plain dicts).
         if isinstance(item, dict):
             return item.get(field)
+        # 4. Structured grounding_fields bag (value-substantiation, 2026-06-26):
+        #    fundamentals/compare handlers carry raw numeric values as an ordered
+        #    tuple of (key, str-value) pairs. Probe it last so the direct-attr /
+        #    citation_meta paths (e.g. ticker via entity_name) still win. Dict-ify
+        #    once per call; the bag is small (<=~9 keys) so this is cheap.
+        gf = getattr(item, "grounding_fields", None)
+        if gf:
+            gf_map = dict(gf)
+            if field in gf_map:
+                return gf_map[field]
         return None
 
     @classmethod
@@ -773,6 +817,30 @@ class SSEEmitter:
                 row_contributed = True
             if row_contributed:
                 sampled_rows += 1
+
+            # Value-substantiation (2026-06-26): admit ALREADY-SUFFIXED grounding
+            # keys (``revenue_2``, ``ticker_3``) that a single item carries for
+            # MULTIPLE entities — e.g. compare_entities packs every compared
+            # ticker into one item. The main loop only probes bare allow-listed
+            # names, so the 2nd+ entity's metrics would otherwise be dropped. We
+            # admit a suffixed key ONLY when its ``_\d+$``-stripped base is in the
+            # allow-list AND passes the same portfolio/account redaction — so this
+            # stays fail-closed and never leaks an unknown field shape.
+            gf = getattr(item, "grounding_fields", None)
+            if gf:
+                for raw_key, raw_val in dict(gf).items():
+                    if row_field_count >= cls.GROUNDING_MAX_FIELDS_PER_ROW:
+                        break
+                    base = re.sub(r"_\d+$", "", raw_key)
+                    if base == raw_key or base not in allow:
+                        # Bare keys already handled above; non-allow-listed base → skip.
+                        continue
+                    if any(sub in raw_key.lower() for sub in cls._GROUNDING_REDACT_NAME_SUBSTRINGS):
+                        continue
+                    if raw_val is None or raw_key in fields:
+                        continue
+                    fields[raw_key] = str(raw_val)[: cls.GROUNDING_VALUE_MAX_CHARS]
+                    row_field_count += 1
 
         if not fields:
             # No allow-listed field survived (e.g. the handler renders numbers
