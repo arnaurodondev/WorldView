@@ -121,6 +121,124 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── Value-based substantiation (2026-06-26) ───────────────────────────────────
+# Helpers that lift the RAW numeric values the fundamentals handlers already
+# compute into a structured ``grounding_fields`` bag on RetrievedItem, so the
+# chat-quality eval can substantiate numeric claims against returned values
+# rather than re-parsing the markdown ``text`` blob (brittle: "$81.6B" loses
+# precision). See docs/audits/2026-06-26-substantiation-eval-design.md.
+#
+# Values are emitted as RAW, UNSCALED numeric strings ("81600000000", "1.87",
+# "0.586") so the judge's scale logic (B/M/K/T, %, $) stays authoritative and we
+# never double-scale. A metric is emitted ONLY when its value is a finite number
+# — a missing/None value is skipped so it never enters as a phantom number.
+
+# Per-period flow/snapshot metrics we lift, mapped to the synonym keys a row may
+# carry (first non-None wins). Order is stable so grounding_fields are
+# deterministic. Margins are ratios on the row; we emit them verbatim (the judge
+# compares a "%" claim against ratio*100 via its percent-valued set).
+_GROUNDING_PERIOD_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("revenue", ("revenue", "totalRevenue", "revenue_ttm")),
+    ("net_income", ("net_income", "netIncome")),
+    ("eps", ("eps", "epsActual")),
+    ("gross_profit", ("gross_profit",)),
+    ("pe_ratio", ("pe_ratio", "pe")),
+    ("market_cap", ("market_cap", "market_capitalization", "market_cap_usd")),
+    ("ebitda", ("ebitda",)),
+    ("free_cash_flow", ("free_cash_flow", "fcf")),
+    ("forward_pe", ("forward_pe",)),
+)
+
+# Snapshot scalars we lift in addition to the latest period row. The snapshot
+# uses slightly different keys (e.g. market_cap_usd) than per-period rows.
+_GROUNDING_SNAPSHOT_METRIC_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pe_ratio", ("pe_ratio",)),
+    ("forward_pe", ("forward_pe",)),
+    ("market_cap", ("market_cap_usd", "market_cap")),
+    ("ebitda", ("ebitda",)),
+    ("free_cash_flow", ("free_cash_flow", "fcf")),
+)
+
+
+def _coerce_grounding_number(value: Any) -> str | None:
+    """Return ``value`` as a raw, unscaled numeric string, or None if not numeric.
+
+    Rejects bools (``True`` is an int subclass) and non-finite floats so a phantom
+    NaN never enters the bag. ``str(float(...))`` keeps full precision and avoids
+    the markdown formatter's lossy "$81.6B" rendering.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num != num or num in (float("inf"), float("-inf")):  # NaN / inf guard
+        return None
+    # Emit integers without a trailing ".0" so "81600000000" matches the judge's
+    # bare-integer parse; keep float precision otherwise ("1.87", "0.586").
+    if num.is_integer():
+        return str(int(num))
+    return repr(num)
+
+
+def _grounding_fields_from_row(
+    row: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+    *,
+    ticker: str,
+    metric_keys: tuple[tuple[str, tuple[str, ...]], ...] = _GROUNDING_PERIOD_METRIC_KEYS,
+    allowed_canonicals: set[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Build the ``grounding_fields`` bag for one entity from its latest period.
+
+    ``row`` is the latest-period metric dict (revenue/eps/...); ``snapshot`` is the
+    current-snapshot scalar dict (pe_ratio/market_cap/...). The first non-None
+    candidate per canonical metric wins, with the period row taking priority over
+    the snapshot. ``ticker`` is always emitted first so the entity is anchored even
+    when every numeric metric is missing.
+
+    ``allowed_canonicals`` (when given) restricts BOTH the period and snapshot-only
+    metric sets to those canonical names — used by query_fundamentals to honour the
+    per-metric coverage flag so an uncovered metric never enters as a phantom number.
+    """
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    seen: set[str] = set()
+    row = row or {}
+    snapshot = snapshot or {}
+    for canonical, synonyms in metric_keys:
+        if canonical in seen:
+            continue
+        raw: Any = None
+        for syn in synonyms:
+            if row.get(syn) is not None:
+                raw = row.get(syn)
+                break
+        if raw is None:
+            for syn in synonyms:
+                if snapshot.get(syn) is not None:
+                    raw = snapshot.get(syn)
+                    break
+        num = _coerce_grounding_number(raw)
+        if num is not None:
+            fields.append((canonical, num))
+            seen.add(canonical)
+    # Snapshot-only scalars (pe_ratio/forward_pe/market_cap/...) that the period
+    # row did not provide — pull straight from the snapshot under its own keys.
+    for canonical, synonyms in _GROUNDING_SNAPSHOT_METRIC_KEYS:
+        if canonical in seen:
+            continue
+        if allowed_canonicals is not None and canonical not in allowed_canonicals:
+            continue
+        for syn in synonyms:
+            num = _coerce_grounding_number(snapshot.get(syn))
+            if num is not None:
+                fields.append((canonical, num))
+                seen.add(canonical)
+                break
+    return tuple(fields)
+
+
 # ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
 # Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
 # ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
@@ -601,12 +719,22 @@ class MarketHandler(ToolHandler):
             non_phantom,
             current_snapshot=current_snapshot,
         )
+        # Value-substantiation (2026-06-26): lift the latest period's raw numbers
+        # so the eval can verify quoted figures. ``non_phantom`` is ASC by date,
+        # so the last element is the latest period. Rows may be pydantic models
+        # (model_dump) or plain dicts depending on the adapter path.
+        latest = non_phantom[-1]
+        latest_dict = (
+            latest.model_dump() if hasattr(latest, "model_dump") else (latest if isinstance(latest, dict) else {})
+        )
+        grounding_fields = _grounding_fields_from_row(latest_dict, current_snapshot, ticker=ticker)
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{ticker}",
             item_type=ItemType.financial,
             text=table[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
+            grounding_fields=grounding_fields,
             # PLAN-0103 W26 / BP-644: bind the entity_name so the BP-605
             # entity-grounding guard (chat_orchestrator._check_entity_grounding)
             # can match this item to the question's ticker. Pre-W26 the
@@ -675,6 +803,7 @@ class MarketHandler(ToolHandler):
         for ticker in ticker_list:
             entry = results.get(ticker) or {}
             status = entry.get("status")
+            grounding_fields: tuple[tuple[str, str], ...] = ()
             if status == "ok":
                 periods_data = entry.get("periods") or []
                 # PLAN-0103 W25 / BP-640: forward the per-ticker snapshot
@@ -687,6 +816,16 @@ class MarketHandler(ToolHandler):
                     text = f"{ticker}: no quarterly fundamentals available"
                 else:
                     text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
+                    # Value-substantiation: lift the latest period's raw numbers
+                    # (periods sorted ASC → last element is latest). Skip when
+                    # no period rows (snapshot-only entry still anchors ticker).
+                    latest = periods_data[-1] if periods_data else None
+                    latest_dict = (
+                        latest.model_dump()
+                        if latest is not None and hasattr(latest, "model_dump")
+                        else (latest if isinstance(latest, dict) else {})
+                    )
+                    grounding_fields = _grounding_fields_from_row(latest_dict, snap_dict, ticker=ticker)
             else:
                 reason = entry.get("reason") or "unknown"
                 text = f"{ticker}: data unavailable — {reason}"
@@ -698,6 +837,7 @@ class MarketHandler(ToolHandler):
                     text=text[:_TOOL_RESULT_MAX_CHARS],
                     score=0.88,
                     trust_weight=0.90,
+                    grounding_fields=grounding_fields,
                     citation_meta=CitationMeta(
                         title=f"Fundamentals: {ticker}",
                         url=None,
@@ -805,12 +945,30 @@ class MarketHandler(ToolHandler):
         #    text-scan path picks those up via ``classify_number``.
         upper_ticker = ticker.upper()
         text = self._format_query_fundamentals(upper_ticker, metrics, rows, snapshot, coverage)
+        # Value-substantiation (2026-06-26): lift the latest period (+ snapshot
+        # scalars) as raw numbers. CRITICAL: only emit a metric whose coverage is
+        # "ok" — a "missing"/"partial" metric must NOT enter as a phantom number
+        # (so the eval correctly leaves an asserted-but-uncovered metric as
+        # unsupported). ``rows`` is ASC by date → last element is latest.
+        ok_metrics = {m for m in metrics if coverage.get(m, "missing") == "ok"}
+        grounding_metric_keys = tuple(
+            (canonical, synonyms) for canonical, synonyms in _GROUNDING_PERIOD_METRIC_KEYS if canonical in ok_metrics
+        )
+        latest_row = rows[-1] if rows else {}
+        grounding_fields = _grounding_fields_from_row(
+            latest_row if isinstance(latest_row, dict) else {},
+            snapshot,
+            ticker=upper_ticker,
+            metric_keys=grounding_metric_keys,
+            allowed_canonicals=ok_metrics,
+        )
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{upper_ticker}",
             item_type=ItemType.financial,
             text=text[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
+            grounding_fields=grounding_fields,
             citation_meta=CitationMeta(
                 title=f"Fundamentals query: {upper_ticker}",
                 url=None,
@@ -1088,6 +1246,13 @@ class MarketHandler(ToolHandler):
             return []
 
         lines = [f"## Entity Comparison: {', '.join(tickers)}\n"]
+        # Value-substantiation (2026-06-26): accumulate grounding_fields across all
+        # compared entities into the single returned item. The first entity uses
+        # bare metric names; the 2nd+ are suffixed ``_2``/``_3`` (matching the
+        # judge's ``_\d+$`` field-name normalisation) so per-entity claims map to
+        # the right number. ``entity_idx`` advances only for entities that render.
+        compare_grounding: list[tuple[str, str]] = []
+        entity_idx = 0
         for item in results:
             # M-3: BaseException is the correct check — asyncio.gather(return_exceptions=True)
             # can return KeyboardInterrupt, SystemExit, etc. which are BaseException but not Exception.
@@ -1160,10 +1325,21 @@ class MarketHandler(ToolHandler):
                     [latest_period.get("eps"), highlights.get("DilutedEpsTTM"), highlights.get("EarningsShare")],
                 ),
             ]
+            # Per-entity grounding bag: ticker first, then each resolved metric as
+            # a RAW number. Suffix non-first entities (``_2``/``_3``...) so the
+            # judge can disambiguate which ticker a claim refers to.
+            suffix = "" if entity_idx == 0 else f"_{entity_idx + 1}"
+            entity_grounding: list[tuple[str, str]] = [(f"ticker{suffix}", ticker)]
+            quote_price = _coerce_grounding_number(quote.get("price") or quote.get("close") or quote.get("last_price"))
+            if quote_price is not None:
+                entity_grounding.append((f"price{suffix}", quote_price))
             for key, candidates in metric_specs:
                 val = next((c for c in candidates if c is not None), None)
                 if val is None:
                     continue
+                num = _coerce_grounding_number(val)
+                if num is not None:
+                    entity_grounding.append((f"{key}{suffix}", num))
                 # FIX-LIVE-DD: pre-format cap-style metrics so the LLM does not
                 # have to read 13-digit integers and hallucinate trillion/
                 # billion labels (the original screener fix, now reused here).
@@ -1173,6 +1349,8 @@ class MarketHandler(ToolHandler):
                         lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
                         continue
                 lines.append(f"  {key.replace('_', ' ').title()}: {val}")
+            compare_grounding.extend(entity_grounding)
+            entity_idx += 1
             lines.append("")
 
         text = "\n".join(lines)
@@ -1189,6 +1367,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.88,
                 trust_weight=0.85,
+                grounding_fields=tuple(compare_grounding),
                 citation_meta=CitationMeta(
                     title=f"Comparison: {', '.join(tickers)}",
                     url=None,
