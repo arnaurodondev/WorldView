@@ -1105,9 +1105,13 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_alerts",
             description=(
-                "Retrieves the user's active (pending) alerts — price alerts, signal alerts, "
-                'and watchlist triggers. Use when the user asks "show me my alerts", "what '
-                'alerts do I have", or "are there any active alerts for my portfolio".'
+                "**Use this tool — NOT search_documents — for ANY question about the user's "
+                "alerts.** Retrieves the user's active (pending) alerts: price alerts, signal "
+                "alerts, and watchlist triggers. Triggers (call get_alerts immediately, do not "
+                'search documents): "show me my alerts", "what alerts do I have", "list my '
+                'active alerts", "are there any active alerts for my portfolio", "any alerts '
+                "triggered\". This is the ONLY tool that can read the user's alerts — free-text "
+                "search will return nothing."
             ),
             # WHY parameters=[]: alerts are keyed on the authenticated user; no LLM inputs.
             parameters=[],

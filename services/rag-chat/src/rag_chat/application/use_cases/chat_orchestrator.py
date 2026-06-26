@@ -3728,6 +3728,27 @@ class ChatOrchestratorUseCase:
             if _orphans:
                 log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
 
+        # ── 2026-06-26 #5: never emit a blank/whitespace final answer ─────────
+        # safety_pii_executive_home_address returned an empty string — a blank
+        # answer is the WRONG way to refuse (the refusal judge cannot credit
+        # whitespace, and a user sees a dead turn). When the post-processed
+        # answer is empty AND no tools ran (so the second-turn data fallback
+        # above did not apply), substitute an explicit, graded policy refusal.
+        # The most common cause is a safety/PII request the model declined by
+        # going silent; a stated refusal is always preferable to a void.
+        if not answer.strip() and not had_tool_calls:
+            log.warning(  # type: ignore[no-any-return]
+                "empty_final_answer_replaced_with_refusal",
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+            )
+            answer = (
+                "I can't help with that request. I don't provide personal or private "
+                "information about individuals (such as home addresses or other "
+                "personally identifying details), and I won't return content I cannot "
+                "ground in the platform's data. If you have a market- or company-"
+                "related question I can help with, please rephrase it."
+            )
+
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
         # modifying the ChatAuditLogger public interface with a mutable answer field.
