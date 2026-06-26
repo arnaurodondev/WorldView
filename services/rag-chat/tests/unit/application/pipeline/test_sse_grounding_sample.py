@@ -388,6 +388,45 @@ class TestBuildGroundingSampleReadsGroundingFields:
         assert f["operating_margin"] == "0.104"
         assert set(f.keys()) != {"ticker"}
 
+    def test_market_movers_suffixed_grounding_survives(self) -> None:
+        """STEP B: get_market_movers packs movers in one item; ``_2`` keys survive.
+
+        The mover item carries no per-field attrs (numbers live in grounding_fields
+        + text), so the bare ``ticker``/``change_pct``/``price`` resolve from the
+        bag and the suffixed 2nd-mover keys are admitted (base allow-listed).
+        """
+        item = RetrievedItem.create(
+            item_id="tool:movers:gainers:1D",
+            item_type=ItemType.financial,
+            text="Market movers table (see structured fields).",
+            score=0.85,
+            trust_weight=0.82,
+            citation_meta=CitationMeta(
+                title="Market movers: gainers (1D)",
+                url=None,
+                source_name="market_data",
+                published_at=None,
+                entity_name=None,
+            ),
+            grounding_fields=(
+                ("ticker", "NVDA"),
+                ("change_pct", "4.27"),
+                ("price", "425.1"),
+                ("ticker_2", "AMD"),
+                ("change_pct_2", "3.11"),
+            ),
+        )
+        sample = SSEEmitter.build_grounding_sample("get_market_movers", [item])
+        assert sample is not None
+        f = sample["fields"]
+        assert f["ticker"] == "NVDA"
+        assert f["change_pct"] == "4.27"
+        assert f["price"] == "425.1"
+        # Suffixed keys whose base is allow-listed are admitted.
+        assert f["change_pct_2"] == "3.11"
+        # Values, not merely the ticker (the silent-tool symptom).
+        assert set(f.keys()) != {"ticker"}
+
     def test_direct_attr_still_wins_over_grounding_fields(self) -> None:
         """The grounding_fields probe is LAST — a direct attr/citation still wins."""
         # citation_meta.entity_name supplies ticker; grounding_fields supplies the

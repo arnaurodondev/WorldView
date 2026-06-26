@@ -1693,11 +1693,22 @@ class MarketHandler(ToolHandler):
             return []
 
         movers = raw.get("movers") or raw.get("data") or raw.get("results") or []
+        # Value-substantiation (2026-06-26 STEP B): accumulate a per-mover
+        # grounding bag so an answer citing "TICKER +X.XX%" / "@ price" can be
+        # substantiated against the values the tool actually returned. ALL movers
+        # share ONE RetrievedItem (the markdown table is a single block), so we
+        # pack each mover under suffixed keys (``ticker``/``change_pct``/``price``,
+        # then ``ticker_2``/...). The sse_emitter admits ``_\d+$`` keys whose base
+        # is allow-listed; the W1 matcher strips the suffix back to the base metric.
+        # change_pct is emitted as a RAW PERCENT NUMBER ("4.27", not "4.27%") — the
+        # matcher's percentage typing handles the unit, and "change_pct" is in
+        # _PERCENT_VALUED_FIELDS-equivalent percent kind via its name.
+        mover_grounding: list[tuple[str, str]] = []
         if not movers:
             text = f"No {safe_mover_type} data available for period {period}."
         else:
             lines = [f"## Market Movers — {safe_mover_type.replace('_', ' ').title()} ({period})\n"]
-            for m in movers[:limit_clamped]:
+            for idx, m in enumerate(movers[:limit_clamped]):
                 ticker = m.get("ticker") or m.get("symbol") or "?"
                 change_pct = m.get("change_percent") or m.get("change_pct") or m.get("changePercent")
                 price = m.get("price") or m.get("close")
@@ -1707,6 +1718,16 @@ class MarketHandler(ToolHandler):
                 if price:
                     row += f" @ {price}"
                 lines.append(row)
+                # idx 0 → bare keys; idx N → ``_<N+1>`` suffix (matcher strips _\d+$).
+                suffix = "" if idx == 0 else f"_{idx + 1}"
+                if ticker and ticker != "?":
+                    mover_grounding.append((f"ticker{suffix}", str(ticker)))
+                cp_num = _coerce_grounding_number(change_pct)
+                if cp_num is not None:
+                    mover_grounding.append((f"change_pct{suffix}", cp_num))
+                price_num = _coerce_grounding_number(price)
+                if price_num is not None:
+                    mover_grounding.append((f"price{suffix}", price_num))
             text = "\n".join(lines)
 
         log.info(
@@ -1723,6 +1744,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.85,
                 trust_weight=0.82,
+                grounding_fields=tuple(mover_grounding),
                 citation_meta=CitationMeta(
                     title=f"Market movers: {safe_mover_type} ({period})",
                     url=None,

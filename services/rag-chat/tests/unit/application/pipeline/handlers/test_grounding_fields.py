@@ -27,10 +27,10 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _make_handler(s3: Any) -> Any:
+def _make_handler(s3: Any, s3_brief: Any = None) -> Any:
     from rag_chat.application.pipeline.handlers.market import MarketHandler
 
-    return MarketHandler(s3=s3, s3_brief=None, timeout=5.0)
+    return MarketHandler(s3=s3, s3_brief=s3_brief, timeout=5.0)
 
 
 def _gf_dict(result: Any) -> dict[str, str]:
@@ -306,6 +306,52 @@ async def test_query_fundamentals_emits_margins_as_raw_ratios() -> None:
     assert gf["gross_margin"] == "0.176"
     assert gf["operating_margin"] == "0.104"
     assert all("%" not in v for v in gf.values())
+
+
+# ── _handle_get_market_movers (STEP B, 2026-06-26) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_market_movers_emits_per_mover_suffixed_grounding() -> None:
+    """STEP B: each mover's ticker/change_pct/price lands suffixed in one item.
+
+    All movers share ONE RetrievedItem (the markdown table), so the 2nd+ mover's
+    keys are ``_2``/``_3`` suffixed — the sse_emitter admits the suffixed keys and
+    the W1 matcher strips the suffix back to the base metric. change_pct/price are
+    RAW numbers (no "%"/"$") so the matcher's typing handles the unit.
+    """
+    s3_brief = AsyncMock()
+    s3_brief.get_top_movers.return_value = {
+        "movers": [
+            {"ticker": "NVDA", "change_percent": 4.27, "price": 425.10},
+            {"ticker": "AMD", "change_percent": 3.11, "price": 150.0},
+        ]
+    }
+    handler = _make_handler(AsyncMock(), s3_brief=s3_brief)
+    results = await handler._handle_get_market_movers(mover_type="gainers", limit=5)
+
+    assert len(results) == 1
+    gf = _gf_dict(results[0])
+    # First mover → bare keys; RAW numbers, no "%"/"$".
+    assert gf["ticker"] == "NVDA"
+    assert gf["change_pct"] == "4.27"
+    assert gf["price"] == "425.1"
+    # Second mover → ``_2`` suffixed.
+    assert gf["ticker_2"] == "AMD"
+    assert gf["change_pct_2"] == "3.11"
+    assert gf["price_2"] == "150"
+    assert all("%" not in v and "$" not in v for v in gf.values())
+
+
+@pytest.mark.asyncio
+async def test_market_movers_no_data_empty_grounding() -> None:
+    """No movers returned → no grounding (never a phantom row)."""
+    s3_brief = AsyncMock()
+    s3_brief.get_top_movers.return_value = {"movers": []}
+    handler = _make_handler(AsyncMock(), s3_brief=s3_brief)
+    results = await handler._handle_get_market_movers(mover_type="gainers")
+    assert len(results) == 1
+    assert results[0].grounding_fields == ()
 
 
 # ── _handle_compare_entities ──────────────────────────────────────────────────
