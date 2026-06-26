@@ -41,10 +41,13 @@ from chat_quality_judge import (  # — sys.path mutation must precede the impor
     Rubric,
     _build_user_prompt,
     _is_appropriate_refusal,
+    _is_transient_llm_error,
+    _with_retry,
     detect_degenerate_answer,
     detect_phantom_citation,
     detect_tool_failure_nonanswer,
     judge_answer,
+    summarise_judge_records,
 )
 
 pytestmark = pytest.mark.unit
@@ -194,7 +197,7 @@ _SCREENER_500_NONANSWER = (
 
 # Real leading-digit-drop corruption — q_ru_mstr_news_run2.json (E6).
 _DIGIT_DROP_ANSWER = (
-    "MicroStrategy recently purchased an additional **,095 BTC** for " "approximately **$271.47 million**."
+    "MicroStrategy recently purchased an additional **,095 BTC** for approximately **$271.47 million**."
 )
 
 
@@ -815,3 +818,101 @@ def test_refusal_relaxation_does_not_spare_genuine_empty_after_tools(monkeypatch
     )
     out = judge_answer(inp)
     assert out["verdict"] == "FAIL"
+
+
+# ---------------------------------------------------------------------------
+# Judge LLM retry (PLAN-0116 W5 / Item 2). A transient ReadTimeout / 5xx / 429
+# is retried with backoff; a deterministic error or an exhausted retry budget
+# re-raises (so judge_answer still tags the row ERROR). ERROR rows are excluded
+# from the quality aggregates and counted separately as eval-infra.
+# ---------------------------------------------------------------------------
+
+
+class _FakeReadTimeoutError(Exception):
+    """Stand-in for httpx.ReadTimeout for the retry-wrapper tests.
+
+    The real httpx exception types are recognised by ``_is_transient_llm_error``;
+    here we drive ``_with_retry`` with an injected classifier so the test does not
+    depend on httpx being importable.
+    """
+
+
+def test_with_retry_succeeds_after_transient_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A call that fails twice transiently then succeeds returns the success."""
+    calls = {"n": 0}
+
+    def _flaky(*, system: str, user: str) -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _FakeReadTimeoutError("read timeout")
+        return '{"ok": true}'
+
+    monkeypatch.setattr(
+        "chat_quality_judge._is_transient_llm_error", lambda exc: isinstance(exc, _FakeReadTimeoutError)
+    )
+    wrapped = _with_retry(_flaky, attempts=3, base_delay=0.0, sleep=lambda _s: None)
+    assert wrapped(system="s", user="u") == '{"ok": true}'
+    assert calls["n"] == 3  # 1 initial + 2 retries
+
+
+def test_with_retry_reraises_after_exhausting_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All attempts transient-fail -> the last exception is re-raised (-> ERROR row)."""
+    calls = {"n": 0}
+
+    def _always_timeout(*, system: str, user: str) -> str:
+        calls["n"] += 1
+        raise _FakeReadTimeoutError("read timeout")
+
+    monkeypatch.setattr(
+        "chat_quality_judge._is_transient_llm_error", lambda exc: isinstance(exc, _FakeReadTimeoutError)
+    )
+    wrapped = _with_retry(_always_timeout, attempts=3, base_delay=0.0, sleep=lambda _s: None)
+    with pytest.raises(_FakeReadTimeoutError):
+        wrapped(system="s", user="u")
+    assert calls["n"] == 3  # exactly the attempt budget, no more
+
+
+def test_with_retry_does_not_retry_nontransient_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deterministic (non-transient) error is re-raised immediately, no retry."""
+    calls = {"n": 0}
+
+    def _bad_request(*, system: str, user: str) -> str:
+        calls["n"] += 1
+        raise ValueError("400 bad request")
+
+    monkeypatch.setattr("chat_quality_judge._is_transient_llm_error", lambda exc: False)
+    wrapped = _with_retry(_bad_request, attempts=3, base_delay=0.0, sleep=lambda _s: None)
+    with pytest.raises(ValueError, match="400 bad request"):
+        wrapped(system="s", user="u")
+    assert calls["n"] == 1  # no retry on a deterministic error
+
+
+def test_is_transient_llm_error_classifies_httpx() -> None:
+    """5xx/429 + timeouts are transient; 4xx (except 429) and others are not."""
+    httpx = pytest.importorskip("httpx")
+    req = httpx.Request("POST", "http://x")
+
+    def _status(code: int) -> httpx.HTTPStatusError:
+        return httpx.HTTPStatusError("e", request=req, response=httpx.Response(code, request=req))
+
+    assert _is_transient_llm_error(httpx.ReadTimeout("t", request=req)) is True
+    assert _is_transient_llm_error(httpx.ConnectError("c", request=req)) is True
+    assert _is_transient_llm_error(_status(503)) is True
+    assert _is_transient_llm_error(_status(429)) is True
+    assert _is_transient_llm_error(_status(400)) is False
+    assert _is_transient_llm_error(_status(401)) is False
+    assert _is_transient_llm_error(ValueError("parse")) is False
+
+
+def test_summarise_excludes_error_rows_from_quality_aggregates() -> None:
+    """ERROR rows are tallied separately and never pollute mean / FAIL counts."""
+    records = [
+        {"id": "a", "verdict": "PASS", "score": 90, "dimensions": {k: {"score": 22} for k in DIMENSION_KEYS}},
+        {"id": "b", "verdict": "FAIL", "score": 40, "dimensions": {k: {"score": 10} for k in DIMENSION_KEYS}},
+        {"id": "c", "verdict": "ERROR", "score": None, "dimensions": dict.fromkeys(DIMENSION_KEYS)},
+    ]
+    agg = summarise_judge_records(records)
+    assert agg["verdict_counts"]["ERROR"] == 1
+    assert agg["verdict_counts"]["FAIL"] == 1
+    assert agg["score_avg"] == 65.0  # mean over the two scored rows (90, 40)
+    assert agg["n_records"] == 3

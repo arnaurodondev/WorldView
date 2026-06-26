@@ -467,8 +467,87 @@ class JudgeLLM(Protocol):
     def __call__(self, *, system: str, user: str) -> str: ...
 
 
+# ── Judge LLM retry (PLAN-0116 W5 / Item 2) ──────────────────────────────
+# The DeepInfra judge occasionally ``ReadTimeout``s / returns a transient 5xx /
+# 429 under load — which turned into a ``verdict=ERROR`` row that polluted the
+# headline (an eval-INFRA failure mis-read as a quality signal). A bounded retry
+# with short backoff absorbs the transient blip; only a STILL-failing call after
+# all attempts surfaces as ERROR (then excluded from the quality aggregates and
+# reported separately as eval-infra). Deterministic content (temperature=0) makes
+# a retry safe — the same prompt yields the same grade.
+_JUDGE_RETRY_ATTEMPTS = 3  # total attempts (1 initial + 2 retries)
+_JUDGE_RETRY_BASE_DELAY = 0.5  # seconds; exponential: 0.5, 1.0, ...
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """True for a RETRYABLE judge-call error (timeout / connection / 5xx / 429).
+
+    We retry ONLY transient transport/server errors — a timeout, a dropped
+    connection, or a server-side 5xx/429. A deterministic client error (a 400 bad
+    request, an auth 401/403, a JSON/parse bug) is NOT retried: re-sending the
+    identical request would fail identically and only waste time. httpx is
+    imported lazily so the module stays importable without it; if it is absent we
+    treat nothing as transient (no retry).
+    """
+    try:
+        import httpx
+    except ImportError:
+        return False
+    # Transport-level: timeouts, connection resets, DNS, etc.
+    if isinstance(exc, httpx.TimeoutException | httpx.TransportError):
+        return True
+    # Server-side HTTP status: 5xx (server fault) or 429 (rate limit) are
+    # transient; 4xx (except 429) is a deterministic client error — do not retry.
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code >= 500 or code == 429
+    return False
+
+
+def _with_retry(
+    call: JudgeLLM,
+    *,
+    attempts: int = _JUDGE_RETRY_ATTEMPTS,
+    base_delay: float = _JUDGE_RETRY_BASE_DELAY,
+    sleep: Any = None,
+) -> JudgeLLM:
+    """Wrap a judge LLM with a bounded retry on TRANSIENT errors (Item 2).
+
+    Retries up to ``attempts`` times total, sleeping ``base_delay * 2**i`` between
+    tries. A non-transient error (see :func:`_is_transient_llm_error`) or the
+    final transient failure is re-raised so ``judge_answer`` / ``judge_trajectory``
+    still tag the row ERROR. ``sleep`` is injectable for tests (defaults to
+    ``time.sleep``); pass a no-op to avoid real delays in unit tests.
+    """
+    import time
+
+    _sleep = sleep if sleep is not None else time.sleep
+
+    def _retrying(*, system: str, user: str) -> str:
+        last: BaseException | None = None
+        for i in range(max(1, attempts)):
+            try:
+                return call(system=system, user=user)
+            except Exception as exc:
+                last = exc
+                # Last attempt, or a non-transient (deterministic) error → give up.
+                if i == attempts - 1 or not _is_transient_llm_error(exc):
+                    raise
+                _sleep(base_delay * (2**i))
+        # Unreachable (the loop either returns or raises), but satisfies typing.
+        assert last is not None
+        raise last
+
+    return _retrying
+
+
 def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> JudgeLLM | None:
-    """Build the default DeepInfra-backed judge LLM, or None if no API key."""
+    """Build the default DeepInfra-backed judge LLM, or None if no API key.
+
+    The returned callable is wrapped in a bounded transient-error retry
+    (:func:`_with_retry`, Item 2) so a single ReadTimeout / 5xx / 429 no longer
+    forces a ``verdict=ERROR`` row.
+    """
     if not api_key:
         return None
 
@@ -504,7 +583,7 @@ def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> Jud
             body = resp.json()
             return str(body["choices"][0]["message"]["content"] or "")
 
-    return _call
+    return _with_retry(_call)
 
 
 # --------------------------------------------------------------------------
