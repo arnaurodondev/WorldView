@@ -239,6 +239,58 @@ def _grounding_fields_from_row(
     return tuple(fields)
 
 
+# Multi-period cap (FIX 2, 2026-06-26). A trend/batch answer quotes values across
+# SEVERAL periods (e.g. "EPS grew 4.10 -> 5.20 -> 6.30 -> 7.31 over 4 quarters").
+# Emitting only the LATEST period made every NON-latest figure false-``contradicted``
+# against the single sampled row (the dominant remaining issue: da_msft 18,
+# chain_top_mover 14). We therefore emit up to this many periods, newest first, with
+# the matcher's ``_<idx>`` suffix convention so each period's distinct value survives
+# without colliding (the judge + sse_emitter both strip ``_\d+$`` to the base metric).
+# Kept small so the per-row field/byte caps in build_grounding_sample still hold.
+_GROUNDING_MAX_PERIODS = 4
+
+
+def _grounding_fields_from_rows(
+    rows: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None,
+    *,
+    ticker: str,
+    max_periods: int = _GROUNDING_MAX_PERIODS,
+) -> tuple[tuple[str, str], ...]:
+    """Build a MULTI-PERIOD ``grounding_fields`` bag (FIX 2, 2026-06-26).
+
+    ``rows`` is the period list in ASCENDING date order (oldest -> newest); we emit
+    the newest ``max_periods`` rows so the most-quoted recent figures are covered.
+    The newest period keeps the BARE metric keys (``revenue``, ``eps``, ...); each
+    older period's metrics are suffixed (``revenue_2``, ``revenue_3``, ...) so the
+    matcher associates a claim to the SET of period values for that metric and a
+    non-latest figure is ``substantiated`` rather than false-``contradicted``. The
+    snapshot scalars (pe_ratio/market_cap/...) are folded once onto the newest period
+    only — they are TTM/current, not per-period, so they have one true value.
+
+    The ``ticker`` is emitted exactly once (identifiers are non-numeric and must not
+    be duplicated). Flag-safe: like the single-period helper this only fills the
+    in-memory item; the CHAT_EVAL_GROUNDING_SAMPLES flag still gates the wire.
+    """
+    if not rows:
+        return ()
+    # Newest period first, capped. ``rows`` is ASC so reversed() is newest -> oldest.
+    newest_first = list(reversed(rows))[:max_periods]
+    fields: list[tuple[str, str]] = [("ticker", ticker)]
+    for idx, row in enumerate(newest_first):
+        # Newest period folds in the snapshot scalars; older periods get the row only
+        # (snapshot is current/TTM, so it has a single value, attached to the latest).
+        row_snapshot = snapshot if idx == 0 else None
+        per_row = _grounding_fields_from_row(row, row_snapshot, ticker=ticker)
+        for key, val in per_row:
+            if key == "ticker":
+                continue  # already emitted once; never duplicate the identifier
+            # idx 0 -> bare key; idx 1 -> ``_2``; idx 2 -> ``_3`` ... (matcher strips _\d+$)
+            suffixed = key if idx == 0 else f"{key}_{idx + 1}"
+            fields.append((suffixed, val))
+    return tuple(fields)
+
+
 # ── Chat-eval #4 (2026-06-12): screener metric rendering ─────────────────────
 # Maps a screener FILTER metric name (the DB column the filter list uses, e.g.
 # ``quarterly_revenue_growth_yoy``) to a display label + the response-row keys
@@ -719,15 +771,16 @@ class MarketHandler(ToolHandler):
             non_phantom,
             current_snapshot=current_snapshot,
         )
-        # Value-substantiation (2026-06-26): lift the latest period's raw numbers
-        # so the eval can verify quoted figures. ``non_phantom`` is ASC by date,
-        # so the last element is the latest period. Rows may be pydantic models
-        # (model_dump) or plain dicts depending on the adapter path.
-        latest = non_phantom[-1]
-        latest_dict = (
-            latest.model_dump() if hasattr(latest, "model_dump") else (latest if isinstance(latest, dict) else {})
-        )
-        grounding_fields = _grounding_fields_from_row(latest_dict, current_snapshot, ticker=ticker)
+        # Value-substantiation (2026-06-26): lift the raw numbers so the eval can
+        # verify quoted figures. ``non_phantom`` is ASC by date. FIX 2 (multi-period):
+        # a trend answer quotes several periods, so emit up to _GROUNDING_MAX_PERIODS
+        # rows (newest first, suffixed) instead of only the latest — otherwise every
+        # non-latest figure false-contradicts the single sampled row. Rows may be
+        # pydantic models (model_dump) or plain dicts depending on the adapter path.
+        row_dicts = [
+            (r.model_dump() if hasattr(r, "model_dump") else (r if isinstance(r, dict) else {})) for r in non_phantom
+        ]
+        grounding_fields = _grounding_fields_from_rows(row_dicts, current_snapshot, ticker=ticker)
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{ticker}",
             item_type=ItemType.financial,
@@ -816,16 +869,15 @@ class MarketHandler(ToolHandler):
                     text = f"{ticker}: no quarterly fundamentals available"
                 else:
                     text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
-                    # Value-substantiation: lift the latest period's raw numbers
-                    # (periods sorted ASC → last element is latest). Skip when
-                    # no period rows (snapshot-only entry still anchors ticker).
-                    latest = periods_data[-1] if periods_data else None
-                    latest_dict = (
-                        latest.model_dump()
-                        if latest is not None and hasattr(latest, "model_dump")
-                        else (latest if isinstance(latest, dict) else {})
-                    )
-                    grounding_fields = _grounding_fields_from_row(latest_dict, snap_dict, ticker=ticker)
+                    # Value-substantiation: lift the raw period numbers (periods are
+                    # ASC). FIX 2 (multi-period): emit up to _GROUNDING_MAX_PERIODS
+                    # rows (newest first, suffixed) so a batch trend answer's
+                    # non-latest figures substantiate instead of false-contradicting.
+                    period_dicts = [
+                        (p.model_dump() if hasattr(p, "model_dump") else (p if isinstance(p, dict) else {}))
+                        for p in periods_data
+                    ]
+                    grounding_fields = _grounding_fields_from_rows(period_dicts, snap_dict, ticker=ticker)
             else:
                 reason = entry.get("reason") or "unknown"
                 text = f"{ticker}: data unavailable — {reason}"

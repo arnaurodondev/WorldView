@@ -94,6 +94,14 @@ async def test_history_emits_latest_period_raw_numbers() -> None:
     assert gf["market_cap"] == "3000000000000"
     # No "$" / "B" formatting leaked into a value.
     assert all("$" not in v and "B" not in v for v in gf.values() if v != "AAPL")
+    # FIX 2 (multi-period): the OLDER period (Q1) is also emitted, suffixed ``_2``,
+    # so a trend answer quoting the prior quarter substantiates instead of
+    # false-contradicting the single latest row.
+    assert gf["revenue_2"] == "90000000000"
+    assert gf["eps_2"] == "1.5"
+    assert gf["net_income_2"] == "20000000000"
+    # The ticker identifier is emitted exactly once (never suffixed/duplicated).
+    assert "ticker_2" not in gf
 
 
 @pytest.mark.asyncio
@@ -126,6 +134,40 @@ async def test_history_missing_metric_absent_from_bag() -> None:
     assert "market_cap" not in gf
 
 
+@pytest.mark.asyncio
+async def test_history_multi_period_capped_and_suffixed() -> None:
+    """FIX 2: emit up to _GROUNDING_MAX_PERIODS periods, newest-first, suffixed.
+
+    Given 6 ASC periods, the bag carries the newest 4 (cap) — newest bare, then
+    ``_2``/``_3``/``_4`` — and the 5th/6th-newest are dropped by the cap.
+    """
+    from rag_chat.application.pipeline.handlers.market import _GROUNDING_MAX_PERIODS
+
+    s3 = AsyncMock()
+    # ASC by date: revenue 10,20,30,40,50,60 (billions) — newest is 60.
+    s3.get_fundamentals_history_with_snapshot.return_value = {
+        "periods": [
+            {"period": f"Q{i}", "period_type": "QUARTERLY", "revenue": v * 1_000_000_000, "eps": float(v)}
+            for i, v in enumerate([10, 20, 30, 40, 50, 60], start=1)
+        ],
+        "current_snapshot": None,
+    }
+    handler = _make_handler(s3)
+    result = await handler._handle_get_fundamentals_history(ticker="AAPL", periods=6)
+
+    assert result is not None
+    gf = _gf_dict(result)
+    # Newest period bare, then _2, _3, _4 — exactly _GROUNDING_MAX_PERIODS rows.
+    assert gf["revenue"] == "60000000000"
+    assert gf["revenue_2"] == "50000000000"
+    assert gf["revenue_3"] == "40000000000"
+    assert gf["revenue_4"] == "30000000000"
+    # 5th/6th-newest (20, 10) are dropped by the cap.
+    assert "revenue_5" not in gf
+    # Sanity on the cap constant the test relies on.
+    assert _GROUNDING_MAX_PERIODS == 4
+
+
 # ── _handle_get_fundamentals_history_batch ────────────────────────────────────
 
 
@@ -155,6 +197,12 @@ async def test_batch_emits_per_ticker_latest_period_numbers() -> None:
     assert nvda["revenue"] == "44100000000"
     assert nvda["eps"] == "5.16"
     assert nvda["gross_profit"] == "33400000000"
+    # FIX 2 (multi-period): the prior period (Q4) is also emitted, ``_2`` suffixed,
+    # per batch ticker — so a batch trend answer's earlier-quarter figures
+    # substantiate instead of false-contradicting the latest row.
+    assert nvda["revenue_2"] == "35000000000"
+    # eps 4.0 is integer-valued → emitted as the bare integer "4" (no ".0").
+    assert nvda["eps_2"] == "4"
     # The errored ticker carries no numeric grounding (data unavailable).
     amd = next(r for r in results if "AMD" in r.text)
     assert amd.grounding_fields == ()
