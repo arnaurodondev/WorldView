@@ -43,16 +43,23 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
-from chat_quality_judge import evaluate_substantiation  # noqa: E402
+from chat_quality_judge import cross_check_grounding, evaluate_substantiation  # noqa: E402
 
 
 def _recompute_one(q_path: Path) -> dict[str, Any]:
-    """Run the shipped substantiation matcher on one saved artefact."""
+    """Run the shipped substantiation matcher + grounding veto on one artefact.
+
+    PLAN-0116 W1 C: we ALSO recompute the grounding contradiction VETO offline
+    (``cross_check_grounding``) so the table shows whether the in-run
+    ``GROUNDING_CONTRADICTED`` hard-fail WOULD still fire under the typed matcher —
+    the false multi-period / %-vs-value contradictions must be GONE.
+    """
     d = json.loads(q_path.read_text())
     result = d.get("result") or {}
     answer = result.get("answer_text") or ""
     tool_results = result.get("tool_results") or []
     check = evaluate_substantiation(answer, tool_results)
+    veto = cross_check_grounding(answer, tool_results)
     sc = (
         check.to_dict()
         if hasattr(check, "to_dict")
@@ -69,6 +76,10 @@ def _recompute_one(q_path: Path) -> dict[str, Any]:
         "tools": [t.get("tool") or t.get("name") for t in tool_results],
         "n_samples": sum(1 for t in tool_results if (t.get("grounding_sample") or {}).get("fields")),
         **{k: sc.get(k) for k in ("coverage", "substantiated", "unsupported", "contradicted", "unmatched")},
+        # The grounding VETO outcome (would the hard GROUNDING_CONTRADICTED fire?).
+        "veto_contradicted": veto.contradicted,
+        "veto_matched": veto.matched,
+        "veto_would_fail": veto.contradicted > 0,
         "examples": sc.get("examples") or [],
     }
 
@@ -127,11 +138,15 @@ def main() -> int:
     print(f"evidenced claims              : {evidenced}")
     print(f"pct_unsubstantiated           : {pct_unsubstantiated}%")
     print(f"report written                : {out_path}")
-    # Show the verified-coverage questions with their real counts.
-    print("\n-- verified-coverage questions --")
+    # Show the verified-coverage questions with their real counts + veto outcome.
+    n_veto_fail = sum(1 for r in rows if r.get("veto_would_fail"))
+    print(f"\ngrounding-veto FAILs (offline): {n_veto_fail} / {len(rows)}")
+    print("\n-- verified-coverage questions (sub/uns/con/unm | veto) --")
     for r in verified_rows:
+        veto_tag = "VETO-FAIL" if r.get("veto_would_fail") else "ok"
         print(
-            f"  {r['id']:<34} sub={r['substantiated']} uns={r['unsupported']} con={r['contradicted']} unm={r['unmatched']}  tools={r['tools']}"
+            f"  {r['id']:<34} sub={r['substantiated']} uns={r['unsupported']} "
+            f"con={r['contradicted']} unm={r['unmatched']}  veto[con={r['veto_contradicted']} {veto_tag}]  tools={r['tools']}"
         )
     return 0
 

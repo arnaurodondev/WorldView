@@ -1453,7 +1453,7 @@ def _field_kind(field: str) -> str:
     return _FIELD_KINDS.get(field.lower(), "unknown")
 
 
-def _classify_claim(raw: str, suffix: str, before: str, after: str) -> str:
+def _classify_claim(raw: str, suffix: str, before: str, after: str, *, has_dollar: bool = False) -> str:
     """Classify a numeric claim into a kind from its FORMAT + surrounding CONTEXT.
 
     ``before``/``after`` are the already-normalised, lowercased windows hugging the
@@ -1469,19 +1469,26 @@ def _classify_claim(raw: str, suffix: str, before: str, after: str) -> str:
     sfx = (suffix or "").lower()
     if sfx == "%":
         return "percentage"
-    # A P/E "multiple" / "ratio" reading takes precedence over the bare-multiplier
-    # rule: ``37.73x`` / ``26.67x`` with "P/E"/"ratio"/"multiple" nearby is a RATIO
-    # value (the ``x`` means "times earnings"), NOT a "6x larger" multiplier.
-    has_ratio_ctx = bool(re.search(r"\b(p\s*/\s*e|price-to-earnings|multiple|ratio)\b", before + " " + after))
-    if has_ratio_ctx:
+    # STRONGEST format signal FIRST: a ``$`` prefix or a B/M/K/T scale suffix is a
+    # money/LEVEL figure regardless of any nearby word. This must beat ratio
+    # context — ``$0.27`` on an "EPS … P/E (TTM): 29.68x" line is an EPS absolute,
+    # NOT a P/E ratio (the "P/E" sits in the same window but belongs to a DIFFERENT
+    # number). Without this precedence, ``$0.27`` mis-typed ratio → pe_ratio →
+    # false contradiction (observed on chain_top_mover_fundamentals).
+    before_tail = before[-2:]
+    if has_dollar or "$" in before_tail or sfx in _SCALE_SUFFIX:
+        return "absolute_value"
+    # A P/E "multiple" reading: a bare/x-suffixed number with "P/E"/"multiple"
+    # nearby is a RATIO (``37.73x`` / ``26.67x`` — the x means "times earnings").
+    # ``ratio`` ALONE is NOT enough (``PEG ratio: 2.02`` is a different metric we do
+    # not sample) — require a P/E-specific cue, or a multiple/x token.
+    pe_ctx = bool(re.search(r"\b(p\s*/\s*e|price-to-earnings|p/e ratio)\b", before + " " + after))
+    multiple_ctx = bool(re.search(r"\bmultiple\b", before + " " + after))
+    if pe_ctx or (multiple_ctx and _MULTIPLIER_AFTER_RE.match(after)):
         return "ratio"
     # "6x", "3-4 times", "8x larger" with NO ratio context — a multiplier/count.
     if _MULTIPLIER_AFTER_RE.match(after):
         return "count"
-    # A $-prefix or scale word makes it a money/level figure regardless of context.
-    before_tail = before[-2:]
-    if "$" in before_tail or sfx in _SCALE_SUFFIX:
-        return "absolute_value"
     # Growth/margin/change/yield context → a relative percentage figure.
     if _PERCENT_CONTEXT_RE.search(before) or _PERCENT_CONTEXT_RE.search(after):
         return "percentage"
@@ -1875,9 +1882,39 @@ def _iter_typed_claims(answer_text: str) -> tuple[str, list[_TypedClaim]]:
         start, end = span
         before = cleaned_lower[max(0, start - 32) : start]
         after = cleaned_lower[end : end + 16]
-        kind = _classify_claim(raw_num, suffix, before, after)
+        # ``$`` is consumed INTO the match (the regex is ``\$?\s?(num)…``), so it is
+        # not in ``before``. Surface it explicitly so a $-prefixed token is typed
+        # absolute_value even when "P/E"/"ratio" sits in the same window.
+        has_dollar = "$" in m.group(0)
+        kind = _classify_claim(raw_num, suffix, before, after, has_dollar=has_dollar)
         claims.append(_TypedClaim(value=claim_val, span=span, text=m.group(0).strip(), kind=kind))
     return cleaned_lower, claims
+
+
+def _answer_multivalued_fields(
+    cleaned_lower: str,
+    claims: list[_TypedClaim],
+    field_names: list[str],
+) -> set[str]:
+    """Fields to which the ANSWER associates >=2 DISTINCT claim values.
+
+    A field the answer enumerates with multiple values (a trend / per-period
+    breakdown — "Revenue: Q2 $4.2B, Q3 $3.9B, Q4 $3.4B") is being treated as a
+    multi-period series. The captured grounding_sample is an INCOMPLETE row subset
+    (``sampled_rows`` is capped), so it cannot DISPROVE a period it did not
+    capture. We therefore NEVER fire a contradiction on such a field — a
+    non-matching claim there is ``unmatched`` (neutral), exactly like a field that
+    had >=2 SAMPLED values. This mirrors the W1.3 set rule from the ANSWER side and
+    removes the false multi-period GROUNDING_CONTRADICTED on
+    chain_top_mover_fundamentals (single net_income sample vs 4 enumerated quarters).
+    """
+    seen: dict[str, set[float]] = {}
+    for claim in claims:
+        field_name = _nearest_field(cleaned_lower, claim.span, field_names, claim.kind)
+        if field_name is None:
+            continue
+        seen.setdefault(field_name, set()).add(round(claim.value, 6))
+    return {f for f, vals in seen.items() if len(vals) >= 2}
 
 
 def cross_check_grounding(
@@ -1910,6 +1947,9 @@ def cross_check_grounding(
 
     cleaned_lower, claims = _iter_typed_claims(answer_text)
     field_names = list(grounding_fields)
+    # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
+    # contradicted (the sample is an incomplete row capture). See W1.3.
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names)
     matched = 0
     unmatched = 0
     contradicted = 0
@@ -1930,11 +1970,13 @@ def cross_check_grounding(
             continue
 
         # Outside tolerance of EVERY sample for this field. MULTI-PERIOD SET rule
-        # (W1.3): a field with >=2 sampled values is an INCOMPLETE period/entity
-        # subset — it cannot DISPROVE a period it never sampled, so a non-matching
-        # claim there is ``unmatched`` (neutral), not a contradiction. Only a
-        # SINGLE-valued (authoritative) field yields a contradiction.
-        if len(samples) >= 2:
+        # (W1.3): a non-matching claim is ``unmatched`` (neutral), NOT a
+        # contradiction, when EITHER the field has >=2 SAMPLED values OR the ANSWER
+        # enumerates >=2 distinct values for it — both mean the sample is an
+        # incomplete period/entity subset that cannot disprove an unsampled period.
+        # Only a single-valued (authoritative) sample vs a single-valued claim
+        # yields a contradiction.
+        if len(samples) >= 2 or field_name in answer_multivalued:
             unmatched += 1
             continue
         nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
@@ -2057,6 +2099,9 @@ def evaluate_substantiation(
     # set (value-less fields included) so a claim can attach to a named-but-empty
     # field and be classed ``unsupported`` rather than silently ``unmatched``.
     field_names = list(all_field_names)
+    # Fields the ANSWER enumerates with >=2 distinct values (a trend) — never
+    # contradicted (the sample is an incomplete row capture). Shared with the veto.
+    answer_multivalued = _answer_multivalued_fields(cleaned_lower, claims, field_names)
     substantiated = 0
     unsupported = 0
     contradicted = 0
@@ -2091,10 +2136,12 @@ def evaluate_substantiation(
             continue
 
         # Outside tolerance of EVERY sampled value. MULTI-PERIOD SET rule (W1.3): a
-        # field with >=2 sampled values is an incomplete period/entity subset that
-        # cannot disprove an unsampled period → ``unmatched`` (neutral), not a
-        # contradiction. Only a SINGLE-valued authoritative field contradicts.
-        if len(samples) >= 2:
+        # non-matching claim is ``unmatched`` (neutral), not a contradiction, when
+        # EITHER the field has >=2 SAMPLED values OR the ANSWER enumerates >=2
+        # distinct values for it — both mean the sample is an incomplete period
+        # subset that cannot disprove an unsampled period. Only a single-valued
+        # authoritative field contradicts.
+        if len(samples) >= 2 or field_name in answer_multivalued:
             unmatched += 1
             continue
         nearest_sample = min(samples, key=lambda s: abs(claim.value - s))
