@@ -1,0 +1,221 @@
+{
+  "bucket_counts": {
+    "EXCEPTION": 0,
+    "FAIL": 0,
+    "PASS": 8,
+    "WARN": 2
+  },
+  "category_buckets": {
+    "factual_lookup": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 1,
+      "WARN": 0
+    },
+    "financial_data": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 5,
+      "WARN": 1
+    },
+    "portfolio": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 0,
+      "WARN": 1
+    },
+    "screener": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 1,
+      "WARN": 0
+    },
+    "signal": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 1,
+      "WARN": 0
+    }
+  },
+  "per_question": [
+    {
+      "bucket": "PASS",
+      "category": "financial_data",
+      "id": "ru_nvda_amd_revenue_4q",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 47.25,
+      "missing_expected_tools": [
+        "get_fundamentals_history"
+      ],
+      "reasons": [],
+      "slot": "q_ru_nvda_amd_revenue_4q",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.598,
+      "word_count": 249
+    },
+    {
+      "bucket": "PASS",
+      "category": "screener",
+      "id": "iter3_top5_tech_marketcap",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 57.553,
+      "missing_expected_tools": [],
+      "reasons": [],
+      "slot": "q_iter3_top5_tech_marketcap",
+      "tool_overlap_with_expected": [
+        "screen_universe"
+      ],
+      "ttft_s": 0.659,
+      "word_count": 86
+    },
+    {
+      "bucket": "PASS",
+      "category": "financial_data",
+      "id": "iter3_msft_earnings_citations",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 23.742,
+      "missing_expected_tools": [
+        "get_entity_news",
+        "query_fundamentals"
+      ],
+      "reasons": [],
+      "slot": "q_iter3_msft_earnings_citations",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.821,
+      "word_count": 171
+    },
+    {
+      "bucket": "PASS",
+      "category": "financial_data",
+      "id": "ru_aapl_pe_simple",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 18.044,
+      "missing_expected_tools": [
+        "get_fundamentals_history"
+      ],
+      "reasons": [],
+      "slot": "q_ru_aapl_pe_simple",
+      "tool_overlap_with_expected": [
+        "query_fundamentals"
+      ],
+      "ttft_s": 0.674,
+      "word_count": 18
+    },
+    {
+      "bucket": "PASS",
+      "category": "financial_data",
+      "id": "ru_tsla_margin_trend",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 39.242,
+      "missing_expected_tools": [
+        "get_fundamentals_history"
+      ],
+      "reasons": [],
+      "slot": "q_ru_tsla_margin_trend",
+      "tool_overlap_with_expected": [
+        "query_fundamentals"
+      ],
+      "ttft_s": 0.73,
+      "word_count": 106
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "id": "ru_googl_pe_vs_history",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 48.942,
+      "missing_expected_tools": [
+        "get_fundamentals_history"
+      ],
+      "reasons": [
+        "slow latency_s=48.942"
+      ],
+      "slot": "q_ru_googl_pe_vs_history",
+      "tool_overlap_with_expected": [
+        "query_fundamentals",
+        "search_documents"
+      ],
+      "ttft_s": 0.675,
+      "word_count": 78
+    },
+    {
+      "bucket": "PASS",
+      "category": "factual_lookup",
+      "id": "tc_earnings_next_week_universe",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 24.425,
+      "missing_expected_tools": [],
+      "reasons": [],
+      "slot": "q_tc_earnings_next_week_universe",
+      "tool_overlap_with_expected": [
+        "get_earnings_calendar"
+      ],
+      "ttft_s": 0.586,
+      "word_count": 24
+    },
+    {
+      "bucket": "WARN",
+      "category": "portfolio",
+      "id": "chain_portfolio_upcoming_earnings",
+      "is_empty": false,
+      "is_refusal": true,
+      "latency_s": 33.533,
+      "missing_expected_tools": [],
+      "reasons": [
+        "answer_classified_as_refusal"
+      ],
+      "slot": "q_chain_portfolio_upcoming_earnings",
+      "tool_overlap_with_expected": [
+        "get_earnings_calendar",
+        "get_portfolio_context"
+      ],
+      "ttft_s": 0.574,
+      "word_count": 45
+    },
+    {
+      "bucket": "PASS",
+      "category": "signal",
+      "id": "chain_top_mover_fundamentals",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 27.783,
+      "missing_expected_tools": [
+        "get_entity_news",
+        "query_fundamentals"
+      ],
+      "reasons": [],
+      "slot": "q_chain_top_mover_fundamentals",
+      "tool_overlap_with_expected": [
+        "get_market_movers"
+      ],
+      "ttft_s": 0.617,
+      "word_count": 172
+    },
+    {
+      "bucket": "PASS",
+      "category": "financial_data",
+      "id": "da_msft_fy2024q4_earnings_citations",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 27.711,
+      "missing_expected_tools": [
+        "get_entity_news"
+      ],
+      "reasons": [],
+      "slot": "q_da_msft_fy2024q4_earnings_citations",
+      "tool_overlap_with_expected": [
+        "get_fundamentals_history",
+        "query_fundamentals"
+      ],
+      "ttft_s": 0.51,
+      "word_count": 55
+    }
+  ]
+}

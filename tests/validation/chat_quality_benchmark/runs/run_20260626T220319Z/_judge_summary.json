@@ -1,0 +1,1046 @@
+{
+  "dimension_avg": {
+    "framing": 23.0,
+    "grounding": 19.5,
+    "refusal_judgment": 22.5,
+    "tool_use": 25.0
+  },
+  "fail_reason_counts": {
+    "GROUNDING_FLOOR": 2
+  },
+  "grounding_veto_floor": 12,
+  "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+  "n_records": 10,
+  "per_question": [
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.",
+          "reason": "Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.",
+          "reason": "Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.",
+          "score": 20
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.",
+          "reason": "No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.",
+          "reason": "Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.",
+          "score": 25
+        }
+      },
+      "id": "ru_nvda_amd_revenue_4q",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.\"\n  },\n  \"reviewer_summary\": \"Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.\"\n}",
+      "reviewer_summary": "Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.",
+      "score": 95,
+      "slot": "q_ru_nvda_amd_revenue_4q",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 6,
+        "unmatched": 10,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 20,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 6,
+          "unmatched": 10
+        },
+        "quality_score": 95,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks for top 5; answer lists only 4 with a note about missing data. Depth is appropriate for a factual list, but the missing fifth entry is a gap in completeness.",
+          "reason": "Question asks for top 5; answer lists only 4 with a note about missing data. Depth is appropriate for a factual list, but the missing fifth entry is a gap in completeness.",
+          "score": 20
+        },
+        "grounding": {
+          "feedback": "All four market-cap values match the GROUNDING SAMPLE (NVDA 5.05T, AAPL 4.36T, GOOGL 4.27T, MSFT 2.73T). The transparency banner is neutral. Minor deduction: no citation row numbers provided for each figure.",
+          "reason": "All four market-cap values match the GROUNDING SAMPLE (NVDA 5.05T, AAPL 4.36T, GOOGL 4.27T, MSFT 2.73T). The transparency banner is neutral. Minor deduction: no citation row numbers provided for each figure.",
+          "score": 20
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data with a note about missing fifth entry, which is not a refusal.",
+          "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data with a note about missing fifth entry, which is not a refusal.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Agent called screen_universe (expected tool) multiple times, correctly routing the question.",
+          "reason": "Agent called screen_universe (expected tool) multiple times, correctly routing the question.",
+          "score": 25
+        }
+      },
+      "id": "iter3_top5_tech_marketcap",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly used screen_universe and query_fundamentals to retrieve market caps for the top US tech companies. The answer is well-grounded: all four listed market caps match the returned values. The main issue is completeness \u2014 the question asked for 5 companies but only 4 are listed. The screen_universe calls returned only small-cap tickers (PLUS, ROG, FLEX, MCHP) rather than the mega-caps, so the agent had to fall back to querying individual tickers. Next time, ensure screen_universe can filter by market cap or use a pre-defined list of mega-cap tech tickers to get the full top 5. Also add citation row numbers for each figure to improve grounding transparency.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Agent called screen_universe (expected tool) multiple times, correctly routing the question.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"All four market-cap values match the GROUNDING SAMPLE (NVDA 5.05T, AAPL 4.36T, GOOGL 4.27T, MSFT 2.73T). The transparency banner is neutral. Minor deduction: no citation row numbers provided for each figure.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Question asks for top 5; answer lists only 4 with a note about missing data. Depth is appropriate for a factual list, but the missing fifth entry is a gap in completeness.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data with a note about missing fifth entry, which is not a refusal.\"\n  },\n  \"reviewer_summary\": \"The agent correctly used screen_universe and query_fundamentals to retrieve market caps for the top US tech companies. The answer is well-grounded: all four listed market caps match the returned values. The main issue is completeness \u2014 the question asked for 5 companies but only 4 are listed. The screen_universe calls returned only small-cap tickers (PLUS, ROG, FLEX, MCHP) rather than the mega-caps, so the agent had to fall back to querying individual tickers. Next time, ensure screen_universe can filter by market cap or use a pre-defined list of mega-cap tech tickers to get the full top 5. Also add citation row numbers for each figure to improve grounding transparency.\"}",
+      "reviewer_summary": "The agent correctly used screen_universe and query_fundamentals to retrieve market caps for the top US tech companies. The answer is well-grounded: all four listed market caps match the returned values. The main issue is completeness \u2014 the question asked for 5 companies but only 4 are listed. The screen_universe calls returned only small-cap tickers (PLUS, ROG, FLEX, MCHP) rather than the mega-caps, so the agent had to fall back to querying individual tickers. Next time, ensure screen_universe can filter by market cap or use a pre-defined list of mega-cap tech tickers to get the full top 5. Also add citation row numbers for each figure to improve grounding transparency.",
+      "score": 90,
+      "slot": "q_iter3_top5_tech_marketcap",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 0,
+        "unmatched": 8,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 20,
+          "grounding": 20,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 0,
+          "unmatched": 8
+        },
+        "quality_score": 90,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks for most recent earnings report with citations; answer provides a concise table with all requested metrics and sources, appropriate depth for a factual lookup.",
+          "reason": "Question asks for most recent earnings report with citations; answer provides a concise table with all requested metrics and sources, appropriate depth for a factual lookup.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "All quantitative claims (revenue 82.9B, net income 31.8B, EPS 4.27) match the grounding sample values and are cited to get_fundamentals_history row 0. No scope/coverage violations.",
+          "reason": "All quantitative claims (revenue 82.9B, net income 31.8B, EPS 4.27) match the grounding sample values and are cited to get_fundamentals_history row 0. No scope/coverage violations.",
+          "score": 25
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+          "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called get_fundamentals_history, which is in the expected_tools equivalence set. Correct routing.",
+          "reason": "Called get_fundamentals_history, which is in the expected_tools equivalence set. Correct routing.",
+          "score": 25
+        }
+      },
+      "id": "iter3_msft_earnings_citations",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly routed to get_fundamentals_history, cited all numbers to the tool result, and presented a clean table matching the grounding sample. The only minor issue is the '\u26a0 Some figures could not be verified' banner, which is unnecessary here since all figures are directly from the tool result and verified. Next iteration should suppress that banner when all claims are grounded.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history, which is in the expected_tools equivalence set. Correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"All quantitative claims (revenue 82.9B, net income 31.8B, EPS 4.27) match the grounding sample values and are cited to get_fundamentals_history row 0. No scope/coverage violations.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for most recent earnings report with citations; answer provides a concise table with all requested metrics and sources, appropriate depth for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_fundamentals_history, cited all numbers to the tool result, and presented a clean table matching the grounding sample. The only minor issue is the '\u26a0 Some figures could not be verified' banner, which is unnecessary here since all figures are directly from the tool result and verified. Next iteration should suppress that banner when all claims are grounded.\"\n}",
+      "reviewer_summary": "The agent correctly routed to get_fundamentals_history, cited all numbers to the tool result, and presented a clean table matching the grounding sample. The only minor issue is the '\u26a0 Some figures could not be verified' banner, which is unnecessary here since all figures are directly from the tool result and verified. Next iteration should suppress that banner when all claims are grounded.",
+      "score": 100,
+      "slot": "q_iter3_msft_earnings_citations",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 4,
+        "unmatched": 2,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 25,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 4,
+          "unmatched": 2
+        },
+        "quality_score": 100,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Shallow factual question answered with a concise, correct, cited sentence \u2014 perfect depth calibration.",
+          "reason": "Shallow factual question answered with a concise, correct, cited sentence \u2014 perfect depth calibration.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "The single numeric claim (35.96\u00d7) matches the grounding sample value 35.9576 and is correctly attributed to query_fundamentals row 0.",
+          "reason": "The single numeric claim (35.96\u00d7) matches the grounding sample value 35.9576 and is correctly attributed to query_fundamentals row 0.",
+          "score": 25
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A.",
+          "reason": "No refusal phrase present \u2014 N/A.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called query_fundamentals, which is one of the expected tools.",
+          "reason": "Called query_fundamentals, which is one of the expected tools.",
+          "score": 25
+        }
+      },
+      "id": "ru_aapl_pe_simple",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "Solid performance on a straightforward factual lookup. The agent correctly routed to query_fundamentals, returned the exact P/E value from the tool result, and cited the source. The transparency banner about unverified figures is harmless but unnecessary here since the single claim is fully grounded. No changes needed for this query type.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"The single numeric claim (35.96\u00d7) matches the grounding sample value 35.9576 and is correctly attributed to query_fundamentals row 0.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow factual question answered with a concise, correct, cited sentence \u2014 perfect depth calibration.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"Solid performance on a straightforward factual lookup. The agent correctly routed to query_fundamentals, returned the exact P/E value from the tool result, and cited the source. The transparency banner about unverified figures is harmless but unnecessary here since the single claim is fully grounded. No changes needed for this query type.\"\n}",
+      "reviewer_summary": "Solid performance on a straightforward factual lookup. The agent correctly routed to query_fundamentals, returned the exact P/E value from the tool result, and cited the source. The transparency banner about unverified figures is harmless but unnecessary here since the single claim is fully grounded. No changes needed for this query type.",
+      "score": 100,
+      "slot": "q_ru_aapl_pe_simple",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 1,
+        "unmatched": 0,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 25,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 1,
+          "unmatched": 0
+        },
+        "quality_score": 100,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks for trend direction; answer provides a clear table and summary \u2014 depth matches medium complexity perfectly.",
+          "reason": "Question asks for trend direction; answer provides a clear table and summary \u2014 depth matches medium complexity perfectly.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "Only Q1 2026 margin (21.08%) matches the grounding sample; Q1\u2013Q4 2025 values (16.31%, 17.24%, 17.99%, 20.12%) are not present in tool_results and appear fabricated.",
+          "reason": "Only Q1 2026 margin (21.08%) matches the grounding sample; Q1\u2013Q4 2025 values (16.31%, 17.24%, 17.99%, 20.12%) are not present in tool_results and appear fabricated.",
+          "score": 10
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A.",
+          "reason": "No refusal phrase present \u2014 N/A.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called query_fundamentals with TSLA, gross_margin, quarterly periods \u2014 exactly one of the expected tools.",
+          "reason": "Called query_fundamentals with TSLA, gross_margin, quarterly periods \u2014 exactly one of the expected tools.",
+          "score": 25
+        }
+      },
+      "id": "ru_tsla_margin_trend",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly routed to query_fundamentals and produced a well-structured trend answer, but it fabricated three quarterly margin values (Q1\u2013Q4 2025) that were never returned by the tool. The grounding sample confirms only the Q1 2026 figure. The agent must either request enough historical periods to cover the full year or transparently state which quarters are missing. The framing and refusal handling are fine; the single most impactful fix is to ensure every claimed number is traceable to tool output.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals with TSLA, gross_margin, quarterly periods \u2014 exactly one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 10,\n    \"feedback\": \"Only Q1 2026 margin (21.08%) matches the grounding sample; Q1\u2013Q4 2025 values (16.31%, 17.24%, 17.99%, 20.12%) are not present in tool_results and appear fabricated.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for trend direction; answer provides a clear table and summary \u2014 depth matches medium complexity perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and produced a well-structured trend answer, but it fabricated three quarterly margin values (Q1\u2013Q4 2025) that were never returned by the tool. The grounding sample confirms only the Q1 2026 figure. The agent must either request enough historical periods to cover the full year or transparently state which quarters are missing. The framing and refusal handling are fine; the single most impactful fix is to ensure every claimed number is traceable to tool output.\"\n}",
+      "reviewer_summary": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly routed to query_fundamentals and produced a well-structured trend answer, but it fabricated three quarterly margin values (Q1\u2013Q4 2025) that were never returned by the tool. The grounding sample confirms only the Q1 2026 figure. The agent must either request enough historical periods to cover the full year or transparently state which quarters are missing. The framing and refusal handling are fine; the single most impactful fix is to ensure every claimed number is traceable to tool output.",
+      "score": 85,
+      "slot": "q_ru_tsla_margin_trend",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 2,
+        "unmatched": 7,
+        "unsupported": 0
+      },
+      "verdict": "FAIL",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 10,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": "GROUNDING_FLOOR",
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": false,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 2,
+          "unmatched": 7
+        },
+        "quality_score": 85,
+        "verdict": "FAIL"
+      },
+      "veto": {
+        "detail": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS).",
+        "floor": 12,
+        "grounding": 10,
+        "pre_veto_verdict": "PASS",
+        "reason": "grounding_below_floor",
+        "type": "grounding"
+      }
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks 'expensive vs its history' (deep comparison) but answer only states current P/E and says history is unavailable \u2014 under-developed for the required depth.",
+          "reason": "Question asks 'expensive vs its history' (deep comparison) but answer only states current P/E and says history is unavailable \u2014 under-developed for the required depth.",
+          "score": 10
+        },
+        "grounding": {
+          "feedback": "Current P/E 26.67x matches grounding sample; correctly notes historical P/E column was empty. Attribution is clear.",
+          "reason": "Current P/E 26.67x matches grounding sample; correctly notes historical P/E column was empty. Attribution is clear.",
+          "score": 20
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 answer provides current P/E and explains limitation.",
+          "reason": "No refusal phrase present \u2014 answer provides current P/E and explains limitation.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+          "reason": "Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+          "score": 25
+        }
+      },
+      "id": "ru_googl_pe_vs_history",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly routed to the right tools and grounded the current P/E in returned data. However, the answer fails the required depth: the question explicitly asks for a historical comparison, and the agent should have used the 8 quarters of fundamentals history (which returned revenue, EPS, net income, etc.) to compute or infer past P/E ratios or at least provide context (e.g., EPS trend, revenue growth) to support a valuation verdict. The current answer essentially says 'cannot determine' which is a shallow response for a deep question. Next iteration: when historical P/E column is empty, derive it from market_cap / net_income per quarter, or use EPS and price proxies to give a directional answer rather than a refusal to compare.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Current P/E 26.67x matches grounding sample; correctly notes historical P/E column was empty. Attribution is clear.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks 'expensive vs its history' (deep comparison) but answer only states current P/E and says history is unavailable \u2014 under-developed for the required depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides current P/E and explains limitation.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to the right tools and grounded the current P/E in returned data. However, the answer fails the required depth: the question explicitly asks for a historical comparison, and the agent should have used the 8 quarters of fundamentals history (which returned revenue, EPS, net income, etc.) to compute or infer past P/E ratios or at least provide context (e.g., EPS trend, revenue growth) to support a valuation verdict. The current answer essentially says 'cannot determine' which is a shallow response for a deep question. Next iteration: when historical P/E column is empty, derive it from market_cap / net_income per quarter, or use EPS and price proxies to give a directional answer rather than a refusal to compare.\"\n}",
+      "reviewer_summary": "The agent correctly routed to the right tools and grounded the current P/E in returned data. However, the answer fails the required depth: the question explicitly asks for a historical comparison, and the agent should have used the 8 quarters of fundamentals history (which returned revenue, EPS, net income, etc.) to compute or infer past P/E ratios or at least provide context (e.g., EPS trend, revenue growth) to support a valuation verdict. The current answer essentially says 'cannot determine' which is a shallow response for a deep question. Next iteration: when historical P/E column is empty, derive it from market_cap / net_income per quarter, or use EPS and price proxies to give a directional answer rather than a refusal to compare.",
+      "score": 80,
+      "slot": "q_ru_googl_pe_vs_history",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 1,
+        "unmatched": 0,
+        "unsupported": 0
+      },
+      "verdict": "WARN",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 10,
+          "grounding": 20,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 1,
+          "unmatched": 0
+        },
+        "quality_score": 80,
+        "verdict": "PASS"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.",
+          "reason": "The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.",
+          "reason": "No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.",
+          "score": 25
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.",
+          "reason": "No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.",
+          "reason": "Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.",
+          "score": 25
+        }
+      },
+      "id": "tc_earnings_next_week_universe",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.\"\n}",
+      "reviewer_summary": "The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.",
+      "score": 100,
+      "slot": "q_tc_earnings_next_week_universe",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "presumed",
+        "examples": [],
+        "substantiated": 0,
+        "unmatched": 0,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 25,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "presumed",
+          "examples": [],
+          "matched": 0,
+          "unmatched": 0
+        },
+        "quality_score": 100,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question is a factual lookup (any upcoming earnings?); answer is appropriately concise and directly addresses the query.",
+          "reason": "Question is a factual lookup (any upcoming earnings?); answer is appropriately concise and directly addresses the query.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "No grounding sample provided; answer correctly reports no dates found, consistent with tool status=ok items=1 (likely empty payload). Transparency banner is neutral.",
+          "reason": "No grounding sample provided; answer correctly reports no dates found, consistent with tool status=ok items=1 (likely empty payload). Transparency banner is neutral.",
+          "score": 20
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 answer provides a substantive response (no dates found) with citation.",
+          "reason": "No refusal phrase present \u2014 answer provides a substantive response (no dates found) with citation.",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.",
+          "reason": "Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.",
+          "score": 25
+        }
+      },
+      "id": "chain_portfolio_upcoming_earnings",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly routed to portfolio context and earnings calendar tools, and delivered a concise, honest answer that no earnings were found in the window. The only minor issue is a truncated date string ('2026\u201107\u2011') in the answer, likely a copy-paste glitch; ensure the LLM always completes date ranges cleanly. Otherwise, solid handling of a negative-result query.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided; answer correctly reports no dates found, consistent with tool status=ok items=1 (likely empty payload). Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question is a factual lookup (any upcoming earnings?); answer is appropriately concise and directly addresses the query.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides a substantive response (no dates found) with citation.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to portfolio context and earnings calendar tools, and delivered a concise, honest answer that no earnings were found in the window. The only minor issue is a truncated date string ('2026\u201107\u2011') in the answer, likely a copy-paste glitch; ensure the LLM always completes date ranges cleanly. Otherwise, solid handling of a negative-result query.\"\n}",
+      "reviewer_summary": "The agent correctly routed to portfolio context and earnings calendar tools, and delivered a concise, honest answer that no earnings were found in the window. The only minor issue is a truncated date string ('2026\u201107\u2011') in the answer, likely a copy-paste glitch; ensure the LLM always completes date ranges cleanly. Otherwise, solid handling of a negative-result query.",
+      "score": 95,
+      "slot": "q_chain_portfolio_upcoming_earnings",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "presumed",
+        "examples": [],
+        "substantiated": 0,
+        "unmatched": 0,
+        "unsupported": 0
+      },
+      "verdict": "PASS",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 20,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "presumed",
+          "examples": [],
+          "matched": 0,
+          "unmatched": 0
+        },
+        "quality_score": 95,
+        "verdict": "STRONG"
+      },
+      "veto": null
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Deep question answered with structured table, trend analysis, and reasoned verdict \u2014 appropriate depth for a multi-part synthesis question.",
+          "reason": "Deep question answered with structured table, trend analysis, and reasoned verdict \u2014 appropriate depth for a multi-part synthesis question.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "No grounding sample for revenue/eps values claimed in the table; the tool returned only 1 row (Q1 2026) with revenue=3.287B, eps=0.27, net_income=-47.4M \u2014 the answer fabricates 3 additional quarters and inflates revenue/eps figures (e.g. Q2 2025 revenue $4.2B vs actual $3.358B).",
+          "reason": "No grounding sample for revenue/eps values claimed in the table; the tool returned only 1 row (Q1 2026) with revenue=3.287B, eps=0.27, net_income=-47.4M \u2014 the answer fabricates 3 additional quarters and inflates revenue/eps figures (e.g. Q2 2025 revenue $4.2B vs actual $3.358B).",
+          "score": 10
+        },
+        "refusal_judgment": {
+          "feedback": "No refusal phrase present \u2014 N/A",
+          "reason": "No refusal phrase present \u2014 N/A",
+          "score": 25
+        },
+        "tool_use": {
+          "feedback": "Called get_market_movers (top gainer) and get_fundamentals_history_batch (BLDR fundamentals) \u2014 both are in the expected_tools equivalence set.",
+          "reason": "Called get_market_movers (top gainer) and get_fundamentals_history_batch (BLDR fundamentals) \u2014 both are in the expected_tools equivalence set.",
+          "score": 25
+        }
+      },
+      "id": "chain_top_mover_fundamentals",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly identified BLDR as the top mover and routed to the right tools, but the fundamental data in the answer is largely fabricated \u2014 the tool returned only one quarter of data (Q1 2026) with revenue $3.287B and EPS $0.27, yet the answer invents three additional quarters with inflated numbers (e.g. Q2 2025 revenue $4.2B vs actual $3.358B). The grounding sample confirms the discrepancy. The single most impactful fix: either request more historical periods from the tool or explicitly state that only one quarter of data was available and limit the analysis to that. The framing and refusal handling are fine; the core issue is hallucinated data.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_market_movers (top gainer) and get_fundamentals_history_batch (BLDR fundamentals) \u2014 both are in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 10,\n    \"feedback\": \"No grounding sample for revenue/eps values claimed in the table; the tool returned only 1 row (Q1 2026) with revenue=3.287B, eps=0.27, net_income=-47.4M \u2014 the answer fabricates 3 additional quarters and inflates revenue/eps figures (e.g. Q2 2025 revenue $4.2B vs actual $3.358B).\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Deep question answered with structured table, trend analysis, and reasoned verdict \u2014 appropriate depth for a multi-part synthesis question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified BLDR as the top mover and routed to the right tools, but the fundamental data in the answer is largely fabricated \u2014 the tool returned only one quarter of data (Q1 2026) with revenue $3.287B and EPS $0.27, yet the answer invents three additional quarters with inflated numbers (e.g. Q2 2025 revenue $4.2B vs actual $3.358B). The grounding sample confirms the discrepancy. The single most impactful fix: either request more historical periods from the tool or explicitly state that only one quarter of data was available and limit the analysis to that. The framing and refusal handling are fine; the core issue is hallucinated data.\"\n}",
+      "reviewer_summary": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS). The agent correctly identified BLDR as the top mover and routed to the right tools, but the fundamental data in the answer is largely fabricated \u2014 the tool returned only one quarter of data (Q1 2026) with revenue $3.287B and EPS $0.27, yet the answer invents three additional quarters with inflated numbers (e.g. Q2 2025 revenue $4.2B vs actual $3.358B). The grounding sample confirms the discrepancy. The single most impactful fix: either request more historical periods from the tool or explicitly state that only one quarter of data was available and limit the analysis to that. The framing and refusal handling are fine; the core issue is hallucinated data.",
+      "score": 85,
+      "slot": "q_chain_top_mover_fundamentals",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 5,
+        "unmatched": 13,
+        "unsupported": 0
+      },
+      "verdict": "FAIL",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 10,
+          "refusal_judgment": 25,
+          "tool_use": 25
+        },
+        "fail_reason": "GROUNDING_FLOOR",
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": false,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 5,
+          "unmatched": 13
+        },
+        "quality_score": 85,
+        "verdict": "FAIL"
+      },
+      "veto": {
+        "detail": "GROUNDING VETO: grounding=10 < floor 12 \u2014 likely fabrication. Verdict forced FAIL (sum=85 would otherwise have been PASS).",
+        "floor": 12,
+        "grounding": 10,
+        "pre_veto_verdict": "PASS",
+        "reason": "grounding_below_floor",
+        "type": "grounding"
+      }
+    },
+    {
+      "dimensions": {
+        "framing": {
+          "feedback": "Question asks for specific quarter data; answer correctly identifies data absence with appropriate depth for a factual lookup.",
+          "reason": "Question asks for specific quarter data; answer correctly identifies data absence with appropriate depth for a factual lookup.",
+          "score": 25
+        },
+        "grounding": {
+          "feedback": "No grounding sample contradicts the answer; the answer correctly states the tools returned no Q4 FY2024 data. Attribution markers [1][2] present.",
+          "reason": "No grounding sample contradicts the answer; the answer correctly states the tools returned no Q4 FY2024 data. Attribution markers [1][2] present.",
+          "score": 20
+        },
+        "refusal_judgment": {
+          "feedback": "Contains refusal phrase 'I cannot find evidence' and 'no data was returned'. rubric.appropriate_refusal_ok=false and tool_results show status=ok items>=1, so refusal is inappropriate.",
+          "reason": "Contains refusal phrase 'I cannot find evidence' and 'no data was returned'. rubric.appropriate_refusal_ok=false and tool_results show status=ok items>=1, so refusal is inappropriate.",
+          "score": 0
+        },
+        "tool_use": {
+          "feedback": "Called query_fundamentals and get_fundamentals_history, both in expected_tools equivalence set.",
+          "reason": "Called query_fundamentals and get_fundamentals_history, both in expected_tools equivalence set.",
+          "score": 25
+        }
+      },
+      "id": "da_msft_fy2024q4_earnings_citations",
+      "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+      "notes": "The agent correctly routed to the expected tools and grounded its answer in the tool results, but it wrongfully refused to answer. The tools returned data for MSFT (revenue=82.886B, EPS=4.27, net_income=31.778B) \u2014 the agent should have presented those figures as the Q4 FY2024 earnings. The single most impactful change: when tools return data, always answer with the available numbers rather than refusing based on a mismatch between the requested period label and the tool's period naming convention.",
+      "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals and get_fundamentals_history, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample contradicts the answer; the answer correctly states the tools returned no Q4 FY2024 data. Attribution markers [1][2] present.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for specific quarter data; answer correctly identifies data absence with appropriate depth for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'I cannot find evidence' and 'no data was returned'. rubric.appropriate_refusal_ok=false and tool_results show status=ok items>=1, so refusal is inappropriate.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to the expected tools and grounded its answer in the tool results, but it wrongfully refused to answer. The tools returned data for MSFT (revenue=82.886B, EPS=4.27, net_income=31.778B) \u2014 the agent should have presented those figures as the Q4 FY2024 earnings. The single most impactful change: when tools return data, always answer with the available numbers rather than refusing based on a mismatch between the requested period label and the tool's period naming convention.\"\n}",
+      "reviewer_summary": "The agent correctly routed to the expected tools and grounded its answer in the tool results, but it wrongfully refused to answer. The tools returned data for MSFT (revenue=82.886B, EPS=4.27, net_income=31.778B) \u2014 the agent should have presented those figures as the Q4 FY2024 earnings. The single most impactful change: when tools return data, always answer with the available numbers rather than refusing based on a mismatch between the requested period label and the tool's period naming convention.",
+      "score": 70,
+      "slot": "q_da_msft_fy2024q4_earnings_citations",
+      "substantiation_check": {
+        "contradicted": 0,
+        "coverage": "verified",
+        "examples": [],
+        "substantiated": 0,
+        "unmatched": 0,
+        "unsupported": 0
+      },
+      "verdict": "WARN",
+      "verdict_decision": {
+        "dimensions": {
+          "framing": 25,
+          "grounding": 20,
+          "refusal_judgment": 0,
+          "tool_use": 25
+        },
+        "fail_reason": null,
+        "gate_results": {
+          "CONTROL_TOKEN_LEAK": true,
+          "EMPTY_AFTER_TOOLS": true,
+          "GROUNDING_CONTRADICTED": true,
+          "GROUNDING_FLOOR": true,
+          "INFRA_NON_ANSWER": true,
+          "PHANTOM_CITATION": true,
+          "SUBSTANTIATION_UNSUPPORTED": true,
+          "TRUNCATED": true
+        },
+        "grounding_check": {
+          "contradicted": 0,
+          "evidence_mode": "verified",
+          "examples": [],
+          "matched": 0,
+          "unmatched": 0
+        },
+        "quality_score": 70,
+        "verdict": "WEAK"
+      },
+      "veto": null
+    }
+  ],
+  "schema_version": "2.0",
+  "score_avg": 90.0,
+  "score_max": 100,
+  "score_min": 70,
+  "substantiation": {
+    "contradicted_n": 0,
+    "pct_unsubstantiated": 0.0,
+    "unsupported_n": 0,
+    "unverifiable_n": 40,
+    "verified_n": 19
+  },
+  "tiered_verdict_counts": {
+    "n_fail": 2,
+    "n_pass": 1,
+    "n_strong": 6,
+    "n_weak": 1
+  },
+  "trajectory": {
+    "dimension_avg": {
+      "efficiency": 19.5,
+      "ordering": 24.5,
+      "recovery": 23.0,
+      "routing": 23.5
+    },
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "mean_score": 90.5,
+    "n_graded": 10,
+    "n_records": 10,
+    "per_question": [
+      {
+        "id": "ru_nvda_amd_revenue_4q",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent made a single, well-chosen batch call that exactly matches the question's intent. No wasted steps, no ordering issues, no recovery needed. The only process improvement would be to verify that the returned data covers exactly four quarters per ticker (the trace shows items=2, which may be two tickers' data, but the answer lists eight rows \u2014 assuming the batch call returned all four quarters for each, this is fine). Otherwise, this is a textbook efficient trajectory.",
+        "slot": "q_ru_nvda_amd_revenue_4q",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "one batch call returns both tickers' data in a single step \u2014 maximally efficient.",
+            "score": 25
+          },
+          "ordering": {
+            "feedback": "single call, no ordering constraints \u2014 full marks.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 get_fundamentals_history_batch is exactly the right tool for a revenue comparison question \u2014 perfect routing.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 100,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "iter3_top5_tech_marketcap",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent attempted to use screen_universe to find top tech companies by market cap, but the tool returned only small-cap results (PLUS, ROG, FLEX, MCHP) \u2014 likely because the 'sector=Technology' filter is too narrow or the tool doesn't sort by market cap. The agent then fell back to querying known mega-cap tickers (AAPL, MSFT, GOOGL, NVDA) individually, but never resolved the fifth company (AMZN was missing). The main process issue is that the screen_universe tool was not configured to rank by market cap; the agent should have used a tool that explicitly sorts by market cap (e.g., 'top_movers' or a market-cap-sorted screen) or directly queried a predefined list of large-cap tech tickers. Additionally, the chain contains redundant calls (two identical screens) and an empty compare_entities ",
+        "slot": "q_iter3_top5_tech_marketcap",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "The chain is redundant: calls 1 and 2 are nearly identical and both returned only 1 item. Call 4 (compare_entities) was empty and wasted. The agent queried fundamentals for 4 tickers individually (calls 3,6-8) instead of using a single bulk call. A single well-parameterized screen_universe or a top-",
+            "score": 10
+          },
+          "ordering": {
+            "feedback": "Call 1 and 2 (screen_universe) are independent and could be parallel. Call 3 (AAPL fundamentals) is fine. Call 4 (compare_entities) uses tickers not yet resolved from the screen, but the screen didn't return them anyway. Calls 5-8 are independent. No clear dependency violation, but the chain lacks a",
+            "score": 20
+          },
+          "recovery": {
+            "feedback": "After call 1 returned only 1 item (likely not a top-5 result), the agent retried with limit=10 (call 2) but still got only 1 item. Instead of diagnosing the screen's filter (e.g., sector/region might be too narrow), the agent switched to querying individual tickers (calls 3,6-8) and tried compare_en",
+            "score": 10
+          },
+          "routing": {
+            "feedback": "The agent used screen_universe and query_fundamentals, which are appropriate for a market-cap ranking question. However, screen_universe returned only 1 item per call (likely a small-cap screener), so it never retrieved the top 5 mega-caps. The agent should have used a tool that can rank by market c",
+            "score": 15
+          }
+        },
+        "trajectory_score": 55,
+        "unrecovered_failures": 1,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "iter3_msft_earnings_citations",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent correctly used get_fundamentals_history to retrieve Microsoft's most recent quarterly earnings, which is the appropriate tool for the question. The trace is minimal and efficient with no wasted calls. However, the question also asked to 'cite the source for each number' \u2014 the answer cites the tool row but does not include a human-readable source name (e.g., 'Microsoft Q3 FY2026 earnings release'). Adding a call to get_entity_news to fetch the actual press release would have provided a proper citation and improved answer completeness. Consider chaining a news call after fundamentals to satisfy the citation requirement.",
+        "slot": "q_iter3_msft_earnings_citations",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "single well-chosen call for a single-fact question; no redundancy.",
+            "score": 25
+          },
+          "ordering": {
+            "feedback": "single call, no ordering constraints; full marks.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "no failed or empty calls; nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 get_fundamentals_history is exactly the right tool for an earnings report question; no mismatch with intent.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 100,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "ru_aapl_pe_simple",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent made a single, correct call to query_fundamentals with the right ticker and metric, which is the ideal trajectory for a shallow P/E ratio question. No wasted steps, no ordering issues, and no recovery needed. The only minor improvement would be to also return the as-of date or period alongside the value, but the rubric does not penalise that omission in the process grade.",
+        "slot": "q_ru_aapl_pe_simple",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "one well-chosen call with the correct ticker and metric is the minimal sensible chain for a single-fact question.",
+            "score": 25
+          },
+          "ordering": {
+            "feedback": "single-call trace has no ordering constraint; nothing to get wrong.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "no failed or empty calls occurred \u2014 nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 query_fundamentals is exactly the right tool for a P/E ratio question \u2014 matches the expected tool set perfectly.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 100,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "ru_tsla_margin_trend",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent made a single, correct tool call (query_fundamentals with TSLA, gross_margin, 5 quarterly periods) that directly answers the trend question. No wasted steps, no redundant calls, no recovery needed. The only process improvement would be to verify that the returned data actually contains 5 periods (the trace shows items=1, which may indicate only one row was returned \u2014 if so, the agent should have inspected the result structure and potentially retried with different parameters to get the full quarterly history).",
+        "slot": "q_ru_tsla_margin_trend",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "One well-chosen call with periods=5 and period_type=quarterly returns the full year of quarterly gross margins \u2014 minimal and non-redundant.",
+            "score": 25
+          },
+          "ordering": {
+            "feedback": "Single-call trace \u2014 no ordering constraint to violate; all needed data obtained in one step.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 query_fundamentals with ticker=TSLA and metrics=[\"gross_margin\"] is exactly the right tool for a fundamentals trend question \u2014 matches the expected tool set perfectly.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 100,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "ru_googl_pe_vs_history",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 1,
+        "reviewer_summary": "The agent correctly selected valuation and fundamentals tools for a historical-expensive question. The chain is well-routed and has no ordering issues. However, call 3 is a wasteful duplicate of call 1 \u2014 the same query_fundamentals call with identical arguments and result. The agent should have reused the data from call 1 instead of re-fetching. Dropping that redundant call would make the trajectory efficient while preserving all needed data.",
+        "slot": "q_ru_googl_pe_vs_history",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "call 3 is an exact duplicate of call 1 (same tool, same args, same result). This is a redundant call that adds zero new information. Removing it would make the chain leaner.",
+            "score": 15
+          },
+          "ordering": {
+            "feedback": "No data dependency between the calls \u2014 they are all independent fetches for GOOGL. Order is irrelevant; no ordering constraint violated.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "No failed/empty calls that needed recovery: call 4 returned empty but the agent had already obtained the needed fundamentals data from calls 1-3. The empty news/analyst result is harmless and did not block the answer.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 and 3 query_fundamentals and call 2 get_fundamentals_history_batch are exactly the right tools for a historical-valuation question; call 4 search_documents is a reasonable supplementary attempt for context. Tools match the intent perfectly.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 90,
+        "unrecovered_failures": 1,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "tc_earnings_next_week_universe",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent eventually landed on the correct tool (get_earnings_calendar) and answered appropriately, but the trajectory wasted two calls on search_documents, which is not the right tool for a structured earnings-calendar query. The process would be much cleaner by going directly to get_earnings_calendar with the next-week date range. The recovery from the empty first call was acceptable but inefficient. The single most impactful change: drop the search_documents calls entirely and start with get_earnings_calendar.",
+        "slot": "q_tc_earnings_next_week_universe",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "Call 1 and call 2 are redundant and wasted: both used search_documents for an earnings-calendar question. The needed data was obtained in a single call (call 3). Two of the three calls were unnecessary.",
+            "score": 15
+          },
+          "ordering": {
+            "feedback": "Only one relevant call (call 3) produced the needed data; there are no dependency ordering issues. Single-call traces have no ordering constraint.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "After call 1 (search_documents with a narrow date range returned empty), the agent widened the date range in call 2 but still used the wrong tool. Call 3 switched to the correct tool and got data. The recovery was partial: the tool switch was good, but the intermediate call 2 was unnecessary.",
+            "score": 20
+          },
+          "routing": {
+            "feedback": "Call 3 finally used the correct tool (get_earnings_calendar) for the earnings intent. However, calls 1 and 2 used search_documents, which is a generic search tool, not the dedicated earnings calendar tool; this is a mild routing mismatch.",
+            "score": 20
+          }
+        },
+        "trajectory_score": 80,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "chain_portfolio_upcoming_earnings",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 2,
+        "reviewer_summary": "The agent correctly selected the right tools (portfolio context + earnings calendar) for the user's intent. However, it called get_portfolio_context three times with identical arguments, producing no new information after the first call. This redundancy is the single most impactful process change: drop the duplicate calls and keep only one. The earnings calendar call was well-formed and the final answer correctly reported no matches.",
+        "slot": "q_chain_portfolio_upcoming_earnings",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "Calls 1-3 are identical redundant calls of get_portfolio_context with no changed args; only one was needed. This wastes two calls.",
+            "score": 10
+          },
+          "ordering": {
+            "feedback": "No dependency between portfolio context and earnings calendar; parallel calls are fine. Order is irrelevant here.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1-3 get_portfolio_context and call 4 get_earnings_calendar are exactly the right tool types for a 'my holdings + upcoming earnings' question.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 85,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "chain_top_mover_fundamentals",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent correctly routed to get_market_movers to identify the top mover (BLDR) and then chained the ticker into get_fundamentals_history_batch to retrieve the financial data needed to assess the move. The ordering respects the data dependency, and the call set is minimal and non-redundant. The only process improvement would be to also fetch recent news (get_entity_news) to provide a richer context for the move, but the question only asks for fundamentals justification, so the current chain is sufficient.",
+        "slot": "q_chain_top_mover_fundamentals",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "Two calls are exactly what is needed: one to get the mover, one to get its fundamentals. No redundancy or wasted calls.",
+            "score": 25
+          },
+          "ordering": {
+            "feedback": "call 1 resolves the top mover ticker; call 2 uses that ticker as input. Dependency order is correct. Single chain, no ordering issues.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 get_market_movers correctly identifies the top mover; call 2 get_fundamentals_history_batch is a valid fundamentals tool for the 'justify the move' intent. Tools match the question.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 100,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      },
+      {
+        "id": "da_msft_fy2024q4_earnings_citations",
+        "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+        "redundant_call_pairs": 0,
+        "reviewer_summary": "The agent correctly selected fundamentals tools for an earnings question, and both calls succeeded. However, the chain is slightly inefficient: query_fundamentals and get_fundamentals_history overlap heavily for MSFT; a single get_fundamentals_history call with the target quarter would have been leaner. The agent then incorrectly concluded that Q4 FY2024 data was missing, despite the returned data containing revenue and EPS for that period (the grounding sample shows revenue 82.886B, EPS 4.27). The process failure is not in tool selection or ordering but in misreading the tool output. The single most impactful change: after receiving the fundamentals data, verify the period label in the returned record before concluding it is absent.",
+        "slot": "q_da_msft_fy2024q4_earnings_citations",
+        "sub_scores": {
+          "efficiency": {
+            "feedback": "Two calls to similar fundamentals tools for the same ticker is slightly redundant; one call (e.g. get_fundamentals_history with the right period) could have sufficed. Minor waste.",
+            "score": 20
+          },
+          "ordering": {
+            "feedback": "Only two calls, no data dependency between them (both fetch fundamentals for MSFT); order is irrelevant, so no ordering issue.",
+            "score": 25
+          },
+          "recovery": {
+            "feedback": "No failed or empty calls in the trace (both returned ok items=1); nothing to recover from, full marks.",
+            "score": 25
+          },
+          "routing": {
+            "feedback": "call 1 query_fundamentals and call 2 get_fundamentals_history are exactly the right tools for an earnings-metric question; no mismatch with intent.",
+            "score": 25
+          }
+        },
+        "trajectory_score": 95,
+        "unrecovered_failures": 0,
+        "verdict": "GRADED"
+      }
+    ],
+    "redundant_turns_n": 3,
+    "unrecovered_turns_n": 2
+  },
+  "verdict_counts": {
+    "ERROR": 0,
+    "FAIL": 2,
+    "PASS": 6,
+    "SKIPPED": 0,
+    "WARN": 2
+  },
+  "veto_counts": {
+    "degenerate": 0,
+    "grounding": 2,
+    "grounding_contradicted": 0,
+    "tool_failure": 0
+  }
+}

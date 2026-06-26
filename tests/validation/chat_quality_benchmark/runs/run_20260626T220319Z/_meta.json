@@ -1,0 +1,27 @@
+{
+  "base_url": "http://localhost:8000",
+  "ended_at": "2026-06-26T22:17:37.460681+00:00",
+  "ids_filter": [
+    "da_msft_fy2024q4_earnings_citations",
+    "chain_top_mover_fundamentals",
+    "ru_googl_pe_vs_history",
+    "ru_nvda_amd_revenue_4q",
+    "ru_tsla_margin_trend",
+    "ru_aapl_pe_simple",
+    "tc_earnings_next_week_universe",
+    "iter3_top5_tech_marketcap",
+    "chain_portfolio_upcoming_earnings",
+    "iter3_msft_earnings_citations"
+  ],
+  "judge_model_id": "deepseek-ai/DeepSeek-V4-Flash",
+  "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+  "judge_prompt_version": "3.0",
+  "max_runs_per_q": 1,
+  "out_dir_label": "run_20260626T220319Z",
+  "questions_file": "/Users/arnaurodon/Projects/University/final_thesis/worldview-consolidation/tests/validation/chat_quality_benchmark/questions",
+  "started_at": "2026-06-26T22:03:19.979735+00:00",
+  "tags_filter": null,
+  "total_questions": 10,
+  "total_runs": 10,
+  "verdict_model_version": "1.1"
+}

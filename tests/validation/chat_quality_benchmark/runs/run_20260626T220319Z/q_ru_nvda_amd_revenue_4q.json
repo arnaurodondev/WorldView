@@ -1,0 +1,818 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 1436,
+    "citation_count": 2,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 47.25,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 359,
+    "phase_timings_ms": {
+      "check_cache": 5.274208000628278,
+      "entity_resolution": 212.56312500918284,
+      "grounding_validation": 30009.794929996133,
+      "llm_direct_text_generation": 13721.85771400109,
+      "llm_tool_planning": 15890.284631983377,
+      "load_history": 32.35566700459458,
+      "persist_and_cache": 59.248375007882714,
+      "tool_execution": 170.7772079971619,
+      "validate_input": 559.4802089908626
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.598,
+    "word_count": 249
+  },
+  "id": "ru_nvda_amd_revenue_4q",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.",
+        "reason": "Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.",
+        "reason": "Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.",
+        "reason": "Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_fundamentals_history_batch with both tickers and 4 periods, matching expected_tools.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Revenue figures for NVDA ($81.6B) and AMD ($10.3B) match grounding sample; other quarterly values not in sample but plausible given 4-period request. Attribution via [1][2] is present. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for comparison of revenue trajectories; answer provides a structured table plus bullet observations on growth pace, scale, and trend \u2014 appropriate depth for a medium-complexity comparison.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer delivers full substantive analysis with citations.\"\n  },\n  \"reviewer_summary\": \"Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.\"\n}",
+    "reviewer_summary": "Solid answer overall. Tool routing was correct, framing matched the comparison depth well, and no refusal issues. The main improvement area is grounding: the answer lists four quarterly revenue values per ticker, but only the most recent quarter for each is confirmed by the grounding sample. The other six values (e.g., NVDA Q4 FY2026 $68.1B, AMD Q3 FY2025 $9.2B) are not verifiable from the provided sample, so the grounding score is slightly reduced. Next time, either include all returned rows in the sample or have the agent explicitly cite each row to improve traceability.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 6,
+      "unmatched": 10,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 6,
+        "unmatched": 10
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Revenue over the last 4 reported quarters**\n\n| Ticker | Quarter (most recent first) | Revenue |\n|--------|----------------------------|---------|\n| **AMD** | Q1\u202fFY2026 | $10.3\u202fB |\n|        | Q4\u202fFY2025 | $10.3\u202fB |\n|        | Q3\u202fFY2025 | $9.2\u202fB |\n|        | Q2\u202fFY2025 | $7.7\u202fB |\n| **NVDA**| Q1\u202fFY2027 | $81.6\u202fB |\n|        | Q4\u202fFY2026 | $68.1\u202fB |\n|        | Q3\u202fFY2026 | $57.0\u202fB |\n|        | Q2\u202fFY2026 | $46.7\u202fB |\n\n*AMD revenue grew from $7.7\u202fB to $10.3\u202fB over the four\u2011quarter span, with the most recent quarter (Q1\u202fFY2026) flat relative to Q4\u202fFY2025.*\u202f[1]  \n*NVDA revenue rose from $46.7\u202fB to $81.6\u202fB, showing a steady increase each quarter.*\u202f[2]\n\n**Key observations**\n\n. **Growth pace** \u2013 NVIDIA\u2019s quarterly revenue increased by roughly 10\u201315\u202f% each quarter, whereas AMD\u2019s growth was faster early in the period (\u224819\u202f% Q2\u2192Q3 FY2025) but slowed to flat growth in the latest quarter.  \n. **Scale** \u2013 NVIDIA\u2019s revenue is roughly 8\u202f\u00d7 larger than AMD\u2019s in the most recent quarter, reflecting its broader product mix and larger market share in data\u2011center and gaming GPUs.  \n. **Trend direction** \u2013 Both companies have been expanding revenue, but NVIDIA\u2019s trajectory is more consistently upward across the four quarters, while AMD\u2019s growth appears to be plateauing at the current level.  \n\nThese figures are drawn directly from the quarterly fundamentals returned by the data source.\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "AMD",
+        "id": "tool:fundamentals_batch:AMD",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: AMD",
+        "url": null
+      },
+      {
+        "confidence": 0.88,
+        "entity_name": "NVDA",
+        "id": "tool:fundamentals_batch:NVDA",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 2,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: NVDA",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        597803
+      ],
+      [
+        "status",
+        624944
+      ],
+      [
+        "thinking",
+        844062
+      ],
+      [
+        "agent_iteration",
+        844090
+      ],
+      [
+        "status",
+        3016200
+      ],
+      [
+        "tool_call",
+        3017689
+      ],
+      [
+        "tool_result",
+        3185870
+      ],
+      [
+        "agent_iteration",
+        3430408
+      ],
+      [
+        "token",
+        17152842
+      ],
+      [
+        "token",
+        17152960
+      ],
+      [
+        "token",
+        17153348
+      ],
+      [
+        "token",
+        17153677
+      ],
+      [
+        "token",
+        17153919
+      ],
+      [
+        "token",
+        17154020
+      ],
+      [
+        "token",
+        17154220
+      ],
+      [
+        "token",
+        17154501
+      ],
+      [
+        "token",
+        17154776
+      ],
+      [
+        "token",
+        17154927
+      ],
+      [
+        "token",
+        17155096
+      ],
+      [
+        "token",
+        17155145
+      ],
+      [
+        "token",
+        17155310
+      ],
+      [
+        "token",
+        17155402
+      ],
+      [
+        "token",
+        17155602
+      ],
+      [
+        "token",
+        17155855
+      ],
+      [
+        "token",
+        17156015
+      ],
+      [
+        "token",
+        17156178
+      ],
+      [
+        "token",
+        17156377
+      ],
+      [
+        "token",
+        17156676
+      ],
+      [
+        "token",
+        17156936
+      ],
+      [
+        "token",
+        17157153
+      ],
+      [
+        "token",
+        17157440
+      ],
+      [
+        "token",
+        17157621
+      ],
+      [
+        "token",
+        17157933
+      ],
+      [
+        "token",
+        17158291
+      ],
+      [
+        "token",
+        17158682
+      ],
+      [
+        "token",
+        17158983
+      ],
+      [
+        "token",
+        17159220
+      ],
+      [
+        "token",
+        17159350
+      ],
+      [
+        "status",
+        17167579
+      ],
+      [
+        "final_answer",
+        47179715
+      ],
+      [
+        "citations",
+        47179924
+      ],
+      [
+        "contradictions",
+        47214463
+      ],
+      [
+        "suggestions",
+        47214497
+      ],
+      [
+        "metadata",
+        47240135
+      ],
+      [
+        "done",
+        47240265
+      ]
+    ],
+    "latency_s": 47.25,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 47153,
+      "message_id": "019f05f6-2c83-7c96-a7db-cf3715be4e9e",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "8b81367c-92dc-42cd-aadb-d30212b8713c"
+    },
+    "output_tokens": 359,
+    "phase_timings_ms": {
+      "check_cache": 5.274208000628278,
+      "entity_resolution": 212.56312500918284,
+      "grounding_validation": 30009.794929996133,
+      "llm_direct_text_generation": 13721.85771400109,
+      "llm_tool_planning": 15890.284631983377,
+      "load_history": 32.35566700459458,
+      "persist_and_cache": 59.248375007882714,
+      "tool_execution": 170.7772079971619,
+      "validate_input": 559.4802089908626
+    },
+    "question": "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history_batch\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 4,
+            "tickers": [
+              "NVDA",
+              "AMD"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 169,
+          "grounding_sample": {
+            "fields": {
+              "eps": "1.87",
+              "eps_2": "1.37",
+              "gross_profit": "61157000000",
+              "gross_profit_2": "5416000000",
+              "market_cap": "5053711646720",
+              "market_cap_2": "847667658752",
+              "net_income": "58321000000",
+              "net_income_2": "1383000000",
+              "pe_ratio": "31.9525",
+              "pe_ratio_2": "172.1358",
+              "revenue": "81615000000",
+              "revenue_2": "10253000000",
+              "revenue_3": "9246000000",
+              "ticker": "NVDA",
+              "ticker_2": "AMD"
+            },
+            "sampled_rows": 2,
+            "total_rows": 2,
+            "truncated": false
+          },
+          "item_count": 2,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:NVDA",
+              "title": "Fundamentals: NVDA"
+            },
+            {
+              "id": "tool:fundamentals_batch:AMD",
+              "title": "Fundamentals: AMD"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2586,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Revenue over the last 4 reported quarters**\n\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Ticker | Quarter (most recent first) | Revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|--------|----------------------------|---------|\n| **AMD** | Q1\u202fFY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$10.3\u202fB |\n|        | Q4\u202fFY2025 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$10.3\u202fB |\n|        | Q3\u202fFY2025 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$9.2\u202fB |\n|        | Q2\u202fFY2025 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$7.7\u202fB |\n| **NVDA**| Q1\u202fFY2027 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$81.6\u202fB |\n|        | Q4\u202fFY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$68.1\u202fB |\n|        | Q3\u202fFY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$57.0\u202fB |\n|        | Q2\u202fFY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$46.7\u202fB |\n\n*AMD revenue grew from $7.7\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "B to $10.3\u202fB over the four\u2011quarter span, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with the most recent quarter (Q1\u202fFY2026) flat "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "relative to Q4\u202fFY2025.*\u202f[1]  \n*NVDA revenue rose "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from $46.7\u202fB to $81.6\u202fB, showing a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "steady increase each quarter.*\u202f[2]\n\n**Key observations**\n\n1. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Growth pace** \u2013 NVIDIA\u2019s quarterly revenue increased by "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "roughly 10\u201315\u202f% each quarter, whereas AMD\u2019s growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "was faster early in the period (\u224819\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q2\u2192Q3 FY2025) but slowed to flat growth in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the latest quarter.  \n2. **Scale** \u2013 NVIDIA\u2019s revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is roughly 8\u202f\u00d7 larger than AMD\u2019s in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the most recent quarter, reflecting its broader product "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "mix and larger market share in data\u2011center and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "gaming GPUs.  \n3. **Trend direction** \u2013 Both companies "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "have been expanding revenue, but NVIDIA\u2019s trajectory is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "more consistently upward across the four quarters, while "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AMD\u2019s growth appears to be plateauing at the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "current level.  \n\nThese figures are drawn directly from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the quarterly fundamentals returned by the data source."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Revenue over the last 4 reported quarters**\n\n| Ticker | Quarter (most recent first) | Revenue |\n|--------|----------------------------|---------|\n| **AMD** | Q1\u202fFY2026 | $10.3\u202fB |\n|        | Q4\u202fFY2025 | $10.3\u202fB |\n|        | Q3\u202fFY2025 | $9.2\u202fB |\n|        | Q2\u202fFY2025 | $7.7\u202fB |\n| **NVDA**| Q1\u202fFY2027 | $81.6\u202fB |\n|        | Q4\u202fFY2026 | $68.1\u202fB |\n|        | Q3\u202fFY2026 | $57.0\u202fB |\n|        | Q2\u202fFY2026 | $46.7\u202fB |\n\n*AMD revenue grew from $7.7\u202fB to $10.3\u202fB over the four\u2011quarter span, with the most recent quarter (Q1\u202fFY2026) flat relative to Q4\u202fFY2025.*\u202f[1]  \n*NVDA revenue rose from $46.7\u202fB to $81.6\u202fB, showing a steady increase each quarter.*\u202f[2]\n\n**Key observations**\n\n. **Growth pace** \u2013 NVIDIA\u2019s quarterly revenue increased by roughly 10\u201315\u202f% each quarter, whereas AMD\u2019s growth was faster early in the period (\u224819\u202f% Q2\u2192Q3 FY2025) but slowed to flat growth in the latest quarter.  \n. **Scale** \u2013 NVIDIA\u2019s revenue is roughly 8\u202f\u00d7 larger than AMD\u2019s in the most recent quarter, reflecting its broader product mix and larger market share in data\u2011center and gaming GPUs.  \n. **Trend direction** \u2013 Both companies have been expanding revenue, but NVIDIA\u2019s trajectory is more consistently upward across the four quarters, while AMD\u2019s growth appears to be plateauing at the current level.  \n\nThese figures are drawn directly from the quarterly fundamentals returned by the data source.\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "AMD",
+            "id": "tool:fundamentals_batch:AMD",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: AMD",
+            "url": null
+          },
+          {
+            "confidence": 0.88,
+            "entity_name": "NVDA",
+            "id": "tool:fundamentals_batch:NVDA",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 2,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: NVDA",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Advanced Micro Devices Inc?",
+          "How has AMD performed recently?",
+          "Who are Advanced Micro Devices Inc's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 47153,
+          "message_id": "019f05f6-2c83-7c96-a7db-cf3715be4e9e",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "8b81367c-92dc-42cd-aadb-d30212b8713c"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.274208000628278,
+            "entity_resolution": 212.56312500918284,
+            "grounding_validation": 30009.794929996133,
+            "llm_direct_text_generation": 13721.85771400109,
+            "llm_tool_planning": 15890.284631983377,
+            "load_history": 32.35566700459458,
+            "persist_and_cache": 59.248375007882714,
+            "tool_execution": 170.7772079971619,
+            "validate_input": 559.4802089908626
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 4,
+          "tickers": [
+            "NVDA",
+            "AMD"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "1.87",
+            "eps_2": "1.37",
+            "gross_profit": "61157000000",
+            "gross_profit_2": "5416000000",
+            "market_cap": "5053711646720",
+            "market_cap_2": "847667658752",
+            "net_income": "58321000000",
+            "net_income_2": "1383000000",
+            "pe_ratio": "31.9525",
+            "pe_ratio_2": "172.1358",
+            "revenue": "81615000000",
+            "revenue_2": "10253000000",
+            "revenue_3": "9246000000",
+            "ticker": "NVDA",
+            "ticker_2": "AMD"
+          },
+          "sampled_rows": 2,
+          "total_rows": 2,
+          "truncated": false
+        },
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 7.695,
+    "tps_streaming": 26.163,
+    "ttft_s": 0.598
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "financials",
+    "aggregate",
+    "q4_original"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent made a single, well-chosen batch call that exactly matches the question's intent. No wasted steps, no ordering issues, no recovery needed. The only process improvement would be to verify that the returned data covers exactly four quarters per ticker (the trace shows items=2, which may be two tickers' data, but the answer lists eight rows \u2014 assuming the batch call returned all four quarters for each, this is fine). Otherwise, this is a textbook efficient trajectory.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one batch call returns both tickers' data in a single step \u2014 maximally efficient.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraints \u2014 full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_fundamentals_history_batch is exactly the right tool for a revenue comparison question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

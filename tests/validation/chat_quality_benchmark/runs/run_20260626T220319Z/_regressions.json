@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "available": false,
+    "label": null,
+    "regressions": [],
+    "shared_questions": 0
+  },
+  "has_regressions": true,
+  "quality_drop_threshold": 5,
+  "total_regressions": 2,
+  "window": {
+    "available": true,
+    "label": "20260626T072542Z",
+    "regressions": [
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "chain_portfolio_upcoming_earnings",
+        "reasons": [
+          "score -5"
+        ],
+        "run_index": 0,
+        "score_delta": -5,
+        "score_dropped": true,
+        "score_from": 100,
+        "score_to": 95,
+        "verdict_downgraded": false,
+        "verdict_from": "STRONG",
+        "verdict_to": "STRONG"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "chain_top_mover_fundamentals",
+        "reasons": [
+          "new invariant GROUNDING_FLOOR"
+        ],
+        "run_index": 0,
+        "score_delta": 85,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 85,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      }
+    ],
+    "shared_questions": 10
+  }
+}

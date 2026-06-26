@@ -1,0 +1,599 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_earnings_calendar"
+    ]
+  },
+  "heuristics": {
+    "char_count": 181,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_earnings_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 24.425,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 46,
+    "phase_timings_ms": {
+      "check_cache": 4.244624986313283,
+      "entity_resolution": 91.51670898427255,
+      "grounding_validation": 18.28145797480829,
+      "llm_direct_text_generation": 6326.196711015655,
+      "llm_tool_planning": 21329.19205102371,
+      "load_history": 25.657499994849786,
+      "persist_and_cache": 28.603582992218435,
+      "tool_execution": 597.683626023354,
+      "validate_input": 522.5706670025829
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_earnings_calendar"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "ttft_s": 0.586,
+    "word_count": 24
+  },
+  "id": "tc_earnings_next_week_universe",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.",
+        "reason": "The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.",
+        "reason": "No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.",
+        "reason": "No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.",
+        "reason": "Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_earnings_calendar, which is in the expected_tools equivalence set. Full marks.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"No grounding sample provided (presumed band). The answer correctly cites the tool result and does not fabricate any numbers or periods.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"The question is a factual lookup (which names report next week). The answer is concise, correctly reports the empty result, and cites the source. Depth matches complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. The answer provides a clear, data-backed statement.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_earnings_calendar, found no S&P 500 earnings for the requested week, and returned a concise, well-grounded answer. The only minor improvement would be to explicitly note that the calendar returned 1 item but none were S&P 500 (the current wording is slightly ambiguous). Otherwise, this is a clean, appropriate response.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Which S&P 500 names report earnings next week?",
+  "reasons": [],
+  "result": {
+    "answer_text": "According to the earnings\u2011calendar data for the period\u202f2026\u201107\u201102\u202fthrough\u202f2026\u201107\u201108, no S&P\u202f500 companies are listed as reporting earnings during that week\u202f[get_earnings_calendar].",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        586076
+      ],
+      [
+        "status",
+        606235
+      ],
+      [
+        "thinking",
+        698150
+      ],
+      [
+        "agent_iteration",
+        698220
+      ],
+      [
+        "status",
+        11656147
+      ],
+      [
+        "tool_call",
+        11656168
+      ],
+      [
+        "tool_result",
+        12035870
+      ],
+      [
+        "tool_call",
+        12812095
+      ],
+      [
+        "tool_result",
+        12812238
+      ],
+      [
+        "agent_iteration",
+        13460204
+      ],
+      [
+        "tool_call",
+        17546001
+      ],
+      [
+        "tool_result",
+        17726665
+      ],
+      [
+        "agent_iteration",
+        18035196
+      ],
+      [
+        "token",
+        24367141
+      ],
+      [
+        "token",
+        24367174
+      ],
+      [
+        "token",
+        24386757
+      ],
+      [
+        "status",
+        24386860
+      ],
+      [
+        "final_answer",
+        24386899
+      ],
+      [
+        "citations",
+        24386965
+      ],
+      [
+        "contradictions",
+        24393773
+      ],
+      [
+        "suggestions",
+        24393837
+      ],
+      [
+        "metadata",
+        24417419
+      ],
+      [
+        "done",
+        24417557
+      ]
+    ],
+    "latency_s": 24.425,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 24340,
+      "message_id": "019f05fe-3807-77b7-b897-9c30fc8d97f1",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "b6d75ed0-c29c-4c92-8091-a53e53d615d8"
+    },
+    "output_tokens": 46,
+    "phase_timings_ms": {
+      "check_cache": 4.244624986313283,
+      "entity_resolution": 91.51670898427255,
+      "grounding_validation": 18.28145797480829,
+      "llm_direct_text_generation": 6326.196711015655,
+      "llm_tool_planning": 21329.19205102371,
+      "load_history": 25.657499994849786,
+      "persist_and_cache": 28.603582992218435,
+      "tool_execution": 597.683626023354,
+      "validate_input": 522.5706670025829
+    },
+    "question": "Which S&P 500 names report earnings next week?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-26",
+            "date_to": "2026-07-07",
+            "source_types": [
+              "earnings"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 413,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "date_from": "2026-03-28",
+            "date_to": "2026-10-05"
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 775,
+          "item_count": 20,
+          "result_preview": [
+            {
+              "id": "tool:chunk:25cc49ef-69da-5513-8534-949c122e659a",
+              "title": "Weekly Market Summary: April 28 - May 2, 2026 \u2014 Big Tech Earnings Dominate"
+            },
+            {
+              "id": "tool:chunk:019e2802-a2d8-7402-b656-83fac4a4e047",
+              "title": "Why Nvidia Earnings May Matter More To The S&amp;P 500 Than Fed Minutes Right No"
+            },
+            {
+              "id": "tool:chunk:019e1235-bc57-7a0a-8073-cf7261556564",
+              "title": "One of the S&amp;P 500's best earnings seasons in 20 years comes with a catch: C"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12758,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-07-02",
+            "to_date": "2026-07-08"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 180,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17335,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "According to the earnings\u2011calendar data for the period\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201107\u201102\u202fthrough\u202f2026\u201107\u201108, no S&P\u202f500 companies are "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "listed as reporting earnings during that week\u202f[get_earnings_calendar]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "According to the earnings\u2011calendar data for the period\u202f2026\u201107\u201102\u202fthrough\u202f2026\u201107\u201108, no S&P\u202f500 companies are listed as reporting earnings during that week\u202f[get_earnings_calendar]."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 24340,
+          "message_id": "019f05fe-3807-77b7-b897-9c30fc8d97f1",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "b6d75ed0-c29c-4c92-8091-a53e53d615d8"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.244624986313283,
+            "entity_resolution": 91.51670898427255,
+            "grounding_validation": 18.28145797480829,
+            "llm_direct_text_generation": 6326.196711015655,
+            "llm_tool_planning": 21329.19205102371,
+            "load_history": 25.657499994849786,
+            "persist_and_cache": 28.603582992218435,
+            "tool_execution": 597.683626023354,
+            "validate_input": 522.5706670025829
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "date_from": "2026-06-26",
+          "date_to": "2026-07-07",
+          "source_types": [
+            "earnings"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-03-28",
+          "date_to": "2026-10-05"
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "from_date": "2026-07-02",
+          "to_date": "2026-07-08"
+        },
+        "name": "get_earnings_calendar"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 20,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tps": 1.93,
+    "tps_streaming": 7.271,
+    "ttft_s": 0.586
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_earnings_calendar"
+    ],
+    "forbidden_facts": [
+      "fabricated_ticker_list_without_tool_call"
+    ],
+    "required_facts": [
+      "date_range_next_week",
+      "list_of_tickers_or_empty_refusal"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_earnings_calendar"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent eventually landed on the correct tool (get_earnings_calendar) and answered appropriately, but the trajectory wasted two calls on search_documents, which is not the right tool for a structured earnings-calendar query. The process would be much cleaner by going directly to get_earnings_calendar with the next-week date range. The recovery from the empty first call was acceptable but inefficient. The single most impactful change: drop the search_documents calls entirely and start with get_earnings_calendar.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 1 and call 2 are redundant and wasted: both used search_documents for an earnings-calendar question. The needed data was obtained in a single call (call 3). Two of the three calls were unnecessary.",
+        "score": 15
+      },
+      "ordering": {
+        "feedback": "Only one relevant call (call 3) produced the needed data; there are no dependency ordering issues. Single-call traces have no ordering constraint.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 (search_documents with a narrow date range returned empty), the agent widened the date range in call 2 but still used the wrong tool. Call 3 switched to the correct tool and got data. The recovery was partial: the tool switch was good, but the intermediate call 2 was unnecessary.",
+        "score": 20
+      },
+      "routing": {
+        "feedback": "Call 3 finally used the correct tool (get_earnings_calendar) for the earnings intent. However, calls 1 and 2 used search_documents, which is a generic search tool, not the dedicated earnings calendar tool; this is a mild routing mismatch.",
+        "score": 20
+      }
+    },
+    "trajectory_score": 80,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}
