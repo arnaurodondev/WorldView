@@ -500,4 +500,59 @@ def test_ticker_only_sample_leaves_numeric_claim_unmatched() -> None:
     assert check.unsupported == 0
     assert check.substantiated == 0
     assert check.contradicted == 0
+
+
+# ---------------------------------------------------------------------------
+# DUPLICATE-SAMPLE GUARD (PLAN-0116 W5). A value tool re-invoked in one turn
+# yields TWO byte-identical grounding_samples; a naive scan inflates each
+# single-period field into a phantom 2-value SET, which the W1.3 set rule then
+# uses to SUPPRESS a genuine contradiction. De-duplicating identical field maps
+# restores the single-valued field so a fabrication is correctly contradicted.
+# Regression for the da_msft case (claimed net_income $22.0B / EPS $2.95 vs
+# sampled $31.778B / $4.27 — escaped as unmatched before the guard).
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_identical_samples_do_not_suppress_contradiction() -> None:
+    """Two identical single-period samples contradict a fabricated figure (not unmatched).
+
+    The SAME tool is recorded twice with a byte-identical sample (a re-fetch).
+    Without de-dup, ``eps`` would hold ``[4.27, 4.27]`` → a 2-value "set" → the
+    multi-period rule marks a wrong EPS claim ``unmatched``. With de-dup it is a
+    single authoritative value and the wrong claim is ``contradicted``.
+    """
+    sample = {"ticker": "MSFT", "eps": "4.27", "net_income": "31778000000"}
+    results = [
+        _tool_result_with_sample("get_fundamentals_history", dict(sample)),
+        _tool_result_with_sample("get_fundamentals_history", dict(sample)),
+    ]
+    check = evaluate_substantiation("MSFT reported EPS of $2.95.", results)
+    assert check.coverage == "verified"
+    assert check.contradicted == 1
+    assert check.substantiated == 0
+    assert check.unmatched == 0
+    # And the shared pipeline (W1.1): the veto agrees on the contradiction count.
+    assert cross_check_grounding("MSFT reported EPS of $2.95.", results).contradicted == 1
+
+
+def test_genuine_multiperiod_suffix_keys_are_not_deduped() -> None:
+    """A real trend (one sample, suffixed keys) stays a multi-value set after de-dup.
+
+    The de-dup collapses byte-identical SAMPLES, never suffixed keys WITHIN one
+    sample. A single sample carrying ``revenue``/``revenue_2`` remains a 2-value
+    SET, so a claim matching the EARLIER period substantiates and a non-matching
+    period is ``unmatched`` (never contradicted) — the W1.3 behaviour is intact.
+    """
+    results = [
+        _tool_result_with_sample(
+            "get_fundamentals_history",
+            {"ticker": "MSFT", "revenue": "82886000000", "revenue_2": "81273000000"},
+        )
+    ]
+    # Claim matches the SECOND (earlier) sampled period → substantiated, not
+    # contradicted against the latest value.
+    check = evaluate_substantiation("Revenue was $81.3B.", results)
+    assert check.coverage == "verified"
+    assert check.substantiated == 1
+    assert check.contradicted == 0
     assert check.unmatched == 0

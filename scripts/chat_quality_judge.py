@@ -1725,22 +1725,64 @@ def _field_value_matches(field_name: str, claim: float, sample: float) -> bool:
     return False
 
 
+def _iter_unique_grounding_field_maps(
+    tool_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Yield the DE-DUPLICATED ``grounding_sample.fields`` maps (PLAN-0116 W5).
+
+    DUPLICATE-SAMPLE GUARD. The agent occasionally invokes the SAME value tool
+    twice in one turn (a retry / a re-fetch), and the harness records BOTH
+    tool_results — each carrying a BYTE-IDENTICAL ``grounding_sample``. A naive
+    per-result scan then appends every field's value TWICE, turning a genuine
+    single-period field (``net_income = 31.778B``) into a phantom 2-value "set".
+    The W1.3 multi-period SET rule reads any field with >=2 values as an
+    incomplete period subset and SUPPRESSES contradictions on it — so a
+    FABRICATED figure the single real sample DISPROVES (da_msft: claimed
+    net_income $22.0B vs sampled $31.778B) escapes as ``unmatched`` instead of
+    ``contradicted``. De-duplicating identical field maps removes the phantom
+    multiplicity so a real single-period field stays single-valued and a
+    fabrication is correctly contradicted. GENUINE multi-period data is
+    unaffected: those come as ONE sample with suffixed keys (``revenue``,
+    ``revenue_2``) — a single map, never a duplicate.
+
+    Returns the list of unique ``fields`` dicts in first-seen order. Two maps are
+    "the same" iff their (key,value) content is equal (order-insensitive).
+    """
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for tr in tool_results or []:
+        sample = tr.get("grounding_sample")
+        if not isinstance(sample, dict):
+            continue
+        raw_fields = sample.get("fields")
+        if not isinstance(raw_fields, dict) or not raw_fields:
+            continue
+        # Canonical key for de-dup: sorted (k, str(v)) pairs so two byte-identical
+        # samples collapse regardless of dict ordering.
+        try:
+            key = json.dumps({str(k): str(v) for k, v in raw_fields.items()}, sort_keys=True)
+        except (TypeError, ValueError):
+            key = repr(sorted((str(k), str(v)) for k, v in raw_fields.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw_fields)
+    return out
+
+
 def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict[str, list[float]]:
     """Gather ``{field: [sampled_float, ...]}`` from every captured grounding_sample.
 
     Reads the W2 ``grounding_sample.fields`` map off each tool_result entry. A
     field may appear in several tool results / sampled rows, so we keep a LIST of
     candidate values per field. Non-numeric / unparseable sample values are
-    dropped (they cannot contradict a number).
+    dropped (they cannot contradict a number). Byte-identical duplicate samples
+    (same tool re-invoked in one turn) are collapsed FIRST via
+    :func:`_iter_unique_grounding_field_maps` so a single-period field is not
+    inflated into a phantom multi-value set (PLAN-0116 W5 duplicate-sample guard).
     """
     fields: dict[str, list[float]] = {}
-    for tr in tool_results or []:
-        sample = tr.get("grounding_sample")
-        if not isinstance(sample, dict):
-            continue
-        raw_fields = sample.get("fields")
-        if not isinstance(raw_fields, dict):
-            continue
+    for raw_fields in _iter_unique_grounding_field_maps(tool_results):
         for fname, fval in raw_fields.items():
             num = _sample_value_to_float(fval)
             if num is None:
@@ -2053,13 +2095,7 @@ def _collect_grounding_field_names(tool_results: list[dict[str, Any]] | None) ->
     back to their base field name so a claim associates to the canonical field.
     """
     names: set[str] = set()
-    for tr in tool_results or []:
-        sample = tr.get("grounding_sample")
-        if not isinstance(sample, dict):
-            continue
-        raw_fields = sample.get("fields")
-        if not isinstance(raw_fields, dict):
-            continue
+    for raw_fields in _iter_unique_grounding_field_maps(tool_results):
         for fname in raw_fields:
             # ``build_grounding_sample`` suffixes repeated fields per row
             # (``revenue``, ``revenue_2``). Strip a trailing ``_<digits>`` so the
