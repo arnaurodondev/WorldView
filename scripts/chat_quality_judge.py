@@ -1695,10 +1695,21 @@ def cross_check_grounding(
         suffix = m.group("suffix") or ""
         if _is_yearlike(raw_num, suffix):
             continue
+        span = m.span()
+        # Structural-number guard (2026-06-26 FIX 3): mirror the same guard
+        # already applied in ``evaluate_substantiation`` (:~1851) so a bare
+        # period label / enumeration / count (e.g. the ``4`` in "last 4 quarters",
+        # the row index in "row 0", "Q4") is never mis-associated to the nearest
+        # sampled metric and false-flagged as a CONTRADICTION. Without this, the
+        # in-run grounding veto over-fires on structural integers and confounds the
+        # answer-judge (the 81.6→69.5 regression). The guard keys on FORMAT +
+        # CONTEXT, never magnitude alone, so real claims (EPS 1.87, 58.6%, 0.586)
+        # are kept. Applied to BOTH matchers from one source (feedback_prompt_input_mismatch).
+        if _is_structural_number(cleaned, span, raw_num, suffix):
+            continue
         claim_val = _coerce_number(raw_num, suffix)
         if claim_val is None:
             continue
-        span = m.span()
 
         # Which SINGLE sampled field does the prose associate with this number?
         field_name = _nearest_field(cleaned_lower, span, field_names)
