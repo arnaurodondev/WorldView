@@ -922,6 +922,46 @@ class TestPhantomToolCitations:
         assert find_phantom_tool_citations(answer, []) == {"query_fundamentals"}
 
 
+class TestOutOfRangeToolCitations:
+    """2026-06-26 #3: [tool row N] whose N is past the tool's returned row count.
+
+    Catches the fabricated-rows shape where a REAL tool is cited at a row index
+    it never returned (iter3_top5_tech_marketcap: screen_universe returned 1 row,
+    the answer cites rows 0-4).
+    """
+
+    def test_row_index_past_count_is_flagged(self) -> None:
+        from rag_chat.application.services.numeric_grounding import find_out_of_range_tool_citations
+
+        # screen_universe returned 1 row → only row 0 is valid; rows 1-4 are OOR.
+        answer = (
+            "Top 5: AAPL [screen_universe row 0], MSFT [screen_universe row 1], "
+            "NVDA [screen_universe row 2], GOOG [screen_universe row 3], AMZN [screen_universe row 4]."
+        )
+        oor = find_out_of_range_tool_citations(answer, {"screen_universe": 1})
+        assert oor == {
+            "[screen_universe row 1]",
+            "[screen_universe row 2]",
+            "[screen_universe row 3]",
+            "[screen_universe row 4]",
+        }
+
+    def test_in_range_rows_not_flagged(self) -> None:
+        from rag_chat.application.services.numeric_grounding import find_out_of_range_tool_citations
+
+        # 3 rows returned → indices 0,1,2 are all valid.
+        answer = "[get_fundamentals_history row 0] [get_fundamentals_history row 2]"
+        assert find_out_of_range_tool_citations(answer, {"get_fundamentals_history": 3}) == set()
+
+    def test_tool_absent_from_counts_is_left_to_phantom_guard(self) -> None:
+        from rag_chat.application.services.numeric_grounding import find_out_of_range_tool_citations
+
+        # A tool NOT in the counts map is the never-called (phantom) case — this
+        # guard ignores it so the two guards do not double-handle the same tag.
+        answer = "Revenue [query_macro row 9]."
+        assert find_out_of_range_tool_citations(answer, {"screen_universe": 1}) == set()
+
+
 class TestEmptyPoolHelpers:
     def test_response_has_numeric_claims(self) -> None:
         from rag_chat.application.services.numeric_grounding import response_has_numeric_claims

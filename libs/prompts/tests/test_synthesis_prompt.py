@@ -59,6 +59,6 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    assert ident.startswith("chat_synthesis_system@1.0#")
+    assert ident.startswith("chat_synthesis_system@1.1#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12

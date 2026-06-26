@@ -1961,6 +1961,12 @@ class ChatOrchestratorUseCase:
         # chunks. Kept as a flat list (not a set) so the order matches the
         # call order; the helper deduplicates while preserving order.
         _executed_tool_names: list[str] = []
+        # 2026-06-26 #3: per-tool MAX returned-row count across the turn. Used by
+        # the pre-send out-of-range citation guard to strip ``[tool row N]`` tags
+        # whose N is past what the tool actually returned (the fabricated-rows
+        # signal). We keep the MAX across iterations so a tool called twice keeps
+        # the larger valid range. Keyed by lower-cased tool name.
+        _tool_row_counts: dict[str, int] = {}
         # FIX-LIVE-Y: skip-final-stream flag (declared at function scope so
         # the late ``if had_tool_calls and not _skip_final_stream`` guard sees
         # it whether or not the inner branch ran). See FIX-LIVE-Y comments
@@ -2534,6 +2540,12 @@ class ChatOrchestratorUseCase:
                 # the second-turn synthesis fallback can name the data sources
                 # that produced results when the LLM summary call fails.
                 _executed_tool_names.append(tc.name)
+                # 2026-06-26 #3: record the MAX rows this tool returned this turn
+                # so the pre-send out-of-range citation guard knows the valid row
+                # range. ``_count`` is the flattened item count for this call.
+                _tn = tc.name.lower()
+                if _count > _tool_row_counts.get(_tn, 0):
+                    _tool_row_counts[_tn] = _count
                 # 2026-06-26 #1/#7: per-query empty-search bookkeeping. Only
                 # ``search_documents`` is tracked — it is the free-text routing
                 # sink. We key on the normalised query so a re-issued or lightly
@@ -3697,6 +3709,32 @@ class ChatOrchestratorUseCase:
         # fallback or every marker resolves against the wrong list.
         prompt_items = reranked or non_none_items
         answer, citations = p.process_output(full_text, prompt_items)
+
+        # ── 2026-06-26 #3: strip out-of-range [tool row N] citations ───────────
+        # The LLM sometimes cites a REAL tool but a row index past what the tool
+        # returned (e.g. screen_universe returned 1 row but the answer cites
+        # ``[screen_universe row 4]`` for fabricated entries). Those tags are a
+        # fabrication signal; strip them from the answer before send so the user
+        # never sees a citation pointing at a non-existent row. ``find_phantom_
+        # tool_citations`` (in the grounding pass) already handles NEVER-CALLED
+        # tools; this complements it with the row-count bound for tools that DID
+        # run. We strip the tag text only — the surrounding claim is left in
+        # place (the grounding validators above already vetted its numbers).
+        if _tool_row_counts:
+            from rag_chat.application.services.numeric_grounding import (
+                find_out_of_range_tool_citations,
+            )
+
+            _oor_tags = find_out_of_range_tool_citations(answer, _tool_row_counts)
+            if _oor_tags:
+                log.warning(  # type: ignore[no-any-return]
+                    "out_of_range_tool_citation_stripped",
+                    count=len(_oor_tags),
+                    tags=sorted(_oor_tags)[:10],
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+                for _tag in _oor_tags:
+                    answer = answer.replace(_tag, "")
 
         # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
         # point past the retrieved-item count. The LLM occasionally emits

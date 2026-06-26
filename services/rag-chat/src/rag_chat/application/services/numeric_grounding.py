@@ -716,6 +716,44 @@ def find_phantom_tool_citations(
     return cited - called
 
 
+# Like _TOOL_ROW_CITATION_RE but captures the row INDEX too, so the
+# out-of-range check below can compare it against the tool's returned row count.
+_TOOL_ROW_CITATION_WITH_INDEX_RE = re.compile(
+    r"\[\s*(?P<tool>[a-z_][a-z0-9_]*)\s+row\s+(?P<row>\d+)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def find_out_of_range_tool_citations(
+    response: str,
+    tool_row_counts: Mapping[str, int],
+) -> set[str]:
+    """Return ``[name row N]`` tags whose row index is past what the tool returned.
+
+    2026-06-26 failure-analysis #3 (fabrication beyond results): the LLM cites a
+    real tool but a row index that does not exist (e.g. ``screen_universe`` returned
+    1 row but the answer cites ``[screen_universe row 4]`` for fabricated entries).
+    A ``[name row N]`` is out-of-range when ``N >= tool_row_counts[name]`` — rows are
+    0-indexed (the prompt example is ``row 0``), so a tool that returned ``k`` rows
+    has valid indices ``0..k-1``.
+
+    Only tools PRESENT in ``tool_row_counts`` are checked: a tool absent from the
+    map is left to :func:`find_phantom_tool_citations` (never-called) so the two
+    guards do not double-handle the same tag. The returned set holds the exact
+    matched citation substrings so the caller can strip/flag them verbatim.
+    """
+    counts = {str(t).strip().lower(): int(n) for t, n in tool_row_counts.items()}
+    out: set[str] = set()
+    for m in _TOOL_ROW_CITATION_WITH_INDEX_RE.finditer(response):
+        tool = m.group("tool").lower()
+        if tool not in counts:
+            continue
+        row = int(m.group("row"))
+        if row >= counts[tool]:
+            out.add(m.group(0))
+    return out
+
+
 def flatten_tool_values_count(tool_results: Iterable[Any]) -> int:
     """Return the number of structured numeric values flattened from *tool_results*.
 

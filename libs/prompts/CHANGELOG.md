@@ -242,3 +242,20 @@ is unchanged.
 - Per-dimension JSON output key `reason` → `feedback`.
 - Top-level `notes` → `reviewer_summary` (≤800-char PR-review paragraph).
 - FRAMING dimension rewritten LENGTH-AGNOSTIC (short factual answers score 25).
+
+## chat_synthesis_system
+
+### 1.1 — 2026-06-26 (platform quality failure-analysis #3 — anti-fabrication)
+
+- Added the **GROUND EVERY ROW** block to the synthesis-turn prompt. The 2026-06-26
+  chat-quality run found fabrication beyond tool results: a tool returns 1 row, the
+  answer asserts N (`iter3_top5_tech_marketcap`, `agg_q5_tsla_macro`,
+  `iter3_msft_earnings_citations`), inventing plausible rows with `[tool row N]`
+  citations that do not exist in the trace.
+- v1.1 hard-constrains the answer to EXACTLY the rows/values the tools returned,
+  forbids emitting a `[tool_name row N]` citation for a row index a tool did not
+  return, and requires an explicit shortfall statement when fewer items came back
+  than the question asked for.
+- Companion product guard: `chat_orchestrator` strips/flags citation row-indices
+  not present in the returned trace before the answer is sent.
+- The `{safety}` parameter and FORBIDDEN narration block are **unchanged**.

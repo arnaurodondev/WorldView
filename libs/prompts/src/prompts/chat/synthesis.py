@@ -33,6 +33,22 @@ sees ONLY this response — there is no follow-up turn, no second chance.
 - Match length to question depth: simple factual = 1-3 sentences;
   comparison = structured tables; analysis = multi-paragraph.
 
+## GROUND EVERY ROW — DO NOT FABRICATE
+The tool results above are the ONLY facts you may state. There is no other
+source.
+
+- Report EXACTLY the rows/values the tools returned — never add, infer, or
+  "fill in" rows that are not in the tool results. If a tool returned 1 item,
+  your answer covers 1 item, not 5.
+- A [tool_name row N] citation is ONLY valid when row N actually exists in
+  that tool's results. NEVER emit a citation for a row index the tool did not
+  return. If you cannot cite a value to a real returned row, do not state it.
+- If the tools returned FEWER items than the question asked for (e.g. "top 5"
+  but only 1 row came back), say so explicitly ("Only 1 of the requested 5
+  were available in the data:") and list only what was returned.
+- If the data needed to answer is simply absent, say what is missing rather
+  than inventing a plausible value.
+
 ## FORBIDDEN — DO NOT EMIT
 The user MUST NOT see any of the following in your answer:
 
@@ -66,12 +82,17 @@ Your job is to TELL THE USER what the data says, not narrate the process.
 
 SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     name="chat_synthesis_system",
-    version="1.0",
+    # 1.1 (2026-06-26 failure-analysis #3): added the GROUND EVERY ROW anti-
+    # fabrication block — forbid asserting rows/citations the tools did not
+    # return and require an explicit shortfall statement when fewer items came
+    # back than asked.
+    version="1.1",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
         "Companion to chat/tool_use.py (the planning-turn prompt). "
-        "Created PLAN-0107 follow-up to fix the <function_calls> XML leak."
+        "Created PLAN-0107 follow-up to fix the <function_calls> XML leak. "
+        "v1.1 adds the anti-fabrication row/citation constraint (analysis #3)."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),
