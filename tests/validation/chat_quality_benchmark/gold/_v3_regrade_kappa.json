@@ -1,0 +1,369 @@
+{
+  "judge": "current-v3-gated (chat_quality_judge.judge_answer)",
+  "judge_model": "deepseek-ai/DeepSeek-V4-Flash",
+  "n_compared": 39,
+  "n_skipped_unlabelled": 0,
+  "cohens_kappa": 0.7471,
+  "raw_agreement": 0.8718,
+  "confusion_matrix": {
+    "human_PASS_machine_PASS": 18,
+    "human_PASS_machine_FAIL": 0,
+    "human_FAIL_machine_PASS": 5,
+    "human_FAIL_machine_FAIL": 16
+  },
+  "false_pass_on_fabrication": 0,
+  "rows": [
+    {
+      "id": "gold_fabrication_01",
+      "stratum": "fabrication",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_02",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_03",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_04",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_05",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_06",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_07",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_08",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_fabrication_09",
+      "stratum": "fabrication",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_leak_01",
+      "stratum": "leak",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_leak_02",
+      "stratum": "leak",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_leak_03",
+      "stratum": "leak",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_leak_04",
+      "stratum": "leak",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_leak_05",
+      "stratum": "leak",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_infra_01",
+      "stratum": "infra",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": false
+    },
+    {
+      "id": "gold_infra_02",
+      "stratum": "infra",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": false
+    },
+    {
+      "id": "gold_infra_03",
+      "stratum": "infra",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_infra_04",
+      "stratum": "infra",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_good_01",
+      "stratum": "good",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": false
+    },
+    {
+      "id": "gold_good_02",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_03",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_04",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_05",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_06",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_07",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_08",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_09",
+      "stratum": "good",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": false
+    },
+    {
+      "id": "gold_good_10",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_11",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_12",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_good_13",
+      "stratum": "good",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_01",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_02",
+      "stratum": "refusal",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": false
+    },
+    {
+      "id": "gold_refusal_03",
+      "stratum": "refusal",
+      "human_verdict": "FAIL",
+      "machine_verdict_raw": "FAIL",
+      "machine_verdict": "FAIL",
+      "machine_score": 0,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_04",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_05",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_06",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_07",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    },
+    {
+      "id": "gold_refusal_08",
+      "stratum": "refusal",
+      "human_verdict": "PASS",
+      "machine_verdict_raw": "ERROR",
+      "machine_verdict": "PASS",
+      "machine_score": null,
+      "agree": true
+    }
+  ],
+  "skipped": []
+}
