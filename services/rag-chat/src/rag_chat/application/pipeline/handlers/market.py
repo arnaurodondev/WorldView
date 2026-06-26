@@ -258,6 +258,12 @@ def _grounding_fields_from_row(
 # Kept small so the per-row field/byte caps in build_grounding_sample still hold.
 _GROUNDING_MAX_PERIODS = 4
 
+# Screener multi-instrument cap (STEP B, 2026-06-26). A screen answer cites a few
+# top tickers' P/E / cap; we lift the top N rows' values under suffixed keys so
+# those citations substantiate. Kept small so the per-row field/byte caps in
+# build_grounding_sample still hold (each row contributes up to 4 keys).
+_SCREEN_GROUNDING_MAX_ROWS = 3
+
 
 def _grounding_fields_from_rows(
     rows: list[dict[str, Any]],
@@ -1585,6 +1591,10 @@ class MarketHandler(ToolHandler):
             return []
 
         instruments = raw.get("instruments") or raw.get("results") or raw.get("data") or []
+        # Value-substantiation (2026-06-26 STEP B): per-instrument grounding bag,
+        # populated for the top few rows inside the render loop below.
+        screen_grounding: list[tuple[str, str]] = []
+        screen_grounding_rows = 0
         if not instruments:
             text = "No instruments matched the screening criteria."
         else:
@@ -1609,6 +1619,37 @@ class MarketHandler(ToolHandler):
                 ticker = inst.get("ticker") or inst.get("symbol") or "?"
                 name = inst.get("name") or ""
                 row = f"  {ticker}"
+                # Value-substantiation (2026-06-26 STEP B): lift the TOP few rows'
+                # ticker/pe_ratio/market_cap/revenue onto the single screener item
+                # under suffixed keys, so an answer citing a screened ticker's P/E
+                # or cap substantiates. Bounded to _SCREEN_GROUNDING_MAX_ROWS — the
+                # per-row field/byte caps in build_grounding_sample bound it further.
+                if screen_grounding_rows < _SCREEN_GROUNDING_MAX_ROWS and ticker != "?":
+                    suffix = "" if screen_grounding_rows == 0 else f"_{screen_grounding_rows + 1}"
+                    screen_grounding.append((f"ticker{suffix}", str(ticker)))
+                    pe_num = _coerce_grounding_number(
+                        next((inst.get(k) for k in ("pe_ratio", "pe", "trailing_pe") if inst.get(k) is not None), None)
+                    )
+                    if pe_num is not None:
+                        screen_grounding.append((f"pe_ratio{suffix}", pe_num))
+                    cap_num = _coerce_grounding_number(
+                        next(
+                            (
+                                inst.get(k)
+                                for k in ("market_cap", "market_capitalization", "market_cap_usd")
+                                if inst.get(k) is not None
+                            ),
+                            None,
+                        )
+                    )
+                    if cap_num is not None:
+                        screen_grounding.append((f"market_cap{suffix}", cap_num))
+                    rev_num = _coerce_grounding_number(
+                        next((inst.get(k) for k in ("revenue", "revenue_ttm") if inst.get(k) is not None), None)
+                    )
+                    if rev_num is not None:
+                        screen_grounding.append((f"revenue{suffix}", rev_num))
+                    screen_grounding_rows += 1
                 if name:
                     row += f" — {name}"
                 for col_label, row_keys in metric_cols:
@@ -1641,6 +1682,7 @@ class MarketHandler(ToolHandler):
                 text=text[:_TOOL_RESULT_MAX_CHARS],
                 score=0.82,
                 trust_weight=0.80,
+                grounding_fields=tuple(screen_grounding),
                 citation_meta=CitationMeta(
                     title="Screener results",
                     url=None,

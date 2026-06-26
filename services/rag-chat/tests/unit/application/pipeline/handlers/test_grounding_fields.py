@@ -354,6 +354,40 @@ async def test_market_movers_no_data_empty_grounding() -> None:
     assert results[0].grounding_fields == ()
 
 
+# ── _handle_screen_universe (STEP B, 2026-06-26) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_screen_universe_emits_top_rows_suffixed_grounding() -> None:
+    """STEP B: the top few screened instruments' pe_ratio/market_cap land suffixed."""
+    from rag_chat.application.pipeline.handlers.market import _SCREEN_GROUNDING_MAX_ROWS
+
+    s3_brief = AsyncMock()
+    s3_brief.screen_instruments.return_value = {
+        "instruments": [
+            {"ticker": "NVDA", "pe_ratio": 65.0, "market_cap": 4_500_000_000_000, "revenue": 130_000_000_000},
+            {"ticker": "AVGO", "pe_ratio": 48.0, "market_cap": 1_200_000_000_000},
+            {"ticker": "AMD", "pe_ratio": 40.0, "market_cap": 820_000_000_000},
+            {"ticker": "INTC", "pe_ratio": 18.0, "market_cap": 90_000_000_000},
+        ]
+    }
+    handler = _make_handler(AsyncMock(), s3_brief=s3_brief)
+    results = await handler._handle_screen_universe(pe_ratio_max=70.0, limit=10)
+
+    assert len(results) == 1
+    gf = _gf_dict(results[0])
+    # Top instrument → bare keys.
+    assert gf["ticker"] == "NVDA"
+    assert gf["pe_ratio"] == "65"
+    assert gf["market_cap"] == "4500000000000"
+    # Second → ``_2`` suffix.
+    assert gf["ticker_2"] == "AVGO"
+    assert gf["pe_ratio_2"] == "48"
+    # Only the top _SCREEN_GROUNDING_MAX_ROWS rows are lifted (4th absent).
+    assert "ticker_4" not in gf
+    assert _SCREEN_GROUNDING_MAX_ROWS == 3
+
+
 # ── _handle_compare_entities ──────────────────────────────────────────────────
 
 
