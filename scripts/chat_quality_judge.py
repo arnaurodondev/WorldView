@@ -1580,7 +1580,16 @@ def _collect_grounding_fields(tool_results: list[dict[str, Any]] | None) -> dict
             num = _sample_value_to_float(fval)
             if num is None:
                 continue
-            fields.setdefault(str(fname), []).append(num)
+            # FIX 2 (2026-06-26): a multi-row/-period sample suffixes repeated
+            # fields per row (``eps``, ``eps_2``, ``eps_3`` for a trend; ``revenue_2``
+            # for a 2nd compared entity). Normalise the trailing ``_<digits>`` back to
+            # the BASE field name so EVERY period/row value lands in the SAME
+            # candidate list — otherwise a prior-period figure associates to the base
+            # field (``eps``) but only the latest value is in its list, and a correct
+            # earlier-quarter number is false-``contradicted``. Mirrors the suffix
+            # stripping already done in ``_collect_grounding_field_names``.
+            base = re.sub(r"_\d+$", "", str(fname))
+            fields.setdefault(base, []).append(num)
     return fields
 
 
