@@ -262,6 +262,22 @@ is unchanged.
 
 ## chat_synthesis_system
 
+### 1.3 — 2026-06-27 (FINAL-67 C1 — transcribe, don't compute)
+
+- Added the **TRANSCRIBE, DO NOT COMPUTE** block. The dominant FINAL-67
+  grounding-floor failure (8 of 14 FAILs) was the answer LLM altering numbers it
+  already had: rounding $111.184B -> $111.200B
+  (`da_apple_revenue_fy2024q4_precision`), fabricating a 6-quarter trajectory from
+  a single-period snapshot (`ru_nvda_amd_revenue_4q`), and carrying one entity's
+  revenue onto another (`da_nvda_amd_compare_fy2024q3`).
+- v1.3 requires copying every figure digit-for-digit from the tool result,
+  forbids rounding/extrapolating/annualising, forbids inventing a period or
+  series the tool did not return, requires every derived figure's inputs to be
+  present, and requires an explicit "not in the retrieved data" statement instead
+  of a substitute number.
+- The product-side numeric-grounding validator (chat_orchestrator) still backs
+  this prompt rule as defence-in-depth.
+
 ### 1.2 — 2026-06-27 (FINAL-67 C3 — trust-your-tool-results)
 
 - Added the **TRUST YOUR TOOL RESULTS** block to the synthesis-turn prompt. The

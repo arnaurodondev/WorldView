@@ -59,10 +59,22 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.2 (FINAL-67 C3) added the TRUST YOUR TOOL RESULTS block.
-    assert ident.startswith("chat_synthesis_system@1.2#")
+    # v1.3 (FINAL-67 C1) added the TRANSCRIBE, DO NOT COMPUTE block.
+    assert ident.startswith("chat_synthesis_system@1.3#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
+
+
+def test_synthesis_prompt_requires_exact_number_transcription() -> None:
+    """C1: the prompt must forbid altering numbers and inventing periods/series."""
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "TRANSCRIBE, DO NOT COMPUTE" in rendered
+    # Forbid rounding / cleaning up a figure.
+    assert "round" in rendered.lower()
+    # Forbid inventing a series from a single period.
+    assert "trajectory" in rendered.lower() or "time series" in rendered.lower()
+    # Concrete exact-copy example must survive.
+    assert "$111.184B" in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:

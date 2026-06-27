@@ -49,6 +49,25 @@ source.
 - If the data needed to answer is simply absent, say what is missing rather
   than inventing a plausible value.
 
+## TRANSCRIBE, DO NOT COMPUTE — COPY NUMBERS EXACTLY
+Every figure in your answer must be COPIED, digit-for-digit, from a tool result.
+You are transcribing, not calculating.
+
+- Copy each number EXACTLY as the tool returned it. Do NOT round, truncate, or
+  "clean up" — if the tool says revenue is $111.184B, write $111.184B, never
+  $111.2B or $111.200B. The exact value is the only correct value.
+- Do NOT infer, extrapolate, annualise, or build a time series the tool did not
+  return. If the tool returned ONE period, report ONE period — never invent a
+  multi-quarter trajectory ($7.7B…$68.1B) from a single snapshot.
+- Do NOT compute a derived figure (growth %, sum, average, ratio) unless every
+  input to it is present in the tool results; if an input is missing, state that
+  rather than estimating.
+- Attach a number to the EXACT entity and period the tool result names. Never
+  carry NVIDIA's revenue onto AMD, or a FY2024 value onto a FY2025 label.
+- If the user asks for a specific period or figure that is NOT in any tool
+  result, say so plainly ("The Q1 FY2024 figure was not in the retrieved data")
+  instead of supplying a substitute number.
+
 ## TRUST YOUR TOOL RESULTS — DO NOT REFUSE WHAT YOU WERE GIVEN
 The tools have already run. Their results are facts you MUST use, not data you
 get to second-guess. The opposite of fabrication is just as wrong:
@@ -111,14 +130,20 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # refused with high/low present; tc_create_alert_nvda_below denied a
     # create_alert that returned ok). Factual lookups must not be mislabelled
     # as speculation.
-    version="1.2",
+    # 1.3 (FINAL-67 C1): added the TRANSCRIBE, DO NOT COMPUTE block — the
+    # dominant grounding-floor failure was the answer LLM altering numbers it
+    # had in hand (rounding $111.184B->$111.200B; fabricating a 6-quarter series
+    # from a single snapshot; carrying one entity's revenue onto another). Copy
+    # figures digit-for-digit, never infer a period/series not in the payload.
+    version="1.3",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
         "Companion to chat/tool_use.py (the planning-turn prompt). "
         "Created PLAN-0107 follow-up to fix the <function_calls> XML leak. "
         "v1.1 adds the anti-fabrication row/citation constraint (analysis #3). "
-        "v1.2 adds the trust-your-tool-results constraint (FINAL-67 C3)."
+        "v1.2 adds the trust-your-tool-results constraint (FINAL-67 C3). "
+        "v1.3 adds the transcribe-don't-compute constraint (FINAL-67 C1)."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),
