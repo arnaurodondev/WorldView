@@ -153,11 +153,13 @@ descriptions and adding a no-repeat-empty-query guardrail, the trajectory judge 
 the full 67-question benchmark.
 
 #strong[Level 4: judge calibration.] The judge is itself part of the system and must be measured. Against a
-#strong[39]-item failure-mode-stratified human-labelled gold set [9], stored pre-gate verdicts achieved Cohen's
-#strong[κ = 0.59], below the target bar. Re-scoring with the current gated judge raised agreement to
-#strong[κ = 0.80], with raw agreement around 90% and #strong[zero] false-passes on fabrication. The important
-result is not only the κ value, but the asymmetry: fabrication false-passes are treated as the safety-critical
-cell and held to zero.
+#strong[39]-item human-labelled gold set [9] #emph[deliberately stratified by failure mode] — concentrated on
+the hardest, most ambiguous cases, which makes the agreement figure conservative — stored pre-gate verdicts
+achieved Cohen's #strong[κ = 0.59], below the target bar. Re-scoring with the current gated judge raised
+agreement to #strong[κ = 0.80] (raw agreement ≈ 90%) with #strong[zero] false-passes on fabrication. The
+important result is not only the κ value but the asymmetry: fabrication false-passes are the safety-critical
+cell, held to zero — and #emph[run-stable], because the gates that protect that cell are deterministic rather
+than LLM-scored.
 
 We also maintain an emerging #emph[reasoning-validity] layer that labels whether evidence-to-claim inferences
 are supported, unsupported, or contradicted. We do not present it as a validated standalone benchmark yet,
