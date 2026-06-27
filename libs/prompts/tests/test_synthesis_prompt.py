@@ -59,6 +59,19 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    assert ident.startswith("chat_synthesis_system@1.1#")
+    # v1.2 (FINAL-67 C3) added the TRUST YOUR TOOL RESULTS block.
+    assert ident.startswith("chat_synthesis_system@1.2#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
+
+
+def test_synthesis_prompt_forbids_refusing_present_data() -> None:
+    """C3: the prompt must instruct the model to TRUST non-empty/successful tool
+    results and not refuse / deny capability when the data or success is present.
+    """
+    rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+    assert "TRUST YOUR TOOL RESULTS" in rendered
+    # The two concrete failure modes must be addressed in the text.
+    assert "unavailable" in rendered  # forbid false "value unavailable"
+    assert "create_alert" in rendered  # forbid denying a completed action
+    assert "factual lookup" in rendered.lower() or "factual question" in rendered.lower()

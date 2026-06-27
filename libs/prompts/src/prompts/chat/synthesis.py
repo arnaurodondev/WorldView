@@ -49,6 +49,25 @@ source.
 - If the data needed to answer is simply absent, say what is missing rather
   than inventing a plausible value.
 
+## TRUST YOUR TOOL RESULTS — DO NOT REFUSE WHAT YOU WERE GIVEN
+The tools have already run. Their results are facts you MUST use, not data you
+get to second-guess. The opposite of fabrication is just as wrong:
+
+- If a tool result contains the field the user asked for, you MUST report that
+  value. NEVER say a value is "unavailable", "not included", or "not in the
+  data" when it is plainly present in a tool result above. Read every field of
+  the result before deciding something is missing — e.g. if the user asks for a
+  high/low and a row carries ``high`` and ``low`` fields, answer with them.
+- If a tool that PERFORMS AN ACTION (e.g. create_alert, place_order) returned a
+  success/ok status, the action SUCCEEDED. Confirm it plainly ("Done — I've set
+  the alert ..."). NEVER claim you "can't" do it, that it is "not permitted", or
+  invent a policy restriction after the tool already completed it.
+- Reporting a price level, a high/low, or a past value is a factual lookup, NOT
+  a prediction or speculation. Do not refuse a factual question by mislabelling
+  it as forecasting.
+- Only state that something cannot be answered when NO tool result above
+  contains the needed value or success — and then say exactly what is missing.
+
 ## FORBIDDEN — DO NOT EMIT
 The user MUST NOT see any of the following in your answer:
 
@@ -86,13 +105,20 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # fabrication block — forbid asserting rows/citations the tools did not
     # return and require an explicit shortfall statement when fewer items came
     # back than asked.
-    version="1.1",
+    # 1.2 (FINAL-67 C3): added the TRUST YOUR TOOL RESULTS block — forbid the
+    # INVERSE failure where the model refuses / denies capability despite a
+    # successful or non-empty tool result (tc_price_history_msft_ytd_range
+    # refused with high/low present; tc_create_alert_nvda_below denied a
+    # create_alert that returned ok). Factual lookups must not be mislabelled
+    # as speculation.
+    version="1.2",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
         "Companion to chat/tool_use.py (the planning-turn prompt). "
         "Created PLAN-0107 follow-up to fix the <function_calls> XML leak. "
-        "v1.1 adds the anti-fabrication row/citation constraint (analysis #3)."
+        "v1.1 adds the anti-fabrication row/citation constraint (analysis #3). "
+        "v1.2 adds the trust-your-tool-results constraint (FINAL-67 C3)."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

@@ -245,6 +245,22 @@ is unchanged.
 
 ## chat_synthesis_system
 
+### 1.2 — 2026-06-27 (FINAL-67 C3 — trust-your-tool-results)
+
+- Added the **TRUST YOUR TOOL RESULTS** block to the synthesis-turn prompt. The
+  FINAL-67 run found the INVERSE of fabrication: the answer LLM refused or denied
+  capability despite a successful / non-empty tool result.
+  `tc_price_history_msft_ytd_range` refused ("data does not contain the daily
+  high or low") when the tool row carried `high=489.7, low=356.28`;
+  `tc_create_alert_nvda_below` denied it could set price alerts ("not permitted")
+  after `create_alert` returned `status: ok`.
+- v1.2 forbids claiming a value is "unavailable/not included" when it is present
+  in a tool result, requires confirming an action when its tool returned success,
+  and instructs that a price/high-low/past-value lookup is factual — NOT
+  speculation to be refused.
+- The `{safety}` parameter, FORBIDDEN narration block, and GROUND EVERY ROW
+  anti-fabrication block are **unchanged**.
+
 ### 1.1 — 2026-06-26 (platform quality failure-analysis #3 — anti-fabrication)
 
 - Added the **GROUND EVERY ROW** block to the synthesis-turn prompt. The 2026-06-26
