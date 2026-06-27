@@ -1,0 +1,591 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_graph"
+    ]
+  },
+  "heuristics": {
+    "char_count": 363,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_graph"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 20.388,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 91,
+    "phase_timings_ms": {
+      "check_cache": 5.347416008589789,
+      "entity_resolution": 161.90383298089728,
+      "grounding_validation": 3.435000020544976,
+      "llm_direct_text_generation": 7329.800378996879,
+      "llm_tool_planning": 18287.77263397933,
+      "load_history": 33.931333979126066,
+      "persist_and_cache": 20.01274999929592,
+      "tool_execution": 319.2469160130713,
+      "validate_input": 570.3141260019038
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "depth",
+          "entity_name"
+        ],
+        "tool": "get_entity_graph"
+      },
+      {
+        "arguments_keys": [
+          "depth",
+          "entity_name"
+        ],
+        "tool": "get_entity_graph"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_graph"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      }
+    ],
+    "ttft_s": 0.656,
+    "word_count": 52
+  },
+  "id": "tc_entity_graph_tesla_neighbors",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a list of connected entities; answer provides a concise table with two entries, appropriate depth for a factual lookup.",
+        "reason": "Question asks for a list of connected entities; answer provides a concise table with two entries, appropriate depth for a factual lookup.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims (NasdaqGS, Cathie Wood) are traceable to tool_results; no grounding sample provided but no scope/coverage violation.",
+        "reason": "Claims (NasdaqGS, Cathie Wood) are traceable to tool_results; no grounding sample provided but no scope/coverage violation.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_graph, which is in the expected_tools equivalence set.",
+        "reason": "Called get_entity_graph, which is in the expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_entity_graph, returned a clean table of two direct neighbours (NasdaqGS, Cathie Wood) with implied relationship labels, and cited the tool call. The answer is well-calibrated to the question's depth. One improvement: the answer could note that the graph returned only two neighbours at depth=1, so the list is exhaustive at that depth \u2014 this would preempt any user assumption that the list is incomplete. Otherwise solid.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_graph, which is in the expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Claims (NasdaqGS, Cathie Wood) are traceable to tool_results; no grounding sample provided but no scope/coverage violation.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a list of connected entities; answer provides a concise table with two entries, appropriate depth for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_entity_graph, returned a clean table of two direct neighbours (NasdaqGS, Cathie Wood) with implied relationship labels, and cited the tool call. The answer is well-calibrated to the question's depth. One improvement: the answer could note that the graph returned only two neighbours at depth=1, so the list is exhaustive at that depth \u2014 this would preempt any user assumption that the list is incomplete. Otherwise solid.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_entity_graph, returned a clean table of two direct neighbours (NasdaqGS, Cathie Wood) with implied relationship labels, and cited the tool call. The answer is well-calibrated to the question's depth. One improvement: the answer could note that the graph returned only two neighbours at depth=1, so the list is exhaustive at that depth \u2014 this would preempt any user assumption that the list is incomplete. Otherwise solid.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What entities is Tesla directly connected to in your knowledge graph?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Tesla\u202fInc. is directly linked in the knowledge graph to the following entities:\n\n| Connected Entity | Relationship (implied) |\n|------------------|------------------------|\n| NasdaqGS (exchange) | Listed on NasdaqGS |\n| Cathie Wood (person) | Notable association (e.g., investment interest) |\n\nThese connections are shown in the graph data returned for Tesla\u202f[1].",
+    "citations": [
+      {
+        "confidence": 0.85,
+        "entity_name": "Tesla",
+        "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+        "item_type": "relation",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "knowledge_graph",
+        "title": "Knowledge graph: Tesla",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        656011
+      ],
+      [
+        "status",
+        679449
+      ],
+      [
+        "thinking",
+        845014
+      ],
+      [
+        "agent_iteration",
+        845197
+      ],
+      [
+        "status",
+        4842139
+      ],
+      [
+        "tool_call",
+        4842621
+      ],
+      [
+        "tool_result",
+        5160395
+      ],
+      [
+        "agent_iteration",
+        5721191
+      ],
+      [
+        "tool_call",
+        12693698
+      ],
+      [
+        "tool_result",
+        12693943
+      ],
+      [
+        "agent_iteration",
+        13018349
+      ],
+      [
+        "token",
+        20348256
+      ],
+      [
+        "token",
+        20348398
+      ],
+      [
+        "token",
+        20348605
+      ],
+      [
+        "token",
+        20348744
+      ],
+      [
+        "token",
+        20348948
+      ],
+      [
+        "token",
+        20349030
+      ],
+      [
+        "token",
+        20355990
+      ],
+      [
+        "status",
+        20356165
+      ],
+      [
+        "final_answer",
+        20356322
+      ],
+      [
+        "citations",
+        20356436
+      ],
+      [
+        "contradictions",
+        20358984
+      ],
+      [
+        "suggestions",
+        20359077
+      ],
+      [
+        "metadata",
+        20377659
+      ],
+      [
+        "done",
+        20377835
+      ]
+    ],
+    "latency_s": 20.388,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 20294,
+      "message_id": "019f074e-b3bd-75ef-b8be-116c039e5942",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "0fd692ea-4d7c-47e1-baef-94fc99ddb12b"
+    },
+    "output_tokens": 91,
+    "phase_timings_ms": {
+      "check_cache": 5.347416008589789,
+      "entity_resolution": 161.90383298089728,
+      "grounding_validation": 3.435000020544976,
+      "llm_direct_text_generation": 7329.800378996879,
+      "llm_tool_planning": 18287.77263397933,
+      "load_history": 33.931333979126066,
+      "persist_and_cache": 20.01274999929592,
+      "tool_execution": 319.2469160130713,
+      "validate_input": 570.3141260019038
+    },
+    "question": "What entities is Tesla directly connected to in your knowledge graph?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_graph\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 1,
+            "entity_name": "Tesla"
+          },
+          "label": "Building entity map for Tesla",
+          "status": "running",
+          "tool": "get_entity_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 318,
+          "item_count": 1,
+          "label": "Building entity map for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+              "title": "Knowledge graph: Tesla"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4876,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 1,
+            "entity_name": "Tesla"
+          },
+          "label": "Building entity map for Tesla",
+          "status": "running",
+          "tool": "get_entity_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "Building entity map for Tesla",
+          "result_preview": [
+            {
+              "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+              "title": "Knowledge graph: Tesla"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12174,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Tesla\u202fInc. is directly linked in the knowledge "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "graph to the following entities:\n\n| Connected Entity "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Relationship (implied) |\n|------------------|------------------------|\n| NasdaqGS (exchange) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Listed on NasdaqGS |\n| Cathie Wood "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(person) | Notable association (e.g., investment interest) |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "These connections are shown in the graph data "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "returned for Tesla\u202f[1]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Tesla\u202fInc. is directly linked in the knowledge graph to the following entities:\n\n| Connected Entity | Relationship (implied) |\n|------------------|------------------------|\n| NasdaqGS (exchange) | Listed on NasdaqGS |\n| Cathie Wood (person) | Notable association (e.g., investment interest) |\n\nThese connections are shown in the graph data returned for Tesla\u202f[1]."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.85,
+            "entity_name": "Tesla",
+            "id": "tool:graph:01900000-0000-7000-8000-000000001004",
+            "item_type": "relation",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "knowledge_graph",
+            "title": "Knowledge graph: Tesla",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 20294,
+          "message_id": "019f074e-b3bd-75ef-b8be-116c039e5942",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "0fd692ea-4d7c-47e1-baef-94fc99ddb12b"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.347416008589789,
+            "entity_resolution": 161.90383298089728,
+            "grounding_validation": 3.435000020544976,
+            "llm_direct_text_generation": 7329.800378996879,
+            "llm_tool_planning": 18287.77263397933,
+            "load_history": 33.931333979126066,
+            "persist_and_cache": 20.01274999929592,
+            "tool_execution": 319.2469160130713,
+            "validate_input": 570.3141260019038
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "depth": 1,
+          "entity_name": "Tesla"
+        },
+        "name": "get_entity_graph"
+      },
+      {
+        "arguments": {
+          "depth": 1,
+          "entity_name": "Tesla"
+        },
+        "name": "get_entity_graph"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      }
+    ],
+    "tps": 4.612,
+    "tps_streaming": 12.415,
+    "ttft_s": 0.656
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_graph"
+    ],
+    "forbidden_facts": [
+      "fabricated_relationships_no_tool_call"
+    ],
+    "required_facts": [
+      "tesla_identified",
+      "neighbour_list",
+      "relation_types_present"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_graph"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 1,
+    "reviewer_summary": "The agent correctly selected get_entity_graph for the knowledge-graph neighbour question and made no ordering or recovery errors. However, it wasted a call by repeating the identical get_entity_graph(Tesla, depth=1) a second time, which returned the same data. The single most impactful process change: remove the duplicate call \u2014 one invocation is enough to answer the question.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1 and call 2 are identical (same tool, same args, same result). call 2 is pure redundancy \u2014 it adds zero new information. One call would have sufficed.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Only one unique call; no dependency ordering to evaluate. Single-call trajectory is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from. Full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_entity_graph, exactly the right tool for a knowledge-graph neighbour query. Perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

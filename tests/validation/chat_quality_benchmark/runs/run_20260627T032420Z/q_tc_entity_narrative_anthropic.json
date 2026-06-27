@@ -1,0 +1,543 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_entity_narrative",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 738,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_narrative"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "get_entity_narrative"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 13.898,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_intelligence"
+    ],
+    "output_tokens": 185,
+    "phase_timings_ms": {
+      "check_cache": 6.158415984828025,
+      "entity_resolution": 176.01250001462176,
+      "grounding_validation": 5771.017002000008,
+      "llm_direct_text_generation": 2412.115001003258,
+      "llm_tool_planning": 6501.615712011699,
+      "load_history": 85.76229200116359,
+      "persist_and_cache": 59.3223339819815,
+      "tool_execution": 100.00466599012725,
+      "validate_input": 758.0665840068832
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_narrative"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_narrative"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_narrative"
+      }
+    ],
+    "ttft_s": 0.882,
+    "word_count": 106
+  },
+  "id": "tc_entity_narrative_anthropic",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "reason": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "reason": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "reason": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "reason": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+    "raw_response": null,
+    "reviewer_summary": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+    "score": 0,
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "PHANTOM_CITATION",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": false,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "detail": "PHANTOM CITATION: the answer cites tool 'unverified' ([unverified row N]) but that tool was NEVER called this turn \u2014 the provenance tag is invented. Fabrication \u2192 hard FAIL.",
+      "phantom_tool": "unverified",
+      "reason": "phantom_citation:unverified",
+      "type": "phantom_citation"
+    }
+  },
+  "prompt": "Give me the narrative profile for Anthropic.",
+  "reasons": [],
+  "result": {
+    "answer_text": "AnthropicAI is a research organization focused on developing and applying artificial general intelligence (AGI) to address complex problems in science, technology, and society. Founded in 2021\u202f[unverified] by Dario\u202fAmodei, the organization is headquartered in San\u202fFrancisco, California, and has received significant funding from investors such as Sam\u202fBankman\u2011Fried and the FTX Foundation. AnthropicAI\u2019s research aims to create AGI systems that are aligned with human values and can assist in solving pressing global challenges. The organization\u2019s work is centered around developing and testing AGI models, as well as exploring the societal implications of AGI development. [1]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.92,
+        "entity_name": "Anthropic",
+        "id": "tool:narrative:0195daad-d001-7000-8000-000000000002",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "narrative",
+        "title": "Narrative: Anthropic",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        881961
+      ],
+      [
+        "status",
+        929015
+      ],
+      [
+        "thinking",
+        1107691
+      ],
+      [
+        "agent_iteration",
+        1107767
+      ],
+      [
+        "status",
+        5199061
+      ],
+      [
+        "tool_call",
+        5199749
+      ],
+      [
+        "tool_result",
+        5298791
+      ],
+      [
+        "agent_iteration",
+        5542053
+      ],
+      [
+        "token",
+        7969199
+      ],
+      [
+        "token",
+        7972692
+      ],
+      [
+        "token",
+        7972719
+      ],
+      [
+        "token",
+        7972783
+      ],
+      [
+        "token",
+        7972870
+      ],
+      [
+        "token",
+        7972918
+      ],
+      [
+        "token",
+        7972931
+      ],
+      [
+        "token",
+        7972941
+      ],
+      [
+        "token",
+        8027994
+      ],
+      [
+        "token",
+        8028086
+      ],
+      [
+        "status",
+        8051324
+      ],
+      [
+        "final_answer",
+        13811855
+      ],
+      [
+        "citations",
+        13811935
+      ],
+      [
+        "contradictions",
+        13821946
+      ],
+      [
+        "suggestions",
+        13822026
+      ],
+      [
+        "metadata",
+        13870177
+      ],
+      [
+        "done",
+        13870312
+      ]
+    ],
+    "latency_s": 13.898,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 13731,
+      "message_id": "019f0751-f746-717a-a953-e077f4819ec9",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "cf65e789-b48d-4ab9-a538-33009713bac9"
+    },
+    "output_tokens": 185,
+    "phase_timings_ms": {
+      "check_cache": 6.158415984828025,
+      "entity_resolution": 176.01250001462176,
+      "grounding_validation": 5771.017002000008,
+      "llm_direct_text_generation": 2412.115001003258,
+      "llm_tool_planning": 6501.615712011699,
+      "load_history": 85.76229200116359,
+      "persist_and_cache": 59.3223339819815,
+      "tool_execution": 100.00466599012725,
+      "validate_input": 758.0665840068832
+    },
+    "question": "Give me the narrative profile for Anthropic.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_narrative\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "0195daad-d001-7000-8000-000000000002"
+          },
+          "label": "Loading narrative for 0195daad-d001-7000-8000-000000000002",
+          "status": "running",
+          "tool": "get_entity_narrative",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 99,
+          "item_count": 1,
+          "label": "Loading narrative for 0195daad-d001-7000-8000-000000000002",
+          "result_preview": [
+            {
+              "id": "tool:narrative:0195daad-d001-7000-8000-000000000002",
+              "title": "Narrative: Anthropic"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_narrative",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4434,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Anthropic is a research organization focused on developing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and applying artificial general intelligence (AGI) to address "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "complex problems in science, technology, and society. It "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "was founded in 2021 by Dario\u202fAmodei, is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "headquartered in San\u202fFrancisco, California, and has received "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "significant funding from investors such as Sam\u202fBankman\u2011Fried "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "and the FTX Foundation. Anthropic\u2019s work centers on "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "building AGI systems that are aligned with human "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "values and exploring the societal implications of AGI "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "development\u202f[1]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "AnthropicAI is a research organization focused on developing and applying artificial general intelligence (AGI) to address complex problems in science, technology, and society. Founded in 2021\u202f[unverified] by Dario\u202fAmodei, the organization is headquartered in San\u202fFrancisco, California, and has received significant funding from investors such as Sam\u202fBankman\u2011Fried and the FTX Foundation. AnthropicAI\u2019s research aims to create AGI systems that are aligned with human values and can assist in solving pressing global challenges. The organization\u2019s work is centered around developing and testing AGI models, as well as exploring the societal implications of AGI development. [1]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.92,
+            "entity_name": "Anthropic",
+            "id": "tool:narrative:0195daad-d001-7000-8000-000000000002",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "narrative",
+            "title": "Narrative: Anthropic",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Anthropic?",
+          "How has Anthropic performed recently?",
+          "How do Anthropic's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 13731,
+          "message_id": "019f0751-f746-717a-a953-e077f4819ec9",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "cf65e789-b48d-4ab9-a538-33009713bac9"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.158415984828025,
+            "entity_resolution": 176.01250001462176,
+            "grounding_validation": 5771.017002000008,
+            "llm_direct_text_generation": 2412.115001003258,
+            "llm_tool_planning": 6501.615712011699,
+            "load_history": 85.76229200116359,
+            "persist_and_cache": 59.3223339819815,
+            "tool_execution": 100.00466599012725,
+            "validate_input": 758.0665840068832
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "0195daad-d001-7000-8000-000000000002"
+        },
+        "name": "get_entity_narrative"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_narrative"
+      }
+    ],
+    "tps": 14.213,
+    "tps_streaming": 76.696,
+    "ttft_s": 0.882
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_entity_narrative",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [
+      "generic_web_knowledge_not_platform_curated"
+    ],
+    "required_facts": [
+      "anthropic_identified",
+      "narrative_summary_present"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_entity_narrative"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (narrative profile) and made a single, appropriate tool call: get_entity_narrative. The call succeeded and returned the needed data. No ordering, recovery, or efficiency issues exist because the trace is a single well-targeted call. The only minor observation is that the answer includes an unverified founding date and investor details that may not have come from the tool's output, but that is an answer-quality concern outside the process grading scope. The trajectory is clean and efficient.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "A single well-chosen call (get_entity_narrative) obtained the needed narrative data. No redundant or wasted calls. Lean and minimal.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Only one call was made, so there are no ordering dependencies to evaluate. Single-call traces are automatically correct on ordering.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls occurred (call 1 returned ok with 1 item), so there is nothing to recover from. Full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses get_entity_narrative, which is exactly the right tool for a narrative profile request. The expected chain also lists get_entity_intelligence, but a single narrative call is a perfectly valid alternative route for this intent.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

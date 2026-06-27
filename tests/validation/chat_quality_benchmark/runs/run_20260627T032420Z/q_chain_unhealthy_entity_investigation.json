@@ -1,0 +1,698 @@
+{
+  "bucket": "PASS",
+  "category": "reasoning",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 692,
+    "citation_count": 2,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_health",
+      "get_entity_intelligence"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_intelligence",
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 55.98,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_narrative",
+      "query_fundamentals"
+    ],
+    "output_tokens": 173,
+    "phase_timings_ms": {
+      "check_cache": 6.599832995561883,
+      "entity_resolution": 258.23204198968597,
+      "grounding_validation": 13244.02075598482,
+      "llm_direct_text_generation": 13969.496297999285,
+      "llm_tool_planning": 40721.21726803016,
+      "load_history": 181.89570799586363,
+      "persist_and_cache": 58.418915985384956,
+      "tool_execution": 273.29220800311305,
+      "validate_input": 681.5954170015175
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_health"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_health",
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "ttft_s": 0.73,
+    "word_count": 96
+  },
+  "id": "chain_unhealthy_entity_investigation",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Deep question answered with structured multi-section response (health metrics + narrative summary) \u2014 appropriate depth for a synthesis task.",
+        "reason": "Deep question answered with structured multi-section response (health metrics + narrative summary) \u2014 appropriate depth for a synthesis task.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Health score 0.40 and source distribution cite tool row 1; narrative cites row 2. Market cap '$10B' not in grounding sample but plausible from narrative tool. Transparency banner is neutral.",
+        "reason": "Health score 0.40 and source distribution cite tool row 1; narrative cites row 2. Market cap '$10B' not in grounding sample but plausible from narrative tool. Transparency banner is neutral.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.",
+        "reason": "Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Good routing to health and intelligence tools; answer correctly identifies MSTR as a low-health-score entity and summarises available data. The market cap figure ($10B) is not directly traceable to the tool results shown \u2014 either cite the narrative row that contains it or flag it as unverified. Consider also calling query_fundamentals to pull a recent revenue or P/E metric for a more complete picture. Overall solid, with one grounding gap to fix.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_entity_health and get_entity_intelligence, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Health score 0.40 and source distribution cite tool row 1; narrative cites row 2. Market cap '$10B' not in grounding sample but plausible from narrative tool. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Deep question answered with structured multi-section response (health metrics + narrative summary) \u2014 appropriate depth for a synthesis task.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"Good routing to health and intelligence tools; answer correctly identifies MSTR as a low-health-score entity and summarises available data. The market cap figure ($10B) is not directly traceable to the tool results shown \u2014 either cite the narrative row that contains it or flag it as unverified. Consider also calling query_fundamentals to pull a recent revenue or P/E metric for a more complete picture. Overall solid, with one grounding gap to fix.\"\n}",
+    "reviewer_summary": "Good routing to health and intelligence tools; answer correctly identifies MSTR as a low-health-score entity and summarises available data. The market cap figure ($10B) is not directly traceable to the tool results shown \u2014 either cite the narrative row that contains it or flag it as unverified. Consider also calling query_fundamentals to pull a recent revenue or P/E metric for a more complete picture. Overall solid, with one grounding gap to fix.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Company with low data\u2011quality score:** MicroStrategy Incorporated (ticker\u202fMSTR)\n\n- **Health score:** 0.40\u202f[1]  \n- **Sector:** Information Technology\u202f[1]  \n- **Source distribution:**  \n  - eodhd\u202f=\u202f0.9404  \n  - eodhd_ticker_news\u202f=\u202f0.0596\u202f[1]  \n\n**What we know from the narrative:**\n\nMicroStrategy Incorporated is a publicly traded business\u2011intelligence company headquartered in Tysons Corner, Virginia. Founded in 1989, it offers cloud\u2011based software solutions for business analytics, mobility, and security. The company has a market capitalization of over\u202f$10\u202fbillion and is listed on the NASDAQ under the ticker symbol\u202fMSTR\u202f[2].\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.9,
+        "entity_name": "data",
+        "id": "tool:intelligence:019e0db6-2e39-7e04-aaf8-9ec675797470",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "narrative",
+        "title": "Intelligence: data",
+        "url": null
+      },
+      {
+        "confidence": 0.88,
+        "entity_name": "data",
+        "id": "tool:health:019e0db6-2e39-7e04-aaf8-9ec675797470",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 2,
+        "source_name": "narrative",
+        "title": "Health: data",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        729714
+      ],
+      [
+        "status",
+        902055
+      ],
+      [
+        "thinking",
+        1160385
+      ],
+      [
+        "agent_iteration",
+        1160438
+      ],
+      [
+        "status",
+        23325820
+      ],
+      [
+        "tool_call",
+        23327690
+      ],
+      [
+        "tool_result",
+        23571088
+      ],
+      [
+        "agent_iteration",
+        23889916
+      ],
+      [
+        "tool_call",
+        28484433
+      ],
+      [
+        "tool_result",
+        28513604
+      ],
+      [
+        "agent_iteration",
+        28672698
+      ],
+      [
+        "token",
+        42645831
+      ],
+      [
+        "token",
+        42646130
+      ],
+      [
+        "token",
+        42646204
+      ],
+      [
+        "token",
+        42646253
+      ],
+      [
+        "token",
+        42646293
+      ],
+      [
+        "token",
+        42646331
+      ],
+      [
+        "token",
+        42646443
+      ],
+      [
+        "token",
+        42646527
+      ],
+      [
+        "token",
+        42646936
+      ],
+      [
+        "token",
+        42647324
+      ],
+      [
+        "token",
+        42647532
+      ],
+      [
+        "token",
+        42647626
+      ],
+      [
+        "token",
+        42655884
+      ],
+      [
+        "status",
+        42656108
+      ],
+      [
+        "final_answer",
+        55902969
+      ],
+      [
+        "citations",
+        55903166
+      ],
+      [
+        "contradictions",
+        55910317
+      ],
+      [
+        "suggestions",
+        55910395
+      ],
+      [
+        "metadata",
+        55963596
+      ],
+      [
+        "done",
+        55963775
+      ]
+    ],
+    "latency_s": 55.98,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 55874,
+      "message_id": "019f0779-d96e-73a9-885b-98d38a2c12e6",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "0f6842a3-d562-4f16-9e33-7e31b4324bd4"
+    },
+    "output_tokens": 173,
+    "phase_timings_ms": {
+      "check_cache": 6.599832995561883,
+      "entity_resolution": 258.23204198968597,
+      "grounding_validation": 13244.02075598482,
+      "llm_direct_text_generation": 13969.496297999285,
+      "llm_tool_planning": 40721.21726803016,
+      "load_history": 181.89570799586363,
+      "persist_and_cache": 58.418915985384956,
+      "tool_execution": 273.29220800311305,
+      "validate_input": 681.5954170015175
+    },
+    "question": "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_health\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "MSTR"
+          },
+          "label": "Computing health score for MicroStrategy",
+          "status": "running",
+          "tool": "get_entity_health",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 240,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "data"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Computing health score for MicroStrategy",
+          "result_preview": [
+            {
+              "id": "tool:health:019e0db6-2e39-7e04-aaf8-9ec675797470",
+              "title": "Health: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_health",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 22726,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "MSTR"
+          },
+          "label": "Loading intelligence for MicroStrategy",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 31,
+          "item_count": 1,
+          "label": "Loading intelligence for MicroStrategy",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:019e0db6-2e39-7e04-aaf8-9ec675797470",
+              "title": "Intelligence: data"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 27511,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**MicroStrategy Incorporated (ticker\u202fMSTR)**  \n\n- **Data\u2011quality health score:**\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0.40, indicating a low\u2011quality data profile\u30101\u3011.  \n- **Sector:**\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Information Technology\u30101\u3011.  \n- **Source mix:**\u202f\u2248\u202f94\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from the \u201ceodhd\u201d feed and \u2248\u202f6\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from \u201ceodhd_ticker_news\u201d\u30101\u3011.  \n\n**What we know about the company "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(from the platform\u2019s curated narrative):**  \n\n- It is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "a publicly traded business\u2011intelligence firm headquartered in Tysons "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Corner, Virginia.  \n- Founded in\u202f1989, MicroStrategy provides "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "cloud\u2011based software for business analytics, mobility, and security.  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- The company has a market capitalization of "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**over\u202f$10\u202fbillion** and trades on the NASDAQ "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "under the ticker\u202fMSTR\u30102\u3011.  \n- It serves a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "diverse enterprise\u2011software customer base across multiple industries\u30102\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Company with low data\u2011quality score:** MicroStrategy Incorporated (ticker\u202fMSTR)\n\n- **Health score:** 0.40\u202f[1]  \n- **Sector:** Information Technology\u202f[1]  \n- **Source distribution:**  \n  - eodhd\u202f=\u202f0.9404  \n  - eodhd_ticker_news\u202f=\u202f0.0596\u202f[1]  \n\n**What we know from the narrative:**\n\nMicroStrategy Incorporated is a publicly traded business\u2011intelligence company headquartered in Tysons Corner, Virginia. Founded in 1989, it offers cloud\u2011based software solutions for business analytics, mobility, and security. The company has a market capitalization of over\u202f$10\u202fbillion and is listed on the NASDAQ under the ticker symbol\u202fMSTR\u202f[2].\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.9,
+            "entity_name": "data",
+            "id": "tool:intelligence:019e0db6-2e39-7e04-aaf8-9ec675797470",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "narrative",
+            "title": "Intelligence: data",
+            "url": null
+          },
+          {
+            "confidence": 0.88,
+            "entity_name": "data",
+            "id": "tool:health:019e0db6-2e39-7e04-aaf8-9ec675797470",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 2,
+            "source_name": "narrative",
+            "title": "Health: data",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on data?",
+          "How has data performed recently?",
+          "How do data's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 55874,
+          "message_id": "019f0779-d96e-73a9-885b-98d38a2c12e6",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "0f6842a3-d562-4f16-9e33-7e31b4324bd4"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.599832995561883,
+            "entity_resolution": 258.23204198968597,
+            "grounding_validation": 13244.02075598482,
+            "llm_direct_text_generation": 13969.496297999285,
+            "llm_tool_planning": 40721.21726803016,
+            "load_history": 181.89570799586363,
+            "persist_and_cache": 58.418915985384956,
+            "tool_execution": 273.29220800311305,
+            "validate_input": 681.5954170015175
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "MSTR"
+        },
+        "name": "get_entity_health"
+      },
+      {
+        "arguments": {
+          "entity_id": "MSTR"
+        },
+        "name": "get_entity_intelligence"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "data"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_health"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tps": 3.131,
+    "tps_streaming": 12.384,
+    "ttft_s": 0.73
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_entity_health",
+      "get_entity_narrative",
+      "get_entity_intelligence",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "Claims every entity in coverage is fully healthy"
+    ],
+    "required_facts": [
+      "Names a specific entity flagged with a health concern (low score, missing field, stale data, etc.)",
+      "Summarises whatever data IS available for that entity (description, recent metric, recent news)"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "reasoning",
+    "signal"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified MSTR as a low-health-score entity using get_entity_health and supplemented with get_entity_intelligence for a narrative. The trajectory is clean and error-free, but it stops short of the 'deep' depth the rubric expected \u2014 notably missing a call to query_fundamentals for recent financial metrics or get_entity_narrative for a richer summary. The process would be stronger if it chained a fundamentals call after identifying the entity, giving the user concrete numbers rather than just a description. No ordering or recovery issues.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The two calls are non-redundant and each returned useful data. However, the agent could have made a single call to get_entity_health (which already includes the ticker) and then used that ticker in a single get_entity_intelligence call \u2014 which it did. No waste, but the chain is minimal. Slight deduc",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls, both independent (no data dependency between them). Order is irrelevant; no ordering error.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Call 1 get_entity_health and call 2 get_entity_intelligence are appropriate for surfacing a low-quality-score entity and its narrative. However, the rubric expected a deeper dive (e.g., query_fundamentals for recent metrics, or get_entity_narrative for a richer summary). The agent stopped after two ",
+        "score": 20
+      }
+    },
+    "trajectory_score": 90,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

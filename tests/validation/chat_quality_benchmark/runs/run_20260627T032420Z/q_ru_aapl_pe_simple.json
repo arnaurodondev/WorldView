@@ -1,0 +1,488 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 117,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 26.414,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 6.818541995016858,
+      "entity_resolution": 99.74654199322686,
+      "grounding_validation": 19164.12421700079,
+      "llm_direct_text_generation": 1055.8429170050658,
+      "llm_tool_planning": 6048.250044987071,
+      "load_history": 38.21858298033476,
+      "persist_and_cache": 24.640207993797958,
+      "tool_execution": 166.44779199850745,
+      "validate_input": 474.3132920120843
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.542,
+    "word_count": 17
+  },
+  "id": "ru_aapl_pe_simple",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow factual question answered with a concise, correct, cited figure \u2014 appropriate depth.",
+        "reason": "Shallow factual question answered with a concise, correct, cited figure \u2014 appropriate depth.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "P/E claim 35.96\u00d7 matches grounding sample value 35.9576; source cited [1]. Transparency banner is neutral.",
+        "reason": "P/E claim 35.96\u00d7 matches grounding sample value 35.9576; source cited [1]. Transparency banner is neutral.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "reason": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid routing to query_fundamentals, correct P/E value grounded in tool results, and appropriate conciseness for a shallow lookup. The only minor note is the unverifiable-figures banner is unnecessary here since the single claim is fully verifiable; consider suppressing it for single-fact answers to avoid confusing users.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"P/E claim 35.96\u00d7 matches grounding sample value 35.9576; source cited [1]. Transparency banner is neutral.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow factual question answered with a concise, correct, cited figure \u2014 appropriate depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"Solid routing to query_fundamentals, correct P/E value grounded in tool results, and appropriate conciseness for a shallow lookup. The only minor note is the unverifiable-figures banner is unnecessary here since the single claim is fully verifiable; consider suppressing it for single-fact answers to avoid confusing users.\"\n}",
+    "reviewer_summary": "Solid routing to query_fundamentals, correct P/E value grounded in tool results, and appropriate conciseness for a shallow lookup. The only minor note is the unverifiable-figures banner is unnecessary here since the single claim is fully verifiable; consider suppressing it for single-fact answers to avoid confusing users.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 1,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 1,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's AAPL's P/E ratio?",
+  "reasons": [],
+  "result": {
+    "answer_text": "AAPL\u2019s price\u2011to\u2011earnings (P/E) ratio is **35.96\u00d7**\u202f[1].\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "AAPL",
+        "id": "tool:fundamentals:AAPL",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "fundamentals",
+        "title": "Fundamentals query: AAPL",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        541946
+      ],
+      [
+        "status",
+        572784
+      ],
+      [
+        "thinking",
+        682041
+      ],
+      [
+        "agent_iteration",
+        682070
+      ],
+      [
+        "status",
+        5677825
+      ],
+      [
+        "tool_call",
+        5677894
+      ],
+      [
+        "tool_result",
+        5842197
+      ],
+      [
+        "agent_iteration",
+        6146986
+      ],
+      [
+        "token",
+        7216825
+      ],
+      [
+        "status",
+        7216867
+      ],
+      [
+        "final_answer",
+        26381193
+      ],
+      [
+        "citations",
+        26381327
+      ],
+      [
+        "contradictions",
+        26387557
+      ],
+      [
+        "suggestions",
+        26387584
+      ],
+      [
+        "metadata",
+        26407001
+      ],
+      [
+        "done",
+        26407134
+      ]
+    ],
+    "latency_s": 26.414,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 26333,
+      "message_id": "019f0739-7a82-7970-b59e-e74bf7d8a492",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "bebb8f87-c430-4797-940f-6bff72d02535"
+    },
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 6.818541995016858,
+      "entity_resolution": 99.74654199322686,
+      "grounding_validation": 19164.12421700079,
+      "llm_direct_text_generation": 1055.8429170050658,
+      "llm_tool_planning": 6048.250044987071,
+      "load_history": 38.21858298033476,
+      "persist_and_cache": 24.640207993797958,
+      "tool_execution": 166.44779199850745,
+      "validate_input": 474.3132920120843
+    },
+    "question": "What's AAPL's P/E ratio?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "periods": 0,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 166,
+          "grounding_sample": {
+            "fields": {
+              "pe_ratio": "35.9576",
+              "ticker": "AAPL"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5467,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "AAPL\u2019s current price\u2011to\u2011earnings (P/E) ratio is **35.96\u00d7**\u3010query_fundamentals 0\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "AAPL\u2019s price\u2011to\u2011earnings (P/E) ratio is **35.96\u00d7**\u202f[1].\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "AAPL",
+            "id": "tool:fundamentals:AAPL",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "fundamentals",
+            "title": "Fundamentals query: AAPL",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 26333,
+          "message_id": "019f0739-7a82-7970-b59e-e74bf7d8a492",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "bebb8f87-c430-4797-940f-6bff72d02535"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.818541995016858,
+            "entity_resolution": 99.74654199322686,
+            "grounding_validation": 19164.12421700079,
+            "llm_direct_text_generation": 1055.8429170050658,
+            "llm_tool_planning": 6048.250044987071,
+            "load_history": 38.21858298033476,
+            "persist_and_cache": 24.640207993797958,
+            "tool_execution": 166.44779199850745,
+            "validate_input": 474.3132920120843
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "periods": 0,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "pe_ratio": "35.9576",
+            "ticker": "AAPL"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 1.16,
+    "tps_streaming": 28.413,
+    "ttft_s": 0.542
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_period",
+      "single_quarter_passed_off_as_ttm"
+    ],
+    "required_facts": [
+      "pe_ratio_value",
+      "as_of_date_or_period"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (P/E ratio) and made a single, precise call to query_fundamentals with the relevant metric. No ordering, recovery, or efficiency issues exist. The trajectory is minimal and perfectly aligned with the question.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "one well-chosen call returns the needed P/E ratio; no wasted or redundant calls.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call, no ordering constraints to evaluate.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls, nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses query_fundamentals with pe_ratio metric, exactly the right tool for a P/E ratio question.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

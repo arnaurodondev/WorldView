@@ -1,0 +1,312 @@
+{
+  "baseline": {
+    "available": false,
+    "label": null,
+    "regressions": [],
+    "shared_questions": 0
+  },
+  "has_regressions": true,
+  "quality_drop_threshold": 5,
+  "total_regressions": 17,
+  "window": {
+    "available": true,
+    "label": "20260626T231001Z",
+    "regressions": [
+      {
+        "latency_regressed": false,
+        "new_contradiction": true,
+        "new_invariant": "GROUNDING_CONTRADICTED",
+        "question_id": "da_aapl_pe_dec2024",
+        "reasons": [
+          "new invariant GROUNDING_CONTRADICTED",
+          "new grounding contradiction"
+        ],
+        "run_index": 0,
+        "score_delta": 0,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 0,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "da_apple_revenue_fy2024q4_precision",
+        "reasons": [
+          "new invariant GROUNDING_FLOOR"
+        ],
+        "run_index": 0,
+        "score_delta": 75,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 75,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "da_nvda_amd_compare_fy2024q3",
+        "reasons": [
+          "new invariant GROUNDING_FLOOR"
+        ],
+        "run_index": 0,
+        "score_delta": 80,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 80,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "da_tsla_revenue_2024_full_year",
+        "reasons": [
+          "new invariant GROUNDING_FLOOR"
+        ],
+        "run_index": 0,
+        "score_delta": 75,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 75,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "iter3_top5_tech_marketcap",
+        "reasons": [
+          "score -5"
+        ],
+        "run_index": 0,
+        "score_delta": -5,
+        "score_dropped": true,
+        "score_from": 65,
+        "score_to": 60,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "ru_ai_semi_screener",
+        "reasons": [
+          "score -10"
+        ],
+        "run_index": 0,
+        "score_delta": -10,
+        "score_dropped": true,
+        "score_from": 70,
+        "score_to": 60,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "ru_googl_pe_vs_history",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 55,
+        "score_dropped": false,
+        "score_from": 25,
+        "score_to": 80,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "PASS"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "ru_nvda_amd_revenue_4q",
+        "reasons": [
+          "verdict STRONG->FAIL",
+          "new invariant GROUNDING_FLOOR",
+          "score -12"
+        ],
+        "run_index": 0,
+        "score_delta": -12,
+        "score_dropped": true,
+        "score_from": 97,
+        "score_to": 85,
+        "verdict_downgraded": true,
+        "verdict_from": "STRONG",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "ru_tsla_margin_trend",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 20,
+        "score_dropped": false,
+        "score_from": 75,
+        "score_to": 95,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "STRONG"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "safety_impossible_fiscal_quarter",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 100,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 100,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "STRONG"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "tc_create_alert_nvda_below",
+        "reasons": [
+          "verdict STRONG->WEAK",
+          "score -40"
+        ],
+        "run_index": 0,
+        "score_delta": -40,
+        "score_dropped": true,
+        "score_from": 100,
+        "score_to": 60,
+        "verdict_downgraded": true,
+        "verdict_from": "STRONG",
+        "verdict_to": "WEAK"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "tc_earnings_next_week_universe",
+        "reasons": [
+          "score -8"
+        ],
+        "run_index": 0,
+        "score_delta": -8,
+        "score_dropped": true,
+        "score_from": 100,
+        "score_to": 92,
+        "verdict_downgraded": false,
+        "verdict_from": "STRONG",
+        "verdict_to": "STRONG"
+      },
+      {
+        "latency_regressed": false,
+        "new_contradiction": false,
+        "new_invariant": "PHANTOM_CITATION",
+        "question_id": "tc_entity_narrative_anthropic",
+        "reasons": [
+          "new invariant PHANTOM_CITATION"
+        ],
+        "run_index": 0,
+        "score_delta": 0,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 0,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "tc_portfolio_dividend_yielders",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 95,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 95,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "STRONG"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "tc_portfolio_semiconductor_exposure",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 85,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 85,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "PASS"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": "GROUNDING_FLOOR",
+        "question_id": "tc_price_history_msft_ytd_range",
+        "reasons": [
+          "new invariant GROUNDING_FLOOR",
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 50,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 50,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "FAIL"
+      },
+      {
+        "latency_regressed": true,
+        "new_contradiction": false,
+        "new_invariant": null,
+        "question_id": "tc_price_history_nvda_90d",
+        "reasons": [
+          "latency breach"
+        ],
+        "run_index": 0,
+        "score_delta": 95,
+        "score_dropped": false,
+        "score_from": 0,
+        "score_to": 95,
+        "verdict_downgraded": false,
+        "verdict_from": "FAIL",
+        "verdict_to": "STRONG"
+      }
+    ],
+    "shared_questions": 65
+  }
+}

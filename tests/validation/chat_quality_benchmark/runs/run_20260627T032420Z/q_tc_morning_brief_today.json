@@ -1,0 +1,547 @@
+{
+  "bucket": "PASS",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_morning_brief"
+    ]
+  },
+  "heuristics": {
+    "char_count": 327,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_morning_brief"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 16.978,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 82,
+    "phase_timings_ms": {
+      "check_cache": 4.72587498370558,
+      "entity_resolution": 132.20941700274125,
+      "grounding_validation": 7582.883087015944,
+      "llm_direct_text_generation": 5771.137378003914,
+      "llm_tool_planning": 7859.521421021782,
+      "load_history": 30.532708013197407,
+      "persist_and_cache": 18.179666018113494,
+      "tool_execution": 54.42933301674202,
+      "validate_input": 939.7376669803634
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          ""
+        ],
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_morning_brief"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "ttft_s": 0.99,
+    "word_count": 52
+  },
+  "id": "tc_morning_brief_today",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Answer depth matches question complexity: a morning brief is a medium-depth overview, and the answer provides a structured snapshot with market and portfolio sections.",
+        "reason": "Answer depth matches question complexity: a morning brief is a medium-depth overview, and the answer provides a structured snapshot with market and portfolio sections.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer cites specific market and portfolio figures but does not include source citations. The transparency banner is appropriate, not fabrication.",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer cites specific market and portfolio figures but does not include source citations. The transparency banner is appropriate, not fabrication.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Correctly called get_morning_brief, which is the expected tool.",
+        "reason": "Correctly called get_morning_brief, which is the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_morning_brief and produced a well-structured brief. The main improvement is adding source citations (e.g., [get_morning_brief row 0]) to improve grounding transparency. The transparency banner is a good practice but should be paired with explicit row references for each figure.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Correctly called get_morning_brief, which is the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer cites specific market and portfolio figures but does not include source citations. The transparency banner is appropriate, not fabrication.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Answer depth matches question complexity: a morning brief is a medium-depth overview, and the answer provides a structured snapshot with market and portfolio sections.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_morning_brief and produced a well-structured brief. The main improvement is adding source citations (e.g., [get_morning_brief row 0]) to improve grounding transparency. The transparency banner is a good practice but should be paired with explicit row references for each figure.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_morning_brief and produced a well-structured brief. The main improvement is adding source citations (e.g., [get_morning_brief row 0]) to improve grounding transparency. The transparency banner is a good practice but should be paired with explicit row references for each figure.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's in my morning brief today?",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Morning Brief \u2013 2026\u201106\u201127**\n\n**Market Snapshot**  \n- SPY\u202f\u20110.04%  \n- QQQ\u202f\u20110.42%  \n- VIX\u202f19.22  \n\n**Your Portfolio Today**  \n- MSTR\u202f\u20119.23% pre\u2011mkt  \n- IBIT\u202f\u20113.99% pre\u2011mkt  \n- GOOGL\u202f\u20110.28% pre\u2011mkt  \n- XLE\u202f\u20111.67% pre\u2011mkt  \n- PPA\u202f\u20110.50% pre\u2011mkt  \n- QQQ\u202f\u20110.42% pre\u2011mkt\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        989603
+      ],
+      [
+        "status",
+        1010610
+      ],
+      [
+        "thinking",
+        1143076
+      ],
+      [
+        "agent_iteration",
+        1143092
+      ],
+      [
+        "status",
+        3237037
+      ],
+      [
+        "tool_call",
+        3244400
+      ],
+      [
+        "tool_result",
+        3290008
+      ],
+      [
+        "agent_iteration",
+        3591107
+      ],
+      [
+        "token",
+        9362212
+      ],
+      [
+        "token",
+        9362273
+      ],
+      [
+        "token",
+        9362286
+      ],
+      [
+        "token",
+        9362587
+      ],
+      [
+        "token",
+        9362859
+      ],
+      [
+        "token",
+        9363366
+      ],
+      [
+        "token",
+        9363628
+      ],
+      [
+        "token",
+        9363728
+      ],
+      [
+        "token",
+        9363916
+      ],
+      [
+        "token",
+        9364166
+      ],
+      [
+        "token",
+        9364367
+      ],
+      [
+        "token",
+        9364497
+      ],
+      [
+        "token",
+        9368586
+      ],
+      [
+        "status",
+        9368676
+      ],
+      [
+        "final_answer",
+        16951534
+      ],
+      [
+        "citations",
+        16951613
+      ],
+      [
+        "contradictions",
+        16955007
+      ],
+      [
+        "suggestions",
+        16955180
+      ],
+      [
+        "metadata",
+        16970222
+      ],
+      [
+        "done",
+        16970448
+      ]
+    ],
+    "latency_s": 16.978,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 16922,
+      "message_id": "019f0757-343f-729b-bc40-f2a7494968be",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "5617c31c-68ef-4858-9e5e-a4102738082f"
+    },
+    "output_tokens": 82,
+    "phase_timings_ms": {
+      "check_cache": 4.72587498370558,
+      "entity_resolution": 132.20941700274125,
+      "grounding_validation": 7582.883087015944,
+      "llm_direct_text_generation": 5771.137378003914,
+      "llm_tool_planning": 7859.521421021782,
+      "load_history": 30.532708013197407,
+      "persist_and_cache": 18.179666018113494,
+      "tool_execution": 54.42933301674202,
+      "validate_input": 939.7376669803634
+    },
+    "question": "What's in my morning brief today?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_morning_brief\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "": {}
+          },
+          "label": "Loading morning brief...",
+          "status": "running",
+          "tool": "get_morning_brief",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 53,
+          "item_count": 1,
+          "label": "Loading morning brief...",
+          "result_preview": [
+            {
+              "id": "tool:brief:019f0718-9a4a-713f-8aae-fb62f9ef6eb1",
+              "title": "## Details\n**Market Snapshot**\n- SPY -0.04%, QQQ -0.42%, VIX 19.22 \u2014 risk\u2011off to"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_morning_brief",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2447,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Here\u2019s your morning brief for\u202f2026\u201106\u201127:\n\n**Market snapshot**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "- SPY\u202f\u20110.04% | QQQ\u202f\u20110.42% | VIX\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "19.22 \u2013 a modest risk\u2011off tone in pre\u2011market "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trading.\n\n**Your portfolio today**  \n| Ticker | Pre\u2011market "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "change | Driver |\n|--------|-------------------|--------|\n| MSTR | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u20119.23% | idiosyncratic \u2013 no identifiable driver |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| IBIT | \u20113.99% | idiosyncratic \u2013 no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "identifiable driver |\n| GOOGL | \u20110.28% | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "tracking Communication Services sector (\u20110.39%) |\n| XLE "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| \u20111.67% | tracking Energy sector (\u20111.34%) |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| PPA | \u20110.50% | idiosyncratic \u2013 no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "identifiable driver |\n| QQQ | \u20110.42% | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "idiosyncratic |\n\n*Source: morning brief (2026\u201106\u201127)\u202f[1]*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Morning Brief \u2013 2026\u201106\u201127**\n\n**Market Snapshot**  \n- SPY\u202f\u20110.04%  \n- QQQ\u202f\u20110.42%  \n- VIX\u202f19.22  \n\n**Your Portfolio Today**  \n- MSTR\u202f\u20119.23% pre\u2011mkt  \n- IBIT\u202f\u20113.99% pre\u2011mkt  \n- GOOGL\u202f\u20110.28% pre\u2011mkt  \n- XLE\u202f\u20111.67% pre\u2011mkt  \n- PPA\u202f\u20110.50% pre\u2011mkt  \n- QQQ\u202f\u20110.42% pre\u2011mkt\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 16922,
+          "message_id": "019f0757-343f-729b-bc40-f2a7494968be",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "5617c31c-68ef-4858-9e5e-a4102738082f"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.72587498370558,
+            "entity_resolution": 132.20941700274125,
+            "grounding_validation": 7582.883087015944,
+            "llm_direct_text_generation": 5771.137378003914,
+            "llm_tool_planning": 7859.521421021782,
+            "load_history": 30.532708013197407,
+            "persist_and_cache": 18.179666018113494,
+            "tool_execution": 54.42933301674202,
+            "validate_input": 939.7376669803634
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "": {}
+        },
+        "name": "get_morning_brief"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_morning_brief"
+      }
+    ],
+    "tps": 5.129,
+    "tps_streaming": 14.209,
+    "ttft_s": 0.99
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_morning_brief"
+    ],
+    "forbidden_facts": [
+      "generic_market_summary_not_user_specific"
+    ],
+    "required_facts": [
+      "brief_headline_or_lead",
+      "at_least_one_section"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_morning_brief"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the user's intent for a personalized morning brief and made a single, appropriate tool call (get_morning_brief) that returned the needed data. The trajectory is minimal, well-routed, and has no ordering or recovery issues. No process changes are needed; this is an ideal chain for the question.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "single well-chosen call for a single-fact question \u2014 no waste.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single call with no dependencies \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_morning_brief is exactly the right tool for a 'morning brief' question \u2014 perfect routing.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,585 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "traverse_graph",
+      "get_entity_paths"
+    ]
+  },
+  "heuristics": {
+    "char_count": 261,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_path_between",
+      "traverse_graph"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_paths",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 28.309,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_paths"
+    ],
+    "output_tokens": 66,
+    "phase_timings_ms": {
+      "check_cache": 2.938167017418891,
+      "entity_resolution": 128.55687498813495,
+      "grounding_validation": 6878.077836998273,
+      "llm_direct_text_generation": 10812.84054700518,
+      "llm_tool_planning": 18394.20004998101,
+      "load_history": 24.44133401149884,
+      "persist_and_cache": 31.82437497889623,
+      "tool_execution": 1257.934541994473,
+      "validate_input": 788.7339169974439
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "depth",
+          "start_entity",
+          "target_entity"
+        ],
+        "tool": "traverse_graph"
+      },
+      {
+        "arguments_keys": [
+          "max_hops",
+          "source_entity",
+          "target_entity"
+        ],
+        "tool": "get_path_between"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "traverse_graph"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "traverse_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_path_between"
+      }
+    ],
+    "ttft_s": 0.842,
+    "word_count": 39
+  },
+  "id": "ru_openai_msft_paths",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for relationship paths; answer concisely states no path found within the hop limit \u2014 appropriate depth for a factual lookup.",
+        "reason": "Question asks for relationship paths; answer concisely states no path found within the hop limit \u2014 appropriate depth for a factual lookup.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims match tool results: both tools returned status=ok items=1 but no edges/paths; answer correctly reports no connection.",
+        "reason": "Claims match tool results: both tools returned status=ok items=1 but no edges/paths; answer correctly reports no connection.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides the factual result from the tools.",
+        "reason": "No refusal phrase present \u2014 answer provides the factual result from the tools.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called both expected tools (traverse_graph, get_path_between) \u2014 correct routing.",
+        "reason": "Called both expected tools (traverse_graph, get_path_between) \u2014 correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed the question to both graph-traversal tools and faithfully reported that no path was found within the specified hop limits. The answer is concise, grounded in the tool results, and appropriately scoped. The only improvement would be to clarify that the hop limit was 3 (or 4) so the user understands the constraint, but this is minor. No issues with tool selection, grounding, framing, or refusal.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called both expected tools (traverse_graph, get_path_between) \u2014 correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Claims match tool results: both tools returned status=ok items=1 but no edges/paths; answer correctly reports no connection.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for relationship paths; answer concisely states no path found within the hop limit \u2014 appropriate depth for a factual lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides the factual result from the tools.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed the question to both graph-traversal tools and faithfully reported that no path was found within the specified hop limits. The answer is concise, grounded in the tool results, and appropriately scoped. The only improvement would be to clarify that the hop limit was 3 (or 4) so the user understands the constraint, but this is minor. No issues with tool selection, grounding, framing, or refusal.\"\n}",
+    "reviewer_summary": "The agent correctly routed the question to both graph-traversal tools and faithfully reported that no path was found within the specified hop limits. The answer is concise, grounded in the tool results, and appropriately scoped. The only improvement would be to clarify that the hop limit was 3 (or 4) so the user understands the constraint, but this is minor. No issues with tool selection, grounding, framing, or refusal.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "How is OpenAI connected to Microsoft? Show me the relationship paths.",
+  "reasons": [],
+  "result": {
+    "answer_text": "No direct relationship path was found between OpenAI and Microsoft within three hops. The graph traversal returned no edges linking the two entities [get_path_between row\u202f0], and the path\u2011search explicitly reported no connection within the specified hop limit .",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        842011
+      ],
+      [
+        "status",
+        859937
+      ],
+      [
+        "thinking",
+        997632
+      ],
+      [
+        "agent_iteration",
+        997685
+      ],
+      [
+        "status",
+        4824788
+      ],
+      [
+        "tool_call",
+        4825572
+      ],
+      [
+        "tool_result",
+        5111487
+      ],
+      [
+        "agent_iteration",
+        5650924
+      ],
+      [
+        "tool_call",
+        9409628
+      ],
+      [
+        "tool_result",
+        10375702
+      ],
+      [
+        "agent_iteration",
+        10562934
+      ],
+      [
+        "token",
+        21378623
+      ],
+      [
+        "token",
+        21379004
+      ],
+      [
+        "token",
+        21379029
+      ],
+      [
+        "token",
+        21379321
+      ],
+      [
+        "token",
+        21379346
+      ],
+      [
+        "token",
+        21379945
+      ],
+      [
+        "token",
+        21380422
+      ],
+      [
+        "token",
+        21380481
+      ],
+      [
+        "status",
+        21389511
+      ],
+      [
+        "final_answer",
+        28269909
+      ],
+      [
+        "citations",
+        28269968
+      ],
+      [
+        "contradictions",
+        28271644
+      ],
+      [
+        "suggestions",
+        28271733
+      ],
+      [
+        "metadata",
+        28299047
+      ],
+      [
+        "done",
+        28299167
+      ]
+    ],
+    "latency_s": 28.309,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 28229,
+      "message_id": "019f071f-1a2a-75e3-bca2-7c62f5f5ca9a",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "a15e3bcd-6c55-456e-9738-23b9ccc61ea3"
+    },
+    "output_tokens": 66,
+    "phase_timings_ms": {
+      "check_cache": 2.938167017418891,
+      "entity_resolution": 128.55687498813495,
+      "grounding_validation": 6878.077836998273,
+      "llm_direct_text_generation": 10812.84054700518,
+      "llm_tool_planning": 18394.20004998101,
+      "load_history": 24.44133401149884,
+      "persist_and_cache": 31.82437497889623,
+      "tool_execution": 1257.934541994473,
+      "validate_input": 788.7339169974439
+    },
+    "question": "How is OpenAI connected to Microsoft? Show me the relationship paths.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading traverse_graph\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 4,
+            "start_entity": "OpenAI",
+            "target_entity": "Microsoft"
+          },
+          "label": "Traversing knowledge graph...",
+          "status": "running",
+          "tool": "traverse_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 286,
+          "item_count": 1,
+          "label": "Traversing knowledge graph...",
+          "result_preview": [
+            {
+              "id": "tool:traverse:OpenAI",
+              "title": "Graph traversal: OpenAI"
+            }
+          ],
+          "status": "ok",
+          "tool": "traverse_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4654,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "max_hops": 3,
+            "source_entity": "OpenAI",
+            "target_entity": "Microsoft"
+          },
+          "label": "Querying the knowledge graph...",
+          "status": "running",
+          "tool": "get_path_between",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 971,
+          "item_count": 1,
+          "label": "Querying the knowledge graph...",
+          "result_preview": [
+            {
+              "id": "tool:pathbetween:0195daad-d001-7000-8000-000000000001:01900000-0",
+              "title": "Connection: OpenAI \u2194 Microsoft"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_path_between",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9566,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "The graph\u2011search tools did not return any edges "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "linking OpenAI to Microsoft.\n\n- **traverse_graph** returned only "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "nodes for OpenAI and Microsoft with no edges "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(hops\u202f=\u202f0)\u202f[traverse_graph row\u202f0].\n- **get_path_between** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reported that no connection exists within three hops\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[ get_path_between row\u202f1].\n\n**Result:** No relationship path "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "was found between OpenAI and Microsoft in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "current knowledge graph."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "No direct relationship path was found between OpenAI and Microsoft within three hops. The graph traversal returned no edges linking the two entities [get_path_between row\u202f0], and the path\u2011search explicitly reported no connection within the specified hop limit ."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on OpenAI?",
+          "How has OpenAI performed recently?",
+          "How do OpenAI's fundamentals look?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 28229,
+          "message_id": "019f071f-1a2a-75e3-bca2-7c62f5f5ca9a",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "a15e3bcd-6c55-456e-9738-23b9ccc61ea3"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.938167017418891,
+            "entity_resolution": 128.55687498813495,
+            "grounding_validation": 6878.077836998273,
+            "llm_direct_text_generation": 10812.84054700518,
+            "llm_tool_planning": 18394.20004998101,
+            "load_history": 24.44133401149884,
+            "persist_and_cache": 31.82437497889623,
+            "tool_execution": 1257.934541994473,
+            "validate_input": 788.7339169974439
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "depth": 4,
+          "start_entity": "OpenAI",
+          "target_entity": "Microsoft"
+        },
+        "name": "traverse_graph"
+      },
+      {
+        "arguments": {
+          "max_hops": 3,
+          "source_entity": "OpenAI",
+          "target_entity": "Microsoft"
+        },
+        "name": "get_path_between"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "traverse_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_path_between"
+      }
+    ],
+    "tps": 2.403,
+    "tps_streaming": 6.104,
+    "ttft_s": 0.842
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "traverse_graph",
+      "get_entity_paths"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "relationship",
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly selected graph-traversal tools for a relationship-path question. However, it made two nearly identical calls (traverse_graph and get_path_between) on the same entity pair, which is redundant \u2014 one would have been enough. The chain is otherwise clean: no ordering issues, no failures to recover from. The single most impactful improvement is to drop the duplicate call and rely on a single path-finding tool.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The two calls are redundant: both traverse_graph(depth=4) and get_path_between(max_hops=3) attempt to find a path between the same pair. One would suffice. Deduct 5 for redundancy.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls, no data dependency between them \u2014 they are independent parallel queries. No ordering constraint to violate; full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls (both returned ok with items=1). Nothing to recover from; full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "Both calls (traverse_graph, get_path_between) are exactly the right kind of graph/relation tools for a 'relationship paths' question. Perfect tool selection.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

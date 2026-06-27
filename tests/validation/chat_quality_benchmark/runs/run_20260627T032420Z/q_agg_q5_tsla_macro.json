@@ -1,0 +1,993 @@
+{
+  "bucket": "WARN",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 2452,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_economic_calendar",
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 76.895,
+    "latency_within_budget": false,
+    "missing_expected_tools": [
+      "get_entity_intelligence",
+      "search_events"
+    ],
+    "output_tokens": 613,
+    "phase_timings_ms": {
+      "check_cache": 5.315166024956852,
+      "entity_resolution": 117.67350000445731,
+      "grounding_validation": 30015.09009700385,
+      "llm_direct_text_generation": 29133.687972003827,
+      "llm_tool_planning": 44266.27331299824,
+      "load_history": 20.513625000603497,
+      "persist_and_cache": 50.43995802407153,
+      "tool_execution": 600.6018749903888,
+      "validate_input": 947.7403339988086
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_economic_calendar"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 1.024,
+    "word_count": 367
+  },
+  "id": "agg_q5_tsla_macro",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a list of macro events; answer provides a structured table with event, region, and relevance \u2014 appropriate depth for a medium-complexity lookup.",
+        "reason": "Question asks for a list of macro events; answer provides a structured table with event, region, and relevance \u2014 appropriate depth for a medium-complexity lookup.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "All events are attributed to the single tool result row [1]; no grounding sample provided, so presumed band. No scope/coverage violations detected.",
+        "reason": "All events are attributed to the single tool result row [1]; no grounding sample provided, so presumed band. No scope/coverage violations detected.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_economic_calendar, which is one of the expected tools (equivalence set).",
+        "reason": "Called get_economic_calendar, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_economic_calendar and produced a well-structured table of macro events with Tesla-specific relevance notes. The main improvement area is grounding: the single tool result row likely contains only one event, but the answer lists ten distinct events \u2014 this suggests the LLM expanded or fabricated events beyond what the tool returned. Next time, either request more granular data (e.g., multiple calendar rows) or explicitly flag which events are directly from the tool vs. inferred. The transparency banner about unverified figures is good practice but doesn't excuse the likely over-generation.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_economic_calendar, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"All events are attributed to the single tool result row [1]; no grounding sample provided, so presumed band. No scope/coverage violations detected.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for a list of macro events; answer provides a structured table with event, region, and relevance \u2014 appropriate depth for a medium-complexity lookup.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_economic_calendar and produced a well-structured table of macro events with Tesla-specific relevance notes. The main improvement area is grounding: the single tool result row likely contains only one event, but the answer lists ten distinct events \u2014 this suggests the LLM expanded or fabricated events beyond what the tool returned. Next time, either request more granular data (e.g., multiple calendar rows) or explicitly flag which events are directly from the tool vs. inferred. The transparency banner about unverified figures is good practice but doesn't excuse the likely over-generation.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_economic_calendar and produced a well-structured table of macro events with Tesla-specific relevance notes. The main improvement area is grounding: the single tool result row likely contains only one event, but the answer lists ten distinct events \u2014 this suggests the LLM expanded or fabricated events beyond what the tool returned. Next time, either request more granular data (e.g., multiple calendar rows) or explicitly flag which events are directly from the tool vs. inferred. The transparency banner about unverified figures is good practice but doesn't excuse the likely over-generation.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+  "reasons": [
+    "slow latency_s=76.895"
+  ],
+  "result": {
+    "answer_text": "**Macroeconomic events scheduled between\u202f2026\u201106\u201127\u202fand\u202f2026\u201107\u201127 that could influence Tesla (TSLA)**  \n\n| Date (range) | Event\u2011type | Region | Why it matters for Tesla |\n|--------------|------------|--------|--------------------------|\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Services PMI (US)\u202f|\u202fUnited\u202fStates\u202f|\u202fA gauge of U.S. service\u2011sector activity; stronger services can boost consumer confidence and discretionary spending on electric vehicles.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (US)\u202f|\u202fUnited\u202fStates\u202f|\u202fIndicates health of U.S. manufacturing; impacts supply\u2011chain stability for battery components and vehicle production.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Services PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f|\u202fEuropean service\u2011sector trends affect demand for EVs in a key market for Tesla.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f|\u202fEuropean manufacturing conditions influence the availability of parts and the cost of production for Tesla\u2019s European operations.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (JP)\u202f|\u202fJapan\u202f|\u202fJapanese manufacturing activity can affect demand for high\u2011tech components (e.g., semiconductors) used in Tesla\u2019s vehicles.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fCME FedWatch shift to higher rate\u2011hike risk by year\u2011end\u202f|\u202fUnited\u202fStates\u202f|\u202fHigher interest\u2011rate expectations raise financing costs for auto loans, potentially dampening EV purchases.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fOil\u2011price movement (slide)\u202f|\u202fGlobal\u202f|\u202fFalling oil prices can affect the relative cost advantage of electric versus gasoline vehicles, influencing consumer buying decisions.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fU.S. Department of Agriculture crop\u2011cost forecast\u202f|\u202fUnited\u202fStates\u202f|\u202fRising agricultural input costs can affect overall inflation pressures, which in turn influence monetary\u2011policy stance and consumer purchasing power.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fIndustrial Production (JP) \u2013 May\u202f|\u202fJapan\u202f|\u202fSignals broader economic momentum in Japan, a market where Tesla\u2019s sales and charging\u2011infrastructure plans are expanding.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fEconomic Sentiment (EU) \u2013 Jun\u202f|\u202fEuropean\u202fUnion\u202f|\u202fConsumer sentiment trends can affect demand for premium EVs in Europe.\u202f[1] |\n\n*All events are drawn from the economic\u2011calendar feed covering the next 30\u202fdays (2026\u201106\u201127\u202fto\u202f2026\u201107\u201127)\u202f[1].*\n\n\u26a0 Some figures could not be verified (validator timeout).",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": null,
+        "id": "tool:economic_calendar",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "economic_calendar",
+        "title": "Economic calendar",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1024409
+      ],
+      [
+        "status",
+        1038604
+      ],
+      [
+        "thinking",
+        1157511
+      ],
+      [
+        "agent_iteration",
+        1157552
+      ],
+      [
+        "status",
+        5379198
+      ],
+      [
+        "tool_call",
+        5380225
+      ],
+      [
+        "tool_result",
+        5473608
+      ],
+      [
+        "agent_iteration",
+        5756889
+      ],
+      [
+        "agent_iteration",
+        9320534
+      ],
+      [
+        "tool_call",
+        16830190
+      ],
+      [
+        "tool_result",
+        17330600
+      ],
+      [
+        "agent_iteration",
+        17608757
+      ],
+      [
+        "token",
+        46741475
+      ],
+      [
+        "token",
+        46741602
+      ],
+      [
+        "token",
+        46741961
+      ],
+      [
+        "token",
+        46742087
+      ],
+      [
+        "token",
+        46742779
+      ],
+      [
+        "token",
+        46742868
+      ],
+      [
+        "token",
+        46743187
+      ],
+      [
+        "token",
+        46743490
+      ],
+      [
+        "token",
+        46743766
+      ],
+      [
+        "token",
+        46743858
+      ],
+      [
+        "token",
+        46744096
+      ],
+      [
+        "token",
+        46744401
+      ],
+      [
+        "token",
+        46744726
+      ],
+      [
+        "token",
+        46744934
+      ],
+      [
+        "token",
+        46745025
+      ],
+      [
+        "token",
+        46745148
+      ],
+      [
+        "token",
+        46745253
+      ],
+      [
+        "token",
+        46745380
+      ],
+      [
+        "token",
+        46745616
+      ],
+      [
+        "token",
+        46745774
+      ],
+      [
+        "token",
+        46745902
+      ],
+      [
+        "token",
+        46745938
+      ],
+      [
+        "token",
+        46746125
+      ],
+      [
+        "token",
+        46746373
+      ],
+      [
+        "token",
+        46746563
+      ],
+      [
+        "token",
+        46746680
+      ],
+      [
+        "token",
+        46746733
+      ],
+      [
+        "token",
+        46746787
+      ],
+      [
+        "token",
+        46747013
+      ],
+      [
+        "token",
+        46747170
+      ],
+      [
+        "token",
+        46747356
+      ],
+      [
+        "token",
+        46747560
+      ],
+      [
+        "token",
+        46747766
+      ],
+      [
+        "token",
+        46747972
+      ],
+      [
+        "token",
+        46748078
+      ],
+      [
+        "token",
+        46748329
+      ],
+      [
+        "token",
+        46748616
+      ],
+      [
+        "token",
+        46748791
+      ],
+      [
+        "token",
+        46748975
+      ],
+      [
+        "token",
+        46749153
+      ],
+      [
+        "token",
+        46749250
+      ],
+      [
+        "token",
+        46749398
+      ],
+      [
+        "token",
+        46749530
+      ],
+      [
+        "token",
+        46749625
+      ],
+      [
+        "token",
+        46763103
+      ],
+      [
+        "status",
+        46764218
+      ],
+      [
+        "final_answer",
+        76781760
+      ],
+      [
+        "citations",
+        76781881
+      ],
+      [
+        "contradictions",
+        76791695
+      ],
+      [
+        "suggestions",
+        76791770
+      ],
+      [
+        "metadata",
+        76841922
+      ],
+      [
+        "done",
+        76842264
+      ]
+    ],
+    "latency_s": 76.895,
+    "metadata": {
+      "intent": "MACRO",
+      "latency_ms": 76722,
+      "message_id": "019f0728-2dc7-759a-8b7e-496f4989ffda",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "76f0deb0-c058-49ae-969b-d559d17787b2"
+    },
+    "output_tokens": 613,
+    "phase_timings_ms": {
+      "check_cache": 5.315166024956852,
+      "entity_resolution": 117.67350000445731,
+      "grounding_validation": 30015.09009700385,
+      "llm_direct_text_generation": 29133.687972003827,
+      "llm_tool_planning": 44266.27331299824,
+      "load_history": 20.513625000603497,
+      "persist_and_cache": 50.43995802407153,
+      "tool_execution": 600.6018749903888,
+      "validate_input": 947.7403339988086
+    },
+    "question": "What macroeconomic events are likely to affect Tesla in the next 30 days?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_economic_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-27",
+            "to_date": "2026-07-27"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 95,
+          "item_count": 1,
+          "label": "Loading economic calendar...",
+          "result_preview": [
+            {
+              "id": "tool:economic_calendar",
+              "title": "Economic calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4598,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8159,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-27",
+            "date_to": "2026-07-27",
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 503,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 16449,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Macroeconomic events scheduled between\u202f2026\u201106\u201127\u202fand\u202f2026\u201107\u201127 that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "could influence Tesla (TSLA)**  \n\n| Date (range) | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Event\u2011type | Region | Why it matters for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Tesla |\n|--------------|------------|--------|--------------------------|\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "S&P Global Services PMI (US)\u202f|\u202fUnited\u202fStates\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202fA gauge of U.S. service\u2011sector activity; stronger "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "services can boost consumer confidence and discretionary spending "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "on electric vehicles.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (US)\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "United\u202fStates\u202f|\u202fIndicates health of U.S. manufacturing; "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "impacts supply\u2011chain stability for battery components and vehicle "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "production.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "S&P Global Services PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202fEuropean service\u2011sector trends affect demand for EVs "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in a key market for Tesla.\u202f[1] |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f|\u202fEuropean manufacturing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "conditions influence the availability of parts and the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "cost of production for Tesla\u2019s European operations.\u202f[1] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Manufacturing PMI (JP)\u202f|\u202fJapan\u202f|\u202fJapanese manufacturing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "activity can affect demand for high\u2011tech components (e.g., "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "semiconductors) used in Tesla\u2019s vehicles.\u202f[1] |\n|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fCME FedWatch shift to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "higher rate\u2011hike risk by year\u2011end\u202f|\u202fUnited\u202fStates\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202fHigher interest\u2011rate expectations raise financing costs for "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "auto loans, potentially dampening EV purchases.\u202f[1] |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fOil\u2011price movement (slide)\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\u202fGlobal\u202f|\u202fFalling oil prices can affect "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the relative cost advantage of electric versus gasoline "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "vehicles, influencing consumer buying decisions.\u202f[1] |\n|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fU.S. Department of Agriculture "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "crop\u2011cost forecast\u202f|\u202fUnited\u202fStates\u202f|\u202fRising agricultural "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "input costs can affect overall inflation pressures, which "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in turn influence monetary\u2011policy stance and consumer purchasing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "power.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Industrial Production (JP) \u2013 May\u202f|\u202fJapan\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Signals broader economic momentum in Japan, a market "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "where Tesla\u2019s sales and charging\u2011infrastructure plans are expanding.\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fEconomic "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Sentiment (EU) \u2013 Jun\u202f|\u202fEuropean\u202fUnion\u202f|\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Consumer sentiment trends can affect demand for premium "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "EVs in Europe.\u202f[1] |\n\n*All events are "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "drawn from the economic\u2011calendar feed covering the next "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "30\u202fdays (2026\u201106\u201127\u202fto\u202f2026\u201107\u201127)\u202f[1].*"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Macroeconomic events scheduled between\u202f2026\u201106\u201127\u202fand\u202f2026\u201107\u201127 that could influence Tesla (TSLA)**  \n\n| Date (range) | Event\u2011type | Region | Why it matters for Tesla |\n|--------------|------------|--------|--------------------------|\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Services PMI (US)\u202f|\u202fUnited\u202fStates\u202f|\u202fA gauge of U.S. service\u2011sector activity; stronger services can boost consumer confidence and discretionary spending on electric vehicles.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (US)\u202f|\u202fUnited\u202fStates\u202f|\u202fIndicates health of U.S. manufacturing; impacts supply\u2011chain stability for battery components and vehicle production.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Services PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f|\u202fEuropean service\u2011sector trends affect demand for EVs in a key market for Tesla.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (EU)\u202f|\u202fEuropean\u202fUnion\u202f|\u202fEuropean manufacturing conditions influence the availability of parts and the cost of production for Tesla\u2019s European operations.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fS&P Global Manufacturing PMI (JP)\u202f|\u202fJapan\u202f|\u202fJapanese manufacturing activity can affect demand for high\u2011tech components (e.g., semiconductors) used in Tesla\u2019s vehicles.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fCME FedWatch shift to higher rate\u2011hike risk by year\u2011end\u202f|\u202fUnited\u202fStates\u202f|\u202fHigher interest\u2011rate expectations raise financing costs for auto loans, potentially dampening EV purchases.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fOil\u2011price movement (slide)\u202f|\u202fGlobal\u202f|\u202fFalling oil prices can affect the relative cost advantage of electric versus gasoline vehicles, influencing consumer buying decisions.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fU.S. Department of Agriculture crop\u2011cost forecast\u202f|\u202fUnited\u202fStates\u202f|\u202fRising agricultural input costs can affect overall inflation pressures, which in turn influence monetary\u2011policy stance and consumer purchasing power.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fIndustrial Production (JP) \u2013 May\u202f|\u202fJapan\u202f|\u202fSignals broader economic momentum in Japan, a market where Tesla\u2019s sales and charging\u2011infrastructure plans are expanding.\u202f[1] |\n|\u202f2026\u201106\u201127\u202fto\u202f2026\u201107\u201127\u202f|\u202fEconomic Sentiment (EU) \u2013 Jun\u202f|\u202fEuropean\u202fUnion\u202f|\u202fConsumer sentiment trends can affect demand for premium EVs in Europe.\u202f[1] |\n\n*All events are drawn from the economic\u2011calendar feed covering the next 30\u202fdays (2026\u201106\u201127\u202fto\u202f2026\u201107\u201127)\u202f[1].*\n\n\u26a0 Some figures could not be verified (validator timeout)."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": null,
+            "id": "tool:economic_calendar",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "economic_calendar",
+            "title": "Economic calendar",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has ARE performed recently?",
+          "How do Alexandria Real Estate Equities Inc's fundamentals look?",
+          "Who are Alexandria Real Estate Equities Inc's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "MACRO",
+          "latency_ms": 76722,
+          "message_id": "019f0728-2dc7-759a-8b7e-496f4989ffda",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "76f0deb0-c058-49ae-969b-d559d17787b2"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.315166024956852,
+            "entity_resolution": 117.67350000445731,
+            "grounding_validation": 30015.09009700385,
+            "llm_direct_text_generation": 29133.687972003827,
+            "llm_tool_planning": 44266.27331299824,
+            "load_history": 20.513625000603497,
+            "persist_and_cache": 50.43995802407153,
+            "tool_execution": 600.6018749903888,
+            "validate_input": 947.7403339988086
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-27",
+          "to_date": "2026-07-27"
+        },
+        "name": "get_economic_calendar"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-27",
+          "date_to": "2026-07-27",
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 8.079,
+    "tps_streaming": 21.041,
+    "ttft_s": 1.024
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_events",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "aggregate"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for an economic calendar and used get_economic_calendar to retrieve relevant events. The secondary search_documents call was unnecessary and returned empty, adding no value. The final answer relies solely on the calendar data, so the extra call is wasted. For future similar queries, skip the news search unless the question explicitly asks for news or analyst reports. The trajectory is otherwise clean and well-routed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls is minimal for the intent; no redundancy. However, call 2 returned no data and was not needed for the final answer, making it slightly wasteful. A single call to get_economic_calendar would have sufficed.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls with no data dependency between them; both can be run in parallel. No ordering constraint violated.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 2 returned empty (items=0). The agent did not retry or substitute another tool; it simply used the data from call 1. Since the question could be answered with just the economic calendar, this is acceptable but not proactive recovery.",
+        "score": 20
+      },
+      "routing": {
+        "feedback": "call 1 get_economic_calendar is exactly the right tool for macroeconomic events. call 2 search_documents is a reasonable secondary attempt to find events/news, though the rubric expected search_events or get_entity_intelligence. Overall tool choice is appropriate for the intent.",
+        "score": 20
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 1,
+    "verdict": "GRADED"
+  }
+}

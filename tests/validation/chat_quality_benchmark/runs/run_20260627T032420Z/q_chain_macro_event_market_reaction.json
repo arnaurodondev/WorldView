@@ -1,0 +1,1837 @@
+{
+  "bucket": "PASS",
+  "category": "news",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_economic_calendar",
+      "search_events",
+      "search_documents"
+    ]
+  },
+  "heuristics": {
+    "char_count": 492,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_documents",
+      "search_events"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 53.946,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "search_events"
+    ],
+    "output_tokens": 123,
+    "phase_timings_ms": {
+      "check_cache": 2.8881670150440186,
+      "entity_resolution": 170.07137500331737,
+      "grounding_validation": 4312.20966798719,
+      "llm_synthesis_streaming": 5562.196085986216,
+      "llm_tool_planning": 38999.241100944346,
+      "load_history": 33.82308399886824,
+      "persist_and_cache": 56.96145800175145,
+      "tool_execution": 2436.8007110024337,
+      "validate_input": 856.9434169912711
+    },
+    "status_code": 200,
+    "tool_call_count": 7,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_economic_calendar"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_economic_calendar",
+      "search_documents"
+    ],
+    "tool_result_count": 7,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.94,
+    "word_count": 78
+  },
+  "id": "chain_macro_event_market_reaction",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for news coverage of a rate decision; answer is a brief refusal-like summary rather than a structured synthesis of coverage angles.",
+        "reason": "Question asks for news coverage of a rate decision; answer is a brief refusal-like summary rather than a structured synthesis of coverage angles.",
+        "score": 15
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer stays within tool scope and cites the single calendar row. The FedWatch mention is attributed to that row.",
+        "reason": "No grounding sample provided; answer stays within tool scope and cites the single calendar row. The FedWatch mention is attributed to that row.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present; answer provides a substantive highlight from the calendar row.",
+        "reason": "No refusal phrase present; answer provides a substantive highlight from the calendar row.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_economic_calendar and search_documents, both in expected_tools equivalence set.",
+        "reason": "Called get_economic_calendar and search_documents, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to the economic calendar and news search tools, but the answer is too thin for a 'deep' question. The user wanted news coverage of a specific decision; the agent found no news items and defaulted to a single FedWatch snippet. Next iteration should broaden the date range or try alternative search queries (e.g. 'FOMC decision', 'ECB rate') before concluding no coverage exists. Also consider adding a fallback that explains why no news was found (e.g. date range too narrow) rather than presenting a single line as the full answer.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_economic_calendar and search_documents, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided; answer stays within tool scope and cites the single calendar row. The FedWatch mention is attributed to that row.\"\n  },\n  \"framing\": {\n    \"score\": 15,\n    \"feedback\": \"Question asks for news coverage of a rate decision; answer is a brief refusal-like summary rather than a structured synthesis of coverage angles.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present; answer provides a substantive highlight from the calendar row.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to the economic calendar and news search tools, but the answer is too thin for a 'deep' question. The user wanted news coverage of a specific decision; the agent found no news items and defaulted to a single FedWatch snippet. Next iteration should broaden the date range or try alternative search queries (e.g. 'FOMC decision', 'ECB rate') before concluding no coverage exists. Also consider adding a fallback that explains why no news was found (e.g. date range too narrow) rather than presenting a single line as the full answer.\"\n}",
+    "reviewer_summary": "The agent correctly routed to the economic calendar and news search tools, but the answer is too thin for a 'deep' question. The user wanted news coverage of a specific decision; the agent found no news items and defaulted to a single FedWatch snippet. Next iteration should broaden the date range or try alternative search queries (e.g. 'FOMC decision', 'ECB rate') before concluding no coverage exists. Also consider adding a fallback that explains why no news was found (e.g. date range too narrow) rather than presenting a single line as the full answer.",
+    "score": 85,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 15,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 85,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about it.",
+  "reasons": [],
+  "result": {
+    "answer_text": "The retrieved data does not contain a specific FOMC or ECB rate\u2011decision announcement. The only related news snippet mentions that the CME\u202fFedWatch tool \u201cshifted to price rate\u2011hike risk by year\u2011end\u201d\u202f\u2014 indicating market expectations of a possible Fed rate increase later in the year, but no details of an actual decision were provided. No ECB rate\u2011decision coverage appears in the available sources.\u202f[ get_economic_calendar row 0 ]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        940161
+      ],
+      [
+        "status",
+        966711
+      ],
+      [
+        "thinking",
+        1139195
+      ],
+      [
+        "agent_iteration",
+        1139289
+      ],
+      [
+        "status",
+        10534003
+      ],
+      [
+        "tool_call",
+        10534780
+      ],
+      [
+        "tool_result",
+        10597036
+      ],
+      [
+        "agent_iteration",
+        10885335
+      ],
+      [
+        "tool_call",
+        13179600
+      ],
+      [
+        "tool_result",
+        13636391
+      ],
+      [
+        "agent_iteration",
+        13818492
+      ],
+      [
+        "tool_call",
+        15883151
+      ],
+      [
+        "tool_result",
+        16302367
+      ],
+      [
+        "agent_iteration",
+        16473179
+      ],
+      [
+        "tool_call",
+        27026405
+      ],
+      [
+        "tool_result",
+        27096347
+      ],
+      [
+        "agent_iteration",
+        27379064
+      ],
+      [
+        "tool_call",
+        30965021
+      ],
+      [
+        "tool_result",
+        31773036
+      ],
+      [
+        "agent_iteration",
+        31973282
+      ],
+      [
+        "tool_call",
+        38708663
+      ],
+      [
+        "tool_result",
+        39185983
+      ],
+      [
+        "agent_iteration",
+        39479473
+      ],
+      [
+        "tool_call",
+        43876601
+      ],
+      [
+        "tool_result",
+        43990566
+      ],
+      [
+        "agent_iteration",
+        43990748
+      ],
+      [
+        "token",
+        49533214
+      ],
+      [
+        "token",
+        49533457
+      ],
+      [
+        "token",
+        49533546
+      ],
+      [
+        "token",
+        49534038
+      ],
+      [
+        "token",
+        49534448
+      ],
+      [
+        "token",
+        49534660
+      ],
+      [
+        "token",
+        49534940
+      ],
+      [
+        "token",
+        49535000
+      ],
+      [
+        "token",
+        49535384
+      ],
+      [
+        "token",
+        49535595
+      ],
+      [
+        "token",
+        49535915
+      ],
+      [
+        "token",
+        49536186
+      ],
+      [
+        "token",
+        49536414
+      ],
+      [
+        "token",
+        49536571
+      ],
+      [
+        "token",
+        49536790
+      ],
+      [
+        "token",
+        49536968
+      ],
+      [
+        "token",
+        49537200
+      ],
+      [
+        "token",
+        49537530
+      ],
+      [
+        "token",
+        49537741
+      ],
+      [
+        "token",
+        49537940
+      ],
+      [
+        "token",
+        49538263
+      ],
+      [
+        "token",
+        49538599
+      ],
+      [
+        "token",
+        49538860
+      ],
+      [
+        "token",
+        49539021
+      ],
+      [
+        "token",
+        49539259
+      ],
+      [
+        "token",
+        49539409
+      ],
+      [
+        "token",
+        49539587
+      ],
+      [
+        "token",
+        49539804
+      ],
+      [
+        "token",
+        49540153
+      ],
+      [
+        "token",
+        49540345
+      ],
+      [
+        "token",
+        49540623
+      ],
+      [
+        "token",
+        49540847
+      ],
+      [
+        "token",
+        49541061
+      ],
+      [
+        "token",
+        49541110
+      ],
+      [
+        "token",
+        49541317
+      ],
+      [
+        "token",
+        49541649
+      ],
+      [
+        "token",
+        49541679
+      ],
+      [
+        "token",
+        49541973
+      ],
+      [
+        "token",
+        49542056
+      ],
+      [
+        "token",
+        49542166
+      ],
+      [
+        "token",
+        49542196
+      ],
+      [
+        "token",
+        49542456
+      ],
+      [
+        "token",
+        49542546
+      ],
+      [
+        "token",
+        49542646
+      ],
+      [
+        "token",
+        49542916
+      ],
+      [
+        "token",
+        49542953
+      ],
+      [
+        "token",
+        49543104
+      ],
+      [
+        "token",
+        49543330
+      ],
+      [
+        "token",
+        49543498
+      ],
+      [
+        "token",
+        49543805
+      ],
+      [
+        "token",
+        49543957
+      ],
+      [
+        "token",
+        49544196
+      ],
+      [
+        "token",
+        49544546
+      ],
+      [
+        "token",
+        49544996
+      ],
+      [
+        "token",
+        49545136
+      ],
+      [
+        "token",
+        49545307
+      ],
+      [
+        "token",
+        49545537
+      ],
+      [
+        "token",
+        49545700
+      ],
+      [
+        "token",
+        49546089
+      ],
+      [
+        "token",
+        49546285
+      ],
+      [
+        "token",
+        49546349
+      ],
+      [
+        "token",
+        49546604
+      ],
+      [
+        "token",
+        49546763
+      ],
+      [
+        "token",
+        49546964
+      ],
+      [
+        "token",
+        49547200
+      ],
+      [
+        "token",
+        49547335
+      ],
+      [
+        "token",
+        49547560
+      ],
+      [
+        "token",
+        49547789
+      ],
+      [
+        "token",
+        49547844
+      ],
+      [
+        "token",
+        49548056
+      ],
+      [
+        "token",
+        49548158
+      ],
+      [
+        "token",
+        49548387
+      ],
+      [
+        "token",
+        49548618
+      ],
+      [
+        "token",
+        49548770
+      ],
+      [
+        "token",
+        49548954
+      ],
+      [
+        "token",
+        49549047
+      ],
+      [
+        "token",
+        49549294
+      ],
+      [
+        "token",
+        49549527
+      ],
+      [
+        "token",
+        49549651
+      ],
+      [
+        "token",
+        49549896
+      ],
+      [
+        "token",
+        49549948
+      ],
+      [
+        "token",
+        49550025
+      ],
+      [
+        "token",
+        49550248
+      ],
+      [
+        "token",
+        49550418
+      ],
+      [
+        "token",
+        49550556
+      ],
+      [
+        "token",
+        49550934
+      ],
+      [
+        "token",
+        49550949
+      ],
+      [
+        "token",
+        49551219
+      ],
+      [
+        "token",
+        49551241
+      ],
+      [
+        "token",
+        49551304
+      ],
+      [
+        "token",
+        49551586
+      ],
+      [
+        "token",
+        49551840
+      ],
+      [
+        "token",
+        49552057
+      ],
+      [
+        "token",
+        49552121
+      ],
+      [
+        "status",
+        49558969
+      ],
+      [
+        "final_answer",
+        53897601
+      ],
+      [
+        "citations",
+        53897653
+      ],
+      [
+        "contradictions",
+        53898063
+      ],
+      [
+        "suggestions",
+        53898081
+      ],
+      [
+        "metadata",
+        53929417
+      ],
+      [
+        "done",
+        53929488
+      ]
+    ],
+    "latency_s": 53.946,
+    "metadata": {
+      "intent": "MACRO",
+      "latency_ms": 53805,
+      "message_id": "019f0777-088c-7752-8292-fc658a2510f5",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "ab3469cf-e422-45f0-9dbb-b76992d73980"
+    },
+    "output_tokens": 123,
+    "phase_timings_ms": {
+      "check_cache": 2.8881670150440186,
+      "entity_resolution": 170.07137500331737,
+      "grounding_validation": 4312.20966798719,
+      "llm_synthesis_streaming": 5562.196085986216,
+      "llm_tool_planning": 38999.241100944346,
+      "load_history": 33.82308399886824,
+      "persist_and_cache": 56.96145800175145,
+      "tool_execution": 2436.8007110024337,
+      "validate_input": 856.9434169912711
+    },
+    "question": "Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about it.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_economic_calendar\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-20",
+            "to_date": "2026-06-27"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 64,
+          "item_count": 1,
+          "label": "Loading economic calendar...",
+          "result_preview": [
+            {
+              "id": "tool:economic_calendar",
+              "title": "Economic calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9746,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-20",
+            "date_to": "2026-06-27",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 457,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 12678,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-20",
+            "date_to": "2026-06-27",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 420,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15334,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-01",
+            "to_date": "2026-06-27"
+          },
+          "label": "Loading economic calendar...",
+          "status": "running",
+          "tool": "get_economic_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 84,
+          "item_count": 1,
+          "label": "Loading economic calendar...",
+          "result_preview": [
+            {
+              "id": "tool:economic_calendar",
+              "title": "Economic calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_economic_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 26239,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 810,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 30834,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 5
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 481,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 38329,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 6
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2026-06-01",
+            "date_to": "2026-06-27",
+            "entity_tickers": [],
+            "source_types": [
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 115,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 42852,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 7
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " data"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " does"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " contain"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " specific"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " F"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "OM"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "C"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " or"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ECB"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decision"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " announcement"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " only"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " related"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " news"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " snippet"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " mentions"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " that"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " CME"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Fed"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Watch"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " tool"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " \u201c"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "shift"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ed"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " to"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " price"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "h"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ike"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " risk"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " by"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " year"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "end"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u201d"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2014"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " indicating"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " market"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " expectations"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " possible"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Fed"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " increase"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " later"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " year"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " but"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " no"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " details"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " of"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " an"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " actual"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " decision"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " were"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " provided"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " No"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ECB"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " rate"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2011"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "decision"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " coverage"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " appears"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sources"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "["
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " get"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_e"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "conomic"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "_calendar"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " row"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The retrieved data does not contain a specific FOMC or ECB rate\u2011decision announcement. The only related news snippet mentions that the CME\u202fFedWatch tool \u201cshifted to price rate\u2011hike risk by year\u2011end\u201d\u202f\u2014 indicating market expectations of a possible Fed rate increase later in the year, but no details of an actual decision were provided. No ECB rate\u2011decision coverage appears in the available sources.\u202f[ get_economic_calendar row 0 ]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "MACRO",
+          "latency_ms": 53805,
+          "message_id": "019f0777-088c-7752-8292-fc658a2510f5",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "ab3469cf-e422-45f0-9dbb-b76992d73980"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.8881670150440186,
+            "entity_resolution": 170.07137500331737,
+            "grounding_validation": 4312.20966798719,
+            "llm_synthesis_streaming": 5562.196085986216,
+            "llm_tool_planning": 38999.241100944346,
+            "load_history": 33.82308399886824,
+            "persist_and_cache": 56.96145800175145,
+            "tool_execution": 2436.8007110024337,
+            "validate_input": 856.9434169912711
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "from_date": "2026-06-20",
+          "to_date": "2026-06-27"
+        },
+        "name": "get_economic_calendar"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-20",
+          "date_to": "2026-06-27",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-20",
+          "date_to": "2026-06-27",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "from_date": "2026-06-01",
+          "to_date": "2026-06-27"
+        },
+        "name": "get_economic_calendar"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2026-06-01",
+          "date_to": "2026-06-27",
+          "entity_tickers": [],
+          "source_types": [
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_economic_calendar"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 2.321,
+    "tps_streaming": 22.114,
+    "ttft_s": 0.94
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_economic_calendar",
+      "search_events",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "Cites a rate decision date in the future as if it already happened"
+    ],
+    "required_facts": [
+      "Names the specific event (FOMC meeting, ECB decision, or similar) and its date",
+      "Summarises at least one news angle on the decision (hawkish/dovish/surprise/expected/etc.)"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "news",
+    "signal",
+    "macro"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent correctly identified the need for an economic calendar and made two appropriate calls to get_economic_calendar. However, it then made five identical search_documents calls with empty entity_tickers, never chaining the calendar output (event name, date) into the search. The core process failure is the lack of data dependency: the calendar result should have been used to populate entity_tickers or a query string. The agent also failed to recover from empty results, simply repeating the same failing call. The single most impactful change would be to extract the event identifier from the calendar and pass it to search_documents.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Seven calls were made, with four identical search_documents calls (calls 2,3,5,6,7) all returning empty. The agent never used the calendar output to inform the search. This is highly redundant and wasteful.",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "call 1 fetched calendar first, which is correct. However, the agent never used the calendar output to inform subsequent searches (entity_tickers remained empty). The ordering is otherwise fine but the dependency chain is broken.",
+        "score": 20
+      },
+      "recovery": {
+        "feedback": "After call 2 returned empty, the agent repeated the identical call (call 3) with no change. After call 4 returned calendar data, the agent again ran search_documents with empty entity_tickers (calls 5,6,7) instead of using the calendar output. No meaningful recovery was attempted.",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "call 1 and 4 used get_economic_calendar which is appropriate for finding rate decision dates; calls 2,3,5,6,7 used search_documents with empty entity_tickers, which is a poor fit for targeted news about a specific event. The agent should have extracted the event name/date from the calendar and then ",
+        "score": 15
+      }
+    },
+    "trajectory_score": 45,
+    "unrecovered_failures": 5,
+    "verdict": "GRADED"
+  }
+}

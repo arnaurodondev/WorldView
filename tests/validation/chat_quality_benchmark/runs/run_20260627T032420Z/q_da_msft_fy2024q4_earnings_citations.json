@@ -1,0 +1,1184 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "query_fundamentals",
+      "get_entity_news",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 258,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 34.711,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "output_tokens": 65,
+    "phase_timings_ms": {
+      "check_cache": 3.2727090001571923,
+      "entity_resolution": 258.31016700249165,
+      "grounding_validation": 4216.850461001741,
+      "llm_synthesis_streaming": 3911.730877007358,
+      "llm_tool_planning": 19516.9549669954,
+      "load_history": 19.110624998575076,
+      "persist_and_cache": 36.533833015710115,
+      "tool_execution": 3763.029293011641,
+      "validate_input": 722.2215010260697
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.783,
+    "word_count": 39
+  },
+  "id": "da_msft_fy2024q4_earnings_citations",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for specific earnings figures with citations; answer is a refusal that does not provide the requested data, under-delivering for a medium-depth query.",
+        "reason": "Question asks for specific earnings figures with citations; answer is a refusal that does not provide the requested data, under-delivering for a medium-depth query.",
+        "score": 10
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided; answer honestly states data is unavailable, consistent with empty tool results. No fabricated numbers.",
+        "reason": "No grounding sample provided; answer honestly states data is unavailable, consistent with empty tool results. No fabricated numbers.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'do not contain' and 'not available'; rubric.appropriate_refusal_ok=false and tool_results show empty data, but agent should have used expected tools before refusing.",
+        "reason": "Contains refusal phrase 'do not contain' and 'not available'; rubric.appropriate_refusal_ok=false and tool_results show empty data, but agent should have used expected tools before refusing.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Agent called only search_documents, not any of the expected tools (query_fundamentals, get_entity_news, get_fundamentals_history).",
+        "reason": "Agent called only search_documents, not any of the expected tools (query_fundamentals, get_entity_news, get_fundamentals_history).",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent failed to route the question to the correct tools (query_fundamentals, get_entity_news, or get_fundamentals_history) and instead made five calls to search_documents, all returning empty. The answer correctly refuses to fabricate numbers, but the refusal is inappropriate because the expected tools were never tried. The single most impactful change is to ensure the agent first attempts the tools listed in expected_tools before falling back to search_documents or refusing.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Agent called only search_documents, not any of the expected tools (query_fundamentals, get_entity_news, get_fundamentals_history).\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided; answer honestly states data is unavailable, consistent with empty tool results. No fabricated numbers.\"\n  },\n  \"framing\": {\n    \"score\": 10,\n    \"feedback\": \"Question asks for specific earnings figures with citations; answer is a refusal that does not provide the requested data, under-delivering for a medium-depth query.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'do not contain' and 'not available'; rubric.appropriate_refusal_ok=false and tool_results show empty data, but agent should have used expected tools before refusing.\"\n  },\n  \"reviewer_summary\": \"The agent failed to route the question to the correct tools (query_fundamentals, get_entity_news, or get_fundamentals_history) and instead made five calls to search_documents, all returning empty. The answer correctly refuses to fabricate numbers, but the refusal is inappropriate because the expected tools were never tried. The single most impactful change is to ensure the agent first attempts the tools listed in expected_tools before falling back to search_documents or refusing.\"\n}",
+    "reviewer_summary": "The agent failed to route the question to the correct tools (query_fundamentals, get_entity_news, or get_fundamentals_history) and instead made five calls to search_documents, all returning empty. The answer correctly refuses to fabricate numbers, but the refusal is inappropriate because the expected tools were never tried. The single most impactful change is to ensure the agent first attempts the tools listed in expected_tools before falling back to search_documents or refusing.",
+    "score": 30,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 10,
+        "grounding": 20,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 30,
+      "verdict": "FAIL"
+    },
+    "veto": null
+  },
+  "prompt": "What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite the source for each number.",
+  "reasons": [],
+  "result": {
+    "answer_text": "The retrieved sources do not contain Microsoft\u2019s fiscal\u202fQ4\u202f2024 earnings figures (revenue, net income, earnings per share, etc.).\u202fTherefore, those numbers are not available in the current context.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        783321
+      ],
+      [
+        "status",
+        799699
+      ],
+      [
+        "thinking",
+        1059430
+      ],
+      [
+        "agent_iteration",
+        1059552
+      ],
+      [
+        "status",
+        5103699
+      ],
+      [
+        "tool_call",
+        5103807
+      ],
+      [
+        "tool_result",
+        5737022
+      ],
+      [
+        "tool_call",
+        6211236
+      ],
+      [
+        "tool_result",
+        6211389
+      ],
+      [
+        "agent_iteration",
+        6894625
+      ],
+      [
+        "tool_call",
+        10815729
+      ],
+      [
+        "tool_result",
+        12128534
+      ],
+      [
+        "agent_iteration",
+        12598564
+      ],
+      [
+        "tool_call",
+        17667715
+      ],
+      [
+        "tool_result",
+        19011961
+      ],
+      [
+        "agent_iteration",
+        19560233
+      ],
+      [
+        "tool_call",
+        26050285
+      ],
+      [
+        "tool_result",
+        26518099
+      ],
+      [
+        "agent_iteration",
+        26518267
+      ],
+      [
+        "token",
+        30416987
+      ],
+      [
+        "token",
+        30417069
+      ],
+      [
+        "token",
+        30417121
+      ],
+      [
+        "token",
+        30417287
+      ],
+      [
+        "token",
+        30417844
+      ],
+      [
+        "token",
+        30418187
+      ],
+      [
+        "token",
+        30418339
+      ],
+      [
+        "token",
+        30418512
+      ],
+      [
+        "token",
+        30418732
+      ],
+      [
+        "token",
+        30418935
+      ],
+      [
+        "token",
+        30419210
+      ],
+      [
+        "token",
+        30419426
+      ],
+      [
+        "token",
+        30419673
+      ],
+      [
+        "token",
+        30419979
+      ],
+      [
+        "token",
+        30420225
+      ],
+      [
+        "token",
+        30420392
+      ],
+      [
+        "token",
+        30420734
+      ],
+      [
+        "token",
+        30421053
+      ],
+      [
+        "token",
+        30421685
+      ],
+      [
+        "token",
+        30422015
+      ],
+      [
+        "token",
+        30422797
+      ],
+      [
+        "token",
+        30423495
+      ],
+      [
+        "token",
+        30424170
+      ],
+      [
+        "token",
+        30424627
+      ],
+      [
+        "token",
+        30425081
+      ],
+      [
+        "token",
+        30425210
+      ],
+      [
+        "token",
+        30425703
+      ],
+      [
+        "token",
+        30426161
+      ],
+      [
+        "token",
+        30426607
+      ],
+      [
+        "token",
+        30426819
+      ],
+      [
+        "token",
+        30427027
+      ],
+      [
+        "token",
+        30427250
+      ],
+      [
+        "token",
+        30427599
+      ],
+      [
+        "token",
+        30427816
+      ],
+      [
+        "token",
+        30428180
+      ],
+      [
+        "token",
+        30428486
+      ],
+      [
+        "token",
+        30428853
+      ],
+      [
+        "token",
+        30429078
+      ],
+      [
+        "token",
+        30429536
+      ],
+      [
+        "token",
+        30430047
+      ],
+      [
+        "token",
+        30430515
+      ],
+      [
+        "token",
+        30430753
+      ],
+      [
+        "token",
+        30430914
+      ],
+      [
+        "status",
+        30437934
+      ],
+      [
+        "final_answer",
+        34653636
+      ],
+      [
+        "citations",
+        34653816
+      ],
+      [
+        "contradictions",
+        34655900
+      ],
+      [
+        "suggestions",
+        34656057
+      ],
+      [
+        "metadata",
+        34694856
+      ],
+      [
+        "done",
+        34695296
+      ]
+    ],
+    "latency_s": 34.711,
+    "metadata": {
+      "intent": "FACTUAL_LOOKUP",
+      "latency_ms": 132032,
+      "message_id": "019f0784-35a9-762c-a3b1-da5a376f760d",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "b90dfc71-8187-422b-80d5-5e129f89b487"
+    },
+    "output_tokens": 65,
+    "phase_timings_ms": {
+      "check_cache": 3.2727090001571923,
+      "entity_resolution": 258.31016700249165,
+      "grounding_validation": 4216.850461001741,
+      "llm_synthesis_streaming": 3911.730877007358,
+      "llm_tool_planning": 19516.9549669954,
+      "load_history": 19.110624998575076,
+      "persist_and_cache": 36.533833015710115,
+      "tool_execution": 3763.029293011641,
+      "validate_input": 722.2215010260697
+    },
+    "question": "What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite the source for each number.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_documents\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "MSFT"
+            ],
+            "source_types": [
+              "sec_filing",
+              "earnings",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 634,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "fallback_of": "search_documents",
+          "input": {
+            "entity_tickers": [
+              "MSFT"
+            ]
+          },
+          "is_fallback": true,
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 473,
+          "item_count": 1,
+          "result_preview": [
+            {
+              "id": "tool:chunk:019e4bee-55b7-7389-b3d2-4f30be0b9394",
+              "title": "Microsoft Rides on Enterprise AI Advancements: More Upside Ahead?"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5833,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "MSFT"
+            ],
+            "source_types": [
+              "earnings",
+              "sec_filing",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1312,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11536,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "MSFT"
+            ],
+            "source_types": [
+              "sec_filing",
+              "earnings",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 1346,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 18500,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2024-07-01",
+            "date_to": "2024-08-31",
+            "entity_tickers": [
+              "MSFT"
+            ],
+            "source_types": [
+              "sec_filing",
+              "earnings",
+              "news"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 468,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 25458,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "The"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " retrieved"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sources"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " do"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " contain"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Microsoft"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2019s"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " fiscal"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "4"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "202"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "4"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " earnings"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " figures"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " ("
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "re"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "venue"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " net"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " income"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " earnings"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " per"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " share"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " etc"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ".)."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Therefore"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " those"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " numbers"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " are"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " not"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " available"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " in"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " the"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " current"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " context"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The retrieved sources do not contain Microsoft\u2019s fiscal\u202fQ4\u202f2024 earnings figures (revenue, net income, earnings per share, etc.).\u202fTherefore, those numbers are not available in the current context.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has MSFT performed recently?",
+          "How do Microsoft Corporation's fundamentals look?",
+          "Who are Microsoft Corporation's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "FACTUAL_LOOKUP",
+          "latency_ms": 132032,
+          "message_id": "019f0784-35a9-762c-a3b1-da5a376f760d",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "b90dfc71-8187-422b-80d5-5e129f89b487"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.2727090001571923,
+            "entity_resolution": 258.31016700249165,
+            "grounding_validation": 4216.850461001741,
+            "llm_synthesis_streaming": 3911.730877007358,
+            "llm_tool_planning": 19516.9549669954,
+            "load_history": 19.110624998575076,
+            "persist_and_cache": 36.533833015710115,
+            "tool_execution": 3763.029293011641,
+            "validate_input": 722.2215010260697
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_tickers": [
+            "MSFT"
+          ],
+          "source_types": [
+            "sec_filing",
+            "earnings",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "MSFT"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "MSFT"
+          ],
+          "source_types": [
+            "earnings",
+            "sec_filing",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "MSFT"
+          ],
+          "source_types": [
+            "sec_filing",
+            "earnings",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "date_from": "2024-07-01",
+          "date_to": "2024-08-31",
+          "entity_tickers": [
+            "MSFT"
+          ],
+          "source_types": [
+            "sec_filing",
+            "earnings",
+            "news"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 1.916,
+    "tps_streaming": 16.617,
+    "ttft_s": 0.783
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_entity_news",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "earnings_data_from_a_different_quarter",
+      "uncited_numbers"
+    ],
+    "required_facts": [
+      "msft_fy2024_q4_revenue",
+      "msft_fy2024_q4_eps_or_net_income",
+      "citation_marker_per_number"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "financials",
+    "citations"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 1,
+    "reviewer_summary": "The agent misrouted the question entirely: it used a generic document search tool (search_documents) five times instead of the appropriate structured fundamentals tool (query_fundamentals) that would have returned the exact revenue and EPS numbers for MSFT Q4 FY2024. After the first empty result, it should have switched tools rather than repeating the same failing pattern. The single successful call (call 2) returned one document but was ignored. The most impactful change would be to replace the first search_documents call with query_fundamentals(ticker='MSFT', period='FY2024-Q4') to directly retrieve the required earnings data.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Calls 1, 3, 4, and 5 are nearly identical (same tool, same ticker, same source_types) and all returned empty. This is highly redundant. Only call 2 returned data, but it was not used. The chain could have been a single call to query_fundamentals instead of five wasted search_documents calls.",
+        "score": 5
+      },
+      "ordering": {
+        "feedback": "Only one tool type (search_documents) was called, with no data dependencies between calls. There is no ordering constraint to violate, so full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "After call 1 returned empty, the agent retried with different arguments (call 2: no source_types filter) and got 1 item, but then ignored that result and made three more identical failing calls (calls 3-5) with no change in approach. The agent never switched to a structured fundamentals tool, so it ",
+        "score": 5
+      },
+      "routing": {
+        "feedback": "The question asks for specific earnings numbers (revenue, EPS) for MSFT Q4 FY2024. The expected tools are query_fundamentals, get_entity_news, get_fundamentals_history. The agent only called search_documents (5 times), which is a generic document retrieval tool, not a structured fundamentals tool. T",
+        "score": 5
+      }
+    },
+    "trajectory_score": 40,
+    "unrecovered_failures": 3,
+    "verdict": "GRADED"
+  }
+}

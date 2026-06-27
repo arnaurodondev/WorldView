@@ -1,0 +1,554 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 396,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 10.879,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 99,
+    "phase_timings_ms": {
+      "check_cache": 3.208457987057045,
+      "entity_resolution": 79.10545798949897,
+      "grounding_validation": 0.9596250019967556,
+      "llm_direct_text_generation": 5142.299877974438,
+      "llm_tool_planning": 9431.515421980293,
+      "load_history": 21.87012499780394,
+      "persist_and_cache": 21.388583991210908,
+      "tool_execution": 85.05904200137593,
+      "validate_input": 871.8277509906329
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.938,
+    "word_count": 73
+  },
+  "id": "ru_meta_eps_trend",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for EPS over last 4 quarters; answer provides a clear table with each quarter and EPS, plus a note on missing data. Depth matches the factual lookup nature of the question.",
+        "reason": "Question asks for EPS over last 4 quarters; answer provides a clear table with each quarter and EPS, plus a note on missing data. Depth matches the factual lookup nature of the question.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims cite query_fundamentals row 0; Q2 FY2026 marked as unavailable, consistent with tool scope. No grounding sample to verify exact EPS values, but attribution is present and scope is respected.",
+        "reason": "Claims cite query_fundamentals row 0; Q2 FY2026 marked as unavailable, consistent with tool scope. No grounding sample to verify exact EPS values, but attribution is present and scope is respected.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive EPS data with a note on missing quarter.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive EPS data with a note on missing quarter.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "reason": "Called query_fundamentals, which is one of the expected tools (equivalence set).",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals, one of the expected tools, and produced a well-structured table answering the question. Grounding is adequate: the answer cites the tool row and transparently flags the missing Q2 FY2026 value. The only improvement would be to include the exact period labels returned by the tool (e.g., Q1 2025, Q2 2025) rather than FY2025/FY2026, to avoid any ambiguity about fiscal vs. calendar year. Overall, a solid response that meets the rubric requirements.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals, which is one of the expected tools (equivalence set).\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims cite query_fundamentals row 0; Q2 FY2026 marked as unavailable, consistent with tool scope. No grounding sample to verify exact EPS values, but attribution is present and scope is respected.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for EPS over last 4 quarters; answer provides a clear table with each quarter and EPS, plus a note on missing data. Depth matches the factual lookup nature of the question.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive EPS data with a note on missing quarter.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals, one of the expected tools, and produced a well-structured table answering the question. Grounding is adequate: the answer cites the tool row and transparently flags the missing Q2 FY2026 value. The only improvement would be to include the exact period labels returned by the tool (e.g., Q1 2025, Q2 2025) rather than FY2025/FY2026, to avoid any ambiguity about fiscal vs. calendar year. Overall, a solid response that meets the rubric requirements.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals, one of the expected tools, and produced a well-structured table answering the question. Grounding is adequate: the answer cites the tool row and transparently flags the missing Q2 FY2026 value. The only improvement would be to include the exact period labels returned by the tool (e.g., Q1 2025, Q2 2025) rather than FY2025/FY2026, to avoid any ambiguity about fiscal vs. calendar year. Overall, a solid response that meets the rubric requirements.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me Meta's EPS over the last 4 quarters.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Meta Platforms (META) \u2013 EPS (last 4 quarters)**  \n\n| Quarter | EPS |\n|---------|-----|\n| Q3 FY2025 | 7.25 |\n| Q4 FY2025 | 8.88 |\n| Q1 FY2026 | 7.31 |\n| Q2 FY2026 | \u2013 (data not available) |\n\n*The most recent quarter (Q2\u202fFY2026) has no EPS value in the source data.*  \n\nSource: EPS figures from the fundamentals query for META, covering the last four quarterly periods\u202f[query_fundamentals row 0].",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        937954
+      ],
+      [
+        "status",
+        955094
+      ],
+      [
+        "thinking",
+        1035582
+      ],
+      [
+        "agent_iteration",
+        1035660
+      ],
+      [
+        "status",
+        5326282
+      ],
+      [
+        "tool_call",
+        5326744
+      ],
+      [
+        "tool_result",
+        5411507
+      ],
+      [
+        "agent_iteration",
+        5703329
+      ],
+      [
+        "token",
+        10845848
+      ],
+      [
+        "token",
+        10845938
+      ],
+      [
+        "token",
+        10845988
+      ],
+      [
+        "token",
+        10846185
+      ],
+      [
+        "token",
+        10846542
+      ],
+      [
+        "token",
+        10846776
+      ],
+      [
+        "token",
+        10847084
+      ],
+      [
+        "token",
+        10847322
+      ],
+      [
+        "token",
+        10847428
+      ],
+      [
+        "token",
+        10847577
+      ],
+      [
+        "status",
+        10851292
+      ],
+      [
+        "final_answer",
+        10851598
+      ],
+      [
+        "citations",
+        10852489
+      ],
+      [
+        "contradictions",
+        10852602
+      ],
+      [
+        "suggestions",
+        10854214
+      ],
+      [
+        "metadata",
+        10874308
+      ],
+      [
+        "done",
+        10874362
+      ]
+    ],
+    "latency_s": 10.879,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 10797,
+      "message_id": "019f073a-6a41-78e2-b653-fae702fb1e46",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "7e3a7426-ade2-4e9f-a5c1-5a3b16231fbc"
+    },
+    "output_tokens": 99,
+    "phase_timings_ms": {
+      "check_cache": 3.208457987057045,
+      "entity_resolution": 79.10545798949897,
+      "grounding_validation": 0.9596250019967556,
+      "llm_direct_text_generation": 5142.299877974438,
+      "llm_tool_planning": 9431.515421980293,
+      "load_history": 21.87012499780394,
+      "persist_and_cache": 21.388583991210908,
+      "tool_execution": 85.05904200137593,
+      "validate_input": 871.8277509906329
+    },
+    "question": "Show me Meta's EPS over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "eps"
+            ],
+            "period_type": "quarterly",
+            "periods": 4,
+            "ticker": "META"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 84,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "META"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:META",
+              "title": "Fundamentals query: META"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 4667,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Meta Platforms (META) \u2013 EPS (last 4 quarters)**  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Quarter | EPS |\n|---------|-----|\n| Q3 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2025 | 7.25 |\n| Q4 FY2025 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "8.88 |\n| Q1 FY2026 | 7.31 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Q2 FY2026 | \u2013 (data not available) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n\n*The most recent quarter (Q2\u202fFY2026) has "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "no EPS value in the source data.*  \n\nSource: "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "EPS figures from the fundamentals query for META, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "covering the last four quarterly periods\u202f[query_fundamentals row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Meta Platforms (META) \u2013 EPS (last 4 quarters)**  \n\n| Quarter | EPS |\n|---------|-----|\n| Q3 FY2025 | 7.25 |\n| Q4 FY2025 | 8.88 |\n| Q1 FY2026 | 7.31 |\n| Q2 FY2026 | \u2013 (data not available) |\n\n*The most recent quarter (Q2\u202fFY2026) has no EPS value in the source data.*  \n\nSource: EPS figures from the fundamentals query for META, covering the last four quarterly periods\u202f[query_fundamentals row 0]."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 10797,
+          "message_id": "019f073a-6a41-78e2-b653-fae702fb1e46",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "7e3a7426-ade2-4e9f-a5c1-5a3b16231fbc"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.208457987057045,
+            "entity_resolution": 79.10545798949897,
+            "grounding_validation": 0.9596250019967556,
+            "llm_direct_text_generation": 5142.299877974438,
+            "llm_tool_planning": 9431.515421980293,
+            "load_history": 21.87012499780394,
+            "persist_and_cache": 21.388583991210908,
+            "tool_execution": 85.05904200137593,
+            "validate_input": 871.8277509906329
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "eps"
+          ],
+          "period_type": "quarterly",
+          "periods": 4,
+          "ticker": "META"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "META"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 9.959,
+    "tps_streaming": 19.252,
+    "ttft_s": 0.938
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_values"
+    ],
+    "required_facts": [
+      "eps_per_quarter",
+      "four_quarters_or_trend"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (Meta EPS over four quarters) and made a single, precise call to query_fundamentals with the right ticker, metric, period count, and period type. No wasted calls, no ordering issues, no recovery needed. The trajectory is textbook efficient for a single-fact retrieval. The only minor note is that the answer's table shows Q2 FY2026 as missing data, which is consistent with the tool's output \u2014 the agent did not fabricate values. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call returns all needed data; no redundancy or wasted steps.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no dependency chain to evaluate \u2014 ordering is trivially correct.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 uses query_fundamentals with ticker=META, metrics=[\"eps\"], periods=4, period_type=quarterly \u2014 exactly the right tool for an EPS history question.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

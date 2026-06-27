@@ -1,0 +1,727 @@
+{
+  "bucket": "PASS",
+  "category": "signal",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_market_movers",
+      "query_fundamentals",
+      "get_entity_news"
+    ]
+  },
+  "heuristics": {
+    "char_count": 939,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_market_movers",
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_news",
+      "get_market_movers",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 21.005,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_entity_news"
+    ],
+    "output_tokens": 235,
+    "phase_timings_ms": {
+      "check_cache": 5.492541997227818,
+      "entity_resolution": 165.81737500382587,
+      "grounding_validation": 3581.6037519834936,
+      "llm_direct_text_generation": 7443.521670007613,
+      "llm_tool_planning": 15631.045465997886,
+      "load_history": 30.445958022028208,
+      "persist_and_cache": 24.743250018218532,
+      "tool_execution": 501.34808401344344,
+      "validate_input": 564.9753340112511
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "mover_type",
+          "period"
+        ],
+        "tool": "get_market_movers"
+      },
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_market_movers",
+      "query_fundamentals"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.622,
+    "word_count": 135
+  },
+  "id": "chain_top_mover_fundamentals",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Structured answer with ticker, move, and fundamental analysis; depth is appropriate for a deep question, though verdict could be slightly more explicit.",
+        "reason": "Structured answer with ticker, move, and fundamental analysis; depth is appropriate for a deep question, though verdict could be slightly more explicit.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "Claims for ticker, market-cap, and P/E match GROUNDING SAMPLE; revenue/EPS correctly noted as unavailable. No scope violations.",
+        "reason": "Claims for ticker, market-cap, and P/E match GROUNDING SAMPLE; revenue/EPS correctly noted as unavailable. No scope violations.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_market_movers and query_fundamentals, both in expected_tools equivalence set.",
+        "reason": "Called get_market_movers and query_fundamentals, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified BLDR as the top mover and retrieved its P/E and market cap. The answer is well-grounded and cites tool results. The main improvement would be to also request revenue growth or margin metrics to give a stronger fundamental justification, rather than relying on a single P/E snapshot. The transparency banner is fine, but the verdict could be more decisive by comparing the P/E to sector averages or historical values.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_market_movers and query_fundamentals, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Claims for ticker, market-cap, and P/E match GROUNDING SAMPLE; revenue/EPS correctly noted as unavailable. No scope violations.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Structured answer with ticker, move, and fundamental analysis; depth is appropriate for a deep question, though verdict could be slightly more explicit.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified BLDR as the top mover and retrieved its P/E and market cap. The answer is well-grounded and cites tool results. The main improvement would be to also request revenue growth or margin metrics to give a stronger fundamental justification, rather than relying on a single P/E snapshot. The transparency banner is fine, but the verdict could be more decisive by comparing the P/E to sector averages or historical values.\"\n}",
+    "reviewer_summary": "The agent correctly identified BLDR as the top mover and retrieved its P/E and market cap. The answer is well-grounded and cites tool results. The main improvement would be to also request revenue growth or margin metrics to give a stronger fundamental justification, rather than relying on a single P/E snapshot. The transparency banner is fine, but the verdict could be more decisive by comparing the P/E to sector averages or historical values.",
+    "score": 92,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 2,
+      "unmatched": 6,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 2,
+        "unmatched": 6
+      },
+      "quality_score": 92,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "What's today's top market mover, and does its fundamentals justify the move?",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Top mover today (1\u2011day gainers)**  \n- **Ticker:** **BLDR** \u2013 identified as the leading gain\u2011leader in the 1\u2011day market\u2011movers list\u30101\u3011.\n\n**Fundamental snapshot for BLDR**  \n- **Market\u2011cap:** **$8.36\u202fB** (snapshot)\u30102\u3011  \n- **P/E ratio:** **29.68\u202f\u00d7** (snapshot)\u30102\u3011  \n- **Revenue (Q2\u202f2026):** data not available\u30102\u3011  \n- **EPS (Q2\u202f2026):** data not available\u30102\u3011\n\n**Does the fundamentals justify the move?**  \nThe available fundamentals show a mid\u2011size market cap and a relatively high P/E (\u224830\u00d7), but key profitability metrics (revenue and EPS for the most recent quarter) are missing from the data source. Without current revenue and earnings figures, we cannot fully evaluate whether the price rally is supported by underlying earnings growth or other financial improvements. The existing snapshot alone is insufficient to determine a clear fundamental justification for the move.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        622243
+      ],
+      [
+        "status",
+        647757
+      ],
+      [
+        "thinking",
+        814978
+      ],
+      [
+        "agent_iteration",
+        815032
+      ],
+      [
+        "status",
+        6675258
+      ],
+      [
+        "tool_call",
+        6675966
+      ],
+      [
+        "tool_result",
+        7056845
+      ],
+      [
+        "agent_iteration",
+        7310551
+      ],
+      [
+        "tool_call",
+        9649786
+      ],
+      [
+        "tool_result",
+        9761254
+      ],
+      [
+        "agent_iteration",
+        9932939
+      ],
+      [
+        "token",
+        17379038
+      ],
+      [
+        "token",
+        17379196
+      ],
+      [
+        "token",
+        17379601
+      ],
+      [
+        "token",
+        17379902
+      ],
+      [
+        "token",
+        17380408
+      ],
+      [
+        "token",
+        17380874
+      ],
+      [
+        "token",
+        17381127
+      ],
+      [
+        "token",
+        17381283
+      ],
+      [
+        "token",
+        17381568
+      ],
+      [
+        "token",
+        17381951
+      ],
+      [
+        "token",
+        17382515
+      ],
+      [
+        "token",
+        17382681
+      ],
+      [
+        "token",
+        17382827
+      ],
+      [
+        "token",
+        17382946
+      ],
+      [
+        "token",
+        17383139
+      ],
+      [
+        "token",
+        17383211
+      ],
+      [
+        "status",
+        17392608
+      ],
+      [
+        "final_answer",
+        20970143
+      ],
+      [
+        "citations",
+        20970309
+      ],
+      [
+        "contradictions",
+        20974311
+      ],
+      [
+        "suggestions",
+        20974380
+      ],
+      [
+        "metadata",
+        20997543
+      ],
+      [
+        "done",
+        20997637
+      ]
+    ],
+    "latency_s": 21.005,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 20928,
+      "message_id": "019f0778-6c67-7c9e-beaa-076163c00e9b",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "1e96926f-25f4-4a1c-bbf1-3b77b7c84fcf"
+    },
+    "output_tokens": 235,
+    "phase_timings_ms": {
+      "check_cache": 5.492541997227818,
+      "entity_resolution": 165.81737500382587,
+      "grounding_validation": 3581.6037519834936,
+      "llm_direct_text_generation": 7443.521670007613,
+      "llm_tool_planning": 15631.045465997886,
+      "load_history": 30.445958022028208,
+      "persist_and_cache": 24.743250018218532,
+      "tool_execution": 501.34808401344344,
+      "validate_input": 564.9753340112511
+    },
+    "question": "What's today's top market mover, and does its fundamentals justify the move?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_market_movers\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 1,
+            "mover_type": "gainers",
+            "period": "1D"
+          },
+          "label": "Fetching market movers...",
+          "status": "running",
+          "tool": "get_market_movers",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 383,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "BLDR"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching market movers...",
+          "result_preview": [
+            {
+              "id": "tool:movers:gainers:1D",
+              "title": "Market movers: gainers (1D)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_market_movers",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 6495,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "market_cap",
+              "revenue",
+              "eps",
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 1,
+            "ticker": "BLDR"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 116,
+          "grounding_sample": {
+            "fields": {
+              "market_cap": "8364931072",
+              "pe_ratio": "29.6832",
+              "ticker": "BLDR"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:BLDR",
+              "title": "Fundamentals query: BLDR"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9115,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Top mover today (1\u2011day gainers)**  \n- **Ticker:** **BLDR** "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u2013 identified as the leading gain\u2011leader in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1\u2011day market\u2011movers list\u30101\u3011.\n\n**Fundamental snapshot for BLDR**  \n- "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Market\u2011cap:** **$8.36\u202fB** (snapshot)\u30102\u3011  \n- **P/E ratio:** **29.68\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\u00d7** (snapshot)\u30102\u3011  \n- **Revenue (Q2\u202f2026):** data not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "available\u30102\u3011  \n- **EPS (Q2\u202f2026):** data not available\u30102\u3011\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Does the fundamentals justify the move?**  \nThe available "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "fundamentals show a mid\u2011size market cap and a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "relatively high P/E (\u224830\u00d7), but key profitability metrics "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(revenue and EPS for the most recent quarter) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "are missing from the data source. Without current "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue and earnings figures, we cannot fully evaluate "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "whether the price rally is supported by underlying "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "earnings growth or other financial improvements. The existing "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "snapshot alone is insufficient to determine a clear "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "fundamental justification for the move."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Top mover today (1\u2011day gainers)**  \n- **Ticker:** **BLDR** \u2013 identified as the leading gain\u2011leader in the 1\u2011day market\u2011movers list\u30101\u3011.\n\n**Fundamental snapshot for BLDR**  \n- **Market\u2011cap:** **$8.36\u202fB** (snapshot)\u30102\u3011  \n- **P/E ratio:** **29.68\u202f\u00d7** (snapshot)\u30102\u3011  \n- **Revenue (Q2\u202f2026):** data not available\u30102\u3011  \n- **EPS (Q2\u202f2026):** data not available\u30102\u3011\n\n**Does the fundamentals justify the move?**  \nThe available fundamentals show a mid\u2011size market cap and a relatively high P/E (\u224830\u00d7), but key profitability metrics (revenue and EPS for the most recent quarter) are missing from the data source. Without current revenue and earnings figures, we cannot fully evaluate whether the price rally is supported by underlying earnings growth or other financial improvements. The existing snapshot alone is insufficient to determine a clear fundamental justification for the move.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 20928,
+          "message_id": "019f0778-6c67-7c9e-beaa-076163c00e9b",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "1e96926f-25f4-4a1c-bbf1-3b77b7c84fcf"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.492541997227818,
+            "entity_resolution": 165.81737500382587,
+            "grounding_validation": 3581.6037519834936,
+            "llm_direct_text_generation": 7443.521670007613,
+            "llm_tool_planning": 15631.045465997886,
+            "load_history": 30.445958022028208,
+            "persist_and_cache": 24.743250018218532,
+            "tool_execution": 501.34808401344344,
+            "validate_input": 564.9753340112511
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 1,
+          "mover_type": "gainers",
+          "period": "1D"
+        },
+        "name": "get_market_movers"
+      },
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "market_cap",
+            "revenue",
+            "eps",
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 1,
+          "ticker": "BLDR"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "BLDR"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "market_cap": "8364931072",
+            "pe_ratio": "29.6832",
+            "ticker": "BLDR"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 11.529,
+    "tps_streaming": 31.571,
+    "ttft_s": 0.622
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_market_movers",
+      "query_fundamentals",
+      "get_entity_news"
+    ],
+    "forbidden_facts": [
+      "Picks a different stock than the actual top mover returned by the tool"
+    ],
+    "required_facts": [
+      "Names the top mover (ticker and % move)",
+      "Cites at least one fundamental metric (P/E, revenue growth, margin, etc.) for that mover",
+      "Offers a reasoned verdict on whether the move is fundamentally supported"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "signal",
+    "financial_data"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the top mover via get_market_movers and then chained the ticker into query_fundamentals, exactly matching the question's intent. The trace is clean, minimal, and dependency-ordered. The only process improvement would be to also call get_entity_news to check for a catalyst, but the rubric's expected chain is advisory and the agent's two-call approach still answers the question fully. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Two calls \u2014 one to get the mover, one to get its fundamentals \u2014 is the minimal sensible chain for this two-part question. No redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "call 1 resolves the top mover's ticker; call 2 consumes that ticker to fetch fundamentals. Dependency order is correct. Single chain, no ordering issues.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; both calls returned ok with items=1. Nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_market_movers correctly identifies the top mover; call 2 query_fundamentals on that ticker is exactly the right tool for the fundamental-justification part of the question. No mismatched tools.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

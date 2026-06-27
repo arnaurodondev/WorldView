@@ -1,0 +1,819 @@
+{
+  "bucket": "PASS",
+  "category": "relationship",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "traverse_graph",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 371,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_intelligence",
+      "search_entity_relations"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_entity_intelligence",
+      "traverse_graph"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 53.871,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "traverse_graph"
+    ],
+    "output_tokens": 93,
+    "phase_timings_ms": {
+      "check_cache": 4.430375003721565,
+      "entity_resolution": 206.06291701551527,
+      "grounding_validation": 17272.63900800608,
+      "llm_direct_text_generation": 15757.086216006428,
+      "llm_tool_planning": 33475.88505700696,
+      "load_history": 27.685374981956556,
+      "persist_and_cache": 17.600250022951514,
+      "tool_execution": 1000.2984169695992,
+      "validate_input": 1017.137749993708
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_name",
+          "limit",
+          "min_confidence",
+          "relation_type"
+        ],
+        "tool": "search_entity_relations"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "ttft_s": 1.082,
+    "word_count": 56
+  },
+  "id": "iter3_apple_suppliers_compound",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for top supplier list then details on the largest; answer provides a concise list and focused explanation, matching medium depth appropriately.",
+        "reason": "Question asks for top supplier list then details on the largest; answer provides a concise list and focused explanation, matching medium depth appropriately.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Claims are consistent with the tool trace (TSMC as supplier, semiconductor business, key customers). The transparency banner is neutral. No grounding sample contradicts the answer.",
+        "reason": "Claims are consistent with the tool trace (TSMC as supplier, semiconductor business, key customers). The transparency banner is neutral. No grounding sample contradicts the answer.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "reason": "No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Expected tools: traverse_graph or get_entity_intelligence. Agent called search_entity_relations (twice) and get_entity_intelligence, none of which are in the expected set.",
+        "reason": "Expected tools: traverse_graph or get_entity_intelligence. Agent called search_entity_relations (twice) and get_entity_intelligence, none of which are in the expected set.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified TSMC as Apple's top supplier and gave a reasonable summary of its business and customers, but it used the wrong tool set: the rubric expected traverse_graph or get_entity_intelligence, yet the trace shows only search_entity_relations and get_entity_intelligence (the latter is in the expected set but was called after the wrong tool). The primary issue is routing \u2014 the agent should have used traverse_graph to discover supplier relationships rather than search_entity_relations. Fix the tool routing to match the expected equivalence set, and the answer will be solid.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tools: traverse_graph or get_entity_intelligence. Agent called search_entity_relations (twice) and get_entity_intelligence, none of which are in the expected set.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"Claims are consistent with the tool trace (TSMC as supplier, semiconductor business, key customers). The transparency banner is neutral. No grounding sample contradicts the answer.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Question asks for top supplier list then details on the largest; answer provides a concise list and focused explanation, matching medium depth appropriately.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. Answer provides substantive data and analysis.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified TSMC as Apple's top supplier and gave a reasonable summary of its business and customers, but it used the wrong tool set: the rubric expected traverse_graph or get_entity_intelligence, yet the trace shows only search_entity_relations and get_entity_intelligence (the latter is in the expected set but was called after the wrong tool). The primary issue is routing \u2014 the agent should have used traverse_graph to discover supplier relationships rather than search_entity_relations. Fix the tool routing to match the expected equivalence set, and the answer will be solid.\"\n}",
+    "reviewer_summary": "The agent correctly identified TSMC as Apple's top supplier and gave a reasonable summary of its business and customers, but it used the wrong tool set: the rubric expected traverse_graph or get_entity_intelligence, yet the trace shows only search_entity_relations and get_entity_intelligence (the latter is in the expected set but was called after the wrong tool). The primary issue is routing \u2014 the agent should have used traverse_graph to discover supplier relationships rather than search_entity_relations. Fix the tool routing to match the expected equivalence set, and the answer will be solid.",
+    "score": 70,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "WARN",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 70,
+      "verdict": "WEAK"
+    },
+    "veto": null
+  },
+  "prompt": "List Apple's top suppliers, then for the largest supplier explain its main business and key customers.",
+  "reasons": [],
+  "result": {
+    "answer_text": "Apple\u2019s top supplier  \n- **Taiwan Semiconductor Manufacturing (TSMC)**\u202f[1]\n\n**Main business of TSMC**  \nTSMC is a major supplier of semiconductors to leading technology companies, manufacturing chips for some of the top chip designers in the world.\u202f[1]\n\n**Key customers of TSMC**  \nApple, AMD, and Nvidia.\u202f[1]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.82,
+        "entity_name": "Apple",
+        "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+        "item_type": "relation",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "knowledge_graph",
+        "title": "Relations: Apple",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1082207
+      ],
+      [
+        "status",
+        1106653
+      ],
+      [
+        "thinking",
+        1319392
+      ],
+      [
+        "agent_iteration",
+        1319410
+      ],
+      [
+        "status",
+        10289368
+      ],
+      [
+        "tool_call",
+        10290151
+      ],
+      [
+        "tool_result",
+        10804154
+      ],
+      [
+        "agent_iteration",
+        11085224
+      ],
+      [
+        "tool_call",
+        15929187
+      ],
+      [
+        "tool_result",
+        16343670
+      ],
+      [
+        "agent_iteration",
+        16620391
+      ],
+      [
+        "tool_call",
+        20527919
+      ],
+      [
+        "tool_result",
+        20596778
+      ],
+      [
+        "agent_iteration",
+        20765835
+      ],
+      [
+        "token",
+        36526791
+      ],
+      [
+        "token",
+        36526921
+      ],
+      [
+        "token",
+        36526948
+      ],
+      [
+        "token",
+        36527346
+      ],
+      [
+        "token",
+        36527514
+      ],
+      [
+        "token",
+        36527825
+      ],
+      [
+        "token",
+        36527995
+      ],
+      [
+        "token",
+        36528103
+      ],
+      [
+        "token",
+        36528278
+      ],
+      [
+        "token",
+        36528561
+      ],
+      [
+        "token",
+        36528869
+      ],
+      [
+        "token",
+        36529076
+      ],
+      [
+        "token",
+        36529386
+      ],
+      [
+        "token",
+        36529543
+      ],
+      [
+        "token",
+        36529775
+      ],
+      [
+        "token",
+        36530064
+      ],
+      [
+        "token",
+        36530208
+      ],
+      [
+        "token",
+        36530313
+      ],
+      [
+        "status",
+        36542035
+      ],
+      [
+        "final_answer",
+        53808937
+      ],
+      [
+        "citations",
+        53809013
+      ],
+      [
+        "contradictions",
+        53812963
+      ],
+      [
+        "suggestions",
+        53813012
+      ],
+      [
+        "metadata",
+        53835375
+      ],
+      [
+        "done",
+        53835545
+      ]
+    ],
+    "latency_s": 53.871,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 53764,
+      "message_id": "019f0737-23f4-7d5d-b015-5876981a55f0",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "94a6a622-f8a8-4400-b90b-44d53e71f415"
+    },
+    "output_tokens": 93,
+    "phase_timings_ms": {
+      "check_cache": 4.430375003721565,
+      "entity_resolution": 206.06291701551527,
+      "grounding_validation": 17272.63900800608,
+      "llm_direct_text_generation": 15757.086216006428,
+      "llm_tool_planning": 33475.88505700696,
+      "load_history": 27.685374981956556,
+      "persist_and_cache": 17.600250022951514,
+      "tool_execution": 1000.2984169695992,
+      "validate_input": 1017.137749993708
+    },
+    "question": "List Apple's top suppliers, then for the largest supplier explain its main business and key customers.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading search_entity_relations\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": null
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 514,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9765,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_name": "Apple",
+            "limit": 20,
+            "min_confidence": 0.6,
+            "relation_type": "supplier_of"
+          },
+          "label": "Mapping relationships for Apple",
+          "status": "running",
+          "tool": "search_entity_relations",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 415,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "Apple"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Mapping relationships for Apple",
+          "result_preview": [
+            {
+              "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+              "title": "Relations: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "search_entity_relations",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15300,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 69,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 19446,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Apple\u2019s top suppliers (as captured in the knowledge\u2011graph)**  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Supplier | Relationship to Apple | Confidence "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|----------|----------------------|------------|\n| Taiwan Semiconductor Manufacturing Co. (TSMC) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| supplier_of \u2192 Apple Inc. | 0.91 |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "*The knowledge\u2011graph currently lists only TSMC as a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "supplier of Apple; no other suppliers were returned "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "by the query.*\u202f[search_entity_relations row\u202f0]\n\n---\n\n### "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Largest supplier \u2013 Taiwan Semiconductor Manufacturing Co. (TSMC)\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Main business**  \nTSMC is a pure\u2011play semiconductor foundry "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "that manufactures chips for a wide range of "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "technology companies. It provides advanced process technologies (e.g., "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "5\u202fnm, 3\u202fnm) used in high\u2011performance and "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "power\u2011efficient integrated circuits.\u202f[search_entity_relations row\u202f0]\n\n**Key customers**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "According to the same relation data, TSMC\u2019s major "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "customers include:\n\n- Apple\u202fInc. (supplies the A\u2011series "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "processors for iPhones, iPads, Macs)  \n- Advanced Micro "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Devices (AMD)  \n- Nvidia\u202fCorporation  \n\nThese customers rely "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "on TSMC\u2019s leading\u2011edge wafer\u2011fabrication capabilities.\u202f[search_entity_relations row\u202f0]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Apple\u2019s top supplier  \n- **Taiwan Semiconductor Manufacturing (TSMC)**\u202f[1]\n\n**Main business of TSMC**  \nTSMC is a major supplier of semiconductors to leading technology companies, manufacturing chips for some of the top chip designers in the world.\u202f[1]\n\n**Key customers of TSMC**  \nApple, AMD, and Nvidia.\u202f[1]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.82,
+            "entity_name": "Apple",
+            "id": "tool:relations:01900000-0000-7000-8000-000000001001",
+            "item_type": "relation",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "knowledge_graph",
+            "title": "Relations: Apple",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 53764,
+          "message_id": "019f0737-23f4-7d5d-b015-5876981a55f0",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "94a6a622-f8a8-4400-b90b-44d53e71f415"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.430375003721565,
+            "entity_resolution": 206.06291701551527,
+            "grounding_validation": 17272.63900800608,
+            "llm_direct_text_generation": 15757.086216006428,
+            "llm_tool_planning": 33475.88505700696,
+            "load_history": 27.685374981956556,
+            "persist_and_cache": 17.600250022951514,
+            "tool_execution": 1000.2984169695992,
+            "validate_input": 1017.137749993708
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": null
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_name": "Apple",
+          "limit": 20,
+          "min_confidence": 0.6,
+          "relation_type": "supplier_of"
+        },
+        "name": "search_entity_relations"
+      },
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "Apple"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "search_entity_relations"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      }
+    ],
+    "tps": 1.762,
+    "tps_streaming": 5.902,
+    "ttft_s": 1.082
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "traverse_graph",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "compound"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent partially identified Apple's suppliers via search_entity_relations(supplier_of) but then wasted a call on Apple's own intelligence instead of chaining to the largest supplier's details. The trace lacks the critical get_entity_intelligence call on TSMC to answer the second half of the question. Process improvement: after resolving the top supplier, immediately call get_entity_intelligence on that entity to get its main business and key customers. Drop the redundant first search_entity_relations call without relation_type.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 1 is wasted (no relation_type, returns 1 item but not useful). Call 3 is unnecessary (Apple's own intelligence not asked). The agent should have called search_entity_relations with supplier_of once, then get_entity_intelligence on the top supplier. Two of three calls are redundant or irrelevant",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Call 1 and call 2 are redundant (call 1 without relation_type likely returned nothing useful; call 2 with supplier_of is the correct one). Call 3 fetches Apple's own intelligence, which is not needed for the question. The ordering does not chain to the supplier's details; the dependency to get TSMC'",
+        "score": 20
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "The question asks for Apple's top suppliers, then the largest supplier's business and customers. The agent called search_entity_relations twice (once without relation_type, once with supplier_of) and get_entity_intelligence on Apple itself. It never called a tool to get the largest supplier's busine",
+        "score": 10
+      }
+    },
+    "trajectory_score": 65,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

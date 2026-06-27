@@ -1,0 +1,655 @@
+{
+  "bucket": "PASS",
+  "category": "comparison",
+  "expected": {
+    "max_latency_s": 75,
+    "tools": [
+      "compare_entities",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ]
+  },
+  "heuristics": {
+    "char_count": 315,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch",
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 19.155,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities",
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 79,
+    "phase_timings_ms": {
+      "check_cache": 2.6057499926537275,
+      "entity_resolution": 131.94466699496843,
+      "grounding_validation": 1.334166998276487,
+      "llm_direct_text_generation": 6932.428461004747,
+      "llm_tool_planning": 17408.417091035517,
+      "load_history": 32.82508300617337,
+      "persist_and_cache": 17.992626002524048,
+      "tool_execution": 213.90295802848414,
+      "validate_input": 729.6923339890782
+    },
+    "status_code": 200,
+    "tool_call_count": 2,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      },
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 2,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.791,
+    "word_count": 44
+  },
+  "id": "ru_nvda_amd_compare_qtr",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Concise table format directly answers the comparison question; depth matches medium complexity.",
+        "reason": "Concise table format directly answers the comparison question; depth matches medium complexity.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Revenue and EPS values match grounding sample; gross margin claim 'not available' is consistent with missing coverage. No grounding sample for gross_margin \u2014 presumed band.",
+        "reason": "Revenue and EPS values match grounding sample; gross margin claim 'not available' is consistent with missing coverage. No grounding sample for gross_margin \u2014 presumed band.",
+        "score": 22
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A.",
+        "reason": "No refusal phrase present \u2014 N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+        "reason": "Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to query_fundamentals and get_fundamentals_history_batch, both valid expected tools, and produced a clean comparison table for revenue and EPS. The gross margin gap is handled transparently by noting missing coverage. The only improvement would be to attempt a gross_margin calculation from gross_profit/revenue if the raw metric is absent, but the current behaviour is acceptable. No refusals or grounding issues detected.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called query_fundamentals and get_fundamentals_history_batch, both in expected_tools equivalence set.\"\n  },\n  \"grounding\": {\n    \"score\": 22,\n    \"feedback\": \"Revenue and EPS values match grounding sample; gross margin claim 'not available' is consistent with missing coverage. No grounding sample for gross_margin \u2014 presumed band.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Concise table format directly answers the comparison question; depth matches medium complexity.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to query_fundamentals and get_fundamentals_history_batch, both valid expected tools, and produced a clean comparison table for revenue and EPS. The gross margin gap is handled transparently by noting missing coverage. The only improvement would be to attempt a gross_margin calculation from gross_profit/revenue if the raw metric is absent, but the current behaviour is acceptable. No refusals or grounding issues detected.\"\n}",
+    "reviewer_summary": "The agent correctly routed to query_fundamentals and get_fundamentals_history_batch, both valid expected tools, and produced a clean comparison table for revenue and EPS. The gross margin gap is handled transparently by noting missing coverage. The only improvement would be to attempt a gross_margin calculation from gross_profit/revenue if the raw metric is absent, but the current behaviour is acceptable. No refusals or grounding issues detected.",
+    "score": 97,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "verified",
+      "examples": [],
+      "substantiated": 3,
+      "unmatched": 1,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 22,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "verified",
+        "examples": [],
+        "matched": 3,
+        "unmatched": 1
+      },
+      "quality_score": 97,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Compare NVDA and AMD on revenue, EPS, and gross margin for the latest reported quarter.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Revenue (latest quarter)**  \n- NVDA: **$81.6\u202fB**   \n- AMD: **$10.3\u202fB**   \n\n**EPS (latest quarter)**  \n- NVDA: **$1.87**   \n- AMD: **$1.37**   \n\n**Gross margin** \u2013 The latest quarterly gross\u2011margin figures are not available for either company in the current data set (coverage\u202f=\u202fmissing)\u3010query_fundamentals row 1\u3011.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        791469
+      ],
+      [
+        "status",
+        810506
+      ],
+      [
+        "thinking",
+        944955
+      ],
+      [
+        "agent_iteration",
+        945022
+      ],
+      [
+        "status",
+        8698795
+      ],
+      [
+        "tool_call",
+        8699666
+      ],
+      [
+        "tool_result",
+        8806910
+      ],
+      [
+        "agent_iteration",
+        9180290
+      ],
+      [
+        "tool_call",
+        11908790
+      ],
+      [
+        "tool_result",
+        12010871
+      ],
+      [
+        "agent_iteration",
+        12190803
+      ],
+      [
+        "token",
+        19123161
+      ],
+      [
+        "token",
+        19123258
+      ],
+      [
+        "token",
+        19123277
+      ],
+      [
+        "token",
+        19123547
+      ],
+      [
+        "token",
+        19123637
+      ],
+      [
+        "token",
+        19123808
+      ],
+      [
+        "token",
+        19129132
+      ],
+      [
+        "status",
+        19129296
+      ],
+      [
+        "final_answer",
+        19129554
+      ],
+      [
+        "citations",
+        19129599
+      ],
+      [
+        "contradictions",
+        19133835
+      ],
+      [
+        "suggestions",
+        19133892
+      ],
+      [
+        "metadata",
+        19148581
+      ],
+      [
+        "done",
+        19148747
+      ]
+    ],
+    "latency_s": 19.155,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 19092,
+      "message_id": "019f0720-72a5-7542-ae06-ed90265ec92c",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "939e56df-e159-4b23-b379-3f552cf85143"
+    },
+    "output_tokens": 79,
+    "phase_timings_ms": {
+      "check_cache": 2.6057499926537275,
+      "entity_resolution": 131.94466699496843,
+      "grounding_validation": 1.334166998276487,
+      "llm_direct_text_generation": 6932.428461004747,
+      "llm_tool_planning": 17408.417091035517,
+      "load_history": 32.82508300617337,
+      "persist_and_cache": 17.992626002524048,
+      "tool_execution": 213.90295802848414,
+      "validate_input": 729.6923339890782
+    },
+    "question": "Compare NVDA and AMD on revenue, EPS, and gross margin for the latest reported quarter.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": true,
+            "metrics": [
+              "revenue",
+              "eps",
+              "gross_margin"
+            ],
+            "periods": 0,
+            "ticker": "NVDA"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 109,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "NVDA"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:NVDA",
+              "title": "Fundamentals query: NVDA"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8235,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 1,
+            "tickers": [
+              "NVDA",
+              "AMD"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 103,
+          "grounding_sample": {
+            "fields": {
+              "eps": "1.87",
+              "eps_2": "1.37",
+              "gross_profit": "61157000000",
+              "gross_profit_2": "5416000000",
+              "market_cap": "5053711646720",
+              "market_cap_2": "847667658752",
+              "net_income": "58321000000",
+              "net_income_2": "1383000000",
+              "pe_ratio": "31.9525",
+              "pe_ratio_2": "172.1358",
+              "revenue": "81615000000",
+              "revenue_2": "10253000000",
+              "ticker": "NVDA",
+              "ticker_2": "AMD"
+            },
+            "sampled_rows": 2,
+            "total_rows": 2,
+            "truncated": false
+          },
+          "item_count": 2,
+          "label": "get_fundamentals_history_batch...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals_batch:NVDA",
+              "title": "Fundamentals: NVDA"
+            },
+            {
+              "id": "tool:fundamentals_batch:AMD",
+              "title": "Fundamentals: AMD"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11245,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Revenue (latest quarter)**  \n- NVDA: **$81.6\u202fB** [get_fundamentals_history_batch "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row 2]  \n- AMD: **$10.3\u202fB** [get_fundamentals_history_batch row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "3]  \n\n**EPS (latest quarter)**  \n- NVDA: **$1.87** [get_fundamentals_history_batch "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row 2]  \n- AMD: **$1.37** [get_fundamentals_history_batch row 3]  \n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Gross margin** \u2013 The latest quarterly gross\u2011margin figures "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "are not available for either company in the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "current data set (coverage\u202f=\u202fmissing)\u3010query_fundamentals row 1\u3011."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "**Revenue (latest quarter)**  \n- NVDA: **$81.6\u202fB**   \n- AMD: **$10.3\u202fB**   \n\n**EPS (latest quarter)**  \n- NVDA: **$1.87**   \n- AMD: **$1.37**   \n\n**Gross margin** \u2013 The latest quarterly gross\u2011margin figures are not available for either company in the current data set (coverage\u202f=\u202fmissing)\u3010query_fundamentals row 1\u3011."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What's the latest news on Advanced Micro Devices Inc?",
+          "How has AMD performed recently?",
+          "Who are Advanced Micro Devices Inc's main competitors and partners?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 19092,
+          "message_id": "019f0720-72a5-7542-ae06-ed90265ec92c",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "939e56df-e159-4b23-b379-3f552cf85143"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.6057499926537275,
+            "entity_resolution": 131.94466699496843,
+            "grounding_validation": 1.334166998276487,
+            "llm_direct_text_generation": 6932.428461004747,
+            "llm_tool_planning": 17408.417091035517,
+            "load_history": 32.82508300617337,
+            "persist_and_cache": 17.992626002524048,
+            "tool_execution": 213.90295802848414,
+            "validate_input": 729.6923339890782
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": true,
+          "metrics": [
+            "revenue",
+            "eps",
+            "gross_margin"
+          ],
+          "periods": 0,
+          "ticker": "NVDA"
+        },
+        "name": "query_fundamentals"
+      },
+      {
+        "arguments": {
+          "periods": 1,
+          "tickers": [
+            "NVDA",
+            "AMD"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "NVDA"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      },
+      {
+        "grounding_sample": {
+          "fields": {
+            "eps": "1.87",
+            "eps_2": "1.37",
+            "gross_profit": "61157000000",
+            "gross_profit_2": "5416000000",
+            "market_cap": "5053711646720",
+            "market_cap_2": "847667658752",
+            "net_income": "58321000000",
+            "net_income_2": "1383000000",
+            "pe_ratio": "31.9525",
+            "pe_ratio_2": "172.1358",
+            "revenue": "81615000000",
+            "revenue_2": "10253000000",
+            "ticker": "NVDA",
+            "ticker_2": "AMD"
+          },
+          "sampled_rows": 2,
+          "total_rows": 2,
+          "truncated": false
+        },
+        "item_count": 2,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 4.302,
+    "tps_streaming": 11.396,
+    "ttft_s": 0.791
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "compare_entities",
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "real_user",
+    "smoke",
+    "comparison",
+    "financials"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly selected fundamentals tools for a revenue/EPS/gross-margin comparison. The chain is short and dependency-free. However, call 1 is wasted: get_fundamentals_history_batch already covers NVDA and AMD for all requested metrics. Removing call 1 would make the trajectory perfectly efficient. No recovery or ordering issues.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The two calls are not redundant, but call 1 (query_fundamentals for NVDA only) is unnecessary because call 2 already returns the same metrics for both tickers. Dropping call 1 would be leaner.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only two calls, no data dependency between them; order is irrelevant \u2014 no ordering issue.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls in the trace \u2014 nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 query_fundamentals and call 2 get_fundamentals_history_batch are exactly the right tools for a fundamentals comparison question \u2014 routing is correct.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 95,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

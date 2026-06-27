@@ -1,0 +1,523 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ]
+  },
+  "heuristics": {
+    "char_count": 298,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 27.945,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "output_tokens": 75,
+    "phase_timings_ms": {
+      "check_cache": 4.107665998162702,
+      "entity_resolution": 126.33466700208373,
+      "grounding_validation": 5078.0971700150985,
+      "llm_direct_text_generation": 4185.65216899151,
+      "llm_tool_planning": 21358.209259982686,
+      "load_history": 60.3946250048466,
+      "persist_and_cache": 22.39975001430139,
+      "tool_execution": 58.54391597677022,
+      "validate_input": 835.7486260065343
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "include_snapshot",
+          "metrics",
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "query_fundamentals"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.943,
+    "word_count": 50
+  },
+  "id": "da_aapl_pe_dec2024",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "grounding": {
+        "feedback": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "feedback": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "reason": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "raw_response": null,
+    "reviewer_summary": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+    "score": 0,
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 0,
+        "grounding": 0,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": "GROUNDING_CONTRADICTED",
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": false,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 1,
+        "evidence_mode": "verified",
+        "examples": [
+          {
+            "claim": 31.0,
+            "claim_text": "31",
+            "delta": 4.957599999999999,
+            "field": "pe_ratio",
+            "nearest_sample": 35.9576
+          }
+        ],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 0,
+      "verdict": "FAIL"
+    },
+    "veto": {
+      "contradicted": 1,
+      "detail": "GROUNDING CONTRADICTED: 1 numeric claim(s) disproved by a sampled tool value (e.g. claim '31' for field 'pe_ratio' vs sample 35.9576). The agent stated a number the tool's own payload contradicts \u2014 fabrication.",
+      "examples": [
+        {
+          "claim": 31.0,
+          "claim_text": "31",
+          "delta": 4.957599999999999,
+          "field": "pe_ratio",
+          "nearest_sample": 35.9576
+        }
+      ],
+      "reason": "numeric_claim_contradicted",
+      "type": "grounding_contradicted"
+    }
+  },
+  "prompt": "What was AAPL's P/E ratio as of December 31, 2024?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I\u2019m sorry, but I cannot find evidence that Apple\u202fInc.\u2019s price\u2011to\u2011earnings ratio on\u202fDecember\u202f31\u202f2024 was a specific value. The available fundamentals snapshot does not include a date, so I cannot confirm the P/E ratio for that exact day.\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        943098
+      ],
+      [
+        "status",
+        990405
+      ],
+      [
+        "thinking",
+        1120883
+      ],
+      [
+        "agent_iteration",
+        1121035
+      ],
+      [
+        "status",
+        18294713
+      ],
+      [
+        "tool_call",
+        18295708
+      ],
+      [
+        "tool_result",
+        18352988
+      ],
+      [
+        "agent_iteration",
+        18639667
+      ],
+      [
+        "token",
+        22828030
+      ],
+      [
+        "token",
+        22828127
+      ],
+      [
+        "token",
+        22828512
+      ],
+      [
+        "token",
+        22828575
+      ],
+      [
+        "token",
+        22833886
+      ],
+      [
+        "status",
+        22834058
+      ],
+      [
+        "final_answer",
+        27911880
+      ],
+      [
+        "citations",
+        27911974
+      ],
+      [
+        "contradictions",
+        27916570
+      ],
+      [
+        "suggestions",
+        27916612
+      ],
+      [
+        "metadata",
+        27935510
+      ],
+      [
+        "done",
+        27935676
+      ]
+    ],
+    "latency_s": 27.945,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 27831,
+      "message_id": "019f0780-6eca-7eac-89a4-5f354476fbb2",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "c447a43a-08ff-4e8c-a56f-4025b2eb1f96"
+    },
+    "output_tokens": 75,
+    "phase_timings_ms": {
+      "check_cache": 4.107665998162702,
+      "entity_resolution": 126.33466700208373,
+      "grounding_validation": 5078.0971700150985,
+      "llm_direct_text_generation": 4185.65216899151,
+      "llm_tool_planning": 21358.209259982686,
+      "load_history": 60.3946250048466,
+      "persist_and_cache": 22.39975001430139,
+      "tool_execution": 58.54391597677022,
+      "validate_input": 835.7486260065343
+    },
+    "question": "What was AAPL's P/E ratio as of December 31, 2024?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "include_snapshot": false,
+            "metrics": [
+              "pe_ratio"
+            ],
+            "period_type": "quarterly",
+            "periods": 5,
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 58,
+          "grounding_sample": {
+            "fields": {
+              "pe_ratio": "35.9576",
+              "ticker": "AAPL"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "query_fundamentals...",
+          "result_preview": [
+            {
+              "id": "tool:fundamentals:AAPL",
+              "title": "Fundamentals query: AAPL"
+            }
+          ],
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 17520,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "I\u2019m sorry, but I cannot find evidence that "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple\u202fInc.\u2019s price\u2011to\u2011earnings ratio on\u202fDecember\u202f31\u202f2024 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "was a specific value. The available fundamentals snapshot "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "does not include a date, so I cannot "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "confirm the P/E ratio for that exact day."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I\u2019m sorry, but I cannot find evidence that Apple\u202fInc.\u2019s price\u2011to\u2011earnings ratio on\u202fDecember\u202f31\u202f2024 was a specific value. The available fundamentals snapshot does not include a date, so I cannot confirm the P/E ratio for that exact day.\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 27831,
+          "message_id": "019f0780-6eca-7eac-89a4-5f354476fbb2",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "c447a43a-08ff-4e8c-a56f-4025b2eb1f96"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.107665998162702,
+            "entity_resolution": 126.33466700208373,
+            "grounding_validation": 5078.0971700150985,
+            "llm_direct_text_generation": 4185.65216899151,
+            "llm_tool_planning": 21358.209259982686,
+            "load_history": 60.3946250048466,
+            "persist_and_cache": 22.39975001430139,
+            "tool_execution": 58.54391597677022,
+            "validate_input": 835.7486260065343
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "include_snapshot": false,
+          "metrics": [
+            "pe_ratio"
+          ],
+          "period_type": "quarterly",
+          "periods": 5,
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "pe_ratio": "35.9576",
+            "ticker": "AAPL"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 2.778,
+    "tps_streaming": 17.918,
+    "ttft_s": 0.943
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "query_fundamentals",
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "pe_from_2025_or_2026",
+      "single_quarter_passed_off_as_ttm",
+      "unanchored_pe_value"
+    ],
+    "required_facts": [
+      "pe_value_as_of_2024_12_31",
+      "period_anchor_acknowledged"
+    ]
+  },
+  "tags": [
+    "date_anchored",
+    "regression_stable",
+    "ratio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the need for a fundamentals tool but chose query_fundamentals (snapshot, no date) instead of get_fundamentals_history which can anchor to a specific date. After receiving a dataless result, it did not retry with the appropriate tool \u2014 it issued a refusal. The single most impactful change would be: after the snapshot call returns no date, chain to get_fundamentals_history(ticker=AAPL, date=2024-12-31) to resolve the exact P/E ratio. The refusal was premature given that the data likely exists with the correct tool.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "The single call is minimal, but it was the wrong tool for the date-anchored ask. A single well-chosen call would be 25; here the call was insufficient, so the chain is not wasteful but also not effective.",
+        "score": 20
+      },
+      "ordering": {
+        "feedback": "Only one call was made; there is no ordering constraint to violate. Single-call traces get full marks.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "call 1 returned items=1 but the agent treated it as insufficient (no date anchor). Instead of retrying with get_fundamentals_history or adding a date filter, the agent gave up and issued a refusal. No recovery attempt was made.",
+        "score": 10
+      },
+      "routing": {
+        "feedback": "call 1 query_fundamentals is the right kind of tool for a P/E question, but the rubric expected a date-anchored call (get_fundamentals_history) or at least a period anchor. The agent used a snapshot call that returned no date, which is a routing mismatch for a specific-date ask.",
+        "score": 20
+      }
+    },
+    "trajectory_score": 75,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

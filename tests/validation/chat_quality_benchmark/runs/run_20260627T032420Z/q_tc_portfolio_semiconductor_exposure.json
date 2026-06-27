@@ -1,0 +1,633 @@
+{
+  "bucket": "WARN",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 45,
+    "tools": [
+      "get_portfolio_context"
+    ]
+  },
+  "heuristics": {
+    "char_count": 297,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_portfolio_context"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_portfolio_context"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 55.023,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "output_tokens": 75,
+    "phase_timings_ms": {
+      "check_cache": 11.227208975469694,
+      "entity_resolution": 115.86245798389427,
+      "grounding_validation": 7906.9410449883435,
+      "llm_direct_text_generation": 37343.862933979835,
+      "llm_tool_planning": 45647.793979995186,
+      "load_history": 37.460041989106685,
+      "persist_and_cache": 42.9437079874333,
+      "tool_execution": 203.77008398645557,
+      "validate_input": 682.990166998934
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [],
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_portfolio_context"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "ttft_s": 0.755,
+    "word_count": 40
+  },
+  "id": "tc_portfolio_semiconductor_exposure",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for a specific sector allocation; answer starts with a generic 'let me look up' preamble and does not deliver a concrete percentage or breakdown, under-developing the response.",
+        "reason": "Question asks for a specific sector allocation; answer starts with a generic 'let me look up' preamble and does not deliver a concrete percentage or breakdown, under-developing the response.",
+        "score": 15
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer does not cite specific numbers, and the transparency banner is neutral. No scope/coverage violations observed.",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer does not cite specific numbers, and the transparency banner is neutral. No scope/coverage violations observed.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. The answer attempts to answer and includes a tool call.",
+        "reason": "No refusal phrase present \u2014 N/A. The answer attempts to answer and includes a tool call.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_portfolio_context, which is the expected tool for portfolio holdings.",
+        "reason": "Called get_portfolio_context, which is the expected tool for portfolio holdings.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly routed to get_portfolio_context, but the answer is incomplete: it describes the intent to look up holdings but never actually provides the semiconductor allocation percentage. The framing is too shallow for a medium-depth question \u2014 the user expects a concrete sector exposure figure. Next step: ensure the answer extracts and presents the actual sector weight from the tool result, or if data is missing, explicitly state that and refuse appropriately per the rubric.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_portfolio_context, which is the expected tool for portfolio holdings.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer does not cite specific numbers, and the transparency banner is neutral. No scope/coverage violations observed.\"\n  },\n  \"framing\": {\n    \"score\": 15,\n    \"feedback\": \"Question asks for a specific sector allocation; answer starts with a generic 'let me look up' preamble and does not deliver a concrete percentage or breakdown, under-developing the response.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. The answer attempts to answer and includes a tool call.\"\n  },\n  \"reviewer_summary\": \"The agent correctly routed to get_portfolio_context, but the answer is incomplete: it describes the intent to look up holdings but never actually provides the semiconductor allocation percentage. The framing is too shallow for a medium-depth question \u2014 the user expects a concrete sector exposure figure. Next step: ensure the answer extracts and presents the actual sector weight from the tool result, or if data is missing, explicitly state that and refuse appropriately per the rubric.\"\n}",
+    "reviewer_summary": "The agent correctly routed to get_portfolio_context, but the answer is incomplete: it describes the intent to look up holdings but never actually provides the semiconductor allocation percentage. The framing is too shallow for a medium-depth question \u2014 the user expects a concrete sector exposure figure. Next step: ensure the answer extracts and presents the actual sector weight from the tool result, or if data is missing, explicitly state that and refuse appropriately per the rubric.",
+    "score": 85,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 15,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 85,
+      "verdict": "PASS"
+    },
+    "veto": null
+  },
+  "prompt": "How much of my portfolio is in semiconductors?",
+  "reasons": [
+    "slow latency_s=55.023"
+  ],
+  "result": {
+    "answer_text": "I need to check your portfolio holdings first, then determine which are semiconductor companies.\n\nLet me look up your portfolio and the semiconductor industry.\n\n<tool_use>\nget_portfolio_context\n<parameters>\n{}\n</parameters>\n</tool_use>\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        754951
+      ],
+      [
+        "status",
+        772792
+      ],
+      [
+        "thinking",
+        889272
+      ],
+      [
+        "agent_iteration",
+        889312
+      ],
+      [
+        "status",
+        9199761
+      ],
+      [
+        "tool_call",
+        9199827
+      ],
+      [
+        "tool_result",
+        9401027
+      ],
+      [
+        "agent_iteration",
+        9706347
+      ],
+      [
+        "token",
+        47051003
+      ],
+      [
+        "token",
+        47051144
+      ],
+      [
+        "token",
+        47051170
+      ],
+      [
+        "token",
+        47051187
+      ],
+      [
+        "token",
+        47051207
+      ],
+      [
+        "token",
+        47051224
+      ],
+      [
+        "token",
+        47051261
+      ],
+      [
+        "token",
+        47051334
+      ],
+      [
+        "token",
+        47051392
+      ],
+      [
+        "token",
+        47051472
+      ],
+      [
+        "token",
+        47052149
+      ],
+      [
+        "token",
+        47052188
+      ],
+      [
+        "token",
+        47052244
+      ],
+      [
+        "token",
+        47052459
+      ],
+      [
+        "token",
+        47052612
+      ],
+      [
+        "token",
+        47052809
+      ],
+      [
+        "token",
+        47052987
+      ],
+      [
+        "token",
+        47053033
+      ],
+      [
+        "token",
+        47053120
+      ],
+      [
+        "token",
+        47053273
+      ],
+      [
+        "token",
+        47053385
+      ],
+      [
+        "token",
+        47053472
+      ],
+      [
+        "status",
+        47065339
+      ],
+      [
+        "final_answer",
+        54970651
+      ],
+      [
+        "citations",
+        54970684
+      ],
+      [
+        "contradictions",
+        54985853
+      ],
+      [
+        "suggestions",
+        54985908
+      ],
+      [
+        "metadata",
+        55013614
+      ],
+      [
+        "done",
+        55013757
+      ]
+    ],
+    "latency_s": 55.023,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 54935,
+      "message_id": "019f0758-ded8-7587-baad-edb323230b30",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "1508f4b3-ad39-480c-8d7b-860e4d86eee7"
+    },
+    "output_tokens": 75,
+    "phase_timings_ms": {
+      "check_cache": 11.227208975469694,
+      "entity_resolution": 115.86245798389427,
+      "grounding_validation": 7906.9410449883435,
+      "llm_direct_text_generation": 37343.862933979835,
+      "llm_tool_planning": 45647.793979995186,
+      "load_history": 37.460041989106685,
+      "persist_and_cache": 42.9437079874333,
+      "tool_execution": 203.77008398645557,
+      "validate_input": 682.990166998934
+    },
+    "question": "How much of my portfolio is in semiconductors?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_portfolio_context\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading portfolio context...",
+          "status": "running",
+          "tool": "get_portfolio_context",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 203,
+          "item_count": 1,
+          "label": "Loading portfolio context...",
+          "result_preview": [
+            {
+              "id": "tool:portfolio:01900000-0000-7000-8000-000000000010",
+              "title": "Portfolio context"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_portfolio_context",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 8816,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Based on the portfolio snapshot you provided, none "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of the listed holdings are pure\u2011play semiconductor stocks. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The only position that could contain semiconductor exposure "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is the **Technology Select Sector SPDR\u00ae Fund (XLK)**, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "which holds a broad basket of technology companies\u2014including "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "some semiconductor firms\u2014but the portfolio data does not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "break out the sector composition or the weight "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of semiconductors within that ETF.\n\nTherefore:\n\n| Holding "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Direct semiconductor exposure |\n|---------|------------------------------|\n| GOOGL "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(Alphabet Inc.) | No |\n| PPA (Invesco "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Aerospace & Defense ETF) | No |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "XLE (Energy Select Sector SPDR\u00ae Fund) | No "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| VTV (Vanguard Value Index Fund ETF) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| No |\n| XLK (Technology Select Sector "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "SPDR\u00ae Fund) | Indirect (contains semiconductors as part "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of a broader tech basket) |\n| XLV "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(\u2026\u202f) | No |\n\n**Result:**\u202f0\u202f% "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of the portfolio is directly invested in semiconductor "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "companies; any semiconductor exposure is indirect and limited "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "to the XLK ETF, for which the exact "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "percentage cannot be determined from the current portfolio "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "data.\u202f[1]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I need to check your portfolio holdings first, then determine which are semiconductor companies.\n\nLet me look up your portfolio and the semiconductor industry.\n\n<tool_use>\nget_portfolio_context\n<parameters>\n{}\n</parameters>\n</tool_use>\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "Which of my holdings carry the most risk right now?",
+          "What's the latest news on Portfolio?",
+          "How has Portfolio performed recently?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 54935,
+          "message_id": "019f0758-ded8-7587-baad-edb323230b30",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "1508f4b3-ad39-480c-8d7b-860e4d86eee7"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 11.227208975469694,
+            "entity_resolution": 115.86245798389427,
+            "grounding_validation": 7906.9410449883435,
+            "llm_direct_text_generation": 37343.862933979835,
+            "llm_tool_planning": 45647.793979995186,
+            "load_history": 37.460041989106685,
+            "persist_and_cache": 42.9437079874333,
+            "tool_execution": 203.77008398645557,
+            "validate_input": 682.990166998934
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {},
+        "name": "get_portfolio_context"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      }
+    ],
+    "tps": 1.382,
+    "tps_streaming": 2.008,
+    "ttft_s": 0.755
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_portfolio_context"
+    ],
+    "forbidden_facts": [
+      "generic_semiconductor_outlook_no_portfolio_data"
+    ],
+    "required_facts": [
+      "portfolio_holdings_referenced",
+      "sector_exposure_or_percent"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_portfolio_context"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified that a portfolio-sector question requires only get_portfolio_context, made exactly one call, and had no failures or wasted steps. The trajectory is minimal and perfectly aligned with the intent. No process change needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "single well-chosen call for a single-fact portfolio question; no redundancy.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "single-call trace has no ordering constraint; nothing to penalise.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "no failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_portfolio_context is exactly the right tool for a portfolio-sector question; no other tool needed.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

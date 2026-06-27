@@ -1,0 +1,667 @@
+{
+  "bucket": "PASS",
+  "category": "portfolio",
+  "expected": {
+    "max_latency_s": 120,
+    "tools": [
+      "get_portfolio_context",
+      "get_earnings_calendar"
+    ]
+  },
+  "heuristics": {
+    "char_count": 188,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_earnings_calendar",
+      "get_portfolio_context"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_earnings_calendar",
+      "get_portfolio_context"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 60.279,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 6.307000003289431,
+      "entity_resolution": 245.56512499111705,
+      "grounding_validation": 7030.020253005205,
+      "llm_direct_text_generation": 4768.194294010755,
+      "llm_tool_planning": 44356.77060202579,
+      "load_history": 57.78258299687877,
+      "persist_and_cache": 45.72625001310371,
+      "tool_execution": 282.2508320095949,
+      "validate_input": 1828.867125994293
+    },
+    "status_code": 200,
+    "tool_call_count": 4,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [],
+        "tool": "get_portfolio_context"
+      },
+      {
+        "arguments_keys": [],
+        "tool": "get_portfolio_context"
+      },
+      {
+        "arguments_keys": [],
+        "tool": "get_portfolio_context"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "to_date"
+        ],
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_earnings_calendar",
+      "get_portfolio_context"
+    ],
+    "tool_result_count": 4,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "ttft_s": 1.882,
+    "word_count": 29
+  },
+  "id": "chain_portfolio_upcoming_earnings",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Concise, direct answer appropriate for a factual lookup with no data returned \u2014 no unnecessary elaboration.",
+        "reason": "Concise, direct answer appropriate for a factual lookup with no data returned \u2014 no unnecessary elaboration.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "Answer truthfully reports empty results; no fabricated dates or tickers. Stays within tool scope.",
+        "reason": "Answer truthfully reports empty results; no fabricated dates or tickers. Stays within tool scope.",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 answer provides a clear, data-supported negative result.",
+        "reason": "No refusal phrase present \u2014 answer provides a clear, data-supported negative result.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.",
+        "reason": "Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent correctly identified the user's intent (portfolio earnings calendar), routed to the two required tools, and faithfully reported that no earnings dates were found. The answer is concise, grounded in the empty tool result, and avoids fabrication. No changes needed; this is a clean handling of a zero-result scenario.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called both expected tools (get_portfolio_context and get_earnings_calendar) \u2014 correct routing.\"\n  },\n  \"grounding\": {\n    \"score\": 25,\n    \"feedback\": \"Answer truthfully reports empty results; no fabricated dates or tickers. Stays within tool scope.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Concise, direct answer appropriate for a factual lookup with no data returned \u2014 no unnecessary elaboration.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 answer provides a clear, data-supported negative result.\"\n  },\n  \"reviewer_summary\": \"The agent correctly identified the user's intent (portfolio earnings calendar), routed to the two required tools, and faithfully reported that no earnings dates were found. The answer is concise, grounded in the empty tool result, and avoids fabrication. No changes needed; this is a clean handling of a zero-result scenario.\"\n}",
+    "reviewer_summary": "The agent correctly identified the user's intent (portfolio earnings calendar), routed to the two required tools, and faithfully reported that no earnings dates were found. The answer is concise, grounded in the empty tool result, and avoids fabrication. No changes needed; this is a clean handling of a zero-result scenario.",
+    "score": 100,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 25,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 100,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Which of my portfolio holdings have earnings reports coming up in the next two weeks?",
+  "reasons": [],
+  "result": {
+    "answer_text": "I couldn\u2019t find any earnings\u2011report dates for the holdings in your portfolio within the next two weeks. The earnings\u2011calendar query returned no scheduled releases for the tickers you hold.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1882111
+      ],
+      [
+        "status",
+        1932929
+      ],
+      [
+        "thinking",
+        2179888
+      ],
+      [
+        "agent_iteration",
+        2179910
+      ],
+      [
+        "status",
+        12340545
+      ],
+      [
+        "tool_call",
+        12340645
+      ],
+      [
+        "tool_result",
+        12436114
+      ],
+      [
+        "agent_iteration",
+        13381665
+      ],
+      [
+        "tool_call",
+        23476973
+      ],
+      [
+        "tool_result",
+        23479372
+      ],
+      [
+        "agent_iteration",
+        23803591
+      ],
+      [
+        "tool_call",
+        30218398
+      ],
+      [
+        "tool_result",
+        30218634
+      ],
+      [
+        "agent_iteration",
+        31208324
+      ],
+      [
+        "tool_call",
+        44139832
+      ],
+      [
+        "tool_result",
+        44321068
+      ],
+      [
+        "agent_iteration",
+        48420440
+      ],
+      [
+        "token",
+        53189266
+      ],
+      [
+        "token",
+        53189326
+      ],
+      [
+        "token",
+        53189495
+      ],
+      [
+        "token",
+        53189624
+      ],
+      [
+        "status",
+        53211567
+      ],
+      [
+        "final_answer",
+        60225215
+      ],
+      [
+        "citations",
+        60225306
+      ],
+      [
+        "contradictions",
+        60232276
+      ],
+      [
+        "suggestions",
+        60232313
+      ],
+      [
+        "metadata",
+        60272222
+      ],
+      [
+        "done",
+        60272445
+      ]
+    ],
+    "latency_s": 60.279,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 60193,
+      "message_id": "019f076b-0b51-7303-a691-511820b3435e",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "a1f0ee38-3376-4b91-89ed-50b1a9065329"
+    },
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 6.307000003289431,
+      "entity_resolution": 245.56512499111705,
+      "grounding_validation": 7030.020253005205,
+      "llm_direct_text_generation": 4768.194294010755,
+      "llm_tool_planning": 44356.77060202579,
+      "load_history": 57.78258299687877,
+      "persist_and_cache": 45.72625001310371,
+      "tool_execution": 282.2508320095949,
+      "validate_input": 1828.867125994293
+    },
+    "question": "Which of my portfolio holdings have earnings reports coming up in the next two weeks?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_portfolio_context\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading portfolio context...",
+          "status": "running",
+          "tool": "get_portfolio_context",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 96,
+          "item_count": 1,
+          "label": "Loading portfolio context...",
+          "result_preview": [
+            {
+              "id": "tool:portfolio:01900000-0000-7000-8000-000000000010",
+              "title": "Portfolio context"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_portfolio_context",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 11198,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading portfolio context...",
+          "status": "running",
+          "tool": "get_portfolio_context",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "Loading portfolio context...",
+          "result_preview": [
+            {
+              "id": "tool:portfolio:01900000-0000-7000-8000-000000000010",
+              "title": "Portfolio context"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_portfolio_context",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 21621,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {},
+          "label": "Loading portfolio context...",
+          "status": "running",
+          "tool": "get_portfolio_context",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "Loading portfolio context...",
+          "result_preview": [
+            {
+              "id": "tool:portfolio:01900000-0000-7000-8000-000000000010",
+              "title": "Portfolio context"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_portfolio_context",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 29027,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2026-06-27",
+            "to_date": "2026-07-11"
+          },
+          "label": "Loading earnings calendar...",
+          "status": "running",
+          "tool": "get_earnings_calendar",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 184,
+          "item_count": 1,
+          "label": "Loading earnings calendar...",
+          "result_preview": [
+            {
+              "id": "tool:earnings_calendar",
+              "title": "Earnings calendar"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_earnings_calendar",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 46238,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Based on the earnings\u2011calendar data for the period\u202f"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026\u201106\u201127\u202fthrough\u202f2026\u201107\u201111, none of the securities in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "your portfolio have an earnings release scheduled within "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the next two weeks.\u202f[earnings_calendar]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "I couldn\u2019t find any earnings\u2011report dates for the holdings in your portfolio within the next two weeks. The earnings\u2011calendar query returned no scheduled releases for the tickers you hold."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "Which of my holdings carry the most risk right now?",
+          "What's the latest news on Portfolio?",
+          "How has Portfolio performed recently?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 60193,
+          "message_id": "019f076b-0b51-7303-a691-511820b3435e",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "a1f0ee38-3376-4b91-89ed-50b1a9065329"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.307000003289431,
+            "entity_resolution": 245.56512499111705,
+            "grounding_validation": 7030.020253005205,
+            "llm_direct_text_generation": 4768.194294010755,
+            "llm_tool_planning": 44356.77060202579,
+            "load_history": 57.78258299687877,
+            "persist_and_cache": 45.72625001310371,
+            "tool_execution": 282.2508320095949,
+            "validate_input": 1828.867125994293
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {},
+        "name": "get_portfolio_context"
+      },
+      {
+        "arguments": {},
+        "name": "get_portfolio_context"
+      },
+      {
+        "arguments": {},
+        "name": "get_portfolio_context"
+      },
+      {
+        "arguments": {
+          "from_date": "2026-06-27",
+          "to_date": "2026-07-11"
+        },
+        "name": "get_earnings_calendar"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_portfolio_context"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_earnings_calendar"
+      }
+    ],
+    "tps": 0.805,
+    "tps_streaming": 9.857,
+    "ttft_s": 1.882
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_portfolio_context",
+      "get_earnings_calendar"
+    ],
+    "forbidden_facts": [
+      "Lists earnings for tickers the user does not hold (fabricated or wrong-portfolio)"
+    ],
+    "required_facts": [
+      "Names at least one ticker that is BOTH in the user's portfolio AND has an upcoming earnings date",
+      "Cites a concrete earnings date (ISO or natural-language) for at least one named ticker"
+    ]
+  },
+  "tags": [
+    "chain_of_tools",
+    "multi_step",
+    "portfolio"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 2,
+    "reviewer_summary": "The agent correctly selected the right tools (portfolio context + earnings calendar) for the user's intent, and the ordering is unproblematic. However, the trajectory contains a clear efficiency issue: get_portfolio_context() is called three times with identical arguments, returning the same data each time. This is pure redundancy \u2014 one call would have been enough. The agent should drop the duplicate calls to keep the chain lean. No recovery issues because no call failed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "call 1, 2, 3 are three identical get_portfolio_context() calls with no changed args \u2014 two are redundant waste. One call would have sufficed.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "No data dependency between the two tools (portfolio context and earnings calendar are independent), so any order is fine. No ordering issue.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls to recover from (all calls returned ok items=1). Full marks.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1-3 get_portfolio_context and call 4 get_earnings_calendar are exactly the right tool types for a 'my holdings + upcoming earnings' question.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 85,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}

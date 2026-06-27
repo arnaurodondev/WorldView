@@ -1,0 +1,1567 @@
+{
+  "bucket": "PASS",
+  "category": "multilingual",
+  "expected": {
+    "max_latency_s": 60,
+    "tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ]
+  },
+  "heuristics": {
+    "char_count": 417,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_entity_graph",
+      "get_entity_intelligence",
+      "search_documents"
+    ],
+    "error": null,
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 53.671,
+    "latency_within_budget": true,
+    "missing_expected_tools": [
+      "compare_entities"
+    ],
+    "output_tokens": 105,
+    "phase_timings_ms": {
+      "check_cache": 8.420083002420142,
+      "entity_resolution": 201.17474999278784,
+      "grounding_validation": 2.4758749932516366,
+      "llm_synthesis_streaming": 3865.5859190039337,
+      "llm_tool_planning": 44657.39127001143,
+      "load_history": 51.93904199404642,
+      "persist_and_cache": 32.74204197805375,
+      "tool_execution": 1631.8214999919292,
+      "validate_input": 692.6179169968236
+    },
+    "status_code": 200,
+    "tool_call_count": 5,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "depth",
+          "entity_name",
+          "relation_types"
+        ],
+        "tool": "get_entity_graph"
+      },
+      {
+        "arguments_keys": [
+          "entity_id"
+        ],
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "arguments_keys": [
+          "entity_tickers",
+          "source_types"
+        ],
+        "tool": "search_documents"
+      },
+      {
+        "arguments_keys": [
+          "source_types"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_entity_intelligence"
+    ],
+    "tool_result_count": 5,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.735,
+    "word_count": 67
+  },
+  "id": "iter3_apple_competitors_spanish",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Question asks for smartphone competitors; answer is concise and honest about data limitations. Depth is appropriate for a factual lookup that returned no relevant data.",
+        "reason": "Question asks for smartphone competitors; answer is concise and honest about data limitations. Depth is appropriate for a factual lookup that returned no relevant data.",
+        "score": 20
+      },
+      "grounding": {
+        "feedback": "No grounding sample provided \u2014 presumed band. Answer correctly stays within tool scope: get_entity_graph returned competitor data only for PCs/software, not smartphones. No fabricated numbers or periods.",
+        "reason": "No grounding sample provided \u2014 presumed band. Answer correctly stays within tool scope: get_entity_graph returned competitor data only for PCs/software, not smartphones. No fabricated numbers or periods.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "Contains refusal phrase 'no se dispone de una lista' and 'no est\u00e1n disponibles en los datos consultados'. rubric.appropriate_refusal_ok=false, and the agent did not call the expected tools (compare_entities) which could have provided the data. Wrongful refusal.",
+        "reason": "Contains refusal phrase 'no se dispone de una lista' and 'no est\u00e1n disponibles en los datos consultados'. rubric.appropriate_refusal_ok=false, and the agent did not call the expected tools (compare_entities) which could have provided the data. Wrongful refusal.",
+        "score": 0
+      },
+      "tool_use": {
+        "feedback": "Expected tools: compare_entities or get_entity_intelligence. Agent called get_entity_intelligence (twice) and get_entity_graph, but never called compare_entities. get_entity_graph is not in the equivalence set, so zero tools from expected_tools were used.",
+        "reason": "Expected tools: compare_entities or get_entity_intelligence. Agent called get_entity_intelligence (twice) and get_entity_graph, but never called compare_entities. get_entity_graph is not in the equivalence set, so zero tools from expected_tools were used.",
+        "score": 0
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "The agent failed to route the question to the correct tool: the user asked for competitors in smartphones, which is a comparison task best handled by compare_entities. Instead, the agent called get_entity_graph (which returned only PC/software competitors) and then refused to answer. The single most impactful change is to add a routing rule that maps 'competitors' + 'sector' queries to compare_entities, and to ensure the agent retries with the correct tool before refusing.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 0,\n    \"feedback\": \"Expected tools: compare_entities or get_entity_intelligence. Agent called get_entity_intelligence (twice) and get_entity_graph, but never called compare_entities. get_entity_graph is not in the equivalence set, so zero tools from expected_tools were used.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"No grounding sample provided \u2014 presumed band. Answer correctly stays within tool scope: get_entity_graph returned competitor data only for PCs/software, not smartphones. No fabricated numbers or periods.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"feedback\": \"Question asks for smartphone competitors; answer is concise and honest about data limitations. Depth is appropriate for a factual lookup that returned no relevant data.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 0,\n    \"feedback\": \"Contains refusal phrase 'no se dispone de una lista' and 'no est\u00e1n disponibles en los datos consultados'. rubric.appropriate_refusal_ok=false, and the agent did not call the expected tools (compare_entities) which could have provided the data. Wrongful refusal.\"\n  },\n  \"reviewer_summary\": \"The agent failed to route the question to the correct tool: the user asked for competitors in smartphones, which is a comparison task best handled by compare_entities. Instead, the agent called get_entity_graph (which returned only PC/software competitors) and then refused to answer. The single most impactful change is to add a routing rule that maps 'competitors' + 'sector' queries to compare_entities, and to ensure the agent retries with the correct tool before refusing.\"\n}",
+    "reviewer_summary": "The agent failed to route the question to the correct tool: the user asked for competitors in smartphones, which is a comparison task best handled by compare_entities. Instead, the agent called get_entity_graph (which returned only PC/software competitors) and then refused to answer. The single most impactful change is to add a routing rule that maps 'competitors' + 'sector' queries to compare_entities, and to ensure the agent retries with the correct tool before refusing.",
+    "score": 40,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "FAIL",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 20,
+        "grounding": 20,
+        "refusal_judgment": 0,
+        "tool_use": 0
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 40,
+      "verdict": "FAIL"
+    },
+    "veto": null
+  },
+  "prompt": "\u00bfCu\u00e1les son los principales competidores de Apple en el sector de smartphones?",
+  "reasons": [],
+  "result": {
+    "answer_text": "Con la informaci\u00f3n obtenida no se dispone de una lista de los principales competidores de Apple en el sector de smartphones. El contexto recuperado solo menciona que Apple compite con Microsoft en el mercado de ordenadores personales y software, pero no identifica a los rivales en el segmento de tel\u00e9fonos m\u00f3viles. Por lo tanto, los competidores de Apple en smartphones no est\u00e1n disponibles en los datos consultados.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        735218
+      ],
+      [
+        "status",
+        778604
+      ],
+      [
+        "thinking",
+        980752
+      ],
+      [
+        "agent_iteration",
+        980791
+      ],
+      [
+        "status",
+        6141139
+      ],
+      [
+        "tool_call",
+        6141254
+      ],
+      [
+        "tool_result",
+        6289167
+      ],
+      [
+        "agent_iteration",
+        6624906
+      ],
+      [
+        "agent_iteration",
+        10597520
+      ],
+      [
+        "tool_call",
+        15675851
+      ],
+      [
+        "tool_result",
+        15825827
+      ],
+      [
+        "agent_iteration",
+        16135115
+      ],
+      [
+        "tool_call",
+        22912324
+      ],
+      [
+        "tool_result",
+        22912421
+      ],
+      [
+        "agent_iteration",
+        23253874
+      ],
+      [
+        "tool_call",
+        32492210
+      ],
+      [
+        "tool_result",
+        33291389
+      ],
+      [
+        "agent_iteration",
+        34309545
+      ],
+      [
+        "agent_iteration",
+        42372319
+      ],
+      [
+        "tool_call",
+        49216469
+      ],
+      [
+        "tool_result",
+        49745330
+      ],
+      [
+        "agent_iteration",
+        49745409
+      ],
+      [
+        "token",
+        53594714
+      ],
+      [
+        "token",
+        53594912
+      ],
+      [
+        "token",
+        53594925
+      ],
+      [
+        "token",
+        53594933
+      ],
+      [
+        "token",
+        53594948
+      ],
+      [
+        "token",
+        53594961
+      ],
+      [
+        "token",
+        53594968
+      ],
+      [
+        "token",
+        53594974
+      ],
+      [
+        "token",
+        53594989
+      ],
+      [
+        "token",
+        53594995
+      ],
+      [
+        "token",
+        53595016
+      ],
+      [
+        "token",
+        53595023
+      ],
+      [
+        "token",
+        53595029
+      ],
+      [
+        "token",
+        53595054
+      ],
+      [
+        "token",
+        53595060
+      ],
+      [
+        "token",
+        53595066
+      ],
+      [
+        "token",
+        53595087
+      ],
+      [
+        "token",
+        53595400
+      ],
+      [
+        "token",
+        53595493
+      ],
+      [
+        "token",
+        53595692
+      ],
+      [
+        "token",
+        53595802
+      ],
+      [
+        "token",
+        53595949
+      ],
+      [
+        "token",
+        53596284
+      ],
+      [
+        "token",
+        53596461
+      ],
+      [
+        "token",
+        53596676
+      ],
+      [
+        "token",
+        53596753
+      ],
+      [
+        "token",
+        53596827
+      ],
+      [
+        "token",
+        53596977
+      ],
+      [
+        "token",
+        53597212
+      ],
+      [
+        "token",
+        53597282
+      ],
+      [
+        "token",
+        53597622
+      ],
+      [
+        "token",
+        53597630
+      ],
+      [
+        "token",
+        53597636
+      ],
+      [
+        "token",
+        53597803
+      ],
+      [
+        "token",
+        53597837
+      ],
+      [
+        "token",
+        53597879
+      ],
+      [
+        "token",
+        53597979
+      ],
+      [
+        "token",
+        53598061
+      ],
+      [
+        "token",
+        53598231
+      ],
+      [
+        "token",
+        53598310
+      ],
+      [
+        "token",
+        53598429
+      ],
+      [
+        "token",
+        53598540
+      ],
+      [
+        "token",
+        53598666
+      ],
+      [
+        "token",
+        53598716
+      ],
+      [
+        "token",
+        53598874
+      ],
+      [
+        "token",
+        53598953
+      ],
+      [
+        "token",
+        53599069
+      ],
+      [
+        "token",
+        53599176
+      ],
+      [
+        "token",
+        53599508
+      ],
+      [
+        "token",
+        53599524
+      ],
+      [
+        "token",
+        53599533
+      ],
+      [
+        "token",
+        53599541
+      ],
+      [
+        "token",
+        53599601
+      ],
+      [
+        "token",
+        53599677
+      ],
+      [
+        "token",
+        53599883
+      ],
+      [
+        "token",
+        53599916
+      ],
+      [
+        "token",
+        53599965
+      ],
+      [
+        "token",
+        53600056
+      ],
+      [
+        "token",
+        53600198
+      ],
+      [
+        "token",
+        53600368
+      ],
+      [
+        "token",
+        53600535
+      ],
+      [
+        "token",
+        53600663
+      ],
+      [
+        "token",
+        53601001
+      ],
+      [
+        "token",
+        53601227
+      ],
+      [
+        "token",
+        53601457
+      ],
+      [
+        "token",
+        53601622
+      ],
+      [
+        "token",
+        53601849
+      ],
+      [
+        "token",
+        53601958
+      ],
+      [
+        "token",
+        53602099
+      ],
+      [
+        "token",
+        53602274
+      ],
+      [
+        "token",
+        53602562
+      ],
+      [
+        "token",
+        53602663
+      ],
+      [
+        "token",
+        53602855
+      ],
+      [
+        "token",
+        53603203
+      ],
+      [
+        "token",
+        53603389
+      ],
+      [
+        "token",
+        53603597
+      ],
+      [
+        "token",
+        53604134
+      ],
+      [
+        "token",
+        53604477
+      ],
+      [
+        "token",
+        53604714
+      ],
+      [
+        "token",
+        53604861
+      ],
+      [
+        "token",
+        53604991
+      ],
+      [
+        "status",
+        53621883
+      ],
+      [
+        "final_answer",
+        53621994
+      ],
+      [
+        "citations",
+        53622013
+      ],
+      [
+        "contradictions",
+        53622048
+      ],
+      [
+        "suggestions",
+        53628824
+      ],
+      [
+        "metadata",
+        53656827
+      ],
+      [
+        "done",
+        53656952
+      ]
+    ],
+    "latency_s": 53.671,
+    "metadata": {
+      "intent": "RELATIONSHIP",
+      "latency_ms": 53600,
+      "message_id": "019f0735-01cf-7551-ad2d-78431043ef78",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "f7b9dff1-10e2-492c-8a48-d4da11a7aa3d"
+    },
+    "output_tokens": 105,
+    "phase_timings_ms": {
+      "check_cache": 8.420083002420142,
+      "entity_resolution": 201.17474999278784,
+      "grounding_validation": 2.4758749932516366,
+      "llm_synthesis_streaming": 3865.5859190039337,
+      "llm_tool_planning": 44657.39127001143,
+      "load_history": 51.93904199404642,
+      "persist_and_cache": 32.74204197805375,
+      "tool_execution": 1631.8214999919292,
+      "validate_input": 692.6179169968236
+    },
+    "question": "\u00bfCu\u00e1les son los principales competidores de Apple en el sector de smartphones?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_entity_intelligence\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 145,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: Estee Lauder Companies Inc"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 5644,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 9615,
+          "iteration": 2,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "depth": 1,
+            "entity_name": "Apple",
+            "relation_types": [
+              "competitor_of"
+            ]
+          },
+          "label": "Building entity map for Apple",
+          "status": "running",
+          "tool": "get_entity_graph",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 152,
+          "item_count": 1,
+          "label": "Building entity map for Apple",
+          "result_preview": [
+            {
+              "id": "tool:graph:01900000-0000-7000-8000-000000001001",
+              "title": "Knowledge graph: Apple"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_graph",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 15151,
+          "iteration": 3,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 2
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_id": "AAPL"
+          },
+          "label": "Loading intelligence for Apple",
+          "status": "running",
+          "tool": "get_entity_intelligence",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 0,
+          "item_count": 1,
+          "label": "Loading intelligence for Apple",
+          "result_preview": [
+            {
+              "id": "tool:intelligence:01900000-0000-7000-8000-000000001001",
+              "title": "Intelligence: Estee Lauder Companies Inc"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_entity_intelligence",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 22272,
+          "iteration": 4,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 3
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "entity_tickers": [
+              "AAPL"
+            ],
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 799,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 33327,
+          "iteration": 5,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "elapsed_ms": 41391,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 4
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "input": {
+            "source_types": [
+              "news",
+              "analyst_report"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 532,
+          "item_count": 0,
+          "label": "Searching documents...",
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 48764,
+          "iteration": 6,
+          "max_iterations": 8,
+          "stage": "synthesizing",
+          "tools_completed_total": 5
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "Con"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " la"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " informaci\u00f3n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " obten"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ida"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " no"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " se"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " dispone"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " una"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " lista"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " los"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " principales"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " compet"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "idores"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Apple"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " el"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " sector"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " smartphones"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " El"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " contexto"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " recuper"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ado"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " solo"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " menc"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "iona"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " que"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Apple"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " comp"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ite"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " con"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Microsoft"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " el"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " mercado"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " orden"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "adores"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " personales"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " y"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " software"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " pero"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " no"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " identifica"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " a"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " los"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " riv"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ales"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " el"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " segmento"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " tel\u00e9fonos"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " m\u00f3viles"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Por"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " lo"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " tanto"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": ","
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " los"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " compet"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "idores"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " de"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " Apple"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " smartphones"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " no"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " est\u00e1n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " disponibles"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " en"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " los"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " datos"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": " consult"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ados"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "Con la informaci\u00f3n obtenida no se dispone de una lista de los principales competidores de Apple en el sector de smartphones. El contexto recuperado solo menciona que Apple compite con Microsoft en el mercado de ordenadores personales y software, pero no identifica a los rivales en el segmento de tel\u00e9fonos m\u00f3viles. Por lo tanto, los competidores de Apple en smartphones no est\u00e1n disponibles en los datos consultados."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "How has EL performed recently?",
+          "How do Estee Lauder Companies Inc's fundamentals look?",
+          "What are the biggest risks for Estee Lauder Companies Inc right now?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "RELATIONSHIP",
+          "latency_ms": 53600,
+          "message_id": "019f0735-01cf-7551-ad2d-78431043ef78",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "f7b9dff1-10e2-492c-8a48-d4da11a7aa3d"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 8.420083002420142,
+            "entity_resolution": 201.17474999278784,
+            "grounding_validation": 2.4758749932516366,
+            "llm_synthesis_streaming": 3865.5859190039337,
+            "llm_tool_planning": 44657.39127001143,
+            "load_history": 51.93904199404642,
+            "persist_and_cache": 32.74204197805375,
+            "tool_execution": 1631.8214999919292,
+            "validate_input": 692.6179169968236
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "depth": 1,
+          "entity_name": "Apple",
+          "relation_types": [
+            "competitor_of"
+          ]
+        },
+        "name": "get_entity_graph"
+      },
+      {
+        "arguments": {
+          "entity_id": "AAPL"
+        },
+        "name": "get_entity_intelligence"
+      },
+      {
+        "arguments": {
+          "entity_tickers": [
+            "AAPL"
+          ],
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      },
+      {
+        "arguments": {
+          "source_types": [
+            "news",
+            "analyst_report"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_graph"
+      },
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_entity_intelligence"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 1.984,
+    "tps_streaming": 27.163,
+    "ttft_s": 0.735
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "compare_entities",
+      "get_entity_intelligence"
+    ],
+    "forbidden_facts": [],
+    "required_facts": []
+  },
+  "tags": [
+    "iter3",
+    "stress",
+    "spanish"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 1,
+    "reviewer_summary": "The agent correctly used get_entity_graph to find competitors, but the tool returned only a PC competitor (Microsoft), not smartphone rivals. Instead of adapting the query (e.g., using a different relation type or sector filter), the agent made two redundant get_entity_intelligence calls and two empty search_documents calls, then gave up. The main process improvement is to chain a more specific competitor query after the initial graph result, or use a tool that explicitly lists smartphone market rivals, rather than falling back to generic searches.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "Call 3 is a redundant duplicate of call 1. Calls 4 and 5 are wasted \u2014 they return nothing and are not used in the answer. The chain could have stopped after call 2 and either reported the result or tried a more targeted tool.",
+        "score": 10
+      },
+      "ordering": {
+        "feedback": "Call 1 resolves the entity, call 2 uses that entity to fetch competitors \u2014 dependency order is correct. Calls 3-5 are redundant or misplaced but do not violate data dependencies.",
+        "score": 20
+      },
+      "recovery": {
+        "feedback": "After call 2 returned only a PC/software competitor (Microsoft), the agent did not retry with a different tool or refine the query (e.g., use a sector filter or a different relation type). Calls 4 and 5 are empty and not adapted to recover the missing smartphone competitor data.",
+        "score": 10
+      },
+      "routing": {
+        "feedback": "Call 1 and 3 (get_entity_intelligence) are appropriate for entity details, and call 2 (get_entity_graph) is a good tool for competitors. However, calls 4 and 5 (search_documents) are not well-suited for a direct competitor list; they add noise without addressing the smartphone-specific intent.",
+        "score": 15
+      }
+    },
+    "trajectory_score": 55,
+    "unrecovered_failures": 2,
+    "verdict": "GRADED"
+  }
+}

@@ -1,0 +1,558 @@
+{
+  "bucket": "PASS",
+  "category": "factual_lookup",
+  "expected": {
+    "max_latency_s": 30,
+    "tools": [
+      "get_market_movers"
+    ]
+  },
+  "heuristics": {
+    "char_count": 188,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_market_movers"
+    ],
+    "error": null,
+    "expected_tools": [
+      "get_market_movers"
+    ],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 9.221,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 5.714708007872105,
+      "entity_resolution": 108.23629100923426,
+      "grounding_validation": 3119.0815849986393,
+      "llm_direct_text_generation": 2636.755418003304,
+      "llm_tool_planning": 4371.1389190284535,
+      "load_history": 19.113541988190264,
+      "persist_and_cache": 21.70658399700187,
+      "tool_execution": 651.7790419748053,
+      "validate_input": 581.9167090230621
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "limit",
+          "mover_type",
+          "period"
+        ],
+        "tool": "get_market_movers"
+      }
+    ],
+    "tool_overlap_with_expected": [
+      "get_market_movers"
+    ],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      }
+    ],
+    "ttft_s": 0.632,
+    "word_count": 37
+  },
+  "id": "tc_movers_week_losers",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "feedback": "Shallow question (list of losers) answered with a concise bullet list \u2014 depth matches complexity perfectly.",
+        "reason": "Shallow question (list of losers) answered with a concise bullet list \u2014 depth matches complexity perfectly.",
+        "score": 25
+      },
+      "grounding": {
+        "feedback": "8 of 10 tickers match the grounding sample; EPAM and PLTR are unverified. The transparency banner flags the issue appropriately.",
+        "reason": "8 of 10 tickers match the grounding sample; EPAM and PLTR are unverified. The transparency banner flags the issue appropriately.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "feedback": "No refusal phrase present \u2014 N/A. The answer provides substantive data with a transparency banner, not a refusal.",
+        "reason": "No refusal phrase present \u2014 N/A. The answer provides substantive data with a transparency banner, not a refusal.",
+        "score": 25
+      },
+      "tool_use": {
+        "feedback": "Called get_market_movers with correct parameters (losers, 1W) \u2014 exactly the expected tool.",
+        "reason": "Called get_market_movers with correct parameters (losers, 1W) \u2014 exactly the expected tool.",
+        "score": 25
+      }
+    },
+    "judge_prompt_id": "chat_quality_judge@3.0#dbbee7f7c6b5",
+    "notes": "Solid routing and framing: the agent correctly called get_market_movers with the right period and mover type, and the answer is appropriately concise for a shallow list question. Grounding is strong for 8 of 10 tickers; the two unverified tickers (EPAM, PLTR) should be either omitted or explicitly marked as unverified rather than relying on the generic banner. The transparency banner is a good practice but the specific unverified items should be called out inline. Next improvement: ensure the answer only includes tickers that appear in tool_results, or tag each unverified ticker individually.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"feedback\": \"Called get_market_movers with correct parameters (losers, 1W) \u2014 exactly the expected tool.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"feedback\": \"8 of 10 tickers match the grounding sample; EPAM and PLTR are unverified. The transparency banner flags the issue appropriately.\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"feedback\": \"Shallow question (list of losers) answered with a concise bullet list \u2014 depth matches complexity perfectly.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"feedback\": \"No refusal phrase present \u2014 N/A. The answer provides substantive data with a transparency banner, not a refusal.\"\n  },\n  \"reviewer_summary\": \"Solid routing and framing: the agent correctly called get_market_movers with the right period and mover type, and the answer is appropriately concise for a shallow list question. Grounding is strong for 8 of 10 tickers; the two unverified tickers (EPAM, PLTR) should be either omitted or explicitly marked as unverified rather than relying on the generic banner. The transparency banner is a good practice but the specific unverified items should be called out inline. Next improvement: ensure the answer only includes tickers that appear in tool_results, or tag each unverified ticker individually.\"\n}",
+    "reviewer_summary": "Solid routing and framing: the agent correctly called get_market_movers with the right period and mover type, and the answer is appropriately concise for a shallow list question. Grounding is strong for 8 of 10 tickers; the two unverified tickers (EPAM, PLTR) should be either omitted or explicitly marked as unverified rather than relying on the generic banner. The transparency banner is a good practice but the specific unverified items should be called out inline. Next improvement: ensure the answer only includes tickers that appear in tool_results, or tag each unverified ticker individually.",
+    "score": 95,
+    "substantiation_check": {
+      "contradicted": 0,
+      "coverage": "presumed",
+      "examples": [],
+      "substantiated": 0,
+      "unmatched": 0,
+      "unsupported": 0
+    },
+    "verdict": "PASS",
+    "verdict_decision": {
+      "dimensions": {
+        "framing": 25,
+        "grounding": 20,
+        "refusal_judgment": 25,
+        "tool_use": 25
+      },
+      "fail_reason": null,
+      "gate_results": {
+        "CONTROL_TOKEN_LEAK": true,
+        "EMPTY_AFTER_TOOLS": true,
+        "GROUNDING_CONTRADICTED": true,
+        "GROUNDING_FLOOR": true,
+        "INFRA_NON_ANSWER": true,
+        "PHANTOM_CITATION": true,
+        "SUBSTANTIATION_UNSUPPORTED": true,
+        "TRUNCATED": true
+      },
+      "grounding_check": {
+        "contradicted": 0,
+        "evidence_mode": "presumed",
+        "examples": [],
+        "matched": 0,
+        "unmatched": 0
+      },
+      "quality_score": 95,
+      "verdict": "STRONG"
+    },
+    "veto": null
+  },
+  "prompt": "Show me the biggest losers this week.",
+  "reasons": [],
+  "result": {
+    "answer_text": "The biggest losers this week are:\n\n- MSTR  \n- ACN  \n- ORCL  \n- SLV  \n- CTSH  \n- PARA  \n- RDW  \n- CBOE  \n- EPAM  \n- PLTR  \n\n[1]\n\n\u26a0 Some figures could not be verified against retrieved data.",
+    "citations": [
+      {
+        "confidence": 0.85,
+        "entity_name": null,
+        "id": "tool:movers:losers:1W",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "market_data",
+        "title": "Market movers: losers (1W)",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        631810
+      ],
+      [
+        "status",
+        647599
+      ],
+      [
+        "thinking",
+        757048
+      ],
+      [
+        "agent_iteration",
+        757112
+      ],
+      [
+        "status",
+        2492190
+      ],
+      [
+        "tool_call",
+        2493038
+      ],
+      [
+        "tool_result",
+        3144070
+      ],
+      [
+        "agent_iteration",
+        3422438
+      ],
+      [
+        "token",
+        6059294
+      ],
+      [
+        "token",
+        6059405
+      ],
+      [
+        "token",
+        6059881
+      ],
+      [
+        "token",
+        6059973
+      ],
+      [
+        "token",
+        6060158
+      ],
+      [
+        "token",
+        6060965
+      ],
+      [
+        "token",
+        6061213
+      ],
+      [
+        "token",
+        6061453
+      ],
+      [
+        "status",
+        6067954
+      ],
+      [
+        "final_answer",
+        9189631
+      ],
+      [
+        "citations",
+        9189727
+      ],
+      [
+        "contradictions",
+        9190037
+      ],
+      [
+        "suggestions",
+        9190172
+      ],
+      [
+        "metadata",
+        9210588
+      ],
+      [
+        "done",
+        9210918
+      ]
+    ],
+    "latency_s": 9.221,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 9152,
+      "message_id": "019f0755-db78-7b23-b865-acdf006161db",
+      "protocol_version": 2,
+      "provider": "deepinfra",
+      "thread_id": "9274c26b-9fce-4b84-b98f-853ada82460a"
+    },
+    "output_tokens": 47,
+    "phase_timings_ms": {
+      "check_cache": 5.714708007872105,
+      "entity_resolution": 108.23629100923426,
+      "grounding_validation": 3119.0815849986393,
+      "llm_direct_text_generation": 2636.755418003304,
+      "llm_tool_planning": 4371.1389190284535,
+      "load_history": 19.113541988190264,
+      "persist_and_cache": 21.70658399700187,
+      "tool_execution": 651.7790419748053,
+      "validate_input": 581.9167090230621
+    },
+    "question": "Show me the biggest losers this week.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "elapsed_ms": 0,
+          "iteration": 0,
+          "max_iterations": 8,
+          "stage": "planning_tools",
+          "tools_completed_total": 0
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "step": "Loading get_market_movers\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "limit": 10,
+            "mover_type": "losers",
+            "period": "1W"
+          },
+          "label": "Fetching market movers...",
+          "status": "running",
+          "tool": "get_market_movers",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "duration_ms": 651,
+          "grounding_sample": {
+            "fields": {
+              "ticker": "MSTR",
+              "ticker_2": "ACN",
+              "ticker_3": "ORCL",
+              "ticker_4": "SLV",
+              "ticker_5": "CTSH",
+              "ticker_6": "PARA",
+              "ticker_7": "RDW",
+              "ticker_8": "CBOE"
+            },
+            "sampled_rows": 1,
+            "total_rows": 1,
+            "truncated": false
+          },
+          "item_count": 1,
+          "label": "Fetching market movers...",
+          "result_preview": [
+            {
+              "id": "tool:movers:losers:1W",
+              "title": "Market movers: losers (1W)"
+            }
+          ],
+          "status": "ok",
+          "tool": "get_market_movers",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "elapsed_ms": 2665,
+          "iteration": 1,
+          "max_iterations": 8,
+          "stage": "reasoning_over_results",
+          "tools_completed_total": 1
+        },
+        "event": "agent_iteration"
+      },
+      {
+        "data": {
+          "text": "**Top 10 weekly losers (1\u2011week period)**  \n\n| Rank "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Ticker |\n|------|--------|\n| 1 | MSTR "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| 2 | ACN |\n| 3 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| ORCL |\n| 4 | SLV |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| 5 | CTSH |\n| 6 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "PARA |\n| 7 | RDW |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "8 | CBOE |\n| 9 | EPAM "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|10 | PLTR |\n\n[1]"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "step": "verifying"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "text": "The biggest losers this week are:\n\n- MSTR  \n- ACN  \n- ORCL  \n- SLV  \n- CTSH  \n- PARA  \n- RDW  \n- CBOE  \n- EPAM  \n- PLTR  \n\n[1]\n\n\u26a0 Some figures could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.85,
+            "entity_name": null,
+            "id": "tool:movers:losers:1W",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "market_data",
+            "title": "Market movers: losers (1W)",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": [
+          "What are today's biggest market movers?",
+          "What's in my morning brief today?",
+          "Are there any notable earnings coming up this week?"
+        ],
+        "event": "suggestions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 9152,
+          "message_id": "019f0755-db78-7b23-b865-acdf006161db",
+          "protocol_version": 2,
+          "provider": "deepinfra",
+          "thread_id": "9274c26b-9fce-4b84-b98f-853ada82460a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 5.714708007872105,
+            "entity_resolution": 108.23629100923426,
+            "grounding_validation": 3119.0815849986393,
+            "llm_direct_text_generation": 2636.755418003304,
+            "llm_tool_planning": 4371.1389190284535,
+            "load_history": 19.113541988190264,
+            "persist_and_cache": 21.70658399700187,
+            "tool_execution": 651.7790419748053,
+            "validate_input": 581.9167090230621
+          },
+          "protocol_version": 2,
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "limit": 10,
+          "mover_type": "losers",
+          "period": "1W"
+        },
+        "name": "get_market_movers"
+      }
+    ],
+    "tool_results": [
+      {
+        "grounding_sample": {
+          "fields": {
+            "ticker": "MSTR",
+            "ticker_2": "ACN",
+            "ticker_3": "ORCL",
+            "ticker_4": "SLV",
+            "ticker_5": "CTSH",
+            "ticker_6": "PARA",
+            "ticker_7": "RDW",
+            "ticker_8": "CBOE"
+          },
+          "sampled_rows": 1,
+          "total_rows": 1,
+          "truncated": false
+        },
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_market_movers"
+      }
+    ],
+    "tps": 5.472,
+    "tps_streaming": 17.825,
+    "ttft_s": 0.632
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_market_movers"
+    ],
+    "forbidden_facts": [
+      "fabricated_losers_list"
+    ],
+    "required_facts": [
+      "list_of_tickers",
+      "percent_change_or_price_change",
+      "weekly_window"
+    ]
+  },
+  "tags": [
+    "tool_coverage",
+    "get_market_movers"
+  ],
+  "trajectory": {
+    "judge_prompt_id": "chat_trajectory_judge@1.0#eb78317b2115",
+    "redundant_call_pairs": 0,
+    "reviewer_summary": "The agent correctly identified the intent (weekly losers) and made a single, precise call to get_market_movers with the appropriate parameters (losers, 1W). The trace is clean, no wasted steps, and the tool choice is perfectly aligned with the question. No process changes needed.",
+    "sub_scores": {
+      "efficiency": {
+        "feedback": "One well-chosen call returns all needed data \u2014 minimal and non-redundant.",
+        "score": 25
+      },
+      "ordering": {
+        "feedback": "Single call, no ordering constraints \u2014 perfect.",
+        "score": 25
+      },
+      "recovery": {
+        "feedback": "No failed or empty calls; nothing to recover from.",
+        "score": 25
+      },
+      "routing": {
+        "feedback": "call 1 get_market_movers with mover_type=losers, period=1W is exactly the right tool for 'biggest losers this week'.",
+        "score": 25
+      }
+    },
+    "trajectory_score": 100,
+    "unrecovered_failures": 0,
+    "verdict": "GRADED"
+  }
+}
