@@ -144,7 +144,7 @@ does not contain the relevant period or metric, the claim is left #emph[unmatche
 contradicted. It is thus a high-precision corroborating floor; a figure simply #emph[absent] from the tool
 payload is caught by the Level-1 grounding veto, not this numeric check.
 
-#strong[Level 3: trajectory quality.] Agentic RAG must also be evaluated #emph[before] the final answer. The
+#strong[Level 3: trajectory quality.] Agentic RAG must also be evaluated #emph[before] the final answer [10]. The
 trajectory judge reads the captured tool-call trace and scores routing, ordering, recovery, and efficiency,
 supported by deterministic signals such as repeated identical empty calls or failed calls without a substitute.
 This level drove a concrete system improvement: it surfaced that the agent overused free-text document search
@@ -153,7 +153,7 @@ descriptions and adding a no-repeat-empty-query guardrail, the trajectory judge 
 the full 67-question benchmark.
 
 #strong[Level 4: judge calibration.] The judge is itself part of the system and must be measured. Against a
-#strong[39]-item failure-mode-stratified human-labelled gold set, stored pre-gate verdicts achieved Cohen's
+#strong[39]-item failure-mode-stratified human-labelled gold set [9], stored pre-gate verdicts achieved Cohen's
 #strong[κ = 0.59], below the target bar. Re-scoring with the current gated judge raised agreement to
 #strong[κ = 0.80], with raw agreement around 90% and #strong[zero] false-passes on fabrication. The important
 result is not only the κ value, but the asymmetry: fabrication false-passes are treated as the safety-critical
@@ -228,4 +228,6 @@ remain the author's own.
   [Mintz, M., Bills, S., Snow, R., Jurafsky, D. Distant Supervision for Relation Extraction without Labeled Data. ACL-IJCNLP 2009.],
   [Lewis, P., et al. Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. NeurIPS 2020.],
   [Robertson, S., Zaragoza, H. The Probabilistic Relevance Framework: BM25 and Beyond. FnTIR 2009.],
+  [Cohen, J. A Coefficient of Agreement for Nominal Scales. Educational and Psychological Measurement, 20(1):37–46, 1960.],
+  [Asai, A., Wu, Z., Wang, Y., Sil, A., Hajishirzi, H. Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection. ICLR 2024.],
 )
