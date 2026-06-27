@@ -243,6 +243,23 @@ is unchanged.
 - Top-level `notes` → `reviewer_summary` (≤800-char PR-review paragraph).
 - FRAMING dimension rewritten LENGTH-AGNOSTIC (short factual answers score 25).
 
+## tool_use_system
+
+### 1.10 — 2026-06-27 (FINAL-67 C4 — tool routing)
+
+- Added the **TOOL ROUTING** table to the planning-turn prompt. The FINAL-67 run
+  found `search_documents` over-selected as a generic catch-all while the
+  purpose-built tools were under-selected, looping empty searches into refusals:
+  `da_mstr_news_dec2024` never tried `get_entity_news`,
+  `iter3_apple_competitors_spanish` routed competitors to `get_entity_graph`, and
+  `tc_search_events_semi_earnings_beats` never called `search_events`.
+- v1.10 maps question shape to the FIRST tool — 'latest news about X' ->
+  `get_entity_news`, 'competitors of X in <sector>' -> `compare_entities`,
+  '<sector> events/earnings beats' -> `search_events`, relations -> `traverse_graph`
+  / `search_entity_relations`, numbers -> `query_fundamentals` — and demotes
+  `search_documents` to an explicit fallback for open-ended free-text only.
+- All prior strict-no-hallucination rules are **unchanged**.
+
 ## chat_synthesis_system
 
 ### 1.2 — 2026-06-27 (FINAL-67 C3 — trust-your-tool-results)

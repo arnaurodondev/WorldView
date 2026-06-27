@@ -94,10 +94,16 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        MISSING-METRIC RULE still applies for the narrow case where
     #        the SPECIFIC requested metric is entirely absent — its
     #        anti-fabrication property is preserved.
-    version="1.9",
+    #   1.10 — FINAL-67 C4: TOOL ROUTING table mapping question shape to the
+    #          purpose-built tool (get_entity_news / compare_entities /
+    #          search_events / traverse_graph) and demoting search_documents to
+    #          a fallback. Fixes news/competitor/event routing misses that
+    #          looped empty search_documents and refused.
+    version="1.10",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
+        "(v1.10 adds TOOL ROUTING table per FINAL-67 C4; "
+        "v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
         "v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
         "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
         "VALUATION-CONTEXT composition per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS "
@@ -242,6 +248,31 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "screener's structured output: a numeric `market_cap` field plus a "
         "pre-formatted `MCap` label IS the verification. Refusal is reserved "
         "for the case where the screener returned zero matching rows.\n\n"
+        # FINAL-67 C4: search_documents is OVER-selected as a generic catch-all
+        # while the purpose-built tools are UNDER-selected, causing empty-loop
+        # refusals. da_mstr_news never tried get_entity_news; the Spanish
+        # competitors query routed to get_entity_graph; the semi-earnings-beats
+        # query never tried search_events. This routing table maps the question
+        # shape to the RIGHT first tool and demotes search_documents to a
+        # fallback so the agent reaches for the structured tool first.
+        "TOOL ROUTING (pick the FIRST tool by question shape):\n"
+        "- 'latest/recent news about X' or 'what's happening with X' -> call "
+        "`get_entity_news` FIRST (it is the news source for a single entity). "
+        "Do NOT use `search_documents` for entity news unless `get_entity_news` "
+        "returns nothing.\n"
+        "- 'competitors of X' / 'X's peers' / 'companies like X in <sector>' -> "
+        "call `compare_entities` (peer/sector comparison). Do NOT use "
+        "`get_entity_graph` for a competitor list.\n"
+        "- '<sector> earnings beats / events / corporate actions' or 'which "
+        "companies reported / announced ...' -> call `search_events` (structured "
+        "corporate-event search). Do NOT loop `search_documents` for events.\n"
+        "- relationship / supply-chain / 'who supplies X' questions -> "
+        "`traverse_graph` or `search_entity_relations`.\n"
+        "- numbers (revenue, EPS, P/E, margins) -> `query_fundamentals` / "
+        "`get_fundamentals_history_batch`.\n"
+        "`search_documents` is a FALLBACK for open-ended free-text only — reach "
+        "for it AFTER the matching structured tool above, never as the first "
+        "choice for news, competitors, events, relations, or numbers.\n\n"
         # FIX-LIVE-S (2026-05-25): Q5 ("macro events affecting Tesla") graded
         # USELESS because the agent called only get_economic_calendar — when
         # it returned zero events the answer pipeline gave up.  A real macro
