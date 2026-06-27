@@ -71,7 +71,7 @@
   against a human-labelled gold set, with an honestly-caveated emerging #emph[reasoning-validity] layer. Real
   production failures — an answer flagged "most claims fabricated" that scored 85/100 — motivate the
   deterministic gates; the framework also proved active rather than passive — it surfaced a tool-routing
-  defect whose fix lifted trajectory quality from 84.6 to 87.7, while a current-judge calibration of κ = 0.80
+  defect we then fixed, with the trajectory judge scoring 88.9/100 over the full 67-question benchmark, while a current-judge calibration of κ = 0.80
   (zero false-passes on fabrication) cleared our acceptance bar. We also report a sobering finding: under one
   frozen judge, fresh-extraction support (82.6%) roughly halves to served-graph support, because the number
   that matters is the graph users query, not the extractor's precision. The talk is a field report on building and measuring grounded agentic
@@ -180,21 +180,25 @@ individually-invisible fixes before it produced a trustworthy signal — the ret
 entity #emph[identifiers], not values; once values flowed, the judge's input path silently #emph[dropped]
 them; once consumed, the matcher over-extracted #emph[structural] numbers (years, row indices) and our
 single-row samples falsely #emph[contradicted] multi-period answers. Each gap was invisible until we read the
-per-claim outputs. On the latest-period claims the instrumentation can verify, the served numbers are
-well-grounded (#strong[19/19] substantiated, #strong[0] unsupported); a trustworthy whole-answer rate awaits
-multi-period sampling. The meta-point is the talk's thesis turned on ourselves: a measurement harness that
+per-claim outputs. Hardened, the check runs over the full #strong[67]-question benchmark: #strong[22] questions
+carry verifiable value-tool samples, and across them every numeric claim the harness can check is grounded —
+#strong[56] substantiated, #strong[0] contradicted, #strong[0] unsupported. The remaining numeric claims
+reference metrics or periods the captured sample does not hold, so the check leaves them #emph[unmatched]
+rather than false-flag them — a deliberate precision-over-recall stance under which a #emph[reported]
+contradiction is trustworthy (a time-series sample can substantiate a claim it contains but cannot disprove an
+unsampled period). The meta-point is the talk's thesis turned on ourselves: a measurement harness that
 #emph[reports] a number is not the same as one that is #emph[correct].
 
 #strong[Trajectory / tool-chain quality — the eval driving improvement.] The captured trace — ordered tool
 names, arguments, status, and result counts — is itself judged: a trajectory judge scores routing, ordering,
 failure-recovery, and efficiency, corroborated by deterministic signals (repeated identical calls; failed
-calls with no successful substitute). The first run scored #strong[84.6/100], and the two weakest dimensions,
-efficiency and routing, traced to a #emph[single] behavior: the agent defaulted to free-text document search
-(32% of all tool calls), looping on empty results instead of the matching structured tool. This is exactly
-the loop the framework exists to close — we sharpened tool routing and added an enforced
-no-repeat-empty-query guardrail, and a re-run lifted trajectory to #strong[87.7] and cut unrecovered-failure
-turns from #strong[36] to #strong[24]. A respectable final answer can ride a wasteful path, a class only
-trajectory-level evaluation exposes, and one we measurably improved once it did.
+calls with no successful substitute). The two weakest dimensions, efficiency and routing, traced to a
+#emph[single] behavior the eval surfaced: the agent defaulted to free-text document search (32% of all tool
+calls), looping on empty results instead of the matching structured tool. This is exactly the loop the
+framework exists to close — we sharpened tool routing and added an enforced no-repeat-empty-query guardrail.
+Over the full #strong[67]-question benchmark the trajectory judge now scores #strong[88.9/100] (ordering 24.6,
+recovery 22.3, routing 22.4, efficiency 19.6 out of 25 each), with the deterministic signals corroborating. A
+respectable final answer can ride a wasteful path, a class only trajectory-level evaluation exposes.
 
 #strong[Judge calibration.] An LLM judge must itself be measured against humans. Against a #strong[39]-item,
 failure-mode-stratified, human-labelled gold set, the judge scored on its #emph[stored] verdicts gives Cohen's
