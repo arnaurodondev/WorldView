@@ -86,6 +86,23 @@ _SUFFIX_MULT: dict[str, float] = {
     "T": 1e12,
 }
 
+# C1 #1 pin extension — SPELLED-OUT magnitude words. Financial answers usually
+# say "$111.18 billion", not "$111.18B"; ``_NUM_RE`` captures only the digits
+# (suffix=None) and drops the following word, so the decoded value is 1e9x too
+# small and never matches the tool's base-unit value. The pin looks ahead for one
+# of these words immediately after a number and scales accordingly. Map word →
+# (multiplier, canonical single-letter suffix) so the renderer can reuse
+# ``_render_in_token_format``'s suffix path.
+_WORD_MULT: dict[str, tuple[float, str]] = {
+    "thousand": (1e3, "K"),
+    "million": (1e6, "M"),
+    "billion": (1e9, "B"),
+    "trillion": (1e12, "T"),
+}
+# Matches a magnitude word (optionally preceded by whitespace) anchored at the
+# START of the lookahead slice that follows a number token.
+_WORD_MAGNITUDE_RE = re.compile(r"^\s+(thousand|million|billion|trillion)\b", re.IGNORECASE)
+
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
@@ -1518,6 +1535,23 @@ def pin_numbers_to_tool_values(
             value = _decode_token(raw_tok, digits, suffix)
         except ValueError:
             continue
+
+        # C1 #1 pin extension — fold a trailing spelled-out magnitude word into
+        # this token. When the inline suffix is absent and the text right after
+        # the number is " billion"/" million"/etc., scale the value and EXTEND
+        # the replacement span to cover the word so the rewrite stays in the same
+        # "$X billion" shape. ``word_mult`` stays 1.0 (and ``replace_end`` =
+        # m.end()) for the plain-suffix / no-word case, preserving prior behaviour.
+        word_mult = 1.0
+        word_suffix: str | None = None
+        replace_end = m.end()
+        if suffix is None:
+            _wm = _WORD_MAGNITUDE_RE.match(response[m.end() :])
+            if _wm is not None:
+                word_mult, word_suffix = _WORD_MULT[_wm.group(1).lower()]
+                value *= word_mult
+                replace_end = m.end() + _wm.end()
+
         ctx = _context_around(response, m.start(), m.end())
         kind = classify_number(value, raw_tok, ctx)
         if kind in skip:
@@ -1546,14 +1580,26 @@ def pin_numbers_to_tool_values(
         if rel_diff > _PIN_DRIFT_TOL:
             continue
 
-        replacement = _render_in_token_format(raw_tok, suffix, closest)
-        if replacement is None or replacement == raw_tok:
+        original_span = response[m.start() : replace_end]
+        if word_suffix is not None:
+            # Spelled-out form: render the digit core in the word's magnitude,
+            # then re-attach the ORIGINAL word verbatim (keeps the writer's
+            # casing/spacing, e.g. " billion"). We render against a synthetic
+            # single-letter-suffix token so the digit core scales correctly, then
+            # strip that letter and substitute the word span.
+            digit_core = _render_in_token_format(f"{raw_tok}{word_suffix}", word_suffix, closest)
+            if digit_core is None:
+                continue
+            digit_core = digit_core.rstrip(word_suffix)
+            word_text = response[m.end() : replace_end]  # e.g. " billion"
+            replacement: str | None = f"{digit_core}{word_text}"
+        else:
+            replacement = _render_in_token_format(raw_tok, suffix, closest)
+        if replacement is None or replacement == original_span:
             continue
-        # Re-decode the replacement to confirm it now matches exactly; guards
-        # against a formatting round-trip that didn't actually fix the drift.
         out_parts.append(response[last_end : m.start()])
         out_parts.append(replacement)
-        last_end = m.end()
+        last_end = replace_end
         pin_count += 1
 
     if pin_count == 0:

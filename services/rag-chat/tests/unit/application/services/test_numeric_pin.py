@@ -57,6 +57,52 @@ def test_exact_value_is_noop() -> None:
     assert out.text == text
 
 
+# ── Spelled-out magnitude words (billion / million / trillion) ────────────────
+
+
+def test_spelled_out_billion_pinned() -> None:
+    """'111.180 billion' (drifted) -> '111.184 billion' (exact). The dominant form."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    out = pin_numbers_to_tool_values("Apple revenue was 111.180 billion last quarter.", rows)
+    assert out.pin_count == 1
+    assert "111.184 billion" in out.text
+    assert "111.180" not in out.text
+
+
+def test_spelled_out_billion_with_currency() -> None:
+    """'$111.180 billion' pins to the exact value, preserving '$' and ' billion'."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    out = pin_numbers_to_tool_values("Revenue was $111.180 billion.", rows)
+    assert out.pin_count == 1
+    assert "$111.184 billion" in out.text
+
+
+def test_spelled_out_million() -> None:
+    """A 'million' word token scales + pins correctly."""
+    rows = [_val(54_781_000.0, FieldKind.REVENUE)]
+    out = pin_numbers_to_tool_values("Net income was 54.780 million.", rows)
+    assert out.pin_count == 1
+    assert "54.781 million" in out.text
+
+
+def test_spelled_out_exact_is_noop() -> None:
+    """An exact spelled-out figure is left untouched."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    text = "Apple revenue was 111.184 billion."
+    out = pin_numbers_to_tool_values(text, rows)
+    assert out.pin_count == 0
+    assert out.text == text
+
+
+def test_spelled_out_far_off_not_pinned() -> None:
+    """'95.0 billion' is >1% off 111.184B → a different claim, not pinned."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    text = "Apple revenue was 95.0 billion."
+    out = pin_numbers_to_tool_values(text, rows)
+    assert out.pin_count == 0
+    assert out.text == text
+
+
 def test_far_off_number_not_pinned() -> None:
     """A number >1% off is a DIFFERENT claim, not a transcription slip — left alone."""
     rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
