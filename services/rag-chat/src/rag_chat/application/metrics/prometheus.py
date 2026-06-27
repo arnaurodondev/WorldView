@@ -347,6 +347,15 @@ rag_citations_scrubbed_total = Counter(
     "Citation references scrubbed from answers (not grounded in tool results)",
 )
 
+# C5 (FINAL-67 trajectory efficiency): the agent re-emitted a batch of tool
+# calls that had ALL already returned empty this turn. The orchestrator skips
+# re-executing them and nudges the LLM to switch tools / answer. Each increment
+# is one avoided redundant empty-result loop iteration.
+rag_tool_dedup_terminal_total = Counter(
+    "rag_tool_dedup_terminal_total",
+    "Tool-call batches skipped because every call already returned empty this turn",
+)
+
 # ── PLAN-0093 Wave E-2: numeric-grounding validator ──────────────────────────
 
 rag_grounding_validation_total = Counter(

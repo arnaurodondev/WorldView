@@ -63,6 +63,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_queries_total,
     rag_tool_call_latency_seconds,
     rag_tool_call_total,
+    rag_tool_dedup_terminal_total,
     rag_tool_result_items,
     rag_tool_use_first_turn_latency_seconds,
     record_reranker_position_change,
@@ -2071,6 +2072,18 @@ class ChatOrchestratorUseCase:
         # stable key without crashing on frozenset() of unhashable contents.
         _tool_result_cache: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
 
+        # C5 (FINAL-67 efficiency 19.63 / 19 redundant pairs / 35 unrecovered) ─
+        # The dedup cache above SERVES a repeated (tool, args) call from memory,
+        # but the agent still BURNS an iteration re-emitting it and — when the
+        # cached result is empty — keeps looping on the same dead call instead of
+        # switching tools or stopping (search_documents empty x4-6;
+        # get_portfolio_context no-arg x3-5). ``_empty_result_keys`` records every
+        # cache key whose result came back EMPTY so the loop can treat a 2nd
+        # identical empty call as terminal: it is a generalisation of the
+        # search_documents-only nudge below to ALL tools, keyed on the exact
+        # (tool, args) signature rather than a normalised query string.
+        _empty_result_keys: set[tuple[str, frozenset[tuple[str, str]]]] = set()
+
         # 2026-06-26 failure-analysis #1/#7: empty-``search_documents`` loop guard.
         # The planner's dominant failure mode is reaching for free-text
         # ``search_documents`` when unsure, then re-issuing the SAME (or a
@@ -2459,6 +2472,49 @@ class ChatOrchestratorUseCase:
                     _fresh_calls.append(tc)
                     _fresh_keys.append(_key)
 
+            # ── C5: redundant-empty-call terminal guard ───────────────────────
+            # If EVERY call in this batch is one we've already run AND every one of
+            # those prior runs returned EMPTY, re-executing them cannot make
+            # progress — it just burns an iteration and ends in a refusal. Skip the
+            # whole batch, inject a one-shot guidance message telling the LLM to
+            # switch tools or answer "not found", and continue so the next planning
+            # turn can pivot. ``_empty_result_keys`` is populated from the per-tool
+            # status branch below. We require a non-empty batch and that NONE of the
+            # calls are genuinely fresh (so a batch mixing a dead re-call with a new
+            # call still runs the new call normally).
+            _all_redundant_empty = bool(tool_calls) and all(
+                (
+                    tc.name,
+                    frozenset((str(k), repr(v)) for k, v in tc.input.items()),
+                )
+                in _empty_result_keys
+                for tc in tool_calls
+            )
+            if _all_redundant_empty:
+                log.info(  # type: ignore[no-any-return]
+                    "redundant_empty_calls_skipped",
+                    tools=sorted({tc.name for tc in tool_calls}),
+                    iteration=iteration,
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+                rag_tool_dedup_terminal_total.inc()
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Those tool calls were already made this turn and returned no "
+                            "results — re-running them will not help. Do NOT repeat them. "
+                            "Either call a DIFFERENT tool that fits the question, or, if no "
+                            "data is available, state plainly that none was found. Provide "
+                            "your answer now using the information already gathered."
+                        ),
+                    }
+                )
+                consecutive_errors = 0
+                audit.increment_iteration()
+                iteration_count += 1
+                continue
+
             # Execute fresh tool calls concurrently.
             _tool_t0 = time.monotonic()
             _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
@@ -2635,6 +2691,19 @@ class ChatOrchestratorUseCase:
                         _q_norm = " ".join(_q_raw.lower().split())
                         if _q_norm:
                             _empty_search_query_counts[_q_norm] = _empty_search_query_counts.get(_q_norm, 0) + 1
+                # C5: record the EXACT (tool, args) signature of every cleanly-empty
+                # result (status == "empty") so the redundant-empty terminal guard
+                # above can short-circuit an identical re-call on the next
+                # iteration. Transport/errors are excluded — those are retryable
+                # outages, not "no data exists" answers, and are handled by the
+                # consecutive-error budget.
+                if _status == "empty":
+                    _empty_result_keys.add(
+                        (
+                            tc.name,
+                            frozenset((str(k), repr(v)) for k, v in tc.input.items()),
+                        )
+                    )
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
                 # Q1 fix: use accurate per-tool latency from the executor rather than
                 # total_batch_time / n_tools (which incorrectly averages concurrent calls).
