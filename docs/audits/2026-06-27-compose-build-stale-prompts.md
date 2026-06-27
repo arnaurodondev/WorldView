@@ -96,3 +96,62 @@ Dockerfile and are equally affected.
 3. Consider a post-build assertion in `rebuild_service.sh` that greps the
    installed lib version against the on-disk source and fails loudly on a
    mismatch.
+
+---
+
+## Resolution (2026-06-27)
+
+### Root cause (confirmed)
+
+The defect is **not** a static bug in the Dockerfile, `.dockerignore`, compose
+config, or `rebuild_service.sh` — all four are correct and identical across the
+compose-build and direct-build paths (compose `context: ../..` resolves to the
+same repo root the working direct build uses). Re-verified:
+`libs/prompts/src/prompts` is a real directory (not a symlink); no stale
+`*.egg-info` / `*.dist-info` / `*.whl` / `build/` / `dist/` artifacts exist in
+`libs/prompts`; the Dockerfile installs `libs/prompts` non-editable from copied
+source in a single builder stage with no broad `COPY . .` that could mask the
+per-lib `COPY libs/prompts/src`.
+
+The cause is **BuildKit's `local` build-context source op**, which is
+content/metadata-addressed and is **NOT invalidated by `--no-cache`** (that flag
+only forces re-execution of `RUN`/`COPY` ops, not re-snapshotting of the local
+source those ops read from). When an edited file under `libs/prompts/src`
+presented metadata (size + mtime + inode) matching a prior snapshot, BuildKit
+fed the `COPY libs/prompts/src` layer a **stale snapshot**, while genuinely
+changed `services/rag-chat/src` was re-transferred — exactly the reported
+asymmetry (service `src` edits land, shared lib is stale). `docker buildx du`
+showed many `local source for context` records and ~37 GB reclaimable. Once the
+snapshot refreshed, both build paths produced correct output, which is why the
+bug is non-deterministic and was not reproducible on demand afterward. The
+"direct build works" observation was a cache-key miss, not a path difference.
+
+### Fix shipped (scoped to rag-chat as proof)
+
+Two complementary, low-risk changes:
+
+1. **`ARG CACHE_BUST` in `services/rag-chat/Dockerfile`** (before the lib
+   COPYs). A `RUN echo "cache-bust=${CACHE_BUST}"` line forces BuildKit to
+   re-resolve the local source for every COPY below it whenever the value
+   changes. `scripts/rebuild_service.sh` passes
+   `--build-arg CACHE_BUST=<HEAD-sha>-<md5 of working-tree status>`, so any edit
+   busts the snapshot; plain `docker build` keeps the default `unset` and is
+   unchanged.
+
+2. **Post-build staleness guard in `scripts/rebuild_service.sh`** (recommendation
+   #3 above, the deterministic belt-and-suspenders). After building, the script
+   runs each freshly built image and compares the installed
+   `prompts.chat.synthesis.SYNTHESIS_SYSTEM_PROMPT.version` against the on-disk
+   `libs/prompts/src/prompts/chat/synthesis.py` version. A mismatch aborts with
+   exit code 3 and points the operator at `docker builder prune -f`. This
+   catches the bug regardless of the underlying cache mechanism.
+
+**Verification:** `scripts/rebuild_service.sh rag-chat --cache --no-recreate`
+built all 3 variants (app + migrate + brief-scheduler) and the guard reported
+`OK … libs/prompts == 1.3` for each. A negative test (image patched to ship
+`version="1.1"` while source is `1.3`) confirmed the guard fires (exit 3).
+
+**Operational note:** the verify-version-in-container step remains the safest
+manual check for any shared-lib deploy; the guard now automates it. The blunt
+escape hatch when a stale snapshot is suspected is `docker builder prune -f`
+before rebuilding.
