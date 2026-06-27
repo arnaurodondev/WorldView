@@ -186,7 +186,9 @@ carry verifiable value-tool samples, and across them every numeric claim the har
 reference metrics or periods the captured sample does not hold, so the check leaves them #emph[unmatched]
 rather than false-flag them — a deliberate precision-over-recall stance under which a #emph[reported]
 contradiction is trustworthy (a time-series sample can substantiate a claim it contains but cannot disprove an
-unsampled period). The meta-point is the talk's thesis turned on ourselves: a measurement harness that
+unsampled period). It is therefore a high-precision corroborating floor, not the whole grounding story: a
+figure simply #emph[absent] from what the tools returned is caught by the answer-level grounding veto, not
+this numeric check — we lean on both. The meta-point is the talk's thesis turned on ourselves: a measurement harness that
 #emph[reports] a number is not the same as one that is #emph[correct].
 
 #strong[Trajectory / tool-chain quality — the eval driving improvement.] The captured trace — ordered tool
