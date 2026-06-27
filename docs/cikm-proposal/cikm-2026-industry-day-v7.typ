@@ -97,16 +97,24 @@ demotes confidence rather than deleting the edge. Unlike summarisation-oriented 
 points back to the passage that asserted it — which is what makes the evidence-level evaluation below possible.
 
 #figure(
-  block(breakable: false, inset: 5pt, stroke: 0.4pt, radius: 3pt)[
+  block(breakable: false, inset: 7pt, stroke: 0.4pt, radius: 3pt, width: 100%)[
     #set align(center)
-    #set text(7.5pt)
-    #pbox[News / filings] #ar #pbox[NER [1]] #ar #pbox[Entity\ resolution] #ar #pbox[Relation\ extraction] #ar #pbox[Validation\ gates]
-    #v(3pt) #text(9pt)[#sym.arrow.b] #v(3pt)
-    #pbox[Living knowledge graph — Postgres + AGE + pgvector\ (evidence-linked relations · multi-view embeddings · decaying confidence)]
-    #v(3pt) #text(9pt)[#sym.arrow.b] #v(3pt)
-    #pbox[Agent — graph · dense (HNSW) · BM25 · market-data tools] #ar #pbox[Cited answer]
-    #v(3pt) #text(7pt, fill: luma(90))[tool-call trace] #h(3pt) #text(9pt)[#sym.arrow.b] #v(3pt)
-    #box(stroke: (thickness: 0.6pt, dash: "dashed"), inset: 5pt, radius: 2pt, fill: luma(243))[#text(7.5pt)[#strong[Multi-level evaluation] — answer validity · substantiation · trajectory · judge calibration]]
+    #let sbox(b, w: auto, dash: false, fg: white) = box(
+      stroke: (thickness: 0.5pt, dash: if dash { "dashed" } else { "solid" }),
+      inset: (x: 5pt, y: 3.5pt), radius: 2.5pt, width: w, fill: fg,
+    )[#align(center)[#text(8pt, b)]]
+    #let dn = text(9.5pt)[#sym.arrow.b]
+    #sbox[News / filings] \
+    #dn \
+    #sbox(w: 100%)[Ingestion: NER [1] · entity resolution · relation extraction · validation gates] \
+    #dn \
+    #sbox(w: 100%)[Living knowledge graph: Postgres + AGE + pgvector\ evidence-linked relations · multi-view embeddings · decaying confidence] \
+    #dn \
+    #sbox(w: 100%)[Agent: graph · dense (HNSW) · BM25 · market-data tools] \
+    #dn \
+    #sbox[Cited answer] \
+    #text(7.5pt, fill: luma(110))[tool-call trace] #h(3pt) #dn \
+    #sbox(w: 100%, dash: true, fg: luma(244))[#strong[Multi-level evaluation:] answer validity · substantiation · trajectory · judge calibration]
   ],
   caption: [Worldview ingestion-to-answer loop. News and filings pass through NER, entity resolution, relation
   extraction, and validation gates into a living knowledge graph; at query time an agent retrieves over graph,
@@ -124,8 +132,8 @@ The framework evaluates four levels, each catching failures that the previous le
 #strong[Level 1: answer validity.] The answer judge scores grounding, framing, tool use, and coherence, but
 only after deterministic hard-fail gates and a grounding veto. These gates were added because of logged failures
 that additive LLM scoring [4] did not reliably catch: an answer flagged as mostly fabricated still scored
-#strong[85/100], a raw error string scored #strong[100/100], and leaked control tokens scored between 90 and
-100. The lesson is simple: LLM judges are useful, but some defects should be vetoed deterministically.
+#strong[85/100], a raw error string scored #strong[100/100], and leaked control tokens scored in the 90–100
+range. The lesson is simple: LLM judges are useful, but some defects should be vetoed deterministically.
 
 #strong[Level 2: tool-output substantiation.] A generated answer can pass answer-level checks while ignoring or
 misusing the data returned by tools. The substantiation layer cross-checks numeric claims against actual tool
