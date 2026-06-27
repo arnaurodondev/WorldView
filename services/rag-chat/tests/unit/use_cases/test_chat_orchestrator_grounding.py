@@ -317,9 +317,12 @@ class TestOrchestratorGroundingHook:
         # 2 calls — initial + one rewrite (the orchestrator does NOT loop
         # rewrites; one attempt then banner).
         assert len(captured) == 2
-        # The persisted answer ends with the banner.
+        # The persisted answer ends with the disclaimer. C2: the literal
+        # "⚠ Some … could not be verified" banner is now normalised by the egress
+        # sanitizer into the neutral canonical disclaimer (so the quality judge no
+        # longer reads it as a phantom citation). The warning is still present.
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
-        assert "could not be verified" in assistant_response.content
+        assert "could not be matched to a retrieved source" in assistant_response.content
 
     def test_completion_cache_skipped_when_grounding_fails(self) -> None:
         """F-LIVE-008 regression — cache write MUST be skipped when grounding fails.
@@ -408,8 +411,9 @@ class TestOrchestratorGroundingHook:
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
         assert len(captured) == 2
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
-        # The banner MUST fire here — the rewrite still invents a number.
-        assert "could not be verified" in assistant_response.content, (
+        # The disclaimer MUST fire here — the rewrite still invents a number.
+        # C2: the warning banner is normalised to the canonical disclaimer text.
+        assert "could not be matched to a retrieved source" in assistant_response.content, (
             "W44 — banner suppression must not hide real fabrication; " f"got: {assistant_response.content!r}"
         )
 
@@ -463,7 +467,8 @@ class TestOrchestratorGroundingHook:
         assert "271,474 BTC" not in content, f"fabricated re-synthesis shipped: {content!r}"
         assert "$509.0 million" not in content
         # The user is still warned about the one figure that tripped the pass.
-        assert "could not be verified" in content
+        # C2: warning banner normalised to the canonical disclaimer text.
+        assert "could not be matched to a retrieved source" in content
 
     def test_numeric_rewrite_tool_call_stub_keeps_grounded_original(self) -> None:
         """BP-674 — a numeric rewrite that leaks a tool-call / planning STUB must
