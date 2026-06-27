@@ -356,6 +356,15 @@ rag_tool_dedup_terminal_total = Counter(
     "Tool-call batches skipped because every call already returned empty this turn",
 )
 
+# C1 #1 (FINAL-67 numeric fidelity): a response number drifted within 1% of a
+# tool value but was not exact (e.g. rounded $111.184B -> $111.200B) and was
+# deterministically pinned back to the exact tool value. Each increment is one
+# corrected figure.
+rag_numeric_pin_total = Counter(
+    "rag_numeric_pin_total",
+    "Response numbers pinned in-place to the exact tool value (transcription drift)",
+)
+
 # ── PLAN-0093 Wave E-2: numeric-grounding validator ──────────────────────────
 
 rag_grounding_validation_total = Counter(

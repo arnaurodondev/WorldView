@@ -1420,14 +1420,158 @@ def _matches_any(
     return False, closest
 
 
+# ── C1 #1: deterministic exact-value substitution (numeric pin) ───────────────
+#
+# FINAL-67 C1: the answer LLM's dominant grounding-floor failure is altering a
+# number it has in hand — rounding $111.184B -> $111.200B. The TRANSCRIBE prompt
+# rule (synthesis v1.3) reduces but does not eliminate it. This deterministic,
+# zero-LLM pass runs BEFORE the grounding validator: when a response number is
+# CLOSE (within ``_PIN_DRIFT_TOL``) to a tool value but NOT exact, it is a
+# transcription drift, and we replace the response token in-place with the exact
+# tool value re-rendered in the SAME format (currency, magnitude suffix, decimal
+# places). After the pin, the validator's exact-match check passes legitimately
+# because the figure is now the tool's figure.
+#
+# Conservative by construction:
+#   * Only fires when there IS a close tool value — never invents or removes a
+#     number, only corrects drift toward a value the tool actually returned.
+#   * The drift band is tight (1%): a 30%-off "number" is a different claim, not
+#     a transcription slip, and is left for the validator to flag.
+#   * Same entity-scoping + same-kind pool ordering as the validator, so AMD's
+#     value never pins an NVDA-attributed number.
+#   * Exact matches are skipped (no-op), so a correct answer is never touched.
+_PIN_DRIFT_TOL = 0.01  # 1% — drift band for "same figure, transcribed loosely"
+
+
+@dataclass(frozen=True)
+class NumericPinResult:
+    """Outcome of :func:`pin_numbers_to_tool_values`."""
+
+    text: str
+    pin_count: int
+
+
+def _render_in_token_format(raw_token: str, suffix: str | None, exact_value: float) -> str | None:
+    """Re-render *exact_value* in the same shape as *raw_token*.
+
+    *raw_token* is the matched token verbatim (e.g. ``$111.200 B`` captured as
+    ``$111.200B`` or ``111.200B``); *suffix* is its magnitude letter (B/M/K/T)
+    or None; *exact_value* is the tool's base-unit value. We scale the exact
+    value down by the token's magnitude and format it with the SAME number of
+    decimal places the token used, preserving a leading ``$`` and the suffix.
+
+    Returns None when the token has no decimal/format we can safely mirror (the
+    caller then skips the pin rather than guess).
+    """
+    # Preserve currency + sign prefix exactly as written.
+    prefix = "$" if "$" in raw_token else ""
+    # Scale the exact value into the token's magnitude.
+    mult = _SUFFIX_MULT.get(suffix, 1.0) if suffix else 1.0
+    scaled = exact_value / mult
+    # Mirror the token's decimal precision so we don't add/drop digits
+    # gratuitously (e.g. "111.200" -> 3 dp; "489.7" -> 1 dp; "35" -> 0 dp).
+    digits_part = raw_token.lstrip("+-$").rstrip("BMKTbmkt%").strip()
+    decimals = len(digits_part.split(".", 1)[1]) if "." in digits_part else 0
+    rendered_num = f"{scaled:.{decimals}f}"
+    suffix_str = suffix if suffix else ""
+    return f"{prefix}{rendered_num}{suffix_str}"
+
+
+def pin_numbers_to_tool_values(
+    response: str,
+    tool_results: Iterable[Any],
+    *,
+    skip_kinds: Iterable[FieldKind] | None = None,
+) -> NumericPinResult:
+    """Replace transcription-drifted numbers with the EXACT tool value.
+
+    Deterministic, no LLM. For each number in *response* that is within
+    ``_PIN_DRIFT_TOL`` of an entity-scoped same-kind tool value but not exactly
+    equal, rewrite it in-place to the tool's exact value (same format). Returns
+    the corrected text plus the count of substitutions. A no-op (pin_count == 0)
+    when every number is exact or no close tool value exists.
+    """
+    skip = set(skip_kinds or ())
+    tool_values = _flatten_tool_values(list(tool_results))
+    if not tool_values:
+        return NumericPinResult(text=response, pin_count=0)
+
+    # Work on the original text; skip tokens inside [N\d] citation markers so a
+    # marker digit is never treated as a claim. We rebuild the string from
+    # non-overlapping replacement spans computed against the ORIGINAL text.
+    pin_count = 0
+    out_parts: list[str] = []
+    last_end = 0
+    for m in _NUM_RE.finditer(response):
+        digits = m.group("digits") or ""
+        if not any(ch.isdigit() for ch in digits):
+            continue
+        # Ignore a token that is actually a [N\d] citation marker body.
+        lead = response[max(0, m.start() - 1) : m.start()]
+        if lead == "N" and m.start() >= 1 and response[max(0, m.start() - 2) : m.start() - 1] == "[":
+            continue
+        if _is_non_claim_number(response, m):
+            continue
+        raw_tok = m.group("full").strip()
+        suffix = m.group("suffix")
+        try:
+            value = _decode_token(raw_tok, digits, suffix)
+        except ValueError:
+            continue
+        ctx = _context_around(response, m.start(), m.end())
+        kind = classify_number(value, raw_tok, ctx)
+        if kind in skip:
+            continue
+
+        # Same pool ordering as the validator: entity-scoped same-kind first.
+        entity_tag = _nearest_entity_tag(response, raw_tok)
+        if entity_tag:
+            scoped = [tv for tv in tool_values if tv.entity_tag and entity_tag in tv.entity_tag]
+            pool = [tv.value for tv in scoped if tv.field_kind is kind] or [tv.value for tv in scoped]
+        else:
+            pool = [tv.value for tv in tool_values if tv.field_kind is kind]
+        if not pool:
+            continue
+
+        closest = min(pool, key=lambda c: abs(c - value))
+        # Sign must match — a sign flip is a real error, not a transcription slip.
+        if (closest >= 0) != (value >= 0):
+            continue
+        denom = abs(closest) if closest != 0 else 1.0
+        rel_diff = abs(value - closest) / denom
+        # Already exact (within float noise) → nothing to pin.
+        if rel_diff <= 1e-9:
+            continue
+        # Outside the drift band → a different claim; leave for the validator.
+        if rel_diff > _PIN_DRIFT_TOL:
+            continue
+
+        replacement = _render_in_token_format(raw_tok, suffix, closest)
+        if replacement is None or replacement == raw_tok:
+            continue
+        # Re-decode the replacement to confirm it now matches exactly; guards
+        # against a formatting round-trip that didn't actually fix the drift.
+        out_parts.append(response[last_end : m.start()])
+        out_parts.append(replacement)
+        last_end = m.end()
+        pin_count += 1
+
+    if pin_count == 0:
+        return NumericPinResult(text=response, pin_count=0)
+    out_parts.append(response[last_end:])
+    return NumericPinResult(text="".join(out_parts), pin_count=pin_count)
+
+
 __all__ = [
     "GroundingResult",
     "NumericGroundingValidator",
+    "NumericPinResult",
     "ToolValue",
     "UnsupportedNumber",
     "classify_number",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
+    "pin_numbers_to_tool_values",
     "response_has_numeric_claims",
 ]
 

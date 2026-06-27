@@ -60,6 +60,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_grounding_validation_total,
     rag_latency,
     rag_no_tool_calls_first_turn,
+    rag_numeric_pin_total,
     rag_queries_total,
     rag_tool_call_latency_seconds,
     rag_tool_call_total,
@@ -4206,6 +4207,7 @@ class ChatOrchestratorUseCase:
             NumericGroundingValidator,
             find_phantom_tool_citations,
             flatten_tool_values_count,
+            pin_numbers_to_tool_values,
             response_has_numeric_claims,
         )
 
@@ -4232,6 +4234,22 @@ class ChatOrchestratorUseCase:
             )
             rag_grounding_validation_total.labels(result="failed_empty_pool").inc()
             return _EMPTY_POOL_REFUSAL, False
+
+        # ── C1 #1: deterministic numeric pin (BEFORE the validator) ───────────
+        # FINAL-67 C1: the answer LLM rounds a tool figure it has in hand
+        # ($111.184B -> $111.200B). Replace any number that has DRIFTED within 1%
+        # of an entity-scoped same-kind tool value with the EXACT tool value, in
+        # the same format. Zero LLM calls; no-op when every number is exact or no
+        # close tool value exists. After the pin the validator's exact-match check
+        # passes legitimately, avoiding a spurious rewrite/banner.
+        _pin = pin_numbers_to_tool_values(response, tool_items)
+        if _pin.pin_count > 0:
+            log.info(  # type: ignore[no-any-return]
+                "numeric_values_pinned_to_tool_exact",
+                pin_count=_pin.pin_count,
+            )
+            rag_numeric_pin_total.inc(_pin.pin_count)
+            response = _pin.text
 
         # ── Deterministic validations (the cheap ~105ms checks) ───────────────
         numeric_validator = NumericGroundingValidator()
