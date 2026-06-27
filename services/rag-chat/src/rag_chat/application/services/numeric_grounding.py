@@ -1562,6 +1562,104 @@ def pin_numbers_to_tool_values(
     return NumericPinResult(text="".join(out_parts), pin_count=pin_count)
 
 
+# ── C1 #2: fabricated-series detector (fail-safe, no mutation) ─────────────────
+#
+# FINAL-67 C1 (da_apple_revenue_fy2024q4_precision): the tool returned ONE
+# period but the answer fabricated a full multi-quarter table (Q1 FY25=124.3,
+# Q2=95.4, Q3=94.0 …) absent from the payload. The validator flags the bad
+# numbers but the rewrite often re-fabricates, and the fabricated table then
+# ships with only a disclaimer banner.
+#
+# This detector is a DETECTOR ONLY — it never edits the answer. It returns True
+# ONLY under a high-confidence fabrication signature so the orchestrator can
+# route to the honest "only N period(s) available" fallback instead of shipping
+# the table. Per the C1 #2 fail-safe mandate: prefer failing to the honest
+# disclaimer over silently mangling a coherent answer, and never fire on an
+# answer we are not confident is fabricated.
+#
+# Fires ONLY when ALL hold:
+#   * the answer contains a Markdown table with >= _FAB_MIN_TABLE_ROWS data rows
+#     that each carry a number (a genuine multi-row series, not prose),
+#   * the tool corpus flattened to FEWER numeric values than the table has
+#     number-bearing rows (the answer claims more rows than the tool returned),
+#   * AND a strict majority of the table's row-numbers match NO tool value
+#     (within REVENUE-grade tolerance) — i.e. the surplus is invented, not a
+#     reformatting of real rows.
+_FAB_MIN_TABLE_ROWS = 3  # need a real series before we call it fabricated
+_FAB_UNMATCHED_MAJORITY = 0.6  # >60% of row-numbers unmatched → invented series
+_MARKDOWN_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+# A leading table cell that names a PERIOD: Q1 / Q1 2025 / FY2024 / a bare
+# 4-digit year / a month name. Anchors the fabricated-series gate to time-series
+# tables only, so metric/entity comparison rows never trip it.
+_PERIOD_LABEL_RE = re.compile(
+    r"(?:\bQ[1-4]\b|\bFY\s?\d{2,4}\b|\b(?:19|20)\d{2}\b"
+    r"|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)",
+    re.IGNORECASE,
+)
+
+
+def detect_fabricated_series(response: str, tool_results: Iterable[Any]) -> bool:
+    """Return True when *response* presents a multi-row table the tools can't back.
+
+    Detector only — does NOT mutate *response*. See the section comment for the
+    exact (conservative) firing conditions. Returns False on any prose answer, a
+    single-row answer, or a table whose numbers mostly match tool values.
+    """
+    tool_values = _flatten_tool_values(list(tool_results))
+    if not tool_values:
+        # No tool numbers at all is the EMPTY-POOL case, handled elsewhere; do
+        # not also fire here (would double-handle and risk false positives).
+        return False
+    tool_floats = [tv.value for tv in tool_values]
+
+    # Collect number-bearing Markdown table rows whose FIRST cell is a PERIOD
+    # label (Q<n>, FY<year>, a bare 4-digit year, or a month name). We require a
+    # period series specifically — that is the da_apple fabrication signature
+    # (inventing quarters the tool never returned). A metric-comparison table
+    # (rows = Revenue / EPS / Gross Profit) is NOT a period series and must never
+    # trip this gate, even when a sparse tool fixture under-populates its values.
+    row_numbers: list[float] = []
+    number_bearing_rows = 0
+    for line in response.splitlines():
+        if not _MARKDOWN_TABLE_ROW_RE.match(line):
+            continue
+        if set(line.strip()) <= {"|", "-", ":", " "}:
+            continue  # separator row
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells:
+            continue
+        first_cell = cells[0]
+        # The row's leading cell must name a period — else it is not a time
+        # series (it is a metric/entity/category row) and we skip it.
+        if not _PERIOD_LABEL_RE.search(first_cell):
+            continue
+        nums_in_row = [
+            _decode_token(m.group("full").strip(), m.group("digits") or "", m.group("suffix"))
+            for m in _NUM_RE.finditer(line)
+            if (m.group("digits") or "") and any(ch.isdigit() for ch in (m.group("digits") or ""))
+        ]
+        if not nums_in_row:
+            continue
+        number_bearing_rows += 1
+        row_numbers.extend(nums_in_row)
+
+    if number_bearing_rows < _FAB_MIN_TABLE_ROWS:
+        return False
+    # The answer must claim MORE rows than the tool returned distinct values.
+    if number_bearing_rows <= len(tool_floats):
+        return False
+    if not row_numbers:
+        return False
+
+    # How many of the table's numbers match SOME tool value (revenue-grade tol)?
+    unmatched = 0
+    for n in row_numbers:
+        matched, _ = _matches_any(n, tool_floats, DEFAULT_TOLERANCES[FieldKind.REVENUE])
+        if not matched:
+            unmatched += 1
+    return (unmatched / len(row_numbers)) > _FAB_UNMATCHED_MAJORITY
+
+
 __all__ = [
     "GroundingResult",
     "NumericGroundingValidator",
@@ -1569,6 +1667,7 @@ __all__ = [
     "ToolValue",
     "UnsupportedNumber",
     "classify_number",
+    "detect_fabricated_series",
     "find_phantom_tool_citations",
     "flatten_tool_values_count",
     "pin_numbers_to_tool_values",

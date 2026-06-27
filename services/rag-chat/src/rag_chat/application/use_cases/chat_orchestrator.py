@@ -4279,6 +4279,36 @@ class ChatOrchestratorUseCase:
             rag_grounding_validation_total.labels(result="passed").inc()
             return response, True
 
+        # ── C1 #2: fabricated multi-row series → honest fallback (fail-safe) ──
+        # FINAL-67 da_apple: the tool returned ONE period but the answer
+        # fabricated a full multi-quarter TABLE absent from the payload. The
+        # rewrite path tends to re-fabricate, then ships the bogus table with
+        # only a disclaimer banner. When the high-confidence fabricated-series
+        # detector fires (numeric grounding already failed), do NOT attempt a
+        # rewrite or ship the table: replace it with the deterministic,
+        # number-free second-turn fallback that states only what the tools
+        # actually returned. Detector-only + conservative thresholds (see
+        # detect_fabricated_series) so a coherent answer is never mangled.
+        from rag_chat.application.services.numeric_grounding import detect_fabricated_series
+
+        if not numeric_first.passed and detect_fabricated_series(response, tool_items):
+            _question = ""
+            for _m in reversed(messages):
+                if _m.get("role") == "user" and isinstance(_m.get("content"), str):
+                    _question = _m["content"]
+                    break
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_fabricated_series_replaced",
+                table_rows_exceed_tool_values=True,
+            )
+            rag_grounding_validation_total.labels(result="failed_fabricated_series").inc()
+            _honest = _build_second_turn_fallback_answer(
+                question=_question,
+                tool_names=list(called_tool_names or []),
+                retrieved_items=tool_items,
+            )
+            return _honest, False
+
         # BP-648 Guard A (PRESERVED) — numeric unsupported set dominated by
         # small-revenue quarter-label false positives: the validator is
         # misfiring, the original is fine. Suppress the banner, skip the

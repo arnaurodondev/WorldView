@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import pytest
 from rag_chat.application.services.numeric_grounding import (
     NumericPinResult,
+    detect_fabricated_series,
     pin_numbers_to_tool_values,
 )
 
@@ -130,3 +131,61 @@ def test_citation_marker_digit_not_treated_as_claim() -> None:
     # Exact value + only a marker digit present → no pin, marker untouched.
     assert out.pin_count == 0
     assert "[N1]" in out.text
+
+
+# ── C1 #2: fabricated-series detector ─────────────────────────────────────────
+
+# Mirrors da_apple_revenue_fy2024q4_precision: tool returned ONE period; the
+# answer fabricated a multi-quarter table.
+_FABRICATED_TABLE_ANSWER = (
+    "Apple revenue by quarter:\n\n"
+    "| Period | Revenue (B USD) |\n"
+    "|--------|------------------|\n"
+    "| Q1 FY2025 | 124.300 |\n"
+    "| Q2 FY2025 | 95.400 |\n"
+    "| Q3 FY2025 | 94.000 |\n"
+    "| Q4 FY2024 | 102.500 |\n"
+)
+
+
+def test_fabricated_multirow_table_detected() -> None:
+    """Tool has 1 value but the answer presents a 4-row invented table → fires."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    assert detect_fabricated_series(_FABRICATED_TABLE_ANSWER, rows) is True
+
+
+def test_table_matching_tool_values_not_flagged() -> None:
+    """A multi-row table whose numbers ALL come from tool values is legitimate."""
+    rows = [
+        _val(124_300_000_000.0, FieldKind.REVENUE),
+        _val(95_400_000_000.0, FieldKind.REVENUE),
+        _val(94_000_000_000.0, FieldKind.REVENUE),
+        _val(102_500_000_000.0, FieldKind.REVENUE),
+    ]
+    assert detect_fabricated_series(_FABRICATED_TABLE_ANSWER, rows) is False
+
+
+def test_prose_answer_never_flagged() -> None:
+    """A plain prose answer (no Markdown table) is never a fabricated series."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    text = "Apple revenue for the quarter was $111.184B, up year over year."
+    assert detect_fabricated_series(text, rows) is False
+
+
+def test_single_extra_row_below_threshold_not_flagged() -> None:
+    """A 2-row table is below the 3-row minimum — too small to call fabricated."""
+    rows = [_val(111_184_000_000.0, FieldKind.REVENUE)]
+    text = "| Period | Revenue |\n|--|--|\n| Q4 FY2024 | 102.500 |\n| Q1 FY2025 | 124.300 |\n"
+    assert detect_fabricated_series(text, rows) is False
+
+
+def test_no_tool_values_does_not_fire() -> None:
+    """Empty pool is handled elsewhere; the detector must not also fire."""
+    assert detect_fabricated_series(_FABRICATED_TABLE_ANSWER, []) is False
+
+
+def test_table_within_tool_row_count_not_flagged() -> None:
+    """When the tool returned >= as many values as table rows, no over-claim."""
+    rows = [_val(float(900 + i), FieldKind.REVENUE) for i in range(10)]
+    # 10 tool values, 4 table rows → answer does not claim MORE than the tool.
+    assert detect_fabricated_series(_FABRICATED_TABLE_ANSWER, rows) is False
