@@ -218,6 +218,14 @@ def _grounding_fields_from_row(
     for canonical, synonyms in metric_keys:
         if canonical in seen:
             continue
+        # RC-3 (2026-06-28): honour the coverage filter on the PERIOD metrics too,
+        # not just the snapshot-only scalars below. The query_fundamentals caller
+        # now passes the full default ``metric_keys`` and relies on
+        # ``allowed_canonicals`` to drop uncovered metrics (previously it pre-filtered
+        # ``metric_keys`` itself). Without this guard an uncovered period metric would
+        # leak as a phantom number on every period.
+        if allowed_canonicals is not None and canonical not in allowed_canonicals:
+            continue
         raw: Any = None
         for syn in synonyms:
             if row.get(syn) is not None:
@@ -255,8 +263,18 @@ def _grounding_fields_from_row(
 # chain_top_mover 14). We therefore emit up to this many periods, newest first, with
 # the matcher's ``_<idx>`` suffix convention so each period's distinct value survives
 # without colliding (the judge + sse_emitter both strip ``_\d+$`` to the base metric).
-# Kept small so the per-row field/byte caps in build_grounding_sample still hold.
-_GROUNDING_MAX_PERIODS = 4
+#
+# RC-3 (2026-06-28): raised 4 -> 8 in lockstep with the emission-side
+# GROUNDING_MAX_ROWS 3->10 / SAMPLE_MAX_BYTES 1024->4096 bump (sse_emitter.py).
+# A fundamentals-history answer ("Tesla revenue since 2023", "last N quarters")
+# quotes one figure per quarter; emitting only 4 periods left every 5th+ quarter
+# unsubstantiated → GROUNDING_FLOOR even though the figures were correct (RC-3 in
+# docs/audits/2026-06-28-grounding-floor-rootcause.md). 8 is the headroom under
+# build_grounding_sample's per-row field cap (GROUNDING_MAX_FIELDS_PER_ROW=8:
+# ticker + up to 7 period values survive into a single packed item) — going
+# higher would be silently trimmed by that cap, so 8 is the effective ceiling
+# for a single-metric trend without also widening the emission-side field cap.
+_GROUNDING_MAX_PERIODS = 8
 
 # Screener multi-instrument cap (STEP B, 2026-06-26). A screen answer cites a few
 # top tickers' P/E / cap; we lift the top N rows' values under suffixed keys so
@@ -271,6 +289,7 @@ def _grounding_fields_from_rows(
     *,
     ticker: str,
     max_periods: int = _GROUNDING_MAX_PERIODS,
+    allowed_canonicals: set[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """Build a MULTI-PERIOD ``grounding_fields`` bag (FIX 2, 2026-06-26).
 
@@ -286,6 +305,13 @@ def _grounding_fields_from_rows(
     The ``ticker`` is emitted exactly once (identifiers are non-numeric and must not
     be duplicated). Flag-safe: like the single-period helper this only fills the
     in-memory item; the CHAT_EVAL_GROUNDING_SAMPLES flag still gates the wire.
+
+    ``allowed_canonicals`` (RC-3, 2026-06-28): when given, restrict the per-period
+    metrics to those canonical names — threaded straight to ``_grounding_fields_from_row``
+    so query_fundamentals can honour the per-metric coverage flag across EVERY period
+    (an uncovered metric must never enter as a phantom number, on any period — not just
+    the latest). When ``None`` (the history/batch callers) every metric is emitted as
+    before.
     """
     if not rows:
         return ()
@@ -296,7 +322,12 @@ def _grounding_fields_from_rows(
         # Newest period folds in the snapshot scalars; older periods get the row only
         # (snapshot is current/TTM, so it has a single value, attached to the latest).
         row_snapshot = snapshot if idx == 0 else None
-        per_row = _grounding_fields_from_row(row, row_snapshot, ticker=ticker)
+        per_row = _grounding_fields_from_row(
+            row,
+            row_snapshot,
+            ticker=ticker,
+            allowed_canonicals=allowed_canonicals,
+        )
         for key, val in per_row:
             if key == "ticker":
                 continue  # already emitted once; never duplicate the identifier
@@ -1060,21 +1091,26 @@ class MarketHandler(ToolHandler):
         #    text-scan path picks those up via ``classify_number``.
         upper_ticker = ticker.upper()
         text = self._format_query_fundamentals(upper_ticker, metrics, rows, snapshot, coverage)
-        # Value-substantiation (2026-06-26): lift the latest period (+ snapshot
-        # scalars) as raw numbers. CRITICAL: only emit a metric whose coverage is
+        # Value-substantiation (2026-06-26): lift the raw numbers so the eval can
+        # verify quoted figures. CRITICAL: only emit a metric whose coverage is
         # "ok" — a "missing"/"partial" metric must NOT enter as a phantom number
         # (so the eval correctly leaves an asserted-but-uncovered metric as
-        # unsupported). ``rows`` is ASC by date → last element is latest.
+        # unsupported). ``rows`` is ASC by date.
+        #
+        # RC-3 (2026-06-28): emit MULTI-PERIOD grounding (one entry per returned
+        # period, newest first, suffixed) like the sibling history/batch handlers
+        # — NOT only ``rows[-1]``. A "Tesla revenue since 2023 / last N quarters"
+        # answer quotes one figure per quarter; the prior single-latest-row sample
+        # left every non-latest quarter unsubstantiated → GROUNDING_FLOOR despite
+        # correct figures (RC-3 in docs/audits/2026-06-28-grounding-floor-rootcause.md).
+        # ``allowed_canonicals`` is threaded so the per-metric coverage flag is
+        # honoured on EVERY period, not just the latest.
         ok_metrics = {m for m in metrics if coverage.get(m, "missing") == "ok"}
-        grounding_metric_keys = tuple(
-            (canonical, synonyms) for canonical, synonyms in _GROUNDING_PERIOD_METRIC_KEYS if canonical in ok_metrics
-        )
-        latest_row = rows[-1] if rows else {}
-        grounding_fields = _grounding_fields_from_row(
-            latest_row if isinstance(latest_row, dict) else {},
+        row_dicts = [r for r in rows if isinstance(r, dict)]
+        grounding_fields = _grounding_fields_from_rows(
+            row_dicts,
             snapshot,
             ticker=upper_ticker,
-            metric_keys=grounding_metric_keys,
             allowed_canonicals=ok_metrics,
         )
         return RetrievedItem.create(
