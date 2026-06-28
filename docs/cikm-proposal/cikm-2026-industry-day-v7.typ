@@ -31,22 +31,20 @@
 
 #block(inset: (x: 0.6cm))[
   #text(weight: "bold")[Abstract.]
-  We present #emph[Worldview], a locally operated financial-intelligence system used as a testbed for
-  evaluating grounded agentic retrieval-augmented generation (RAG) [7]. The system answers analyst-style
-  questions over a changing retrieval substrate: evidence-linked knowledge-graph relations, dense entity and
-  passage embeddings, BM25 lexical search [8], and structured market data. Its graph is not static: entity
-  representations are refreshed from multiple semantic views, relation confidence accumulates with corroborating
-  evidence, and edge scores decay by predicate-specific timescale. This makes evaluation harder than in a frozen
-  RAG benchmark, because users query the served graph and current retrieval state, not the extractor in
-  isolation. Our central contribution is a #emph[multi-level evaluation framework] for this setting. Beyond an
-  LLM answer-quality judge, the framework adds deterministic hard-fail gates, a grounding veto, numeric
-  tool-output substantiation, trajectory judging over the captured tool-call trace, and calibration against a
-  human-labelled gold set. The framework was motivated by real failures: a fabricated answer scored 85/100 under
-  an additive judge, raw error strings scored perfectly, and tool-routing defects were invisible at answer
-  level. In the latest frozen evaluation run, the trajectory judge scored 88.9/100 over 67 questions, and the
-  current gated judge reached Cohen's κ = 0.80 with zero false-passes on fabrication. We also report a negative
-  finding: fresh-extractor support substantially overestimated served-graph support, showing that live KG-RAG
-  systems must evaluate the state users actually query.
+  Evaluating a grounded agentic retrieval-augmented generation (RAG) system [7] is hard when the system never
+  holds still. We present #emph[Worldview], a locally operated financial-intelligence system whose knowledge
+  graph is continuously updated — entity representations refreshed from multiple semantic views, relation
+  confidence accumulating with corroborating evidence and decaying by predicate-specific timescale — so users
+  query a moving #emph[served] state, not a frozen extractor. Standard answer-level benchmarks miss this: an
+  answer can read well while using the wrong tool, ignoring the data it retrieved, citing stale graph state, or
+  passing an uncalibrated judge. Our contribution is a #emph[multi-level evaluation framework] that measures such
+  a system at four levels — answer validity (an LLM judge hardened with deterministic hard-fail gates and a
+  grounding veto), numeric tool-output substantiation, trajectory judging over the captured tool-call trace, and
+  calibration against a human-labelled gold set. It is motivated by real failures it was built to catch: a
+  fabricated answer scored 85/100 under an additive judge, and raw error strings scored perfectly. On a frozen
+  run the gated judge reaches Cohen's κ = 0.80 with zero false-passes on fabrication, and we report a sobering
+  negative result — fresh-extractor quality substantially overstates the served-graph quality users actually
+  query.
 ]
 
 #v(0.3em)
@@ -167,7 +165,9 @@ because it remains LLM-judged. It is reported only as a diagnostic signal alongs
 substantiation.
 
 = Finding: served graph quality is the number that matters
-The most important empirical lesson is that extractor quality can overstate user-facing quality. In one frozen
+Underlying all four levels is one principle — the object of evaluation is the #emph[served] state the agent
+actually retrieves, not the extractor in isolation — and measured that way, the framework surfaces its most
+important empirical lesson: extractor quality can overstate user-facing quality. In one frozen
 evaluation, fresh extraction reached #strong[82.6%] document support, while relations actually served from the
 stored graph reached only #strong[48.8%] support volume-weighted, or #strong[36.9%] predicate-balanced [6]. The
 gap appears because the live graph is a sediment of extractor versions, historical documents, validation rules,
