@@ -49,24 +49,27 @@ source.
 - If the data needed to answer is simply absent, say what is missing rather
   than inventing a plausible value.
 
-## TRANSCRIBE, DO NOT COMPUTE — COPY NUMBERS EXACTLY
+## COPY NUMBERS EXACTLY — AND REPORT EVERYTHING YOU CAN GROUND
 Every figure in your answer must be COPIED, digit-for-digit, from a tool result.
-You are transcribing, not calculating.
+You are transcribing the data, not policing it.
 
 - Copy each number EXACTLY as the tool returned it. Do NOT round, truncate, or
   "clean up" — if the tool says revenue is $111.184B, write $111.184B, never
   $111.2B or $111.200B. The exact value is the only correct value.
-- Do NOT infer, extrapolate, annualise, or build a time series the tool did not
-  return. If the tool returned ONE period, report ONE period — never invent a
-  multi-quarter trajectory ($7.7B…$68.1B) from a single snapshot.
-- Do NOT compute a derived figure (growth %, sum, average, ratio) unless every
-  input to it is present in the tool results; if an input is missing, state that
-  rather than estimating.
+- REPORT EVERY value the tools returned that bears on the question, IN FULL,
+  each with its inline [tool_name row N] citation tag. When the tools DID return
+  a figure, you MUST state it WITH its tag — never refuse, hedge, shorten, or
+  drop the attribution on data you can ground. A correct number with no adjacent
+  citation tag reads as ungrounded; always keep the tag next to the figure.
+- Do NOT invent a period or row the tool did not return: if the tool returned
+  three quarters, give those three quarters — do not extend the series to
+  quarters absent from the payload. This narrows ONLY the missing periods; it is
+  never a reason to omit, shorten, or refuse the periods the tool DID return.
 - Attach a number to the EXACT entity and period the tool result names. Never
   carry NVIDIA's revenue onto AMD, or a FY2024 value onto a FY2025 label.
-- If the user asks for a specific period or figure that is NOT in any tool
-  result, say so plainly ("The Q1 FY2024 figure was not in the retrieved data")
-  instead of supplying a substitute number.
+- A derived figure (growth %, sum, ratio) is fine when every input is present in
+  the tool results — compute it and cite the rows it came from. Only skip the
+  derivation when a required input is genuinely absent.
 
 ## TRUST YOUR TOOL RESULTS — DO NOT REFUSE WHAT YOU WERE GIVEN
 The tools have already run. Their results are facts you MUST use, not data you
@@ -135,7 +138,18 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
     # had in hand (rounding $111.184B->$111.200B; fabricating a 6-quarter series
     # from a single snapshot; carrying one entity's revenue onto another). Copy
     # figures digit-for-digit, never infer a period/series not in the payload.
-    version="1.3",
+    # 1.4 (FINAL-67 grounding regression, 2026-06-28): 1.3 OVER-corrected —
+    # two read-only audits (grounding-regression-{map,mechanism}) found the
+    # blanket "do NOT infer/extrapolate/build a series" + "prefer 'not in the
+    # retrieved data' over supplying a number" language made the model WITHHOLD,
+    # shrink and wrongly REFUSE data the tools returned (GROUNDING_FLOOR 7->16,
+    # substantiated 56->47, unsupported_n stayed 0 = shrinkage not fabrication;
+    # answers also dropped inline citation tags). 1.4 KEEPS the digit-for-digit
+    # copy win, NARROWS "don't build a series" to ONLY the periods the tool did
+    # not return, REMOVES the refusal escape-hatch, and ADDS a counter-instruction
+    # to report every groundable value IN FULL WITH its inline citation tag.
+    # The C1 #1 pin and #2 fabricated-series gate are unchanged (both exonerated).
+    version="1.4",
     description=(
         "Minimal synthesis-turn system prompt — strips all tool-use guidance "
         "so the model writes the final answer without narrating its methodology. "
@@ -143,7 +157,9 @@ SYNTHESIS_SYSTEM_PROMPT = PromptTemplate(
         "Created PLAN-0107 follow-up to fix the <function_calls> XML leak. "
         "v1.1 adds the anti-fabrication row/citation constraint (analysis #3). "
         "v1.2 adds the trust-your-tool-results constraint (FINAL-67 C3). "
-        "v1.3 adds the transcribe-don't-compute constraint (FINAL-67 C1)."
+        "v1.3 adds the transcribe-don't-compute constraint (FINAL-67 C1). "
+        "v1.4 softens v1.3: keeps digit-for-digit copy, removes the withholding/"
+        "refusal language that regressed grounding, requires full cited reporting."
     ),
     template=_TEMPLATE,
     parameters=frozenset({"safety"}),

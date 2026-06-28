@@ -59,22 +59,26 @@ def test_synthesis_prompt_strips_tool_planning_guidance() -> None:
 def test_synthesis_prompt_identifier_stable() -> None:
     """Identifier shape stays content-addressable for log/judge artefacts."""
     ident = SYNTHESIS_SYSTEM_PROMPT.identifier()
-    # v1.3 (FINAL-67 C1) added the TRANSCRIBE, DO NOT COMPUTE block.
-    assert ident.startswith("chat_synthesis_system@1.3#")
+    # v1.4 (FINAL-67 grounding regression) softened the C1 block.
+    assert ident.startswith("chat_synthesis_system@1.4#")
     # 12-char sha256 prefix.
     assert len(ident.split("#")[-1]) == 12
 
 
 def test_synthesis_prompt_requires_exact_number_transcription() -> None:
-    """C1: the prompt must forbid altering numbers and inventing periods/series."""
+    """C1 (v1.4): keep the digit-for-digit copy win WITHOUT the over-broad
+    withholding language that caused the 2026-06-28 grounding regression."""
     rendered = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
-    assert "TRANSCRIBE, DO NOT COMPUTE" in rendered
-    # Forbid rounding / cleaning up a figure.
+    # The KEEP: copy figures exactly, no rounding. This is the part that helped.
     assert "round" in rendered.lower()
-    # Forbid inventing a series from a single period.
-    assert "trajectory" in rendered.lower() or "time series" in rendered.lower()
-    # Concrete exact-copy example must survive.
     assert "$111.184B" in rendered
+    # The COUNTER-INSTRUCTION: report everything you can ground, keep the tag.
+    assert "REPORT EVERY value" in rendered
+    assert "never refuse, hedge, shorten" in rendered  # the anti-withholding rule
+    assert "citation tag" in rendered  # keep-the-tag rule (citation drop was a driver)
+    # The over-broad escape hatch that drove wrongful refusals must be GONE.
+    assert "not in the retrieved data" not in rendered
+    assert "TRANSCRIBE, DO NOT COMPUTE" not in rendered
 
 
 def test_synthesis_prompt_forbids_refusing_present_data() -> None:

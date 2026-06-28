@@ -262,6 +262,29 @@ is unchanged.
 
 ## chat_synthesis_system
 
+### 1.4 — 2026-06-28 (FINAL-67 grounding regression — soften C1)
+
+- v1.3's "TRANSCRIBE, DO NOT COMPUTE" block OVER-corrected. Two read-only audits
+  (`docs/audits/2026-06-28-grounding-regression-{map,mechanism}.md`) converged:
+  the blanket "do NOT infer/extrapolate/build a time series" plus the "prefer
+  saying 'not in the retrieved data' over supplying a number" escape hatch made
+  the answer LLM WITHHOLD, shrink, and wrongly REFUSE data the tools handed it.
+  `GROUNDING_FLOOR` 7→16, `substantiated_n` 56→47, while `unsupported_n` stayed
+  0 — i.e. shrinkage/refusal, NOT fabrication. Answers also dropped inline
+  citation tags, so correct numbers read as ungrounded. Flagship
+  `iter3_msft_earnings_citations` went 100→5 (wrongful refusal of a
+  `query_fundamentals` result that returned `items=1`).
+- v1.4 **keeps** the digit-for-digit copy rule (the part that helped —
+  `unsupported_n` stayed 0), **narrows** "don't build a series" to ONLY the
+  periods the tool did not return (never a reason to omit returned periods),
+  **removes** the "prefer 'not in the retrieved data'" refusal escape hatch, and
+  **adds** a counter-instruction: report every groundable value IN FULL WITH its
+  inline `[tool_name row N]` citation tag — never refuse, hedge, shorten, or drop
+  attribution on data you can ground.
+- The C1 #1 numeric pin and #2 fabricated-series gate (product code) are
+  **unchanged** — both were exonerated by the audits (pin fired 9× and helped,
+  gate fired 0×).
+
 ### 1.3 — 2026-06-27 (FINAL-67 C1 — transcribe, don't compute)
 
 - Added the **TRANSCRIBE, DO NOT COMPUTE** block. The dominant FINAL-67
